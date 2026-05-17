@@ -1,0 +1,3 @@
+"""pero_theia/rules — Starlark rules package."""
+
+package(default_visibility = ["//visibility:public"])

@@ -52,9 +52,9 @@
            path="mlbevo_gen2_cmp_demo"
            revision="bz-migration" />
 
-  <!-- ── This manifest repo (pinned separately) ─────────────────────── -->
+  <!-- ── This manifest repo (workspace root) ───────────────────────── -->
   <project name="pero_theia"
-           path="pero_theia"
+           path="."
            remote="theia"
            revision="main" />
 

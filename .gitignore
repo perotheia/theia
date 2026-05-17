@@ -3,3 +3,4 @@ bazel-*
 /workspace/
 *.pyc
 __pycache__/
+dist/

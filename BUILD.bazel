@@ -1,0 +1,28 @@
+"""pero_theia — top-level build file.
+
+Quick reference:
+  # Build all host targets
+  bazel build //... --config=linux
+
+  # Cross-compile all firmware targets
+  bazel build //pero_cmp_ti/... //pero_cmp_ti_gw/... --config=cortex_r4f
+
+  # Build & test host
+  bazel test //pero_cmp_lnx/... --config=linux
+"""
+
+package(default_visibility = ["//visibility:public"])
+
+# ── Convenience alias groups ───────────────────────────────────────────────
+
+# All Linux host targets
+alias(
+    name = "host_all",
+    actual = "//pero_cmp_lnx:all",
+)
+
+# All firmware targets
+alias(
+    name = "firmware_all",
+    actual = "//pero_cmp_ti:all",
+)

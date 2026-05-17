@@ -1,0 +1,58 @@
+"""Platforms for pero_theia cross-compilation targets."""
+
+package(default_visibility = ["//visibility:public"])
+
+# ── Host ──────────────────────────────────────────────────────────────────
+platform(
+    name = "linux_x86_64",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+    ],
+)
+
+# ── Hercules TMS570LC43xx (Cortex-R4F, big-endian, FPU) ──────────────────
+platform(
+    name = "tms570lc43xx",
+    constraint_values = [
+        "@platforms//os:none",
+        "@platforms//cpu:arm",
+        ":cortex_r4f",
+        ":big_endian",
+        ":fpu_vfpv3_d16",
+    ],
+)
+
+# ── CPU constraints ────────────────────────────────────────────────────────
+constraint_setting(name = "mcu_core")
+
+constraint_value(
+    name = "cortex_r4f",
+    constraint_setting = ":mcu_core",
+)
+
+# ── Endianness constraints ─────────────────────────────────────────────────
+constraint_setting(name = "endianness")
+
+constraint_value(
+    name = "big_endian",
+    constraint_setting = ":endianness",
+)
+
+constraint_value(
+    name = "little_endian",
+    constraint_setting = ":endianness",
+)
+
+# ── FPU constraints ────────────────────────────────────────────────────────
+constraint_setting(name = "fpu")
+
+constraint_value(
+    name = "fpu_vfpv3_d16",
+    constraint_setting = ":fpu",
+)
+
+constraint_value(
+    name = "no_fpu",
+    constraint_setting = ":fpu",
+)

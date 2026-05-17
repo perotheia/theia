@@ -1,0 +1,39 @@
+"""
+pero_theia — PERO CMP monorepo Bazel module.
+
+Component map:
+  //pero_cmp_ti/...        Hercules TMS570 firmware (arm-none-eabi cross-compile)
+  //pero_cmp_ti_gw/...     Hercules gateway firmware (arm-none-eabi cross-compile)
+  //pero_cmp_lnx/...       Linux host library (libcmpdecoder, libgw)
+  //pero_cmp_gw_svc/...    Gateway NIF service
+  //pero_cmp_gw_cln_demo/... Gateway client demo
+  //mlbevo_gen2_cmp_psp/...  Platform support package (libpsp, libcodec)
+  //mlbevo_gen2_cmp_demo/... Demo app + signal tools
+"""
+
+module(
+    name = "pero_theia",
+    version = "0.1.0",
+)
+
+# ── Standard Bazel rules ───────────────────────────────────────────────────
+bazel_dep(name = "rules_cc",  version = "0.1.1")
+bazel_dep(name = "rules_pkg", version = "1.1.0")
+
+# ── Python (code generators) ───────────────────────────────────────────────
+bazel_dep(name = "rules_python", version = "1.4.1")
+
+# ── Foreign-CC (wraps CMake/Makefile external libs) ───────────────────────
+bazel_dep(name = "rules_foreign_cc", version = "0.14.0")
+
+# ── Nanopb (protobuf for embedded C) ──────────────────────────────────────
+bazel_dep(name = "nanopb", version = "0.4.9.1")
+
+# ── ARM GCC 7-2017-q4 toolchain (CCS 8 era) — cross-compile for Cortex-R4F
+# Fetched by the toolchain extension below; local install at
+# /opt/gcc-arm-none-eabi-7-2017-q4 is used when available.
+# ──────────────────────────────────────────────────────────────────────────
+
+# ── System library handles ─────────────────────────────────────────────────
+# libpcap and libexpat are resolved via the host sysroot (cc_library + linkopts).
+# No Bazel module needed — the toolchain locates them via pkg-config.

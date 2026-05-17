@@ -1,0 +1,5 @@
+.repo/
+bazel-*
+/workspace/
+*.pyc
+__pycache__/

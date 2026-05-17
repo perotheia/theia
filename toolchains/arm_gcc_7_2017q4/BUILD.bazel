@@ -1,0 +1,50 @@
+"""ARM GCC 7-2017-q4 toolchain for Cortex-R4F (TMS570LC43xx)."""
+
+load(":cc_toolchain_config.bzl", "cc_toolchain_config")
+
+package(default_visibility = ["//visibility:public"])
+
+# ── Toolchain config ───────────────────────────────────────────────────────
+cc_toolchain_config(name = "cortex_r4f_config")
+
+# ── Filegroup: all toolchain binaries ─────────────────────────────────────
+filegroup(
+    name = "arm_gcc_all_files",
+    srcs = glob(
+        ["/opt/gcc-arm-none-eabi-7-2017-q4/**"],
+        allow_empty = True,
+    ),
+)
+
+filegroup(name = "empty", srcs = [])
+
+# ── CC toolchain target ────────────────────────────────────────────────────
+cc_toolchain(
+    name = "cortex_r4f_toolchain",
+    toolchain_identifier = "arm-gcc-7-2017q4-cortex-r4f",
+    toolchain_config     = ":cortex_r4f_config",
+    all_files            = ":arm_gcc_all_files",
+    ar_files             = ":arm_gcc_all_files",
+    compiler_files       = ":arm_gcc_all_files",
+    dwp_files            = ":empty",
+    linker_files         = ":arm_gcc_all_files",
+    objcopy_files        = ":arm_gcc_all_files",
+    strip_files          = ":arm_gcc_all_files",
+)
+
+# ── Toolchain registration ─────────────────────────────────────────────────
+toolchain(
+    name = "cc_suite",
+    exec_compatible_with = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+    ],
+    target_compatible_with = [
+        "@platforms//os:none",
+        "@platforms//cpu:arm",
+        "//platforms:cortex_r4f",
+        "//platforms:big_endian",
+    ],
+    toolchain      = ":cortex_r4f_toolchain",
+    toolchain_type = "@bazel_tools//tools/cpp:toolchain_type",
+)

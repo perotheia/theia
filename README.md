@@ -55,29 +55,54 @@ curl -fL https://developer.arm.com/-/media/Files/downloads/gnu-rm/7-2017q4/gcc-a
 ## Quick start
 
 ```sh
-# Clone the workspace
-mkdir pero_workspace && cd pero_workspace
-repo init -u git@cicd.skyway.porsche.com:PG50/pero_theia.git -b main
+# 1. Bootstrap workspace (real git checkouts, no symlinks)
+mkdir theia && cd theia
+repo init -u git@cicd.skyway.porsche.com:PG50/pero_theia.git -b main --depth=1
 repo sync -j8
 
-# (All repos check out on bz-migration branch automatically via manifest)
+# 2. Activate bz-migration on all component repos
+repo forall -c 'git checkout bz-migration'
 
-# Build all Linux host targets — no configuration needed
-bazel build //gateway/pero_cmp_lnx/demo:all
+# 3. Build (no manual generate steps — Bazel handles PSP codegen)
+bazel build //gateway/pero_cmp_lnx/lib:cmpdecoder
+bazel build //gateway/pero_cmp_lnx/lib:gw
+bazel build //gateway/pero_cmp_lnx/demo:all          # pero-decode, pero-filter, pero-timesync
 bazel build //services/pero_cmp_gw_svc:cmp_gw
 bazel build //applications/pero_cmp_gw_cln_demo:cmp_gw_client
+bazel build //platforms/mlbevo_gen2_cmp_psp:codec    # PspGenerate + PspCompile (~6000 .c)
+bazel build //platforms/mlbevo_gen2_cmp_psp:psp_so   # libpsp.so
 bazel build //platforms/mlbevo_gen2_cmp_demo:mlbevo_demo
-
-# Build PSP (triggers code generation from FIBEX + DBC, then compiles ~6000 .c files)
-bazel build //platforms/mlbevo_gen2_cmp_psp:codec
 
 # Cross-compile Hercules firmware (requires arm-none-eabi-gcc-7-2017-q4)
 bazel build //gateway/pero_cmp_ti:pero_cmp_ti.elf --config=cortex_r4f
-
-# Build everything at once
-bazel build //... --config=linux               # all host targets
-bazel build //pero_cmp_ti/... --config=cortex_r4f  # firmware only
 ```
+
+## Verified build (theia workspace, bz-migration, 2026-05-18)
+
+All targets build from a clean `repo sync` with no manual pre-steps.
+
+| Target | Output | Status |
+|---|---|---|
+| `//gateway/pero_cmp_lnx/lib:cmpdecoder` | `libcmpdecoder.so` / `.a` | ✓ |
+| `//gateway/pero_cmp_lnx/lib:gw` | `libgw.so` / `.a` | ✓ |
+| `//gateway/pero_cmp_lnx/demo:pero-decode` | `pero-decode` | ✓ |
+| `//gateway/pero_cmp_lnx/demo:pero-filter` | `pero-filter` | ✓ |
+| `//gateway/pero_cmp_lnx/demo:pero-timesync` | `pero-timesync` | ✓ |
+| `//services/pero_cmp_gw_svc:cmp_gw` | `cmp_gw` | ✓ |
+| `//applications/pero_cmp_gw_cln_demo:cmp_gw_client` | `cmp_gw_client` | ✓ |
+| `//platforms/mlbevo_gen2_cmp_psp:codec` | `codec.a` (5948 .c → .a) | ✓ |
+| `//platforms/mlbevo_gen2_cmp_psp:psp` | `psp.a` | ✓ |
+| `//platforms/mlbevo_gen2_cmp_psp:psp_so` | `libpsp.so` (2.3 MB) | ✓ |
+| `//platforms/mlbevo_gen2_cmp_demo:mlbevo_demo` | `mlbevo_demo` | ✓ |
+| `//packaging:pero-libcmpdecoder` | `.ipk` | ✓ |
+| `//packaging:pero-libpsp` | `.ipk` | ✓ |
+| `//packaging:pero-libgw` | `.ipk` | ✓ |
+| `//packaging:pero-gw-svc` | `.ipk` | ✓ |
+| `//packaging:pero-gw-client` | `.ipk` | ✓ |
+| `//packaging:pero-gw-stack` | `.ipk` (meta) | ✓ |
+
+Firmware cross-compile (`//gateway/pero_cmp_ti:pero_cmp_ti.elf --config=cortex_r4f`)
+requires `/opt/gcc-arm-none-eabi-7-2017-q4/` — see Prerequisites.
 
 ## PSP code generation (replaces generate.sh)
 

@@ -83,7 +83,7 @@ _PSP_COMMON_ATTRS = {
     # Filegroup of all generator .py sources — invoked via system python3
     # so that system-installed jinja2 is available without pip hermetic setup.
     "_tool_srcs": attr.label(
-        default     = "//pero_cmp_lnx/tools:all_srcs",
+        default     = "//gateway/pero_cmp_lnx/tools:all_srcs",
         allow_files = True,
     ),
 }

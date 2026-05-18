@@ -1,10 +1,17 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   pero_theia — repo manifest for PERO CMP workspace
+
+  Directory layout mirrors the pero_theia project organisation:
+    .                    workspace root (this manifest repo)
+    gateway/             Hercules firmware + Linux host library
+    services/            Linux gateway service
+    applications/        Gateway client demo
+    platforms/           Platform support package + demo app
+
   Usage:
     repo init -u git@cicd.skyway.porsche.com:PG50/pero_theia.git -b main
     repo sync -j8
-    repo forall -c 'git checkout bz-migration'
 -->
 <manifest>
 
@@ -12,7 +19,6 @@
           fetch="git@cicd.skyway.porsche.com:PG50/ccstheia"
           review="cicd.skyway.porsche.com" />
 
-  <!-- manifest repo itself -->
   <remote name="theia"
           fetch="git@cicd.skyway.porsche.com:PG50" />
 
@@ -20,42 +26,42 @@
            revision="bz-migration"
            sync-j="4" />
 
-  <!-- ── Hercules firmware ───────────────────────────────────────────── -->
-  <project name="pero_cmp_ti"
-           path="pero_cmp_ti"
-           revision="bz-migration" />
-
-  <project name="pero_cmp_ti_gw"
-           path="pero_cmp_ti_gw"
-           revision="bz-migration" />
-
-  <!-- ── Linux host ─────────────────────────────────────────────────── -->
-  <project name="pero_cmp_lnx"
-           path="pero_cmp_lnx"
-           revision="bz-migration" />
-
-  <!-- ── Gateway service + client ───────────────────────────────────── -->
-  <project name="pero_cmp_gw_svc"
-           path="pero_cmp_gw_svc"
-           revision="bz-migration" />
-
-  <project name="pero_cmp_gw_cln_demo"
-           path="pero_cmp_gw_cln_demo"
-           revision="bz-migration" />
-
-  <!-- ── Platform support package + demo app ────────────────────────── -->
-  <project name="mlbevo_gen2_cmp_psp"
-           path="mlbevo_gen2_cmp_psp"
-           revision="bz-migration" />
-
-  <project name="mlbevo_gen2_cmp_demo"
-           path="mlbevo_gen2_cmp_demo"
-           revision="bz-migration" />
-
-  <!-- ── This manifest repo (workspace root) ───────────────────────── -->
+  <!-- ── Manifest repo (workspace root) ───────────────────────────────── -->
   <project name="pero_theia"
            path="."
            remote="theia"
            revision="main" />
+
+  <!-- ── gateway/ — Hercules firmware + Linux host library ────────────── -->
+  <project name="pero_cmp_ti"
+           path="gateway/pero_cmp_ti"
+           revision="bz-migration" />
+
+  <project name="pero_cmp_ti_gw"
+           path="gateway/pero_cmp_ti_gw"
+           revision="bz-migration" />
+
+  <project name="pero_cmp_lnx"
+           path="gateway/pero_cmp_lnx"
+           revision="bz-migration" />
+
+  <!-- ── services/ — Linux gateway NIF service ────────────────────────── -->
+  <project name="pero_cmp_gw_svc"
+           path="services/pero_cmp_gw_svc"
+           revision="bz-migration" />
+
+  <!-- ── applications/ — TIPC gateway client demo ─────────────────────── -->
+  <project name="pero_cmp_gw_cln_demo"
+           path="applications/pero_cmp_gw_cln_demo"
+           revision="bz-migration" />
+
+  <!-- ── platforms/ — Platform support package + demo app ─────────────── -->
+  <project name="mlbevo_gen2_cmp_psp"
+           path="platforms/mlbevo_gen2_cmp_psp"
+           revision="bz-migration" />
+
+  <project name="mlbevo_gen2_cmp_demo"
+           path="platforms/mlbevo_gen2_cmp_demo"
+           revision="bz-migration" />
 
 </manifest>

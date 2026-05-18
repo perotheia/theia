@@ -4,17 +4,22 @@ Multi-repo manifest for the PERO CMP signal capture / gateway system.
 Uses **Google repo tool** for workspace management and **Bazel 9** as the
 unified build system. `generate.sh` has been replaced entirely by Bazel rules.
 
-## Repos in this workspace
+## Workspace layout
 
-| Path | Description |
-|---|---|
-| `pero_cmp_ti/` | Hercules TMS570 capture firmware (ASAM-CMP over UDP) |
-| `pero_cmp_ti_gw/` | Hercules gateway firmware (CAN+FlexRay TX via UDP) |
-| `pero_cmp_lnx/` | Linux host library (`libcmpdecoder`, `libgw`) + demo tools |
-| `pero_cmp_gw_svc/` | Linux gateway NIF service (`cmp_gw`) |
-| `pero_cmp_gw_cln_demo/` | TIPC gateway client demo (`cmp_gw_client`) |
-| `mlbevo_gen2_cmp_psp/` | Platform support package (codec + PSP + GwBusId) |
-| `mlbevo_gen2_cmp_demo/` | ACC_07 pcap decoder demo |
+```
+.                              workspace root (this manifest repo)
+gateway/
+  pero_cmp_ti/                 Hercules TMS570 capture firmware (ASAM-CMP over UDP)
+  pero_cmp_ti_gw/              Hercules gateway firmware (CAN+FlexRay TX via UDP)
+  pero_cmp_lnx/                Linux host library (libcmpdecoder, libgw) + demo tools
+services/
+  pero_cmp_gw_svc/             Linux gateway NIF service (cmp_gw binary)
+applications/
+  pero_cmp_gw_cln_demo/        TIPC gateway client demo (cmp_gw_client binary)
+platforms/
+  mlbevo_gen2_cmp_psp/         Platform support package (codec + PSP + GwBusId)
+  mlbevo_gen2_cmp_demo/        ACC_07 pcap decoder demo
+```
 
 ## Prerequisites
 
@@ -58,16 +63,16 @@ repo sync -j8
 # (All repos check out on bz-migration branch automatically via manifest)
 
 # Build all Linux host targets — no configuration needed
-bazel build //pero_cmp_lnx/demo:all
-bazel build //pero_cmp_gw_svc:cmp_gw
-bazel build //pero_cmp_gw_cln_demo:cmp_gw_client
-bazel build //mlbevo_gen2_cmp_demo:mlbevo_demo
+bazel build //gateway/pero_cmp_lnx/demo:all
+bazel build //services/pero_cmp_gw_svc:cmp_gw
+bazel build //applications/pero_cmp_gw_cln_demo:cmp_gw_client
+bazel build //platforms/mlbevo_gen2_cmp_demo:mlbevo_demo
 
 # Build PSP (triggers code generation from FIBEX + DBC, then compiles ~6000 .c files)
-bazel build //mlbevo_gen2_cmp_psp:codec
+bazel build //platforms/mlbevo_gen2_cmp_psp:codec
 
 # Cross-compile Hercules firmware (requires arm-none-eabi-gcc-7-2017-q4)
-bazel build //pero_cmp_ti:pero_cmp_ti.elf --config=cortex_r4f
+bazel build //gateway/pero_cmp_ti:pero_cmp_ti.elf --config=cortex_r4f
 
 # Build everything at once
 bazel build //... --config=linux               # all host targets
@@ -88,11 +93,11 @@ and re-runs generation + compilation on the next `bazel build`.
 bazel build //mlbevo_gen2_cmp_psp:generate
 
 # Full codec library (generates + compiles all ~6000 .c files)
-bazel build //mlbevo_gen2_cmp_psp:codec
+bazel build //platforms/mlbevo_gen2_cmp_psp:codec
 
 # Verify DBC dependency: touch a DBC, then rebuild
 touch mlbevo_gen2_cmp_psp/config/dbc/MLBevo_Gen2_MLBevo_KCAN_KMatrix_V8.27.01F.dbc
-bazel build //mlbevo_gen2_cmp_psp:codec   # PspGenerate + PspCompile will re-run
+bazel build //platforms/mlbevo_gen2_cmp_psp:codec   # PspGenerate + PspCompile will re-run
 ```
 
 ## opkg packaging
@@ -190,7 +195,7 @@ dependency on the opkg-build script at build time.
 ## Toolchains
 
 ### Linux host (default)
-System GCC 13 (Ubuntu 24.04). Used for all `//pero_cmp_lnx/...`,
+System GCC 13 (Ubuntu 24.04). Used for all `//gateway/pero_cmp_lnx/...`,
 `//pero_cmp_gw_svc/...`, `//mlbevo_gen2_cmp_psp/...` targets.
 
 ### ARM GCC 7-2017-q4 (`--config=cortex_r4f`)
@@ -211,9 +216,9 @@ Linker: `.cmd` format (`source/generated_code/HL_sys_link.cmd`)
 Stages: `setup → build_host → build_firmware → test → package`
 
 - `setup`: downloads arm-gcc toolchain, caches it
-- `build_host`: `bazel build //pero_cmp_lnx/... //mlbevo_gen2_cmp_psp:codec`
-- `build_firmware`: `bazel build //pero_cmp_ti:pero_cmp_ti.elf --config=cortex_r4f`
-- `test`: `bazel test //pero_cmp_lnx/...`
+- `build_host`: `bazel build //gateway/pero_cmp_lnx/... //platforms/mlbevo_gen2_cmp_psp:codec`
+- `build_firmware`: `bazel build //gateway/pero_cmp_ti:pero_cmp_ti.elf --config=cortex_r4f`
+- `test`: `bazel test //gateway/pero_cmp_lnx/...`
 - `package`: produces `psp_tar.tar.gz` artifact on main/tags
 
 ## Local development (symlink workspace)

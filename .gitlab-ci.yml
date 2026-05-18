@@ -70,7 +70,7 @@ build:libcmpdecoder:
   <<: *setup_workspace
   script:
     - cd workspace
-    - bazel build //pero_cmp_lnx/lib:cmpdecoder
+    - bazel build //gateway/pero_cmp_lnx/lib:cmpdecoder
         --config=linux --config=ci
   artifacts:
     paths: [workspace/bazel-bin/pero_cmp_lnx/lib/]
@@ -82,9 +82,9 @@ build:libgw:
   <<: *setup_workspace
   script:
     - cd workspace
-    - bazel build //pero_cmp_lnx/lib:gw
-        //pero_cmp_gw_svc:cmp_gw
-        //pero_cmp_gw_cln_demo:cmp_gw_client
+    - bazel build //gateway/pero_cmp_lnx/lib:gw
+        //services/pero_cmp_gw_svc:cmp_gw
+        //applications/pero_cmp_gw_cln_demo:cmp_gw_client
         --config=linux --config=ci
 
 build:libpsp:
@@ -95,7 +95,7 @@ build:libpsp:
     - cd workspace
     # PSP requires code generation first
     - cd mlbevo_gen2_cmp_psp && bash generate.sh && cd ..
-    - bazel build //mlbevo_gen2_cmp_psp:psp
+    - bazel build //platforms/mlbevo_gen2_cmp_psp:psp
         --config=linux --config=ci
 
 # ── Stage: build_firmware ──────────────────────────────────────────────────
@@ -105,7 +105,7 @@ build:hercules_firmware:
   <<: *setup_workspace
   script:
     - cd workspace
-    - bazel build //pero_cmp_ti:pero_cmp_ti.elf
+    - bazel build //gateway/pero_cmp_ti:pero_cmp_ti.elf
         --config=cortex_r4f --config=ci
   artifacts:
     paths:
@@ -118,7 +118,7 @@ build:hercules_gw_firmware:
   <<: *setup_workspace
   script:
     - cd workspace
-    - bazel build //pero_cmp_ti_gw:pero_cmp_ti_gw.elf
+    - bazel build //gateway/pero_cmp_ti_gw:pero_cmp_ti_gw.elf
         --config=cortex_r4f --config=ci
   artifacts:
     paths:
@@ -132,7 +132,7 @@ test:host:
   <<: *setup_workspace
   script:
     - cd workspace
-    - bazel test //pero_cmp_lnx/...
+    - bazel test //gateway/pero_cmp_lnx/...
         --config=linux --config=ci
         --test_output=errors
 
@@ -144,7 +144,7 @@ package:psp:
   <<: *setup_workspace
   script:
     - cd workspace
-    - bazel build //mlbevo_gen2_cmp_psp:psp_tar --config=linux --config=ci
+    - bazel build //platforms/mlbevo_gen2_cmp_psp:psp_tar --config=linux --config=ci
   artifacts:
     name: "psp-${CI_COMMIT_SHORT_SHA}"
     paths: [workspace/bazel-bin/mlbevo_gen2_cmp_psp/psp_tar.tar.gz]

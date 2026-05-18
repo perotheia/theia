@@ -33,7 +33,7 @@ pkg_opkg(
     description = "PERO CMP decoder library (ASAM-CMP, FIBEX, PSP loader)",
     section     = "libs",
     files = {
-        "//pero_cmp_lnx/lib:cmpdecoder_so_file": "/usr/lib/libcmpdecoder.so",
+        "//gateway/pero_cmp_lnx/lib:cmpdecoder_so_file": "/usr/lib/libcmpdecoder.so",
     },
     postinst = "#!/bin/sh\nldconfig\n",
 )
@@ -47,7 +47,7 @@ pkg_opkg(
     description = "PERO CMP platform support package (MLBevo Gen2 codec + dispatch)",
     section     = "libs",
     files = {
-        "//mlbevo_gen2_cmp_psp:psp_so": "/usr/lib/libpsp.so",
+        "//platforms/mlbevo_gen2_cmp_psp:psp_so": "/usr/lib/libpsp.so",
     },
     postinst = "#!/bin/sh\nldconfig\n",
 )
@@ -62,7 +62,7 @@ pkg_opkg(
     section     = "libs",
     depends     = "pero-libcmpdecoder, pero-libpsp",
     files = {
-        "//pero_cmp_lnx/lib:gw_so_file": "/usr/lib/libgw.so",
+        "//gateway/pero_cmp_lnx/lib:gw_so_file": "/usr/lib/libgw.so",
     },
     postinst = "#!/bin/sh\nldconfig\n",
 )
@@ -76,7 +76,7 @@ pkg_opkg(
     description = "PERO CMP gateway NIF service (ASAM-CMP UDP → TIPC clients)",
     depends     = "pero-libgw, pero-libcmpdecoder, pero-libpsp",
     files = {
-        "//pero_cmp_gw_svc:cmp_gw": "/usr/bin/cmp_gw",
+        "//services/pero_cmp_gw_svc:cmp_gw": "/usr/bin/cmp_gw",
     },
     postinst = """#!/bin/sh
 # Enable and start the service if systemd is available
@@ -94,7 +94,7 @@ pkg_opkg(
     arch        = _ARCH,
     description = "PERO CMP gateway client demo (TIPC RX + TX_REQUEST)",
     files = {
-        "//pero_cmp_gw_cln_demo:cmp_gw_client": "/usr/bin/cmp_gw_client",
+        "//applications/pero_cmp_gw_cln_demo:cmp_gw_client": "/usr/bin/cmp_gw_client",
     },
 )
 
@@ -112,9 +112,9 @@ pkg_opkg(
         # Firmware ELF built by cross-compile; packaged as a data file for flashing.
         # Build: bazel build //pero_cmp_ti_gw:pero_cmp_ti_gw.elf --config=cortex_r4f
         # For now use a placeholder; comment out until cross-compile is available.
-        # "//pero_cmp_ti_gw:pero_cmp_ti_gw.elf": "/usr/share/pero-gw-fw/pero_cmp_ti_gw.elf",
+        # "//gateway/pero_cmp_ti_gw:pero_cmp_ti_gw.elf": "/usr/share/pero-gw-fw/pero_cmp_ti_gw.elf",
         # Use cmp_gw as a placeholder to keep the target buildable on host
-        "//pero_cmp_gw_svc:cmp_gw": "/usr/share/pero-gw-fw/README",
+        "//services/pero_cmp_gw_svc:cmp_gw": "/usr/share/pero-gw-fw/README",
     },
 )
 
@@ -128,7 +128,7 @@ pkg_opkg(
     depends     = "pero-libcmpdecoder, pero-libpsp, pero-libgw, pero-gw-svc, pero-gw-client",
     files = {
         # Empty package — only installs deps
-        "//pero_cmp_gw_svc:cmp_gw": "/usr/share/pero-gw-stack/installed",
+        "//services/pero_cmp_gw_svc:cmp_gw": "/usr/share/pero-gw-stack/installed",
     },
 )
 

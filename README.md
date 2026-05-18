@@ -1,13 +1,27 @@
-# pero_theia — PERO CMP Workspace
+# pero_theia — PERO CMP Workspace (Bazel files)
 
-Multi-repo manifest for the PERO CMP signal capture / gateway system.
-Uses **Google repo tool** for workspace management and **Bazel 9** as the
+Bazel workspace for the PERO CMP signal capture / gateway system.
+Uses **Google repo tool** for multi-repo management and **Bazel 9** as the
 unified build system. `generate.sh` has been replaced entirely by Bazel rules.
+
+> **This repo contains the workspace files** (MODULE.bazel, BUILD rules,
+> toolchains, platforms, packaging).  
+> The repo manifest lives in a separate repo:
+> [`pero_theia_manifest`](https://cicd.skyway.porsche.com/PG50/pero_theia_manifest)
 
 ## Workspace layout
 
+After `repo sync`, the workspace looks like:
+
 ```
-.                              workspace root (this manifest repo)
+.                              ← pero_theia (this repo — Bazel workspace root)
+  MODULE.bazel                   Bazel module + dep declarations
+  .bazelrc                       Build configs (--config=linux / cortex_r4f / ti_arm_cgt_18)
+  toolchains/                    Cross-compile toolchain configs (GCC + TI armcl)
+  platforms/                     Platform constraint definitions (tms570lc43xx etc.)
+  rules/                         Custom Starlark rules (psp.bzl, opkg.bzl)
+  packaging/                     opkg .ipk package definitions
+
 gateway/
   pero_cmp_ti/                 Hercules TMS570 capture firmware (ASAM-CMP over UDP)
   pero_cmp_ti_gw/              Hercules gateway firmware (CAN+FlexRay TX via UDP)
@@ -55,10 +69,14 @@ curl -fL https://developer.arm.com/-/media/Files/downloads/gnu-rm/7-2017q4/gcc-a
 ## Quick start
 
 ```sh
-# 1. Bootstrap workspace (real git checkouts, no symlinks)
+# 1. Bootstrap workspace from the manifest repo
 mkdir theia && cd theia
-repo init -u git@cicd.skyway.porsche.com:PG50/pero_theia.git -b main --depth=1
+repo init -u git@cicd.skyway.porsche.com:PG50/pero_theia_manifest.git \
+          -b main --partial-clone --depth=1
 repo sync -j8
+
+# repo checks out pero_theia at workspace root (MODULE.bazel, toolchains/, etc.)
+# and all component repos at their hierarchical paths.
 
 # 2. Activate bz-migration on all component repos
 repo forall -c 'git checkout bz-migration'
@@ -123,6 +141,34 @@ bazel build //platforms/mlbevo_gen2_cmp_psp:codec
 # Verify DBC dependency: touch a DBC, then rebuild
 touch mlbevo_gen2_cmp_psp/config/dbc/MLBevo_Gen2_MLBevo_KCAN_KMatrix_V8.27.01F.dbc
 bazel build //platforms/mlbevo_gen2_cmp_psp:codec   # PspGenerate + PspCompile will re-run
+```
+
+## Manifest repos
+
+| Repo | Purpose |
+|---|---|
+| [`pero_theia_manifest`](https://cicd.skyway.porsche.com/PG50/pero_theia_manifest) | `default.xml` only — used with `repo init -u` |
+| [`pero_theia`](https://cicd.skyway.porsche.com/PG50/pero_theia) | Bazel workspace files (this repo) — checked out at `.` |
+
+### Local manifests
+
+After `repo init`, create `.repo/local_manifests/` to add extra projects
+or override paths without modifying the shared manifest:
+
+```sh
+mkdir -p .repo/local_manifests
+
+# Example: add a private repo to the workspace
+cat > .repo/local_manifests/private.xml << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<manifest>
+  <remote name="private" fetch="git@my-server.example.com:my-org" />
+  <project name="my-private-repo" path="private/my-repo" remote="private"
+           revision="main" />
+</manifest>
+EOF
+
+repo sync -j8   # picks up the new project automatically
 ```
 
 ## opkg packaging

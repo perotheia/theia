@@ -14,6 +14,16 @@ build:cortex_r4f --crosstool_top=//toolchains/arm_gcc_7_2017q4:cc_suite
 build:cortex_r4f --cpu=cortex-r4f
 build:cortex_r4f --compiler=arm-none-eabi-gcc
 
+# ── TI ARM CGT 18.1.1.LTS (original CCS 8 compiler) ─────────────────────
+# Requires /opt/ti/cgt_arm_18.1.1.LTS/ installed locally.
+# Produces .obj files and ELF using armcl + HL_sys_link.cmd linker script.
+build:ti_arm_cgt_18 --platforms=//platforms:tms570lc43xx
+build:ti_arm_cgt_18 --crosstool_top=//toolchains/ti_arm_cgt_18:cc_suite
+build:ti_arm_cgt_18 --cpu=cortex-r4f
+build:ti_arm_cgt_18 --compiler=armcl
+build:ti_arm_cgt_18 --sandbox_strategy=off      # TI armcl needs host tools
+build:ti_arm_cgt_18 --spawn_strategy=local
+
 # ── CI mode (no interactive output) ───────────────────────────────────────
 build:ci --show_progress_rate_limit=30
 build:ci --curses=no

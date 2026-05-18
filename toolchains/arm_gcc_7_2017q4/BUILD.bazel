@@ -9,13 +9,7 @@ package(default_visibility = ["//visibility:public"])
 cc_toolchain_config(name = "cortex_r4f_config")
 
 # ── Filegroup: all toolchain binaries ─────────────────────────────────────
-filegroup(
-    name = "arm_gcc_all_files",
-    srcs = glob(
-        ["/opt/gcc-arm-none-eabi-7-2017-q4/**"],
-        allow_empty = True,
-    ),
-)
+filegroup(name = "arm_gcc_all_files", srcs = [])
 
 filegroup(name = "empty", srcs = [])
 
@@ -45,6 +39,7 @@ toolchain(
         "@platforms//cpu:arm",
         "//platforms:cortex_r4f",
         "//platforms:big_endian",
+        "//platforms:gcc_arm",
     ],
     toolchain      = ":cortex_r4f_toolchain",
     toolchain_type = "@bazel_tools//tools/cpp:toolchain_type",

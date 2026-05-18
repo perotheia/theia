@@ -5,6 +5,7 @@ This is the exact GCC version shipped with TI Code Composer Studio 8.x.
 Local install: /opt/gcc-arm-none-eabi-7-2017-q4/bin/arm-none-eabi-*
 """
 
+load("@rules_cc//cc:defs.bzl", "CcToolchainConfigInfo")
 load("@rules_cc//cc:cc_toolchain_config_lib.bzl",
      "action_config",
      "feature",
@@ -13,6 +14,7 @@ load("@rules_cc//cc:cc_toolchain_config_lib.bzl",
      "tool",
      "tool_path",
      "with_feature_set")
+load("@rules_cc//cc/private/toolchain_config:cc_toolchain_config_info.bzl", "create_cc_toolchain_config_info")
 load("@bazel_tools//tools/build_defs/cc:action_names.bzl", "ACTION_NAMES")
 
 _TOOLCHAIN_ROOT = "/opt/gcc-arm-none-eabi-7-2017-q4"
@@ -103,7 +105,7 @@ def _impl(ctx):
         ],
     )
 
-    return cc_common.create_cc_toolchain_config_info(
+    return create_cc_toolchain_config_info(
         ctx = ctx,
         toolchain_identifier = "arm-gcc-7-2017q4-cortex-r4f",
         target_system_name   = "arm-none-eabi",

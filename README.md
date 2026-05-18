@@ -95,6 +95,89 @@ touch mlbevo_gen2_cmp_psp/config/dbc/MLBevo_Gen2_MLBevo_KCAN_KMatrix_V8.27.01F.d
 bazel build //mlbevo_gen2_cmp_psp:codec   # PspGenerate + PspCompile will re-run
 ```
 
+## opkg packaging
+
+The `//packaging` package produces installable `.ipk` files (opkg/OpenWrt
+format — `ar` archive with `debian-binary`, `control.tar.gz`, `data.tar.gz`).
+The rule is in `rules/opkg.bzl`.
+
+### Packages
+
+| Package | Contents | Install path | Depends |
+|---|---|---|---|
+| `pero-libcmpdecoder` | `libcmpdecoder.so` | `/usr/lib/` | — |
+| `pero-libpsp` | `libpsp.so` | `/usr/lib/` | — |
+| `pero-libgw` | `libgw.so` | `/usr/lib/` | libcmpdecoder, libpsp |
+| `pero-gw-svc` | `cmp_gw` | `/usr/bin/` | libgw, libcmpdecoder, libpsp |
+| `pero-gw-client` | `cmp_gw_client` | `/usr/bin/` | — |
+| `pero-gw-firmware` | Hercules ELF | `/usr/share/pero-gw-fw/` | — |
+| `pero-gw-stack` | meta-package | — | full runtime stack |
+
+### Build and install
+
+```sh
+# Build all packages
+bazel build //packaging:pero-libcmpdecoder \
+            //packaging:pero-libpsp \
+            //packaging:pero-libgw \
+            //packaging:pero-gw-svc \
+            //packaging:pero-gw-client \
+            //packaging:pero-gw-stack
+
+# Build Packages index (opkg repo metadata)
+bazel build //packaging:Packages
+
+# Generate dist.sh installer script then run it
+bazel build //packaging:install
+bash bazel-bin/packaging/dist.sh /opt/pero-gw/dist
+
+# Install on target using opkg
+opkg install /opt/pero-gw/dist/pero-gw-stack_1.0.0_x86_64.ipk \
+             --add-dest root:/opt/pero-gw \
+             --lists-dir /opt/pero-gw/dist
+```
+
+### Install layout after dist.sh
+
+```
+/opt/pero-gw/dist/
+├── Packages.idx                         # opkg repository index
+├── pero-libcmpdecoder_1.0.0_x86_64.ipk
+├── pero-libpsp_1.0.0_x86_64.ipk        # 2.3 MB — MLBevo Gen2 codec
+├── pero-libgw_1.0.0_x86_64.ipk
+├── pero-gw-svc_1.0.0_x86_64.ipk
+├── pero-gw-client_1.0.0_x86_64.ipk
+├── pero-gw-firmware_1.0.0_all.ipk
+└── pero-gw-stack_1.0.0_x86_64.ipk      # meta: installs full stack
+```
+
+### Adding a new package
+
+```python
+# In packaging/BUILD.bazel:
+load("//rules:opkg.bzl", "pkg_opkg")
+
+pkg_opkg(
+    name        = "my-package",
+    package     = "my-package",
+    version     = "1.0.0",
+    arch        = "x86_64",
+    description = "Short description",
+    depends     = "pero-libcmpdecoder",
+    files = {
+        "//my_repo:my_binary": "/usr/bin/my_binary",
+        "//my_repo:my_lib_so_file": "/usr/lib/libmy.so",
+    },
+    postinst = "#!/bin/sh\nldconfig\n",
+)
+```
+
+### opkg-build tool
+
+`~/.local/bin/opkg-build` is a local script (opkg-utils is not in Ubuntu 24.04
+apt). The Bazel rule builds packages directly with `ar` and `tar` — no
+dependency on the opkg-build script at build time.
+
 ## Branch convention
 
 | Branch | Purpose |

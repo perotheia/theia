@@ -10,9 +10,20 @@ build:linux --compiler=gcc
 
 # ── ARM Cortex-R4F cross-compile (Hercules TMS570) ────────────────────────
 build:cortex_r4f --platforms=//platforms:tms570lc43xx
-build:cortex_r4f --crosstool_top=//toolchains/arm_gcc_7_2017q4:cc_suite
-build:cortex_r4f --cpu=cortex-r4f
-build:cortex_r4f --compiler=arm-none-eabi-gcc
+
+# ── TI ARM CGT 18.1.1.LTS (original CCS 8 compiler) ─────────────────────
+# Requires /opt/ti/cgt_arm_18.1.1.LTS/ installed.
+build:ti_arm_cgt_18 --platforms=//platforms:tms570lc43xx_ti
+build:ti_arm_cgt_18 --extra_toolchains=//toolchains/ti_arm_cgt_18:cc_suite
+
+build:cortex_r4f --platforms=//platforms:tms570lc43xx_gcc
+build:cortex_r4f --extra_toolchains=//toolchains/arm_gcc_7_2017q4:cc_suite
+build:ti_arm_cgt_18 --strategy=CppCompile=local
+build:ti_arm_cgt_18 --strategy=CppLink=local
+build:ti_arm_cgt_18 --strategy=CppArchive=local
+# Disable strict header inclusion checking — TI CGT headers are outside workspace
+build:ti_arm_cgt_18 --features=-layering_check
+build:ti_arm_cgt_18 --nocheck_visibility
 
 # ── CI mode (no interactive output) ───────────────────────────────────────
 build:ci --show_progress_rate_limit=30

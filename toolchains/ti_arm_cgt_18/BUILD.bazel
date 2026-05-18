@@ -1,5 +1,6 @@
 """TI ARM CGT 18.1.1.LTS toolchain for TMS570LC43xx (Cortex-R4F, be32, VFPv3-D16)."""
 
+load("@rules_cc//cc:defs.bzl", "cc_toolchain")
 load(":cc_toolchain_config.bzl", "cc_toolchain_config")
 
 package(default_visibility = ["//visibility:public"])
@@ -8,13 +9,7 @@ package(default_visibility = ["//visibility:public"])
 cc_toolchain_config(name = "ti_arm_cgt_18_config")
 
 # ── Filegroup: all toolchain binaries ─────────────────────────────────────
-filegroup(
-    name = "ti_cgt_all_files",
-    srcs = glob(
-        ["/opt/ti/cgt_arm_18.1.1.LTS/**"],
-        allow_empty = True,
-    ),
-)
+filegroup(name = "ti_cgt_all_files", srcs = [])
 
 filegroup(name = "empty", srcs = [])
 
@@ -33,6 +28,7 @@ cc_toolchain(
     target_compatible_with = [
         "//platforms:cortex_r4f",
         "//platforms:big_endian",
+        "//platforms:ti_armcl",
     ],
 )
 
@@ -48,6 +44,7 @@ toolchain(
         "@platforms//cpu:arm",
         "//platforms:cortex_r4f",
         "//platforms:big_endian",
+        "//platforms:ti_armcl",
     ],
     toolchain      = ":ti_arm_cgt_18_toolchain",
     toolchain_type = "@bazel_tools//tools/cpp:toolchain_type",

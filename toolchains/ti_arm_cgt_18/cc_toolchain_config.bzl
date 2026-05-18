@@ -11,6 +11,8 @@ load("@rules_cc//cc:cc_toolchain_config_lib.bzl",
      "flag_group",
      "flag_set",
      "tool_path")
+load("@rules_cc//cc:defs.bzl", "CcToolchainConfigInfo")
+load("@rules_cc//cc/private/toolchain_config:cc_toolchain_config_info.bzl", "create_cc_toolchain_config_info")
 load("@bazel_tools//tools/build_defs/cc:action_names.bzl", "ACTION_NAMES")
 
 _CGT_ROOT = "/opt/ti/cgt_arm_18.1.1.LTS"
@@ -37,10 +39,10 @@ _ARMCL_LINK_FLAGS = [
 def _impl(ctx):
     tool_paths = [
         # armcl doubles as C and C++ compiler
-        tool_path(name = "gcc",     path = _CGT_ROOT + "/bin/armcl"),
-        tool_path(name = "g++",     path = _CGT_ROOT + "/bin/armcl"),
+        tool_path(name = "gcc",     path = "/home/axadmin/repo/launch-box/theia/toolchains/ti_arm_cgt_18/armcl_wrapper.sh"),
+        tool_path(name = "g++",     path = "/home/axadmin/repo/launch-box/theia/toolchains/ti_arm_cgt_18/armcl_wrapper.sh"),
         tool_path(name = "ar",      path = _CGT_ROOT + "/bin/armar"),
-        tool_path(name = "cpp",     path = _CGT_ROOT + "/bin/armcl"),
+        tool_path(name = "cpp",     path = "/home/axadmin/repo/launch-box/theia/toolchains/ti_arm_cgt_18/armcl_wrapper.sh"),
         tool_path(name = "ld",      path = _CGT_ROOT + "/bin/armlnk"),
         tool_path(name = "nm",      path = _CGT_ROOT + "/bin/armnm"),
         tool_path(name = "objdump", path = _CGT_ROOT + "/bin/armdis"),
@@ -97,7 +99,18 @@ def _impl(ctx):
         ],
     )
 
-    return cc_common.create_cc_toolchain_config_info(
+
+    # Suppress GCC-only flags that Bazel injects by default.
+    # armcl does not support -MD/-MF (dep tracking), -frandom-seed, or -iquote.
+    no_deps = feature(name = "dependency_file",    enabled = False)
+    no_seed = feature(name = "random_seed",         enabled = False)
+    no_mod  = feature(name = "module_maps",         enabled = False)
+    no_san  = feature(name = "sanitizer_compile_flags", enabled = False)
+    no_fdo  = feature(name = "fdo_instrument",      enabled = False)
+    no_lto  = feature(name = "lto_unit",            enabled = False)
+    no_cov  = feature(name = "coverage",            enabled = False)
+
+    return create_cc_toolchain_config_info(
         ctx                  = ctx,
         toolchain_identifier = "ti-arm-cgt-18.1.1.lts-cortex-r4f",
         target_system_name   = "arm-none-eabi",

@@ -17,6 +17,7 @@ module(
 )
 
 # ── Standard Bazel rules ───────────────────────────────────────────────────
+bazel_dep(name = "platforms",    version = "0.0.11")
 bazel_dep(name = "rules_cc",     version = "0.2.17")
 bazel_dep(name = "rules_pkg",    version = "1.1.0")
 
@@ -37,3 +38,9 @@ bazel_dep(name = "nanopb", version = "0.4.9.1")
 # ── System library handles ─────────────────────────────────────────────────
 # libpcap and libexpat are resolved via the host sysroot (cc_library + linkopts).
 # No Bazel module needed — the toolchain locates them via pkg-config.
+
+# ── Toolchain registrations ────────────────────────────────────────────────
+# ARM GCC 7-2017-q4 (open-source, CCS 8 era)
+register_toolchains("//toolchains/arm_gcc_7_2017q4:cc_suite")
+# TI ARM CGT 18.1.1.LTS (original CCS 8 proprietary compiler)
+register_toolchains("//toolchains/ti_arm_cgt_18:cc_suite")

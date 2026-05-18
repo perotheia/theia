@@ -8,10 +8,6 @@ build --incompatible_enable_cc_toolchain_resolution
 build:linux --cpu=k8
 build:linux --compiler=gcc
 
-# ── ARM Cortex-R4F cross-compile — arm-none-eabi-gcc 7-2017-q4 ───────────
-build:cortex_r4f --platforms=//platforms:tms570lc43xx_gcc
-build:cortex_r4f --extra_toolchains=//toolchains/arm_gcc_7_2017q4:cc_suite
-
 # ── TI ARM CGT 18.1.1.LTS — original CCS 8 compiler (armcl) ─────────────
 # Requires /opt/ti/cgt_arm_18.1.1.LTS/ installed.
 build:ti_arm_cgt_18 --platforms=//platforms:tms570lc43xx_ti

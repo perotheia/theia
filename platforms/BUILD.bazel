@@ -56,3 +56,30 @@ constraint_value(
     name = "no_fpu",
     constraint_setting = ":fpu",
 )
+
+# ── Compiler-type constraint ───────────────────────────────────────────────
+# Used in BUILD select() to emit the correct compiler flags.
+constraint_setting(name = "c_compiler")
+
+constraint_value(
+    name = "ti_armcl",
+    constraint_setting = ":c_compiler",
+)
+
+constraint_value(
+    name = "gcc_arm",
+    constraint_setting = ":c_compiler",
+)
+
+# ── TMS570 platform variants: one per toolchain ───────────────────────────
+platform(
+    name = "tms570lc43xx_ti",
+    parents = [":tms570lc43xx"],
+    constraint_values = [":ti_armcl"],
+)
+
+platform(
+    name = "tms570lc43xx_gcc",
+    parents = [":tms570lc43xx"],
+    constraint_values = [":gcc_arm"],
+)

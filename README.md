@@ -16,8 +16,8 @@ After `repo sync`, the workspace looks like:
 ```
 .                              ← pero_theia (this repo — Bazel workspace root)
   MODULE.bazel                   Bazel module + dep declarations
-  .bazelrc                       Build configs (--config=linux / cortex_r4f / ti_arm_cgt_18)
-  toolchains/                    Cross-compile toolchain configs (GCC + TI armcl)
+  .bazelrc                       Build configs (--config=linux / ti_arm_cgt_18)
+  toolchains/                    Cross-compile toolchain configs (TI armcl)
   platforms/                     Platform constraint definitions (tms570lc43xx etc.)
   rules/                         Custom Starlark rules (psp.bzl, opkg.bzl)
   packaging/                     opkg .ipk package definitions
@@ -54,16 +54,10 @@ sudo apt install libpcap-dev libexpat1-dev libnanopb-dev gcc g++
 # 4. Python code-generator dep
 pip install jinja2        # used by gen_platform_protos.py
 
-# 5. ARM GCC 7-2017-q4 (CCS 8 era) — for Hercules firmware cross-compile
-sudo mkdir -p /opt/gcc-arm-none-eabi-7-2017-q4
-curl -fL https://developer.arm.com/-/media/Files/downloads/gnu-rm/7-2017q4/gcc-arm-none-eabi-7-2017-q4-major-linux.tar.bz2 \
-  | sudo tar -xj --strip-components=1 -C /opt/gcc-arm-none-eabi-7-2017-q4
-
-# 6. TI ARM CGT 18.1.1.LTS (original CCS 8 compiler, requires TI account)
-#    Download from: https://www.ti.com/tool/ARM-CGT
+# 5. TI ARM CGT 18.1.1.LTS — required for Hercules firmware
+#    CCS 8.0.0 project: codegenToolVersion="18.1.1.LTS" (armcl, not GCC)
+#    Download from: https://www.ti.com/tool/ARM-CGT  (TI account required)
 #    Install to: /opt/ti/cgt_arm_18.1.1.LTS/
-#    The project was originally built with: codegenToolVersion="18.1.1.LTS"
-#    armcl toolchain config lives in: toolchains/ti_arm_cgt_18/
 ```
 
 ## Quick start
@@ -81,46 +75,39 @@ repo sync -j8
 # 2. Activate bz-migration on all component repos
 repo forall -c 'git checkout bz-migration'
 
-# 3. Build (no manual generate steps — Bazel handles PSP codegen)
-bazel build //gateway/pero_cmp_lnx/lib:cmpdecoder
-bazel build //gateway/pero_cmp_lnx/lib:gw
+# 3. Build Linux host targets
 bazel build //gateway/pero_cmp_lnx/demo:all          # pero-decode, pero-filter, pero-timesync
 bazel build //services/pero_cmp_gw_svc:cmp_gw
 bazel build //applications/pero_cmp_gw_cln_demo:cmp_gw_client
-bazel build //platforms/mlbevo_gen2_cmp_psp:codec    # PspGenerate + PspCompile (~6000 .c)
+bazel build //platforms/mlbevo_gen2_cmp_psp:codec    # PSP codegen + compile (~6000 .c files)
 bazel build //platforms/mlbevo_gen2_cmp_psp:psp_so   # libpsp.so
-bazel build //platforms/mlbevo_gen2_cmp_demo:mlbevo_demo
 
-# Cross-compile Hercules firmware (requires arm-none-eabi-gcc-7-2017-q4)
-bazel build //gateway/pero_cmp_ti:pero_cmp_ti.elf --config=cortex_r4f
+# 4. Compile Hercules firmware (requires /opt/ti/cgt_arm_18.1.1.LTS/)
+bazel build //gateway/pero_cmp_ti:pero_cmp_ti.elf    --config=ti_arm_cgt_18
+bazel build //gateway/pero_cmp_ti_gw:pero_cmp_ti_gw.elf --config=ti_arm_cgt_18
 ```
 
 ## Verified build (theia workspace, bz-migration, 2026-05-18)
 
-All targets build from a clean `repo sync` with no manual pre-steps.
+All targets build from a clean `repo sync` + `repo forall -c 'git checkout bz-migration'`
+with no manual pre-steps.
 
-| Target | Output | Status |
+| Target | Output | Config |
 |---|---|---|
-| `//gateway/pero_cmp_lnx/lib:cmpdecoder` | `libcmpdecoder.so` / `.a` | ✓ |
-| `//gateway/pero_cmp_lnx/lib:gw` | `libgw.so` / `.a` | ✓ |
-| `//gateway/pero_cmp_lnx/demo:pero-decode` | `pero-decode` | ✓ |
-| `//gateway/pero_cmp_lnx/demo:pero-filter` | `pero-filter` | ✓ |
-| `//gateway/pero_cmp_lnx/demo:pero-timesync` | `pero-timesync` | ✓ |
-| `//services/pero_cmp_gw_svc:cmp_gw` | `cmp_gw` | ✓ |
-| `//applications/pero_cmp_gw_cln_demo:cmp_gw_client` | `cmp_gw_client` | ✓ |
-| `//platforms/mlbevo_gen2_cmp_psp:codec` | `codec.a` (5948 .c → .a) | ✓ |
-| `//platforms/mlbevo_gen2_cmp_psp:psp` | `psp.a` | ✓ |
-| `//platforms/mlbevo_gen2_cmp_psp:psp_so` | `libpsp.so` (2.3 MB) | ✓ |
-| `//platforms/mlbevo_gen2_cmp_demo:mlbevo_demo` | `mlbevo_demo` | ✓ |
-| `//packaging:pero-libcmpdecoder` | `.ipk` | ✓ |
-| `//packaging:pero-libpsp` | `.ipk` | ✓ |
-| `//packaging:pero-libgw` | `.ipk` | ✓ |
-| `//packaging:pero-gw-svc` | `.ipk` | ✓ |
-| `//packaging:pero-gw-client` | `.ipk` | ✓ |
-| `//packaging:pero-gw-stack` | `.ipk` (meta) | ✓ |
-
-Firmware cross-compile (`//gateway/pero_cmp_ti:pero_cmp_ti.elf --config=cortex_r4f`)
-requires `/opt/gcc-arm-none-eabi-7-2017-q4/` — see Prerequisites.
+| `//gateway/pero_cmp_lnx/lib:cmpdecoder` | `libcmpdecoder.so/.a` | host |
+| `//gateway/pero_cmp_lnx/lib:gw` | `libgw.so/.a` | host |
+| `//gateway/pero_cmp_lnx/demo:pero-decode` | `pero-decode` | host |
+| `//gateway/pero_cmp_lnx/demo:pero-filter` | `pero-filter` | host |
+| `//gateway/pero_cmp_lnx/demo:pero-timesync` | `pero-timesync` | host |
+| `//services/pero_cmp_gw_svc:cmp_gw` | `cmp_gw` | host |
+| `//applications/pero_cmp_gw_cln_demo:cmp_gw_client` | `cmp_gw_client` | host |
+| `//platforms/mlbevo_gen2_cmp_psp:codec` | `codec.a` (5948 .c files) | host |
+| `//platforms/mlbevo_gen2_cmp_psp:psp` | `psp.a` | host |
+| `//platforms/mlbevo_gen2_cmp_psp:psp_so` | `libpsp.so` (2.3 MB) | host |
+| `//platforms/mlbevo_gen2_cmp_demo:mlbevo_demo` | `mlbevo_demo` | host |
+| `//packaging:pero-libcmpdecoder` … `:pero-gw-stack` | `.ipk` packages | host |
+| `//gateway/pero_cmp_ti:pero_cmp_ti.elf` | 975 KB ELF | `ti_arm_cgt_18` |
+| `//gateway/pero_cmp_ti_gw:pero_cmp_ti_gw.elf` | ELF | `ti_arm_cgt_18` |
 
 ## PSP code generation (replaces generate.sh)
 
@@ -132,14 +119,14 @@ action inputs. Modifying any DBC file automatically invalidates the cache
 and re-runs generation + compilation on the next `bazel build`.
 
 ```sh
-# Generate sources only (no compile) — writes to bazel-out tree
-bazel build //mlbevo_gen2_cmp_psp:generate
+# Generate sources only (no compile)
+bazel build //platforms/mlbevo_gen2_cmp_psp:generate
 
-# Full codec library (generates + compiles all ~6000 .c files)
+# Full codec library (generates + compiles ~6000 .c files)
 bazel build //platforms/mlbevo_gen2_cmp_psp:codec
 
 # Verify DBC dependency: touch a DBC, then rebuild
-touch mlbevo_gen2_cmp_psp/config/dbc/MLBevo_Gen2_MLBevo_KCAN_KMatrix_V8.27.01F.dbc
+touch platforms/mlbevo_gen2_cmp_psp/config/dbc/MLBevo_Gen2_MLBevo_KCAN_KMatrix_V8.27.01F.dbc
 bazel build //platforms/mlbevo_gen2_cmp_psp:codec   # PspGenerate + PspCompile will re-run
 ```
 
@@ -158,7 +145,6 @@ or override paths without modifying the shared manifest:
 ```sh
 mkdir -p .repo/local_manifests
 
-# Example: add a private repo to the workspace
 cat > .repo/local_manifests/private.xml << 'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <manifest>
@@ -200,9 +186,6 @@ bazel build //packaging:pero-libcmpdecoder \
             //packaging:pero-gw-client \
             //packaging:pero-gw-stack
 
-# Build Packages index (opkg repo metadata)
-bazel build //packaging:Packages
-
 # Generate dist.sh installer script then run it
 bazel build //packaging:install
 bash bazel-bin/packaging/dist.sh /opt/pero-gw/dist
@@ -212,47 +195,6 @@ opkg install /opt/pero-gw/dist/pero-gw-stack_1.0.0_x86_64.ipk \
              --add-dest root:/opt/pero-gw \
              --lists-dir /opt/pero-gw/dist
 ```
-
-### Install layout after dist.sh
-
-```
-/opt/pero-gw/dist/
-├── Packages.idx                         # opkg repository index
-├── pero-libcmpdecoder_1.0.0_x86_64.ipk
-├── pero-libpsp_1.0.0_x86_64.ipk        # 2.3 MB — MLBevo Gen2 codec
-├── pero-libgw_1.0.0_x86_64.ipk
-├── pero-gw-svc_1.0.0_x86_64.ipk
-├── pero-gw-client_1.0.0_x86_64.ipk
-├── pero-gw-firmware_1.0.0_all.ipk
-└── pero-gw-stack_1.0.0_x86_64.ipk      # meta: installs full stack
-```
-
-### Adding a new package
-
-```python
-# In packaging/BUILD.bazel:
-load("//rules:opkg.bzl", "pkg_opkg")
-
-pkg_opkg(
-    name        = "my-package",
-    package     = "my-package",
-    version     = "1.0.0",
-    arch        = "x86_64",
-    description = "Short description",
-    depends     = "pero-libcmpdecoder",
-    files = {
-        "//my_repo:my_binary": "/usr/bin/my_binary",
-        "//my_repo:my_lib_so_file": "/usr/lib/libmy.so",
-    },
-    postinst = "#!/bin/sh\nldconfig\n",
-)
-```
-
-### opkg-build tool
-
-`~/.local/bin/opkg-build` is a local script (opkg-utils is not in Ubuntu 24.04
-apt). The Bazel rule builds packages directly with `ar` and `tar` — no
-dependency on the opkg-build script at build time.
 
 ## Branch convention
 
@@ -266,40 +208,28 @@ dependency on the opkg-build script at build time.
 ## Toolchains
 
 ### Linux host (default)
-System GCC 13 (Ubuntu 24.04). Used for all `//gateway/pero_cmp_lnx/...`,
-`//pero_cmp_gw_svc/...`, `//mlbevo_gen2_cmp_psp/...` targets.
-
-### ARM GCC 7-2017-q4 (`--config=cortex_r4f`)
-Open-source ARM cross-compiler matching the CCS 8 era toolchain.
-Install: `/opt/gcc-arm-none-eabi-7-2017-q4/`
-Config: `toolchains/arm_gcc_7_2017q4/`
+System GCC 13 (Ubuntu 24.04). No extra install. Used for all
+`//gateway/pero_cmp_lnx/...`, `//services/...`, `//platforms/...` targets.
 
 ### TI ARM CGT 18.1.1.LTS (`--config=ti_arm_cgt_18`)
-Original TI proprietary compiler used in CCS 8.0.0 project files.
-`codegenToolVersion = "18.1.1.LTS"` (`armcl`, not GCC).
-Requires manual download from https://www.ti.com/tool/ARM-CGT
-Install: `/opt/ti/cgt_arm_18.1.1.LTS/`
-Config: `toolchains/ti_arm_cgt_18/`
-Linker: `.cmd` format (`source/generated_code/HL_sys_link.cmd`)
+Original TI proprietary compiler used in the CCS 8.0.0 project files
+(`codegenToolVersion = "18.1.1.LTS"`, i.e. `armcl` — not GCC).
+
+- Install: `/opt/ti/cgt_arm_18.1.1.LTS/`  (requires TI account)
+- Download: https://www.ti.com/tool/ARM-CGT
+- Toolchain config: `toolchains/ti_arm_cgt_18/`
+- Wrapper: `toolchains/ti_arm_cgt_18/armcl_wrapper.sh` — filters GCC-specific
+  Bazel flags and adapts the invocation for armcl (response files, `-o`→`--output_file`, etc.)
+- Linker: TI `.cmd` format (`source/generated_code/HL_sys_link.cmd`)
+- Runs **without sandbox** (`--strategy=CppCompile=local`) so armcl can access
+  its own runtime headers at `/opt/ti/cgt_arm_18.1.1.LTS/include/`
 
 ## CI pipeline (`.gitlab-ci.yml`)
 
 Stages: `setup → build_host → build_firmware → test → package`
 
-- `setup`: downloads arm-gcc toolchain, caches it
+- `setup`: caches TI ARM CGT toolchain
 - `build_host`: `bazel build //gateway/pero_cmp_lnx/... //platforms/mlbevo_gen2_cmp_psp:codec`
-- `build_firmware`: `bazel build //gateway/pero_cmp_ti:pero_cmp_ti.elf --config=cortex_r4f`
+- `build_firmware`: `bazel build //gateway/pero_cmp_ti:pero_cmp_ti.elf --config=ti_arm_cgt_18`
 - `test`: `bazel test //gateway/pero_cmp_lnx/...`
-- `package`: produces `psp_tar.tar.gz` artifact on main/tags
-
-## Local development (symlink workspace)
-
-Without running `repo sync`, you can build locally using symlinks:
-
-```sh
-cd /path/to/pero_theia
-ln -s /path/to/ccstheia/pero_cmp_lnx .
-ln -s /path/to/ccstheia/mlbevo_gen2_cmp_psp .
-# ... etc for other repos
-bazel build //...
-```
+- `package`: `bazel build //packaging:install` — produces `.ipk` artifacts on main/tags

@@ -6,6 +6,7 @@ __pycache__/
 /.venv/
 dist/
 /up/
+/HANDOFF.md
 
 # Component-repo checkout paths from .repo/manifests/default.xml.
 # pero_theia sits at workspace root; the projects below are sibling
@@ -19,3 +20,9 @@ dist/
 /platforms/mlbevo_gen2_cmp_demo/
 /platforms/mlbevo_gen2_cmp_psp/
 /services/pero_cmp_gw_svc/
+
+# Vendor implementations are tracked separately (their own GitLab repos,
+# wired in via .repo/local_manifests/ on demand). Do not commit generated
+# vendor artifacts to pero_theia.
+/vendor/*/
+!/vendor/.gitkeep

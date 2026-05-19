@@ -39,10 +39,10 @@ _ARMCL_LINK_FLAGS = [
 def _impl(ctx):
     tool_paths = [
         # armcl doubles as C and C++ compiler
-        tool_path(name = "gcc",     path = "/home/axadmin/repo/launch-box/theia/toolchains/ti_arm_cgt_18/armcl_wrapper.sh"),
-        tool_path(name = "g++",     path = "/home/axadmin/repo/launch-box/theia/toolchains/ti_arm_cgt_18/armcl_wrapper.sh"),
+        tool_path(name = "gcc",     path = "/home/axadmin/repo/theia/toolchains/ti_arm_cgt_18/armcl_wrapper.sh"),
+        tool_path(name = "g++",     path = "/home/axadmin/repo/theia/toolchains/ti_arm_cgt_18/armcl_wrapper.sh"),
         tool_path(name = "ar",      path = _CGT_ROOT + "/bin/armar"),
-        tool_path(name = "cpp",     path = "/home/axadmin/repo/launch-box/theia/toolchains/ti_arm_cgt_18/armcl_wrapper.sh"),
+        tool_path(name = "cpp",     path = "/home/axadmin/repo/theia/toolchains/ti_arm_cgt_18/armcl_wrapper.sh"),
         tool_path(name = "ld",      path = _CGT_ROOT + "/bin/armlnk"),
         tool_path(name = "nm",      path = _CGT_ROOT + "/bin/armnm"),
         tool_path(name = "objdump", path = _CGT_ROOT + "/bin/armdis"),

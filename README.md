@@ -51,8 +51,13 @@ export PATH=~/.local/bin:$PATH
 # 3. Host build deps (Ubuntu 24.04)
 sudo apt install libpcap-dev libexpat1-dev libnanopb-dev gcc g++
 
-# 4. Python code-generator dep
-pip install jinja2        # used by gen_platform_protos.py
+# 4. Python code generators — venv at workspace root
+#    All generators (gen_platform_protos.py, gen_psp_registry.py, fibex_to_nanopb.py,
+#    can_to_nanopb.py, etc.) are invoked from Bazel rules as `python3`, so the venv
+#    must be on PATH for the build.
+python3 -m venv .venv
+./.venv/bin/pip install -r gateway/pero_cmp_lnx/tools/requirements.txt
+#    Then prefix every bazel invocation:  PATH="$PWD/.venv/bin:$PATH" bazel build ...
 
 # 5. TI ARM CGT 18.1.1.LTS — required for Hercules firmware
 #    CCS 8.0.0 project: codegenToolVersion="18.1.1.LTS" (armcl, not GCC)
@@ -75,14 +80,17 @@ repo sync -j8
 # 2. Activate bz-migration on all component repos
 repo forall -c 'git checkout bz-migration'
 
-# 3. Build Linux host targets
+# 3. Make the venv's python3 visible to Bazel rules (PSP codegen, proto codegen, etc.)
+export PATH="$PWD/.venv/bin:$PATH"
+
+# 4. Build Linux host targets
 bazel build //gateway/pero_cmp_lnx/demo:all          # pero-decode, pero-filter, pero-timesync
 bazel build //services/pero_cmp_gw_svc:cmp_gw
 bazel build //applications/pero_cmp_gw_cln_demo:cmp_gw_client
 bazel build //platforms/mlbevo_gen2_cmp_psp:codec    # PSP codegen + compile (~6000 .c files)
 bazel build //platforms/mlbevo_gen2_cmp_psp:psp_so   # libpsp.so
 
-# 4. Compile Hercules firmware (requires /opt/ti/cgt_arm_18.1.1.LTS/)
+# 5. Compile Hercules firmware (requires /opt/ti/cgt_arm_18.1.1.LTS/)
 bazel build //gateway/pero_cmp_ti:pero_cmp_ti.elf    --config=ti_arm_cgt_18
 bazel build //gateway/pero_cmp_ti_gw:pero_cmp_ti_gw.elf --config=ti_arm_cgt_18
 ```

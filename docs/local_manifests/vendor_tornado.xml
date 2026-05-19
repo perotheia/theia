@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Drop this file into $WORKSPACE/.repo/local_manifests/ to make
+  `repo sync` clone vendor/tornado from PG50/tornado.
+
+  See docs/local_manifests/README.md for the workflow.
+-->
+<manifest>
+  <project name="tornado"
+           path="vendor/tornado"
+           remote="theia"
+           revision="main" />
+</manifest>

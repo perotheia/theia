@@ -1,0 +1,35 @@
+services:
+  # MkDocs Material wiki — serves docs/ as a browseable site at
+  # http://0.0.0.0:8800 with hot-reload on file edits. Custom image
+  # adds the mermaid2 plugin so ```mermaid fences render natively.
+  #
+  # Host port 8800 is intentional: 8000 is a common default for python
+  # dev servers (python -m http.server, django runserver), so we move
+  # the wiki up the band to avoid clashes on dev boxes.
+  wiki:
+    build: ./wiki
+    container_name: rss_wiki
+    restart: unless-stopped
+    command: ["serve", "--dev-addr=0.0.0.0:8000", "--config-file=/repo/mkdocs.yml"]
+    ports:
+      - "0.0.0.0:8800:8000"
+    volumes:
+      - ../../:/repo:ro
+
+  # tasks.md — kanban/task board served at http://0.0.0.0:8080.
+  # Markdown files in docs/tasks/; config persisted in a named volume.
+  tasks:
+    image: baldissaramatheus/tasks.md
+    container_name: rss_tasks
+    restart: unless-stopped
+    environment:
+      PUID: 1000
+      PGID: 1000
+    ports:
+      - "0.0.0.0:8080:8080"
+    volumes:
+      - ../tasks:/tasks
+      - tasks_config:/config
+
+volumes:
+  tasks_config:

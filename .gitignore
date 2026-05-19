@@ -12,6 +12,7 @@ dist/
 # git repos checked out into this tree by `repo sync` and must not
 # appear as untracked in pero_theia.
 /applications/pero_cmp_gw_cln_demo/
+/artheia/
 /gateway/pero_cmp_lnx/
 /gateway/pero_cmp_ti/
 /gateway/pero_cmp_ti_gw/

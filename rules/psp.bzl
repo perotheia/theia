@@ -1,11 +1,15 @@
 """psp.bzl — Starlark rules replacing generate.sh for PSP code generation.
 
 Public rules:
-  psp_generate  — runs gen_platform_protos.py, outputs two TreeArtifacts
+  psp_generate  — runs `artheia gen-platform-protos`, outputs two TreeArtifacts
   psp_library   — same, then compiles generated .c files into a static .a
 
 DBC files are tracked via attr.label_keyed_string_dict so Bazel invalidates
 the action when any DBC or the FIBEX file changes.
+
+`artheia` must be on $PATH for the Bazel action — install the workspace venv
+with `pip install -e artheia/` and invoke bazel as
+`PATH="$PWD/.venv/bin:$PATH" bazel build ...` (per workspace convention).
 """
 
 def _resolve_dbc_args(ctx):
@@ -22,24 +26,14 @@ def _resolve_dbc_args(ctx):
 
 def _build_generate_cmd(ctx, fibex, dbc_files, dbc_flag_vals, src_dir, proto_dir):
     """Return (cmd_string, all_inputs) for the generate shell action."""
-    tool_files = ctx.attr._tool_srcs[DefaultInfo].files.to_list()
-    # Find gen_platform_protos.py among the tool sources
-    script = None
-    for f in tool_files:
-        if f.basename == "gen_platform_protos.py":
-            script = f.path
-            break
-    if script == None:
-        fail("gen_platform_protos.py not found in _tool_srcs")
-
     dbc_flags = " ".join(["--dbc '" + dv + "'" for dv in dbc_flag_vals])
-    cmd = ("python3 " + script +
+    cmd = ("artheia gen-platform-protos" +
            " --fibex '" + fibex.path + "'" +
            " --namespace-fr '" + ctx.attr.namespace_fr + "'" +
            " --out-src '" + src_dir.path + "'" +
            " --out-proto '" + proto_dir.path + "'" +
            " --all-signals " + dbc_flags)
-    all_inputs = depset([fibex] + dbc_files + tool_files)
+    all_inputs = depset([fibex] + dbc_files)
     return cmd, all_inputs
 
 def _psp_generate_impl(ctx):
@@ -58,6 +52,7 @@ def _psp_generate_impl(ctx):
         mnemonic     = "PspGenerate",
         progress_message = "PspGenerate %s" % ctx.label,
         execution_requirements = {"no-sandbox": "1"},
+        use_default_shell_env = True,
     )
 
     return [
@@ -79,12 +74,6 @@ _PSP_COMMON_ATTRS = {
     "namespace_fr": attr.string(
         mandatory = True,
         doc = "FlexRay namespace prefix (e.g. 'mlbevo_gen2').",
-    ),
-    # Filegroup of all generator .py sources — invoked via system python3
-    # so that system-installed jinja2 is available without pip hermetic setup.
-    "_tool_srcs": attr.label(
-        default     = "//gateway/pero_cmp_lnx/tools:all_srcs",
-        allow_files = True,
     ),
 }
 
@@ -111,6 +100,7 @@ def _psp_library_impl(ctx):
         mnemonic     = "PspGenerate",
         progress_message = "PspGenerate %s" % ctx.label,
         execution_requirements = {"no-sandbox": "1"},
+        use_default_shell_env = True,
     )
 
     # Compile all generated .c files into a static archive.

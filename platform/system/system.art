@@ -1,31 +1,27 @@
 // Platform composition.
 //
-// The platform pulls together three system fragments:
-//   - tornado/      vendor-side (Tornado vehicle OS components + signals)
-//   - gateway/      gateway component (one node, status RPC)
-//   - autosar/      AUTOSAR-side frame definitions (PSP)
+// Wires the runtime nodes that live on the host: the gateway service
+// and the active vendor application. AUTOSAR-side wire definitions
+// (`autosar/`) are referenced via per-PDU interfaces in the vendor
+// app — not directly here.
 //
-// Each is a symlink into the owning subtree:
-//   platform/system/tornado -> ../../vendor/tornado/system
-//   platform/system/autosar -> ../../autosar/mlbevo_gen2_cmp_psp/system
-//   platform/system/gateway -> ../../gateway/system
-//
-// This composition wires runtime entities (nodes + services). AUTOSAR
-// signals are not nodes; they're consumed indirectly by Tornado
-// components via gateway_route blocks (see Tornado's components/).
+// Symlinks under platform/system/ point at the system fragments that
+// contribute to this composition:
+//   platform/system/odd_path_client -> ../../vendor/odd_path_client/system
+//   platform/system/gateway         -> ../../gateway/system
+//   platform/system/autosar         -> ../../autosar/mlbevo_gen2_cmp_psp/system
 //
 // textX cross-file references are single-file, so anything referenced
-// below as a prototype must also be declared inline. The actual
-// service+message types live in the imported fragments; we forward-
-// declare a minimal shape locally to let the composition typecheck.
+// below as a prototype is also forward-declared inline. The real
+// shapes live in the imported fragments.
 
 package platform.system
 
 import gateway.system.*
-import vendor.tornado.system.*
+import vendor.odd_path_client.system.*
+import vendor.odd_path_client.system.components.*
 
-// ---- forward-decl: Gateway node (real decl in gateway/system) ----------
-// Mirrors gateway/system/package.art so textX can resolve the prototype.
+// ---- forward-decl: Gateway (real decl in gateway/system) ---------------
 
 message StatusReport {
     uint32 uptime_ms
@@ -46,11 +42,23 @@ node atomic Gateway {
     }
 }
 
-// ---- composition: the platform itself ----------------------------------
-// Currently only declares the gateway prototype. Tornado components are
-// not yet rewired to require Status (or any other gateway service); when
-// they are, add their prototypes + connect lines here.
+// ---- forward-decl: OddPathMonitor (real decl in vendor/odd_path_client/
+// system/components/). Only the ports involved in the platform composition
+// need to appear here — the FlexRay receiver ports are local to the app.
+
+node atomic OddPathMonitor {
+    tipc type=0xc0010001 instance=0
+    ports {
+        client status_query requires Status
+    }
+}
+
+// ---- composition --------------------------------------------------------
 
 composition Platform {
-    prototype Gateway gw
+    prototype Gateway          gw
+    prototype OddPathMonitor   odd_path_monitor
+
+    // The app asks the gateway for its current health.
+    connect odd_path_monitor.status_query to gw.status
 }

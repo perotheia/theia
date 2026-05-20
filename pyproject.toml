@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "theia-vendor"
+version = "0.0.1"
+description = "Vendor data for the Theia runtime: concrete vehicle deployments and installable software packages consumed by the artheia toolchain."
+requires-python = ">=3.10"
+authors = [{ name = "Theia Runtime" }]
+license = { text = "MIT" }
+
+# vendor depends on the artheia ADT; install artheia separately
+# (pip install -e artheia/) before installing this.
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["vendor*"]
+exclude = ["artheia*", "autosar*", "gateway*", "docs*", "up*", "tests*"]

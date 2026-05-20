@@ -19,3 +19,10 @@ dist/
 /platforms/mlbevo_gen2_cmp_demo/
 /platforms/mlbevo_gen2_cmp_psp/
 /services/pero_cmp_gw_svc/
+
+# Vendor data populated locally or by importers; keep the namespace
+# marker (vendor/__init__.py) tracked so `pip install -e .` resolves
+# vendor.* even when the data dirs are absent.
+/vendor/packages/
+/vendor/vehicles/
+/theia_vendor.egg-info/

@@ -15,3 +15,9 @@ Documentation for the Porsche PERO CMP gateway workspace.
 - [Layers](gateway/LAYERS.md)
 - [Time sync](gateway/TIMESYNC.md)
 - [Workflow](gateway/WORKFLOW.md)
+
+## Applications
+
+- [Application generation & lifecycle](application.md) — `artheia gen-app`,
+  the three-slice scaffold, `LifecycleInterface`, rx loop, handlers, build,
+  and pcap-replay end-to-end run.

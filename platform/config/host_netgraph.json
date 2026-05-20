@@ -1,0 +1,138 @@
+{
+  "sources": [
+    "platform/system/system.art",
+    "vendor/odd_path_client/system/components/odd_path_monitor.art"
+  ],
+  "nodes": {
+    "Gateway": {
+      "tipc_type": "0xa0010001",
+      "tipc_instance": 0,
+      "ports": {
+        "status": {
+          "kind": "server",
+          "interface": "Status"
+        }
+      },
+      "source": "platform/system/system.art"
+    },
+    "OddPathMonitor": {
+      "tipc_type": "0xc0010001",
+      "tipc_instance": 0,
+      "ports": {
+        "acc_06": {
+          "kind": "receiver",
+          "interface": "ACC_06_Iface"
+        },
+        "acc_07": {
+          "kind": "receiver",
+          "interface": "ACC_07_Iface"
+        },
+        "acc_10": {
+          "kind": "receiver",
+          "interface": "ACC_10_Iface"
+        },
+        "aeb_01": {
+          "kind": "receiver",
+          "interface": "AEB_01_Iface"
+        },
+        "eml_01": {
+          "kind": "receiver",
+          "interface": "EML_01_Iface"
+        },
+        "epb_01": {
+          "kind": "receiver",
+          "interface": "EPB_01_Iface"
+        },
+        "esp_05": {
+          "kind": "receiver",
+          "interface": "ESP_05_Iface"
+        },
+        "esp_32": {
+          "kind": "receiver",
+          "interface": "ESP_32_Iface"
+        },
+        "fas_vk_01": {
+          "kind": "receiver",
+          "interface": "FAS_VK_01_Iface"
+        },
+        "gra_acc_01": {
+          "kind": "receiver",
+          "interface": "GRA_ACC_01_Iface"
+        },
+        "getriebe_11": {
+          "kind": "receiver",
+          "interface": "Getriebe_11_Iface"
+        },
+        "kas_01": {
+          "kind": "receiver",
+          "interface": "KAS_01_Iface"
+        },
+        "ldw_02": {
+          "kind": "receiver",
+          "interface": "LDW_02_Iface"
+        },
+        "lwi_01": {
+          "kind": "receiver",
+          "interface": "LWI_01_Iface"
+        },
+        "licht_hinten_01": {
+          "kind": "receiver",
+          "interface": "Licht_hinten_01_Iface"
+        },
+        "rcta_01": {
+          "kind": "receiver",
+          "interface": "RCTA_01_Iface"
+        },
+        "bv2_objektheader": {
+          "kind": "receiver",
+          "interface": "BV2_ObjektHeader_Iface"
+        },
+        "bv2_objekt_01": {
+          "kind": "receiver",
+          "interface": "BV2_Objekt_01_Iface"
+        },
+        "bv2_objekt_02": {
+          "kind": "receiver",
+          "interface": "BV2_Objekt_02_Iface"
+        },
+        "bv2_objekt_03": {
+          "kind": "receiver",
+          "interface": "BV2_Objekt_03_Iface"
+        },
+        "bv2_objekt_04": {
+          "kind": "receiver",
+          "interface": "BV2_Objekt_04_Iface"
+        },
+        "bv2_objekt_05": {
+          "kind": "receiver",
+          "interface": "BV2_Objekt_05_Iface"
+        },
+        "bv2_objekt_06": {
+          "kind": "receiver",
+          "interface": "BV2_Objekt_06_Iface"
+        },
+        "bv2_objekt_07": {
+          "kind": "receiver",
+          "interface": "BV2_Objekt_07_Iface"
+        },
+        "bv2_objekt_08": {
+          "kind": "receiver",
+          "interface": "BV2_Objekt_08_Iface"
+        },
+        "bv2_objekt_09": {
+          "kind": "receiver",
+          "interface": "BV2_Objekt_09_Iface"
+        },
+        "bv2_objekt_10": {
+          "kind": "receiver",
+          "interface": "BV2_Objekt_10_Iface"
+        },
+        "status_query": {
+          "kind": "client",
+          "interface": "Status"
+        }
+      },
+      "source": "vendor/odd_path_client/system/components/odd_path_monitor.art"
+    }
+  }
+}

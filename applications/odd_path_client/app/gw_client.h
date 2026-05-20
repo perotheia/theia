@@ -1,12 +1,18 @@
 #pragma once
 #include "gw_proto.h"
 #include <cstdint>
+#include <cstring>
 #include <future>
 #include <mutex>
 #include <string>
 #include <sys/types.h>
 #include <unordered_map>
+#include <utility>
 #include <vector>
+
+#include <pb.h>
+#include <pb_decode.h>
+#include <pb_encode.h>
 
 class GwClient {
 public:
@@ -51,6 +57,38 @@ public:
      * synchronous RPCs that don't deadlock against recv_signal.
      * Returns true if at least one response was demuxed. */
     bool pump_response(int timeout_ms);
+
+    /* Typed RPC: encode Req with `req_fields`, send the request, return a
+     * future that — when .get()'d — decodes the response bytes via
+     * `resp_fields` and yields a Resp by value. The field descriptors are
+     * passed in rather than derived from the type so we don't need a
+     * trait specialization per nanopb message (mirrors Google protobuf's
+     * approach: typed at the boundary, descriptor at the wire). */
+    template <typename Req, typename Resp>
+    std::future<Resp> async_send_request(uint16_t service_id,
+                                          uint16_t method_id,
+                                          const Req& req,
+                                          const pb_msgdesc_t* req_fields,
+                                          const pb_msgdesc_t* resp_fields) {
+        uint8_t      req_buf[256];
+        pb_ostream_t os = pb_ostream_from_buffer(req_buf, sizeof(req_buf));
+        uint16_t     req_len = 0;
+        if (pb_encode(&os, req_fields, &req)) {
+            req_len = static_cast<uint16_t>(os.bytes_written);
+        }
+        auto raw = send_request(service_id, method_id, req_buf, req_len);
+
+        // Deferred: decode happens on the .get() thread, not on a worker.
+        return std::async(std::launch::deferred,
+            [raw = std::move(raw), resp_fields]() mutable {
+                std::vector<uint8_t> bytes = raw.get();
+                Resp resp{};
+                pb_istream_t is = pb_istream_from_buffer(bytes.data(),
+                                                         bytes.size());
+                (void)pb_decode(&is, resp_fields, &resp);
+                return resp;
+            });
+    }
 
 private:
     int fd_ = -1;

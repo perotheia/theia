@@ -1,0 +1,32 @@
+// Gateway system fragment.
+//
+// Declares the gateway as an atomic Artheia node with a single
+// client/server `status` service. Other workspace fragments (Tornado,
+// applications, AUTOSAR PSPs) reference the gateway through this
+// interface — they call `Status.GetStatus()` and get a `StatusReport`.
+
+package gateway.system
+
+// ---- status RPC interface ------------------------------------------------
+
+message StatusReport {
+    uint32 uptime_ms
+    uint32 frames_rx
+    uint32 frames_tx
+    uint32 drops
+    bool   healthy
+}
+
+interface clientServer Status {
+    operation GetStatus() returns StatusReport
+}
+
+// ---- gateway node --------------------------------------------------------
+// Synthetic TIPC address; the runtime maps it to the real gateway service.
+
+node atomic Gateway {
+    tipc type=0xa0010001 instance=0
+    ports {
+        server status provides Status
+    }
+}

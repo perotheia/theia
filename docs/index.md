@@ -2,6 +2,12 @@
 
 Documentation for the Porsche PERO CMP gateway workspace.
 
+## Architecture
+
+- [System architecture](architecture/ARCHITECTURE.md) — workflow + artefact spec
+  from FIBEX/DBC through netgraph and system.art to the gateway and the
+  vendor app. The spec code generators read from.
+
 ## Gateway
 
 - [Gateway overview](gateway/GATEWAY.md)

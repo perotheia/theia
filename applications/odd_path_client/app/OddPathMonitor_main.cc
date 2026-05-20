@@ -2,10 +2,8 @@
 // source: odd_path_client/system/components/odd_path_monitor.art
 // node:   OddPathMonitor
 //
-// Slice 2 (stub): tiny main(). Builds the runtime context, constructs
-// the signal junction (provided by libgw codegen — TODO until host
-// protos land), and runs the LifecycleInterface manually:
-// OnCreate → OnStart → wait → OnStop.
+// Slice 2 (stub): tiny main(). Builds the runtime context, instantiates
+// the app, runs the lifecycle, waits on SIGINT/SIGTERM, tears down.
 
 #include <atomic>
 #include <chrono>
@@ -29,9 +27,10 @@ void on_signal(int /*sig*/) noexcept {
 
 }  // namespace
 
-// Provided by the (forthcoming) host-side signal-junction codegen.
-// For now: a stub that the linker resolves to an empty struct when
-// libgw's generated signal junction is available.
+// Placeholder for the per-node signal junction. Today the app talks to
+// the gateway via GwClient directly (see OddPathMonitor.cc); the
+// junction is reserved for future codegen wiring multiple apps to one
+// libgw process without per-app threads.
 namespace odd_path_client {
 struct odd_path_monitor_signals {};
 }
@@ -55,7 +54,7 @@ int main(int argc, char* argv[]) {
     app.OnCreate();
     app.OnStart();
     while (!g_shutdown.load()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
     logger->info("OddPathMonitor: stopping");
     app.OnStop();

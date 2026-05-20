@@ -30,3 +30,6 @@ dist/
 # vendor artifacts to pero_theia.
 /vendor/*/
 !/vendor/.gitkeep
+
+# Generated app build trees
+applications/*/build/

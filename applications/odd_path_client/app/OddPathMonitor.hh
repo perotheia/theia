@@ -4,43 +4,51 @@
 //
 // Slice 2 (stub): the application class declaration. Inherits from
 // LifecycleInterface for OnCreate/OnStart/OnStop; declares one
-// callback method per receiver port and one helper per client port.
+// callback per receiver port. The callback signature is
+//   void on_<port>(const GwMessageHeader& hdr, const shared_<Pdu>& msg) noexcept
 // User implementations live in OddPathMonitor_handlers.cc under impl/.
 
 #pragma once
+#include <atomic>
 #include <memory>
+#include <thread>
 
 #include "LifecycleInterface.hh"
 #include "OddPathMonitorInputs.hh"
 
-#include "ACC_06.pb.h"
-#include "ACC_07.pb.h"
-#include "ACC_10.pb.h"
-#include "AEB_01.pb.h"
-#include "BV2_ObjektHeader.pb.h"
-#include "BV2_Objekt_01.pb.h"
-#include "BV2_Objekt_02.pb.h"
-#include "BV2_Objekt_03.pb.h"
-#include "BV2_Objekt_04.pb.h"
-#include "BV2_Objekt_05.pb.h"
-#include "BV2_Objekt_06.pb.h"
-#include "BV2_Objekt_07.pb.h"
-#include "BV2_Objekt_08.pb.h"
-#include "BV2_Objekt_09.pb.h"
-#include "BV2_Objekt_10.pb.h"
-#include "EML_01.pb.h"
-#include "EPB_01.pb.h"
-#include "ESP_05.pb.h"
-#include "ESP_32.pb.h"
-#include "FAS_VK_01.pb.h"
-#include "GRA_ACC_01.pb.h"
-#include "Getriebe_11.pb.h"
-#include "KAS_01.pb.h"
-#include "LDW_02.pb.h"
-#include "LWI_01.pb.h"
-#include "Licht_hinten_01.pb.h"
-#include "RCTA_01.pb.h"
+extern "C" {
+#include "gw_proto.h"
+}
+#include "flexray/ACC_06.pb.h"
+#include "flexray/ACC_10.pb.h"
+#include "flexray/AEB_01.pb.h"
+#include "flexray/BV2_ObjektHeader.pb.h"
+#include "flexray/BV2_Objekt_01.pb.h"
+#include "flexray/BV2_Objekt_02.pb.h"
+#include "flexray/BV2_Objekt_03.pb.h"
+#include "flexray/BV2_Objekt_04.pb.h"
+#include "flexray/BV2_Objekt_05.pb.h"
+#include "flexray/BV2_Objekt_06.pb.h"
+#include "flexray/BV2_Objekt_07.pb.h"
+#include "flexray/BV2_Objekt_08.pb.h"
+#include "flexray/BV2_Objekt_09.pb.h"
+#include "flexray/BV2_Objekt_10.pb.h"
+#include "flexray/EML_01.pb.h"
+#include "flexray/FAS_VK_01.pb.h"
+#include "shared/ACC_07.pb.h"
+#include "shared/EPB_01.pb.h"
+#include "shared/ESP_05.pb.h"
+#include "shared/ESP_32.pb.h"
+#include "shared/GRA_ACC_01.pb.h"
+#include "shared/Getriebe_11.pb.h"
+#include "shared/KAS_01.pb.h"
+#include "shared/LDW_02.pb.h"
+#include "shared/LWI_01.pb.h"
+#include "shared/Licht_hinten_01.pb.h"
+#include "shared/RCTA_01.pb.h"
 
+
+class GwClient;
 
 namespace odd_path_client {
 
@@ -57,6 +65,7 @@ class OddPathMonitor : public platform::runtime::LifecycleInterface {
 
  public:
   explicit OddPathMonitor(const OddPathMonitorInputs& inputs);
+  ~OddPathMonitor() override;
 
   // LifecycleInterface ---------------------------------------------------
   void OnCreate() noexcept override;
@@ -64,42 +73,69 @@ class OddPathMonitor : public platform::runtime::LifecycleInterface {
   void OnStop()   noexcept override;
 
   // ---- receiver port callbacks (user implements in impl/) ----------------
-  void on_acc_06(const std::shared_ptr<ACC_06> msg) noexcept;
-  void on_acc_07(const std::shared_ptr<ACC_07> msg) noexcept;
-  void on_acc_10(const std::shared_ptr<ACC_10> msg) noexcept;
-  void on_aeb_01(const std::shared_ptr<AEB_01> msg) noexcept;
-  void on_eml_01(const std::shared_ptr<EML_01> msg) noexcept;
-  void on_epb_01(const std::shared_ptr<EPB_01> msg) noexcept;
-  void on_esp_05(const std::shared_ptr<ESP_05> msg) noexcept;
-  void on_esp_32(const std::shared_ptr<ESP_32> msg) noexcept;
-  void on_fas_vk_01(const std::shared_ptr<FAS_VK_01> msg) noexcept;
-  void on_gra_acc_01(const std::shared_ptr<GRA_ACC_01> msg) noexcept;
-  void on_getriebe_11(const std::shared_ptr<Getriebe_11> msg) noexcept;
-  void on_kas_01(const std::shared_ptr<KAS_01> msg) noexcept;
-  void on_ldw_02(const std::shared_ptr<LDW_02> msg) noexcept;
-  void on_lwi_01(const std::shared_ptr<LWI_01> msg) noexcept;
-  void on_licht_hinten_01(const std::shared_ptr<Licht_hinten_01> msg) noexcept;
-  void on_rcta_01(const std::shared_ptr<RCTA_01> msg) noexcept;
-  void on_bv2_objektheader(const std::shared_ptr<BV2_ObjektHeader> msg) noexcept;
-  void on_bv2_objekt_01(const std::shared_ptr<BV2_Objekt_01> msg) noexcept;
-  void on_bv2_objekt_02(const std::shared_ptr<BV2_Objekt_02> msg) noexcept;
-  void on_bv2_objekt_03(const std::shared_ptr<BV2_Objekt_03> msg) noexcept;
-  void on_bv2_objekt_04(const std::shared_ptr<BV2_Objekt_04> msg) noexcept;
-  void on_bv2_objekt_05(const std::shared_ptr<BV2_Objekt_05> msg) noexcept;
-  void on_bv2_objekt_06(const std::shared_ptr<BV2_Objekt_06> msg) noexcept;
-  void on_bv2_objekt_07(const std::shared_ptr<BV2_Objekt_07> msg) noexcept;
-  void on_bv2_objekt_08(const std::shared_ptr<BV2_Objekt_08> msg) noexcept;
-  void on_bv2_objekt_09(const std::shared_ptr<BV2_Objekt_09> msg) noexcept;
-  void on_bv2_objekt_10(const std::shared_ptr<BV2_Objekt_10> msg) noexcept;
-  
-
-  // ---- client-port helpers (user calls these from impl/) -----------------
-  // client status_query requires Status
-  int call_status_query() noexcept;
+  // acc_06 ← ACC_06_Iface (FlexRay slot 4, ch 0)
+  void on_acc_06(const GwMessageHeader& hdr, const mlbevo_gen2_ACC_06& msg) noexcept;
+  // acc_07 ← ACC_07_Iface (CAN id 0x12e)
+  void on_acc_07(const GwMessageHeader& hdr, const shared_ACC_07& msg) noexcept;
+  // acc_10 ← ACC_10_Iface (FlexRay slot 4, ch 0)
+  void on_acc_10(const GwMessageHeader& hdr, const mlbevo_gen2_ACC_10& msg) noexcept;
+  // aeb_01 ← AEB_01_Iface (FlexRay slot 65, ch 0)
+  void on_aeb_01(const GwMessageHeader& hdr, const mlbevo_gen2_AEB_01& msg) noexcept;
+  // eml_01 ← EML_01_Iface (FlexRay slot 5, ch 0)
+  void on_eml_01(const GwMessageHeader& hdr, const mlbevo_gen2_EML_01& msg) noexcept;
+  // epb_01 ← EPB_01_Iface (CAN id 0x104)
+  void on_epb_01(const GwMessageHeader& hdr, const shared_EPB_01& msg) noexcept;
+  // esp_05 ← ESP_05_Iface (CAN id 0x106)
+  void on_esp_05(const GwMessageHeader& hdr, const shared_ESP_05& msg) noexcept;
+  // esp_32 ← ESP_32_Iface (CAN id 0x1fc)
+  void on_esp_32(const GwMessageHeader& hdr, const shared_ESP_32& msg) noexcept;
+  // fas_vk_01 ← FAS_VK_01_Iface (FlexRay slot 5, ch 0)
+  void on_fas_vk_01(const GwMessageHeader& hdr, const mlbevo_gen2_FAS_VK_01& msg) noexcept;
+  // gra_acc_01 ← GRA_ACC_01_Iface (FlexRay slot 63, ch 0)
+  void on_gra_acc_01(const GwMessageHeader& hdr, const shared_GRA_ACC_01& msg) noexcept;
+  // getriebe_11 ← Getriebe_11_Iface (CAN id 0x0ad)
+  void on_getriebe_11(const GwMessageHeader& hdr, const shared_Getriebe_11& msg) noexcept;
+  // kas_01 ← KAS_01_Iface (FlexRay slot 5, ch 0)
+  void on_kas_01(const GwMessageHeader& hdr, const shared_KAS_01& msg) noexcept;
+  // ldw_02 ← LDW_02_Iface (FlexRay slot 65, ch 0)
+  void on_ldw_02(const GwMessageHeader& hdr, const shared_LDW_02& msg) noexcept;
+  // lwi_01 ← LWI_01_Iface (FlexRay slot 17, ch 0)
+  void on_lwi_01(const GwMessageHeader& hdr, const shared_LWI_01& msg) noexcept;
+  // licht_hinten_01 ← Licht_hinten_01_Iface (CAN id 0x3d6)
+  void on_licht_hinten_01(const GwMessageHeader& hdr, const shared_Licht_hinten_01& msg) noexcept;
+  // rcta_01 ← RCTA_01_Iface (FlexRay slot 51, ch 0)
+  void on_rcta_01(const GwMessageHeader& hdr, const shared_RCTA_01& msg) noexcept;
+  // bv2_objektheader ← BV2_ObjektHeader_Iface (FlexRay slot 77, ch 0)
+  void on_bv2_objektheader(const GwMessageHeader& hdr, const mlbevo_gen2_BV2_ObjektHeader& msg) noexcept;
+  // bv2_objekt_01 ← BV2_Objekt_01_Iface (FlexRay slot 77, ch 0)
+  void on_bv2_objekt_01(const GwMessageHeader& hdr, const mlbevo_gen2_BV2_Objekt_01& msg) noexcept;
+  // bv2_objekt_02 ← BV2_Objekt_02_Iface (FlexRay slot 77, ch 0)
+  void on_bv2_objekt_02(const GwMessageHeader& hdr, const mlbevo_gen2_BV2_Objekt_02& msg) noexcept;
+  // bv2_objekt_03 ← BV2_Objekt_03_Iface (FlexRay slot 77, ch 0)
+  void on_bv2_objekt_03(const GwMessageHeader& hdr, const mlbevo_gen2_BV2_Objekt_03& msg) noexcept;
+  // bv2_objekt_04 ← BV2_Objekt_04_Iface (FlexRay slot 77, ch 0)
+  void on_bv2_objekt_04(const GwMessageHeader& hdr, const mlbevo_gen2_BV2_Objekt_04& msg) noexcept;
+  // bv2_objekt_05 ← BV2_Objekt_05_Iface (FlexRay slot 77, ch 0)
+  void on_bv2_objekt_05(const GwMessageHeader& hdr, const mlbevo_gen2_BV2_Objekt_05& msg) noexcept;
+  // bv2_objekt_06 ← BV2_Objekt_06_Iface (FlexRay slot 78, ch 0)
+  void on_bv2_objekt_06(const GwMessageHeader& hdr, const mlbevo_gen2_BV2_Objekt_06& msg) noexcept;
+  // bv2_objekt_07 ← BV2_Objekt_07_Iface (FlexRay slot 78, ch 0)
+  void on_bv2_objekt_07(const GwMessageHeader& hdr, const mlbevo_gen2_BV2_Objekt_07& msg) noexcept;
+  // bv2_objekt_08 ← BV2_Objekt_08_Iface (FlexRay slot 78, ch 0)
+  void on_bv2_objekt_08(const GwMessageHeader& hdr, const mlbevo_gen2_BV2_Objekt_08& msg) noexcept;
+  // bv2_objekt_09 ← BV2_Objekt_09_Iface (FlexRay slot 78, ch 0)
+  void on_bv2_objekt_09(const GwMessageHeader& hdr, const mlbevo_gen2_BV2_Objekt_09& msg) noexcept;
+  // bv2_objekt_10 ← BV2_Objekt_10_Iface (FlexRay slot 78, ch 0)
+  void on_bv2_objekt_10(const GwMessageHeader& hdr, const mlbevo_gen2_BV2_Objekt_10& msg) noexcept;
   
 
  private:
   const OddPathMonitorInputs& inputs_;
+  std::unique_ptr<GwClient>    client_;
+  std::atomic<bool>            running_{false};
+  std::thread                  rx_thread_;
+
+  void rx_loop_() noexcept;
 };
 
 }  // namespace odd_path_client

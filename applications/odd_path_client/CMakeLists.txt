@@ -2,7 +2,7 @@
 # source: odd_path_client/system/components/odd_path_monitor.art
 
 cmake_minimum_required(VERSION 3.16)
-project(odd_path_client CXX)
+project(odd_path_client C CXX)
 
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -11,7 +11,7 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # Workspace paths — adjust if you build outside the standard layout.
 set(WORKSPACE_ROOT "${CMAKE_SOURCE_DIR}/../.." CACHE PATH
-    "pero_theia workspace root (parent of applications/ and platform/).")
+    "pero_theia workspace root (parent of applications/, platform/, gateway/, autosar/).")
 
 set(PLATFORM_RUNTIME "${WORKSPACE_ROOT}/platform/runtime" CACHE PATH
     "platform/runtime: LifecycleInterface, Logger, Clock, Timer, Context.")
@@ -19,14 +19,44 @@ set(PLATFORM_RUNTIME "${WORKSPACE_ROOT}/platform/runtime" CACHE PATH
 set(LIBGW "${WORKSPACE_ROOT}/gateway/libs/libgw" CACHE PATH
     "libgw: gateway NIF (CMP → PSP → TIPC + UDP TX).")
 
-set(PSP_ROOT "${WORKSPACE_ROOT}/autosar/mlbevo_gen2_cmp_psp" CACHE PATH
-    "MLBevo PSP: nanopb message structs + dispatch tables.")
+set(BAZEL_BIN "${WORKSPACE_ROOT}/bazel-bin" CACHE PATH
+    "Bazel output root; psp_nanopb TreeArtifact lives under here.")
+
+# Note: gw_client.{h,cpp} is vendored into app/ (one-time copy from
+# gateway/demo/pero_cmp_gw_cln_demo until libgw exposes it as a
+# public header).
+
+set(PSP_PROTO_INC "${BAZEL_BIN}/autosar/mlbevo_gen2_cmp_psp/psp_nanopb_pb" CACHE PATH
+    "nanopb headers (produced by bazel build //autosar/mlbevo_gen2_cmp_psp:psp_nanopb).")
+
+# Per-PDU .pb.c files (nanopb message field tables) — needed alongside the .pb.h.
+# Globbed from every subtree the PSP emits (shared/, flexray/, can/<bus>/).
+# CONFIGURE_DEPENDS so re-running PspGenerate causes a re-glob.
+get_filename_component(PSP_PROTO_INC_ABS "${PSP_PROTO_INC}" ABSOLUTE)
+file(GLOB_RECURSE PSP_NANOPB_SRCS
+     CONFIGURE_DEPENDS
+     "${PSP_PROTO_INC_ABS}/*.pb.c")
+message(STATUS "PSP nanopb sources: ${PSP_NANOPB_SRCS}")
+
+# nanopb .pb.c files live outside the source tree (under bazel-bin).
+# CMake silently drops out-of-tree sources from add_executable in some
+# versions, so we wrap them in a static library where it's explicit.
+add_library(odd_path_client_psp_protos STATIC ${PSP_NANOPB_SRCS})
+target_include_directories(odd_path_client_psp_protos PRIVATE
+    ${PSP_PROTO_INC_ABS}   # each .pb.c includes "<dir>/<msg>.pb.h"
+    /usr/include           # nanopb runtime headers
+)
+set_target_properties(odd_path_client_psp_protos PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+    LINKER_LANGUAGE C)
+set_source_files_properties(${PSP_NANOPB_SRCS} PROPERTIES LANGUAGE C)
 
 add_executable(odd_path_client
     app/OddPathMonitor.cc
     app/OddPathMonitor_main.cc
     app/impl/OddPathMonitor_handlers.cc
     
+    app/gw_client.cpp
 )
 
 target_include_directories(odd_path_client PRIVATE
@@ -34,21 +64,22 @@ target_include_directories(odd_path_client PRIVATE
     ${CMAKE_SOURCE_DIR}/app
     ${PLATFORM_RUNTIME}/include
     ${LIBGW}/include
-    ${PSP_ROOT}/proto/shared
-    
+    ${PSP_PROTO_INC}        # for `#include "<dir>/<Pdu>.pb.h"`
+    /usr/include            # nanopb runtime: pb.h, pb_decode.h, pb_encode.h
 )
 
-# platform/runtime is a Bazel target; for a CMake build, locate the .a/.so.
+# Link list: platform/runtime → libgw → libcmpdecoder → system libs.
 find_library(PLATFORM_RUNTIME_LIB NAMES runtime
-             PATHS ${PLATFORM_RUNTIME}/build ${WORKSPACE_ROOT}/bazel-bin/platform/runtime)
-
-# libgw and libcmpdecoder come from gateway/libs/.
-find_library(LIBGW_LIB         NAMES gw         PATHS ${LIBGW}/build ${WORKSPACE_ROOT}/bazel-bin/gateway/libs/libgw)
-find_library(LIBCMPDECODER_LIB NAMES cmpdecoder PATHS ${WORKSPACE_ROOT}/gateway/libs/pero_cmp_lnx/build ${WORKSPACE_ROOT}/bazel-bin/gateway/libs/pero_cmp_lnx/lib)
+             PATHS ${BAZEL_BIN}/platform/runtime)
+find_library(LIBGW_LIB         NAMES gw         PATHS ${BAZEL_BIN}/gateway/libs/libgw)
+find_library(LIBCMPDECODER_LIB NAMES cmpdecoder PATHS ${BAZEL_BIN}/gateway/libs/pero_cmp_lnx/lib)
+find_library(NANOPB_RUNTIME    NAMES :libprotobuf-nanopb.a protobuf-nanopb)
 
 target_link_libraries(odd_path_client PRIVATE
+    -Wl,--whole-archive odd_path_client_psp_protos -Wl,--no-whole-archive
     ${PLATFORM_RUNTIME_LIB}
     ${LIBGW_LIB}
     ${LIBCMPDECODER_LIB}
+    ${NANOPB_RUNTIME}
     pthread
 )

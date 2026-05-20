@@ -2,21 +2,62 @@
 // source: odd_path_client/system/components/odd_path_monitor.art
 // node:   OddPathMonitor
 //
-// Slice 2 (stub): tiny main() that wires the runtime, creates inputs,
-// instantiates the app, and hands control to the framework's run loop.
+// Slice 2 (stub): tiny main(). Builds the runtime context, constructs
+// the signal junction (provided by libgw codegen — TODO until host
+// protos land), and runs the LifecycleInterface manually:
+// OnCreate → OnStart → wait → OnStop.
+
+#include <atomic>
+#include <chrono>
+#include <csignal>
+#include <thread>
+
+#include "Clock.hh"
+#include "Logger.hh"
+#include "Timer.hh"
 
 #include "OddPathMonitor.hh"
 #include "OddPathMonitorInputs.hh"
-#include "gateway/libs/pero_cmp_lnx/lib/include/runtime.hh"
+
+namespace {
+
+std::atomic<bool> g_shutdown{false};
+
+void on_signal(int /*sig*/) noexcept {
+    g_shutdown.store(true);
+}
+
+}  // namespace
+
+// Provided by the (forthcoming) host-side signal-junction codegen.
+// For now: a stub that the linker resolves to an empty struct when
+// libgw's generated signal junction is available.
+namespace odd_path_client {
+struct odd_path_monitor_signals {};
+}
 
 int main(int argc, char* argv[]) {
-  auto runtime = pero_cmp_lnx::create_runtime(argc, argv);
-  auto inputs = odd_path_client::OddPathMonitorInputs(
-      runtime.execution_factory_.CreateTimer(),
-      runtime.odd_path_monitor_signals_,
-      runtime.context_.clock,
-      runtime.context_.logger);
-  odd_path_client::OddPathMonitor app(inputs);
-  runtime.run(app);
-  return 0;
+    (void)argc; (void)argv;
+
+    std::signal(SIGINT,  on_signal);
+    std::signal(SIGTERM, on_signal);
+
+    auto logger        = platform::runtime::MakeConsoleLogger();
+    auto clock         = platform::runtime::MakeSteadyClock();
+    auto timer_factory = platform::runtime::MakeThreadTimerFactory();
+
+    odd_path_client::odd_path_monitor_signals signals;
+
+    odd_path_client::OddPathMonitorInputs inputs(timer_factory, signals, clock, logger);
+    odd_path_client::OddPathMonitor app(inputs);
+
+    logger->info("OddPathMonitor: starting");
+    app.OnCreate();
+    app.OnStart();
+    while (!g_shutdown.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    logger->info("OddPathMonitor: stopping");
+    app.OnStop();
+    return 0;
 }

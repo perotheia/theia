@@ -2,38 +2,46 @@
 // source: odd_path_client/system/components/odd_path_monitor.art
 // node:   OddPathMonitor
 //
-// Slice 1 (core): dependency-injection bundle the app receives from
-// its runtime. Holds shared_ptr handles to the platform services
-// (logger, clock, timer) and a typed reference to the signal-junction
-// dispatcher generated alongside this file. Regenerated on any model
-// change; do not hand-edit.
+// Slice 1 (core): dependency-injection bundle the app receives at
+// construction. Holds the platform-runtime services (logger, clock,
+// timer factory) every node needs. Regenerated on any model change;
+// do not hand-edit.
+//
+// The signal-junction reference (`odd_path_monitor_signals&`) is
+// declared as a forward-declared opaque type; the runtime that wires
+// it up (typically libgw's NIF) supplies the concrete definition.
 
 #pragma once
 #include <memory>
 
-#include "gateway/libs/pero_cmp_lnx/lib/include/lifecycle_interface.hh"
-#include "gateway/libs/pero_cmp_lnx/lib/include/logging_interface.hh"
-#include "gateway/libs/pero_cmp_lnx/lib/include/clock_interface.hh"
-#include "gateway/libs/pero_cmp_lnx/lib/include/timer_interface.hh"
-
-#include "odd_path_monitor_signals.hh"
+#include "Clock.hh"
+#include "Logger.hh"
+#include "Timer.hh"
 
 namespace odd_path_client {
+
+// Forward decl: the per-node signal junction. libgw / the codegen
+// extending this stub will define this struct.
+struct odd_path_monitor_signals;
 
 class OddPathMonitorInputs {
  public:
   OddPathMonitorInputs() = delete;
 
-  OddPathMonitorInputs(std::shared_ptr<pero_cmp_lnx::TimerInterface> timer,
-                       odd_path_monitor_signals& signals,
-                       std::shared_ptr<pero_cmp_lnx::ClockInterface> clock,
-                       std::shared_ptr<pero_cmp_lnx::LoggingInterface> logger)
-      : timer_(timer), signals_(signals), clock_(clock), logger_(logger) {}
+  OddPathMonitorInputs(
+      std::shared_ptr<platform::runtime::TimerFactoryInterface> timer_factory,
+      odd_path_monitor_signals& signals,
+      std::shared_ptr<platform::runtime::Clock>  clock,
+      std::shared_ptr<platform::runtime::Logger> logger)
+      : timer_factory_(timer_factory),
+        signals_(signals),
+        clock_(clock),
+        logger_(logger) {}
 
-  std::shared_ptr<pero_cmp_lnx::TimerInterface>   timer_;
-  odd_path_monitor_signals&                       signals_;
-  std::shared_ptr<pero_cmp_lnx::ClockInterface>   clock_;
-  std::shared_ptr<pero_cmp_lnx::LoggingInterface> logger_;
+  std::shared_ptr<platform::runtime::TimerFactoryInterface>  timer_factory_;
+  odd_path_monitor_signals&                                  signals_;
+  std::shared_ptr<platform::runtime::Clock>                  clock_;
+  std::shared_ptr<platform::runtime::Logger>                 logger_;
 };
 
 }  // namespace odd_path_client

@@ -10,8 +10,8 @@
 #pragma once
 #include <memory>
 
+#include "LifecycleInterface.hh"
 #include "OddPathMonitorInputs.hh"
-#include "gateway/libs/pero_cmp_lnx/lib/include/lifecycle_interface.hh"
 
 #include "ACC_06.pb.h"
 #include "ACC_07.pb.h"
@@ -44,7 +44,7 @@
 
 namespace odd_path_client {
 
-class OddPathMonitor : public pero_cmp_lnx::LifecycleInterface {
+class OddPathMonitor : public platform::runtime::LifecycleInterface {
  public:
   static constexpr uint32_t TIPC_TYPE     = 0xc0010001u;
   static constexpr uint32_t TIPC_INSTANCE = 0u;

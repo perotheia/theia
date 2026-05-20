@@ -1,0 +1,28 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+"""platform/runtime — host-runtime abstraction for applications + services.
+
+Provides the Adaptive-AUTOSAR-ish facade the generated apps target:
+LifecycleInterface, Logger, Clock, Timer, RuntimeContext. Lives at the
+workspace top level because it sits above both applications/ and
+services/.
+
+Don't put gateway-comms-specific code here (CMP wire framing, FIBEX,
+PSP loading). That stays in gateway/libs/{pero_cmp_lnx, libgw}.
+"""
+
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "runtime",
+    srcs = glob(["src/*.cc"]),
+    hdrs = glob(["include/*.hh"]),
+    includes = ["include"],
+    copts = [
+        "-Wall",
+        "-Wextra",
+        "-std=c++14",
+        "-fPIC",
+    ],
+    linkopts = ["-lpthread"],
+)

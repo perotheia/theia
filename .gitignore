@@ -6,19 +6,23 @@ __pycache__/
 /.venv/
 dist/
 /up/
+/up
 
 # Component-repo checkout paths from .repo/manifests/default.xml.
 # pero_theia sits at workspace root; the projects below are sibling
 # git repos checked out into this tree by `repo sync` and must not
 # appear as untracked in pero_theia.
-/applications/pero_cmp_gw_cln_demo/
 /artheia/
-/gateway/pero_cmp_lnx/
-/gateway/pero_cmp_ti/
-/gateway/pero_cmp_ti_gw/
-/platforms/mlbevo_gen2_cmp_demo/
-/platforms/mlbevo_gen2_cmp_psp/
+/autosar/demo/mlbevo_gen2_cmp_demo/
+/autosar/mlbevo_gen2_cmp_psp/
+/gateway/demo/pero_cmp_gw_cln_demo/
+/gateway/firmware/pero_cmp_ti/
+/gateway/firmware/pero_cmp_ti_gw/
+/gateway/libs/pero_cmp_lnx/
 /services/pero_cmp_gw_svc/
+
+# Local agent/IDE state — never tracked.
+/.claude/
 
 # Vendor data populated locally or by importers; keep the namespace
 # marker (vendor/__init__.py) tracked so `pip install -e .` resolves

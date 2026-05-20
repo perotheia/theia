@@ -47,7 +47,7 @@ pkg_opkg(
     description = "PERO CMP platform support package (MLBevo Gen2 codec + dispatch)",
     section     = "libs",
     files = {
-        "//platforms/mlbevo_gen2_cmp_psp:psp_so": "/usr/lib/libpsp.so",
+        "//autosar/mlbevo_gen2_cmp_psp:psp_so": "/usr/lib/libpsp.so",
     },
     postinst = "#!/bin/sh\nldconfig\n",
 )

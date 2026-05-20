@@ -14,11 +14,11 @@ dist/
 # appear as untracked in pero_theia.
 /applications/pero_cmp_gw_cln_demo/
 /artheia/
+/autosar/mlbevo_gen2_cmp_psp/
+/autosar/demo/mlbevo_gen2_cmp_demo/
 /gateway/pero_cmp_lnx/
 /gateway/pero_cmp_ti/
 /gateway/pero_cmp_ti_gw/
-/platforms/mlbevo_gen2_cmp_demo/
-/platforms/mlbevo_gen2_cmp_psp/
 /services/pero_cmp_gw_svc/
 
 # Vendor implementations are tracked separately (their own GitLab repos,

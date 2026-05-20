@@ -12,35 +12,55 @@ a Bazel rule), start here.
 
 ```mermaid
 flowchart LR
-  classDef src   fill:#fff5cc,stroke:#b58900,color:#222
-  classDef cat   fill:#e0f0ff,stroke:#268bd2,color:#222
-  classDef art   fill:#e0ffe0,stroke:#859900,color:#222
-  classDef json  fill:#ffe0f0,stroke:#d33682,color:#222
-  classDef code  fill:#f0f0f0,stroke:#444,color:#222
+    classDef src   fill:#fff5cc,stroke:#b58900,color:#222
+    classDef cat   fill:#e0f0ff,stroke:#268bd2,color:#222
+    classDef art   fill:#e0ffe0,stroke:#859900,color:#222
+    classDef json  fill:#ffe0f0,stroke:#d33682,color:#222
+    classDef code  fill:#f0f0f0,stroke:#444,color:#222
 
-  fibex[FIBEX K-Matrix .xml]:::src
-  dbc[DBC files]:::src
+    fibex["FIBEX K-Matrix .xml"]
+    dbc["DBC files"]
+    class fibex,dbc src
 
-  fibex   -->|artheia import-fibex| pkgFib[autosar/&lt;psp&gt;/system/mlbevo_gen2/<br/>package.art + catalog.json]:::cat
-  dbc     -->|artheia import-dbc|   pkgCan[autosar/&lt;psp&gt;/system/kcan/<br/>package.art + catalog.json]:::cat
+    pkgFib["autosar/(psp)/system/mlbevo_gen2/<br/>package.art + catalog.json"]
+    pkgCan["autosar/(psp)/system/kcan/<br/>package.art + catalog.json"]
+    class pkgFib,pkgCan cat
 
-  pkgFib  -->|gen-netgraph-partition| ngFib[mlbevo_gen2/netgraph.json]:::json
-  pkgCan  -->|gen-netgraph-partition| ngCan[kcan/netgraph.json]:::json
+    ngFib["mlbevo_gen2/netgraph.json"]
+    ngCan["kcan/netgraph.json"]
+    hostng["platform/config/host_netgraph.json<br/>symbolic_port to TIPC addr"]
+    idx["platform/config/netgraph.cfg<br/>index of all partitions"]
+    class ngFib,ngCan,hostng,idx json
 
-  pkgFib  -->|gen-autosar-system|    autosys[autosar/&lt;psp&gt;/system/system.art<br/>2 bus mega-nodes, ~1500 sender ports]:::art
-  pkgCan  --> autosys
+    autosys["autosar/(psp)/system/system.art<br/>2 bus mega-nodes, ~1500 sender ports"]
+    gwsys["gateway/system/package.art<br/>Gateway TIPC node + GatewayBridge composition"]
+    platsys["platform/system/system.art<br/>Platform composition + symlinks"]
+    vendor["vendor/(v)/system/<br/>components + interfaces"]
+    class autosys,gwsys,platsys,vendor art
 
-  autosys -.fwd-decl.-> gwsys[gateway/system/package.art<br/>Gateway TIPC node + GatewayBridge composition]:::art
-  gwsys   -.fwd-decl.-> platsys[platform/system/system.art<br/>Platform composition + symlinks]:::art
+    cg["code generators<br/>e.g. gw runtime LUT, signal_filter.csv"]
+    class cg code
 
-  vendor[vendor/&lt;v&gt;/system/<br/>components + interfaces] -.import.-> platsys
+    fibex -- "artheia import-fibex" --> pkgFib
+    dbc   -- "artheia import-dbc"   --> pkgCan
 
-  platsys -->|gen-host-netgraph| hostng[platform/config/host_netgraph.json<br/>symbolic_port → TIPC addr]:::json
-  ngFib   --> idx[platform/config/netgraph.cfg<br/>index of all partitions]:::json
-  ngCan   --> idx
-  hostng  --> idx
+    pkgFib -- "gen-netgraph-partition" --> ngFib
+    pkgCan -- "gen-netgraph-partition" --> ngCan
 
-  idx --> cg[code generators<br/>e.g. gw runtime LUT, signal_filter.csv]:::code
+    pkgFib -- "gen-autosar-system" --> autosys
+    pkgCan --> autosys
+
+    autosys -. "fwd decl" .-> gwsys
+    gwsys   -. "fwd decl" .-> platsys
+
+    vendor -. "import"   .-> platsys
+
+    platsys -- "gen-host-netgraph" --> hostng
+    ngFib   --> idx
+    ngCan   --> idx
+    hostng  --> idx
+
+    idx --> cg
 ```
 
 ## 1. Layers
@@ -461,10 +481,19 @@ joins it needs are:
 ```mermaid
 flowchart LR
     classDef key fill:#fff2cc,stroke:#b58900
-    iface[interface name<br/>EML_01_Iface]:::key --> pdu[PDU name<br/>EML_01]
-    pdu --> shape[catalog.messages[pdu]<br/>fields, types, enums]
-    pdu --> wire[netgraph.routes[pdu]<br/>slot/cycle/channel<br/>or can_id/dlc]
-    port[symbolic port name<br/>odd_path_monitor.eml_01]:::key --> nodeRef[host_netgraph.nodes[NodeName].ports[PortName]<br/>tipc_type, interface]
+
+    iface["interface name<br/>EML_01_Iface"]
+    pdu["PDU name<br/>EML_01"]
+    shape["catalog.messages[pdu]<br/>fields, types, enums"]
+    wire["netgraph.routes[pdu]<br/>slot/cycle/channel<br/>or can_id/dlc"]
+    port["symbolic port name<br/>odd_path_monitor.eml_01"]
+    nodeRef["host_netgraph.nodes[NodeName].ports[PortName]<br/>tipc_type, interface"]
+    class iface,port key
+
+    iface -- "strip _Iface" --> pdu
+    pdu --> shape
+    pdu --> wire
+    port --> nodeRef
     nodeRef --> iface
 ```
 
@@ -506,7 +535,7 @@ sequenceDiagram
     PSP-->>GW: decoded EML_01 nanopb struct
     Note over GW: lookup target via<br/>host_netgraph.json
     GW-->>App: TIPC publish to<br/>OddPathMonitor.eml_01<br/>(tipc_type 0xc0010001)
-    App->>App: handle EML_01 callback;<br/>read .EML_GeschwX
+    App->>App: handle EML_01 callback,<br/>read EML_GeschwX
 ```
 
 **Step-by-step with the artefact each step consults:**

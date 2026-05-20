@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Drop this file into $WORKSPACE/.repo/local_manifests/ to make
+  `repo sync` clone vendor/odd_path_client from PG50/odd-path-client.
+
+  See docs/local_manifests/README.md for the workflow.
+-->
+<manifest>
+  <project name="odd-path-client"
+           path="vendor/odd_path_client"
+           remote="theia"
+           revision="main" />
+</manifest>

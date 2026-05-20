@@ -10,9 +10,11 @@
 #include "OddPathMonitor.hh"
 
 #include <cstring>
+#include <utility>
 
 #include <pb.h>
 #include <pb_decode.h>
+#include <pb_encode.h>
 
 #include "gw_client.h"
 
@@ -315,5 +317,35 @@ void OddPathMonitor::rx_loop_() noexcept {
     // unmatched: not one of this node's subscribed PDUs; drop silently
   }
 }
+
+// ---- clientServer proxies (impl) -------------------------------------------
+
+std::future<gw_status_StatusGetStatusResponse>
+OddPathMonitor::status_query_GetStatus(const gw_status_StatusGetStatusRequest& req) {
+  uint8_t      req_buf[256];
+  pb_ostream_t os = pb_ostream_from_buffer(req_buf, sizeof(req_buf));
+  uint16_t     req_len = 0;
+  if (pb_encode(&os, gw_status_StatusGetStatusRequest_fields, &req)) {
+    req_len = (uint16_t)os.bytes_written;
+  }
+  auto raw = client_->send_request(
+      GW_SVC_STATUS_ID,
+      GW_SVC_STATUS_GETSTATUS,
+      req_buf, req_len);
+
+  // Chain a decode step that consumes the byte vector and yields the
+  // typed response. std::launch::deferred so the work happens on the
+  // .get() thread, not a runtime-spawned worker.
+  return std::async(std::launch::deferred,
+      [r = std::move(raw)]() mutable {
+        std::vector<uint8_t> bytes = r.get();
+        gw_status_StatusGetStatusResponse resp = gw_status_StatusGetStatusResponse_init_zero;
+        pb_istream_t is = pb_istream_from_buffer(bytes.data(),
+                                                  bytes.size());
+        (void)pb_decode(&is, gw_status_StatusGetStatusResponse_fields, &resp);
+        return resp;
+      });
+}
+
 
 }  // namespace odd_path_client

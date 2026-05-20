@@ -1,0 +1,24 @@
+# platform/proto — nanopb C sources mirroring .art package paths.
+#
+# Each subdirectory holds one .proto and its generated .pb.{h,c},
+# laid out as `<package-path>/<Iface>.{proto,pb.h,pb.c}`. Apps and
+# libgw take a dep on this single cc_library and `#include
+# "<package-path>/<Iface>.pb.h"`.
+
+package(default_visibility = ["//visibility:public"])
+
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+cc_library(
+    name = "platform_protos",
+    srcs = [
+        "//platform/proto/gateway/system:status_pb_c",
+    ],
+    hdrs = [
+        "//platform/proto/gateway/system:status_pb_h",
+    ],
+    # platform/proto is the include root: callers write
+    # #include "gateway/system/status.pb.h"
+    includes = ["."],
+    copts = ["-fPIC"],
+)

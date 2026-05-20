@@ -10,6 +10,7 @@
 
 #pragma once
 #include <atomic>
+#include <future>
 #include <memory>
 #include <thread>
 
@@ -18,6 +19,7 @@
 
 extern "C" {
 #include "gw_proto.h"
+#include "gw_service_ids.h"
 }
 #include "flexray/ACC_06.pb.h"
 #include "flexray/ACC_10.pb.h"
@@ -46,6 +48,8 @@ extern "C" {
 #include "shared/LWI_01.pb.h"
 #include "shared/Licht_hinten_01.pb.h"
 #include "shared/RCTA_01.pb.h"
+
+#include "gateway/system/status.pb.h"
 
 
 class GwClient;
@@ -128,6 +132,17 @@ class OddPathMonitor : public platform::runtime::LifecycleInterface {
   // bv2_objekt_10 ← BV2_Objekt_10_Iface (FlexRay slot 78, ch 0)
   void on_bv2_objekt_10(const GwMessageHeader& hdr, const mlbevo_gen2_BV2_Objekt_10& msg) noexcept;
   
+
+  // ---- clientServer proxies (one method per operation) -------------------
+  
+  // status_query.GetStatus (Status, service_id=GW_SVC_STATUS_ID, method_id=GW_SVC_STATUS_GETSTATUS)
+  std::future<gw_status_StatusGetStatusResponse>
+  status_query_GetStatus(const gw_status_StatusGetStatusRequest& req);
+  
+
+  // Access the underlying GwClient (used by main() to pump RPC responses
+  // before the rx thread is spawned, e.g. for boot-time synchronous calls).
+  GwClient* client() noexcept { return client_.get(); }
 
  private:
   const OddPathMonitorInputs& inputs_;

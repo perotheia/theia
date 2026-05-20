@@ -8,6 +8,8 @@
 #include <atomic>
 #include <chrono>
 #include <csignal>
+#include <cstdio>
+#include <future>
 #include <thread>
 
 #include "Clock.hh"
@@ -16,6 +18,9 @@
 
 #include "OddPathMonitor.hh"
 #include "OddPathMonitorInputs.hh"
+#include "gw_client.h"
+#include "gateway/system/status.pb.h"
+
 
 namespace {
 
@@ -52,6 +57,40 @@ int main(int argc, char* argv[]) {
 
     logger->info("OddPathMonitor: starting");
     app.OnCreate();
+
+    // ── Boot-time clientServer calls ────────────────────────────────────────
+    // Issued between OnCreate (connect) and OnStart (rx thread spawn) so the
+    // socket is ours alone — we can call pump_response() without racing the
+    // rx loop. Each call is one round-trip on the same TIPC socket the app
+    // will then use for signal subscriptions.
+
+    {
+        gw_status_StatusGetStatusRequest req = gw_status_StatusGetStatusRequest_init_zero;
+        auto fut = app.status_query_GetStatus(req);
+        // Pump the socket waiting for the RESPONSE. In pcap-replay mode
+        // the gateway floods SIGNAL_UPDATE frames; the demuxer discards
+        // them until the matching RPC RESPONSE arrives. Cap at 5s so a
+        // misconfigured gateway can't hang boot indefinitely.
+        bool got = app.client() && app.client()->pump_response(5000);
+        // fut is a deferred future (the proxy chains std::async(deferred,
+        // ...) around the raw byte vector future). Don't .wait_for(0) it
+        // — deferred futures show "timeout" until you actually .get()
+        // them. pump_response's return tells us whether the inner promise
+        // was fulfilled.
+        if (got) {
+            gw_status_StatusGetStatusResponse resp = fut.get();
+            std::fprintf(stderr,
+                "[boot] status_query.GetStatus OK\n");
+            (void)resp;
+            std::fprintf(stderr,
+                "       uptime_ms=%u  packet_count=%u\n",
+                (unsigned)resp.uptime_ms, (unsigned)resp.packet_count);
+        } else {
+            std::fprintf(stderr,
+                "[boot] status_query.GetStatus TIMEOUT — no response in 5s\n");
+        }
+    }
+
     app.OnStart();
     while (!g_shutdown.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(200));

@@ -1,0 +1,27 @@
+// Status — clientServer interface served by cmp_gw.
+//
+// Mirrors the .art declaration in vendor/odd_path_client/system/components/
+// odd_path_monitor.art:
+//     interface clientServer Status { operation GetStatus() returns StatusReply }
+//
+// Wire path:
+//   client → REQUEST  (msg_type=GW_MSG_RPC_REQUEST,  service_id=hash("Status"),
+//                      method_id=0, correlation_id=N)  + StatusGetStatusRequest
+//   GW     → RESPONSE (msg_type=GW_MSG_RPC_RESPONSE, ...correlation_id=N)
+//                      + StatusGetStatusResponse
+//
+// Compiled with nanopb to status.pb.h / status.pb.c so libgw and apps both
+// link the same typed structs.
+
+syntax = "proto3";
+
+package gw_status;
+
+message StatusGetStatusRequest {
+  // Empty: the gateway has only one status snapshot to return.
+}
+
+message StatusGetStatusResponse {
+  uint32 uptime_ms     = 1;  // ms since cmp_gw process start (CLOCK_MONOTONIC)
+  uint32 packet_count  = 2;  // ASAM-CMP packets seen since start
+}

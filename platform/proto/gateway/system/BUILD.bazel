@@ -1,0 +1,29 @@
+# Generated nanopb sources for the gateway.system package.
+#
+# The .proto sits next to the .art that declares the interface it
+# describes (gateway/system/package.art -> interface clientServer Status).
+# We mirror that hierarchy into platform/proto/<pkg-path>/ so apps can
+# `#include "gateway/system/status.pb.h"` once they add
+# platform/proto/ to their include path.
+#
+# Today the .pb.{h,c} are committed alongside the .proto (one-shot
+# nanopb_generator output). A Bazel-driven regen will replace this with
+# `genrule` / `nanopb_generate` later; the file targets below stay the
+# same so callers don't need to change.
+
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "status_pb_c",
+    srcs = ["status.pb.c"],
+)
+
+filegroup(
+    name = "status_pb_h",
+    srcs = ["status.pb.h"],
+)
+
+filegroup(
+    name = "status_proto",
+    srcs = ["status.proto"],
+)

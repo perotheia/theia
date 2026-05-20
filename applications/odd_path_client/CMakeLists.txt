@@ -19,6 +19,9 @@ set(PLATFORM_RUNTIME "${WORKSPACE_ROOT}/platform/runtime" CACHE PATH
 set(LIBGW "${WORKSPACE_ROOT}/gateway/libs/libgw" CACHE PATH
     "libgw: gateway NIF (CMP → PSP → TIPC + UDP TX).")
 
+set(PLATFORM_PROTO "${WORKSPACE_ROOT}/platform/proto" CACHE PATH
+    "platform/proto: nanopb sources mirroring .art package paths.")
+
 set(BAZEL_BIN "${WORKSPACE_ROOT}/bazel-bin" CACHE PATH
     "Bazel output root; psp_nanopb TreeArtifact lives under here.")
 
@@ -51,19 +54,26 @@ set_target_properties(odd_path_client_psp_protos PROPERTIES
     LINKER_LANGUAGE C)
 set_source_files_properties(${PSP_NANOPB_SRCS} PROPERTIES LANGUAGE C)
 
+
+
 add_executable(odd_path_client
     app/OddPathMonitor.cc
     app/OddPathMonitor_main.cc
     app/impl/OddPathMonitor_handlers.cc
     
     app/gw_client.cpp
+    ${PLATFORM_PROTO}/gateway/system/status.pb.c
+    
 )
+set_source_files_properties(${PLATFORM_PROTO}/gateway/system/status.pb.c PROPERTIES LANGUAGE C)
+
 
 target_include_directories(odd_path_client PRIVATE
     ${CMAKE_SOURCE_DIR}/core
     ${CMAKE_SOURCE_DIR}/app
     ${PLATFORM_RUNTIME}/include
     ${LIBGW}/include
+    ${PLATFORM_PROTO}       # for `#include "<pkg-path>/<Iface>.pb.h"` (clientServer types)
     ${PSP_PROTO_INC}        # for `#include "<dir>/<Pdu>.pb.h"`
     /usr/include            # nanopb runtime: pb.h, pb_decode.h, pb_encode.h
 )

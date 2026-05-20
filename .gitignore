@@ -1,5 +1,8 @@
 .repo/
-bazel-*
+.claude/
+# Bazel symlinks at the workspace root (bazel-bin, bazel-out, bazel-testlogs, bazel-theia).
+# Anchored to / so `docs/skills/bazel-build/` and other deeper bazel-* paths are unaffected.
+/bazel-*
 /workspace/
 *.pyc
 __pycache__/

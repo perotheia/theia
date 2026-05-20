@@ -23,16 +23,23 @@ After `repo sync`, the workspace looks like:
   packaging/                     opkg .ipk package definitions
 
 gateway/
-  pero_cmp_ti/                 Hercules TMS570 capture firmware (ASAM-CMP over UDP)
-  pero_cmp_ti_gw/              Hercules gateway firmware (CAN+FlexRay TX via UDP)
-  pero_cmp_lnx/                Linux host library (libcmpdecoder, libgw) + demo tools
+  firmware/pero_cmp_ti/        Hercules TMS570 capture firmware (ASAM-CMP over UDP)
+  firmware/pero_cmp_ti_gw/     Hercules gateway firmware (CAN+FlexRay TX via UDP)
+  libs/pero_cmp_lnx/           ASAM-CMP wire decode, FIBEX/DBC, PSP loader, timesync
+  libs/libgw/                  Gateway NIF (CMP → PSP → TIPC + UDP TX)
+  demo/pero_cmp_gw_cln_demo/   TIPC gateway client demo
+  system/                      Gateway Artheia system fragment (pero_theia)
 services/
   pero_cmp_gw_svc/             Linux gateway NIF service (cmp_gw binary)
-applications/
-  pero_cmp_gw_cln_demo/        TIPC gateway client demo (cmp_gw_client binary)
-platforms/
+applications/                  Vendor apps (e.g. odd_path_client)
+autosar/
   mlbevo_gen2_cmp_psp/         Platform support package (codec + PSP + GwBusId)
-  mlbevo_gen2_cmp_demo/        ACC_07 pcap decoder demo
+  demo/mlbevo_gen2_cmp_demo/   ACC_07 pcap decoder demo
+platform/
+  system/                      Composition + symlinks to system fragments
+  config/                      netgraph.cfg + host_netgraph.json
+  runtime/                     Host-runtime abstraction (Lifecycle/Logger/Clock/Timer)
+vendor/                        Per-vendor system fragments (Tornado, odd_path_client)
 ```
 
 ## Prerequisites
@@ -56,7 +63,7 @@ sudo apt install libpcap-dev libexpat1-dev libnanopb-dev gcc g++
 #    can_to_nanopb.py, etc.) are invoked from Bazel rules as `python3`, so the venv
 #    must be on PATH for the build.
 python3 -m venv .venv
-./.venv/bin/pip install -r artheia/pyproject.toml
+./.venv/bin/pip install -e 'artheia[lsp,dev]'
 #    Then prefix every bazel invocation:  PATH="$PWD/.venv/bin:$PATH" bazel build ...
 
 # 5. TI ARM CGT 18.1.1.LTS — required for Hercules firmware
@@ -103,7 +110,7 @@ with no manual pre-steps.
 | Target | Output | Config |
 |---|---|---|
 | `//gateway/libs/pero_cmp_lnx/lib:cmpdecoder` | `libcmpdecoder.so/.a` | host |
-| `//gateway/libs/pero_cmp_lnx/lib:gw` | `libgw.so/.a` | host |
+| `//gateway/libs/libgw:gw` | `libgw.so/.a` | host |
 | `//gateway/libs/pero_cmp_lnx/demo:pero-decode` | `pero-decode` | host |
 | `//gateway/libs/pero_cmp_lnx/demo:pero-filter` | `pero-filter` | host |
 | `//gateway/libs/pero_cmp_lnx/demo:pero-timesync` | `pero-timesync` | host |

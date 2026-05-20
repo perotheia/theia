@@ -82,7 +82,7 @@ build:libgw:
   <<: *setup_workspace
   script:
     - cd workspace
-    - bazel build //gateway/libs/pero_cmp_lnx/lib:gw
+    - bazel build //gateway/libs/libgw:gw
         //services/pero_cmp_gw_svc:cmp_gw
         //gateway/demo/pero_cmp_gw_cln_demo:cmp_gw_client
         --config=linux --config=ci

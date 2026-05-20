@@ -62,7 +62,7 @@ pkg_opkg(
     section     = "libs",
     depends     = "pero-libcmpdecoder, pero-libpsp",
     files = {
-        "//gateway/libs/pero_cmp_lnx/lib:gw_so_file": "/usr/lib/libgw.so",
+        "//gateway/libs/libgw:gw_so_file": "/usr/lib/libgw.so",
     },
     postinst = "#!/bin/sh\nldconfig\n",
 )

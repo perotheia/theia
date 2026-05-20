@@ -20,6 +20,7 @@ dist/
 /autosar/demo/mlbevo_gen2_cmp_demo/
 /gateway/firmware/pero_cmp_ti/
 /gateway/firmware/pero_cmp_ti_gw/
+/gateway/libs/libgw/
 /gateway/libs/pero_cmp_lnx/
 /gateway/demo/pero_cmp_gw_cln_demo/
 /services/pero_cmp_gw_svc/

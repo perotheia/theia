@@ -70,7 +70,7 @@ build:libcmpdecoder:
   <<: *setup_workspace
   script:
     - cd workspace
-    - bazel build //gateway/pero_cmp_lnx/lib:cmpdecoder
+    - bazel build //gateway/libs/pero_cmp_lnx/lib:cmpdecoder
         --config=linux --config=ci
   artifacts:
     paths: [workspace/bazel-bin/pero_cmp_lnx/lib/]
@@ -82,9 +82,9 @@ build:libgw:
   <<: *setup_workspace
   script:
     - cd workspace
-    - bazel build //gateway/pero_cmp_lnx/lib:gw
+    - bazel build //gateway/libs/pero_cmp_lnx/lib:gw
         //services/pero_cmp_gw_svc:cmp_gw
-        //applications/pero_cmp_gw_cln_demo:cmp_gw_client
+        //gateway/demo/pero_cmp_gw_cln_demo:cmp_gw_client
         --config=linux --config=ci
 
 build:libpsp:
@@ -105,7 +105,7 @@ build:hercules_firmware:
   <<: *setup_workspace
   script:
     - cd workspace
-    - bazel build //gateway/pero_cmp_ti:pero_cmp_ti.elf
+    - bazel build //gateway/firmware/pero_cmp_ti:pero_cmp_ti.elf
         --config=cortex_r4f --config=ci
   artifacts:
     paths:
@@ -118,7 +118,7 @@ build:hercules_gw_firmware:
   <<: *setup_workspace
   script:
     - cd workspace
-    - bazel build //gateway/pero_cmp_ti_gw:pero_cmp_ti_gw.elf
+    - bazel build //gateway/firmware/pero_cmp_ti_gw:pero_cmp_ti_gw.elf
         --config=cortex_r4f --config=ci
   artifacts:
     paths:
@@ -132,7 +132,7 @@ test:host:
   <<: *setup_workspace
   script:
     - cd workspace
-    - bazel test //gateway/pero_cmp_lnx/...
+    - bazel test //gateway/libs/pero_cmp_lnx/...
         --config=linux --config=ci
         --test_output=errors
 

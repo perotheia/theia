@@ -33,7 +33,7 @@ pkg_opkg(
     description = "PERO CMP decoder library (ASAM-CMP, FIBEX, PSP loader)",
     section     = "libs",
     files = {
-        "//gateway/pero_cmp_lnx/lib:cmpdecoder_so_file": "/usr/lib/libcmpdecoder.so",
+        "//gateway/libs/pero_cmp_lnx/lib:cmpdecoder_so_file": "/usr/lib/libcmpdecoder.so",
     },
     postinst = "#!/bin/sh\nldconfig\n",
 )
@@ -62,7 +62,7 @@ pkg_opkg(
     section     = "libs",
     depends     = "pero-libcmpdecoder, pero-libpsp",
     files = {
-        "//gateway/pero_cmp_lnx/lib:gw_so_file": "/usr/lib/libgw.so",
+        "//gateway/libs/pero_cmp_lnx/lib:gw_so_file": "/usr/lib/libgw.so",
     },
     postinst = "#!/bin/sh\nldconfig\n",
 )
@@ -94,7 +94,7 @@ pkg_opkg(
     arch        = _ARCH,
     description = "PERO CMP gateway client demo (TIPC RX + TX_REQUEST)",
     files = {
-        "//applications/pero_cmp_gw_cln_demo:cmp_gw_client": "/usr/bin/cmp_gw_client",
+        "//gateway/demo/pero_cmp_gw_cln_demo:cmp_gw_client": "/usr/bin/cmp_gw_client",
     },
 )
 
@@ -112,7 +112,7 @@ pkg_opkg(
         # Firmware ELF built by cross-compile; packaged as a data file for flashing.
         # Build: bazel build //pero_cmp_ti_gw:pero_cmp_ti_gw.elf --config=cortex_r4f
         # For now use a placeholder; comment out until cross-compile is available.
-        # "//gateway/pero_cmp_ti_gw:pero_cmp_ti_gw.elf": "/usr/share/pero-gw-fw/pero_cmp_ti_gw.elf",
+        # "//gateway/firmware/pero_cmp_ti_gw:pero_cmp_ti_gw.elf": "/usr/share/pero-gw-fw/pero_cmp_ti_gw.elf",
         # Use cmp_gw as a placeholder to keep the target buildable on host
         "//services/pero_cmp_gw_svc:cmp_gw": "/usr/share/pero-gw-fw/README",
     },

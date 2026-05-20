@@ -29,5 +29,5 @@ test:ci  --test_output=errors
 
 # ── Output shortcuts ──────────────────────────────────────────────────────
 # Host:     bazel build //... --config=linux
-# GCC FW:   bazel build //gateway/pero_cmp_ti:pero_cmp_ti.elf --config=cortex_r4f
-# TI FW:    bazel build //gateway/pero_cmp_ti:pero_cmp_ti.elf --config=ti_arm_cgt_18
+# GCC FW:   bazel build //gateway/firmware/pero_cmp_ti:pero_cmp_ti.elf --config=cortex_r4f
+# TI FW:    bazel build //gateway/firmware/pero_cmp_ti:pero_cmp_ti.elf --config=ti_arm_cgt_18

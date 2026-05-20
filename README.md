@@ -56,7 +56,7 @@ sudo apt install libpcap-dev libexpat1-dev libnanopb-dev gcc g++
 #    can_to_nanopb.py, etc.) are invoked from Bazel rules as `python3`, so the venv
 #    must be on PATH for the build.
 python3 -m venv .venv
-./.venv/bin/pip install -r gateway/pero_cmp_lnx/tools/requirements.txt
+./.venv/bin/pip install -r artheia/pyproject.toml
 #    Then prefix every bazel invocation:  PATH="$PWD/.venv/bin:$PATH" bazel build ...
 
 # 5. TI ARM CGT 18.1.1.LTS — required for Hercules firmware
@@ -84,15 +84,15 @@ repo forall -c 'git checkout bz-migration'
 export PATH="$PWD/.venv/bin:$PATH"
 
 # 4. Build Linux host targets
-bazel build //gateway/pero_cmp_lnx/demo:all          # pero-decode, pero-filter, pero-timesync
+bazel build //gateway/libs/pero_cmp_lnx/demo:all          # pero-decode, pero-filter, pero-timesync
 bazel build //services/pero_cmp_gw_svc:cmp_gw
-bazel build //applications/pero_cmp_gw_cln_demo:cmp_gw_client
-bazel build //platforms/mlbevo_gen2_cmp_psp:codec    # PSP codegen + compile (~6000 .c files)
-bazel build //platforms/mlbevo_gen2_cmp_psp:psp_so   # libpsp.so
+bazel build //gateway/demo/pero_cmp_gw_cln_demo:cmp_gw_client
+bazel build //autosar/mlbevo_gen2_cmp_psp:codec    # PSP codegen + compile (~6000 .c files)
+bazel build //autosar/mlbevo_gen2_cmp_psp:psp_so   # libpsp.so
 
 # 5. Compile Hercules firmware (requires /opt/ti/cgt_arm_18.1.1.LTS/)
-bazel build //gateway/pero_cmp_ti:pero_cmp_ti.elf    --config=ti_arm_cgt_18
-bazel build //gateway/pero_cmp_ti_gw:pero_cmp_ti_gw.elf --config=ti_arm_cgt_18
+bazel build //gateway/firmware/pero_cmp_ti:pero_cmp_ti.elf    --config=ti_arm_cgt_18
+bazel build //gateway/firmware/pero_cmp_ti_gw:pero_cmp_ti_gw.elf --config=ti_arm_cgt_18
 ```
 
 ## Verified build (theia workspace, bz-migration, 2026-05-18)
@@ -102,20 +102,20 @@ with no manual pre-steps.
 
 | Target | Output | Config |
 |---|---|---|
-| `//gateway/pero_cmp_lnx/lib:cmpdecoder` | `libcmpdecoder.so/.a` | host |
-| `//gateway/pero_cmp_lnx/lib:gw` | `libgw.so/.a` | host |
-| `//gateway/pero_cmp_lnx/demo:pero-decode` | `pero-decode` | host |
-| `//gateway/pero_cmp_lnx/demo:pero-filter` | `pero-filter` | host |
-| `//gateway/pero_cmp_lnx/demo:pero-timesync` | `pero-timesync` | host |
+| `//gateway/libs/pero_cmp_lnx/lib:cmpdecoder` | `libcmpdecoder.so/.a` | host |
+| `//gateway/libs/pero_cmp_lnx/lib:gw` | `libgw.so/.a` | host |
+| `//gateway/libs/pero_cmp_lnx/demo:pero-decode` | `pero-decode` | host |
+| `//gateway/libs/pero_cmp_lnx/demo:pero-filter` | `pero-filter` | host |
+| `//gateway/libs/pero_cmp_lnx/demo:pero-timesync` | `pero-timesync` | host |
 | `//services/pero_cmp_gw_svc:cmp_gw` | `cmp_gw` | host |
-| `//applications/pero_cmp_gw_cln_demo:cmp_gw_client` | `cmp_gw_client` | host |
-| `//platforms/mlbevo_gen2_cmp_psp:codec` | `codec.a` (5948 .c files) | host |
-| `//platforms/mlbevo_gen2_cmp_psp:psp` | `psp.a` | host |
-| `//platforms/mlbevo_gen2_cmp_psp:psp_so` | `libpsp.so` (2.3 MB) | host |
-| `//platforms/mlbevo_gen2_cmp_demo:mlbevo_demo` | `mlbevo_demo` | host |
+| `//gateway/demo/pero_cmp_gw_cln_demo:cmp_gw_client` | `cmp_gw_client` | host |
+| `//autosar/mlbevo_gen2_cmp_psp:codec` | `codec.a` (5948 .c files) | host |
+| `//autosar/mlbevo_gen2_cmp_psp:psp` | `psp.a` | host |
+| `//autosar/mlbevo_gen2_cmp_psp:psp_so` | `libpsp.so` (2.3 MB) | host |
+| `//autosar/demo/mlbevo_gen2_cmp_demo:mlbevo_demo` | `mlbevo_demo` | host |
 | `//packaging:pero-libcmpdecoder` … `:pero-gw-stack` | `.ipk` packages | host |
-| `//gateway/pero_cmp_ti:pero_cmp_ti.elf` | 975 KB ELF | `ti_arm_cgt_18` |
-| `//gateway/pero_cmp_ti_gw:pero_cmp_ti_gw.elf` | ELF | `ti_arm_cgt_18` |
+| `//gateway/firmware/pero_cmp_ti:pero_cmp_ti.elf` | 975 KB ELF | `ti_arm_cgt_18` |
+| `//gateway/firmware/pero_cmp_ti_gw:pero_cmp_ti_gw.elf` | ELF | `ti_arm_cgt_18` |
 
 ## PSP code generation (replaces generate.sh)
 
@@ -128,14 +128,14 @@ and re-runs generation + compilation on the next `bazel build`.
 
 ```sh
 # Generate sources only (no compile)
-bazel build //platforms/mlbevo_gen2_cmp_psp:generate
+bazel build //autosar/mlbevo_gen2_cmp_psp:generate
 
 # Full codec library (generates + compiles ~6000 .c files)
-bazel build //platforms/mlbevo_gen2_cmp_psp:codec
+bazel build //autosar/mlbevo_gen2_cmp_psp:codec
 
 # Verify DBC dependency: touch a DBC, then rebuild
 touch platforms/mlbevo_gen2_cmp_psp/config/dbc/MLBevo_Gen2_MLBevo_KCAN_KMatrix_V8.27.01F.dbc
-bazel build //platforms/mlbevo_gen2_cmp_psp:codec   # PspGenerate + PspCompile will re-run
+bazel build //autosar/mlbevo_gen2_cmp_psp:codec   # PspGenerate + PspCompile will re-run
 ```
 
 ## Manifest repos
@@ -217,7 +217,7 @@ opkg install /opt/pero-gw/dist/pero-gw-stack_1.0.0_x86_64.ipk \
 
 ### Linux host (default)
 System GCC 13 (Ubuntu 24.04). No extra install. Used for all
-`//gateway/pero_cmp_lnx/...`, `//services/...`, `//platforms/...` targets.
+`//gateway/libs/pero_cmp_lnx/...`, `//services/...`, `//autosar/...` targets.
 
 ### TI ARM CGT 18.1.1.LTS (`--config=ti_arm_cgt_18`)
 Original TI proprietary compiler used in the CCS 8.0.0 project files
@@ -237,7 +237,7 @@ Original TI proprietary compiler used in the CCS 8.0.0 project files
 Stages: `setup → build_host → build_firmware → test → package`
 
 - `setup`: caches TI ARM CGT toolchain
-- `build_host`: `bazel build //gateway/pero_cmp_lnx/... //platforms/mlbevo_gen2_cmp_psp:codec`
-- `build_firmware`: `bazel build //gateway/pero_cmp_ti:pero_cmp_ti.elf --config=ti_arm_cgt_18`
-- `test`: `bazel test //gateway/pero_cmp_lnx/...`
+- `build_host`: `bazel build //gateway/libs/pero_cmp_lnx/... //autosar/mlbevo_gen2_cmp_psp:codec`
+- `build_firmware`: `bazel build //gateway/firmware/pero_cmp_ti:pero_cmp_ti.elf --config=ti_arm_cgt_18`
+- `test`: `bazel test //gateway/libs/pero_cmp_lnx/...`
 - `package`: `bazel build //packaging:install` — produces `.ipk` artifacts on main/tags

@@ -5,10 +5,10 @@ Quick reference:
   bazel build //... --config=linux
 
   # Cross-compile all firmware targets
-  bazel build //gateway/pero_cmp_ti/... //gateway/pero_cmp_ti_gw/... --config=cortex_r4f
+  bazel build //gateway/firmware/pero_cmp_ti/... //gateway/firmware/pero_cmp_ti_gw/... --config=cortex_r4f
 
   # Build & test host
-  bazel test //gateway/pero_cmp_lnx/... --config=linux
+  bazel test //gateway/libs/pero_cmp_lnx/... --config=linux
 """
 
 package(default_visibility = ["//visibility:public"])
@@ -18,11 +18,11 @@ package(default_visibility = ["//visibility:public"])
 # All Linux host targets
 alias(
     name = "host_all",
-    actual = "//gateway/pero_cmp_lnx:all",
+    actual = "//gateway/libs/pero_cmp_lnx:all",
 )
 
 # All firmware targets
 alias(
     name = "firmware_all",
-    actual = "//gateway/pero_cmp_ti:all",
+    actual = "//gateway/firmware/pero_cmp_ti:all",
 )

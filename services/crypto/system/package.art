@@ -1,0 +1,30 @@
+        // Crypto (CRYPTO) — Adaptive Platform Functional Cluster.
+        //
+        // Provides CryptoIf; requires: core, osi, log.
+
+        package services.crypto
+
+        interface clientServer CryptoIf {
+    operation GetStatus()
+    operation Configure()
+}
+
+interface clientServer KernelIf { }  // from services.core
+
+interface clientServer OsIf { }  // from services.osi
+
+interface clientServer LogIf { }  // from services.log
+
+        node atomic CryptoDaemon {
+            tipc type=0x80010006 instance=0
+            ports {
+                server crypto_status provides CryptoIf
+        client requires_core requires KernelIf
+        client requires_osi requires OsIf
+        client requires_log requires LogIf
+            }
+        }
+
+        composition Crypto {
+            prototype CryptoDaemon crypto_daemon
+        }

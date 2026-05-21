@@ -1,0 +1,30 @@
+        // Sm (SM) — Adaptive Platform Functional Cluster.
+        //
+        // Provides StateMgmtIf; requires: core, phm, exec.
+
+        package services.sm
+
+        interface clientServer StateMgmtIf {
+    operation GetStatus()
+    operation Configure()
+}
+
+interface clientServer KernelIf { }  // from services.core
+
+interface clientServer HealthIf { }  // from services.phm
+
+interface clientServer ExecIf { }  // from services.exec
+
+        node atomic SmDaemon {
+            tipc type=0x8001000D instance=0
+            ports {
+                server sm_status provides StateMgmtIf
+        client requires_core requires KernelIf
+        client requires_phm requires HealthIf
+        client requires_exec requires ExecIf
+            }
+        }
+
+        composition Sm {
+            prototype SmDaemon sm_daemon
+        }

@@ -1,0 +1,30 @@
+        // Per (PER) — Adaptive Platform Functional Cluster.
+        //
+        // Provides PersistencyIf; requires: core, osi, log.
+
+        package services.per
+
+        interface clientServer PersistencyIf {
+    operation GetStatus()
+    operation Configure()
+}
+
+interface clientServer KernelIf { }  // from services.core
+
+interface clientServer OsIf { }  // from services.osi
+
+interface clientServer LogIf { }  // from services.log
+
+        node atomic PerDaemon {
+            tipc type=0x80010007 instance=0
+            ports {
+                server per_status provides PersistencyIf
+        client requires_core requires KernelIf
+        client requires_osi requires OsIf
+        client requires_log requires LogIf
+            }
+        }
+
+        composition Per {
+            prototype PerDaemon per_daemon
+        }

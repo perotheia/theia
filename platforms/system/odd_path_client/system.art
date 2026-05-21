@@ -1,0 +1,21 @@
+// Odd-path-client system composition.
+//
+// One application — OddPathMonitor — consuming the AUTOSAR FlexRay
+// signals listed in upstream docs/signals.md. No internal pub/sub
+// fan-out: the app is a pure subscriber and produces its outputs via
+// channels declared elsewhere (BVM, RSS gates) outside this fragment.
+
+package vendor.odd_path_client.system
+
+import vendor.odd_path_client.system.components.*
+
+// ---- forward-decl: the node lives in components/odd_path_monitor.art -----
+
+node atomic OddPathMonitor {
+    tipc type=0xc0010001 instance=0
+    ports { }
+}
+
+composition OddPathClient {
+    prototype OddPathMonitor odd_path_monitor
+}

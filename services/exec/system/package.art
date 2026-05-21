@@ -1,0 +1,24 @@
+        // Exec (EXEC) — Adaptive Platform Functional Cluster.
+        //
+        // Provides ExecIf; requires: core.
+
+        package services.exec
+
+        interface clientServer ExecIf {
+    operation GetStatus()
+    operation Configure()
+}
+
+interface clientServer KernelIf { }  // from services.core
+
+        node atomic ExecDaemon {
+            tipc type=0x80010005 instance=0
+            ports {
+                server exec_status provides ExecIf
+        client requires_core requires KernelIf
+            }
+        }
+
+        composition Exec {
+            prototype ExecDaemon exec_daemon
+        }

@@ -1,0 +1,30 @@
+        // Fw (FW) — Adaptive Platform Functional Cluster.
+        //
+        // Provides FirewallIf; requires: core, log, idsm.
+
+        package services.fw
+
+        interface clientServer FirewallIf {
+    operation GetStatus()
+    operation Configure()
+}
+
+interface clientServer KernelIf { }  // from services.core
+
+interface clientServer LogIf { }  // from services.log
+
+interface clientServer IntrusionIf { }  // from services.idsm
+
+        node atomic FwDaemon {
+            tipc type=0x80010011 instance=0
+            ports {
+                server fw_status provides FirewallIf
+        client requires_core requires KernelIf
+        client requires_log requires LogIf
+        client requires_idsm requires IntrusionIf
+            }
+        }
+
+        composition Fw {
+            prototype FwDaemon fw_daemon
+        }

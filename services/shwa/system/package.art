@@ -1,0 +1,24 @@
+        // Shwa (SHWA) — Adaptive Platform Functional Cluster.
+        //
+        // Provides SafeAccelIf; requires: core.
+
+        package services.shwa
+
+        interface clientServer SafeAccelIf {
+    operation GetStatus()
+    operation Configure()
+}
+
+interface clientServer KernelIf { }  // from services.core
+
+        node atomic ShwaDaemon {
+            tipc type=0x80010012 instance=0
+            ports {
+                server shwa_status provides SafeAccelIf
+        client requires_core requires KernelIf
+            }
+        }
+
+        composition Shwa {
+            prototype ShwaDaemon shwa_daemon
+        }

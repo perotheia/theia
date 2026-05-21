@@ -1,0 +1,33 @@
+        // Ucm (UCM) — Adaptive Platform Functional Cluster.
+        //
+        // Provides UpdateIf; requires: core, per, crypto, com.
+
+        package services.ucm
+
+        interface clientServer UpdateIf {
+    operation GetStatus()
+    operation Configure()
+}
+
+interface clientServer KernelIf { }  // from services.core
+
+interface clientServer PersistencyIf { }  // from services.per
+
+interface clientServer CryptoIf { }  // from services.crypto
+
+interface clientServer ComIf { }  // from services.com
+
+        node atomic UcmDaemon {
+            tipc type=0x8001000E instance=0
+            ports {
+                server ucm_status provides UpdateIf
+        client requires_core requires KernelIf
+        client requires_per requires PersistencyIf
+        client requires_crypto requires CryptoIf
+        client requires_com requires ComIf
+            }
+        }
+
+        composition Ucm {
+            prototype UcmDaemon ucm_daemon
+        }

@@ -1,0 +1,146 @@
+// Supervisor — OTP-style process supervisor exposed over TIPC.
+//
+// Two service interfaces:
+//
+//   SupervisorControlIf (clientServer)
+//     — RPC surface modelled on OTP supervisor.erl exports:
+//       which_children/1, which_child/2, count_children/1,
+//       restart_child/2, terminate_child/2, stop/1.
+//     Used by the supervisor-gui to query state and request actions.
+//
+//   SupervisorEventIf (senderReceiver)
+//     — push stream of supervision events for the GUI's trace pane,
+//       plus a periodic Health beacon that doubles as keep-alive.
+//
+// Reference: see /tmp/supervisor.erl in the OTP source tree and
+// docs/supervision.md for our semantics. Proto3-tag assignment is
+// automatic in artheia — fields are listed positionally.
+
+package services.supervisor
+
+// ---- messages ------------------------------------------------------------
+
+// One row in a tree snapshot. Hierarchy is encoded by parent_name
+// (empty for the root supervisor). Workers report restart_count and
+// last_exit_code; supervisors report strategy + restart_intensity.
+message ChildState {
+    string  name
+    string  parent_name      // "" for the root supervisor
+    uint32  kind             // 0 = worker, 1 = supervisor
+    sint32  pid              // -1 when not running
+    uint32  state            // 0=stopped, 1=starting, 2=running, 3=terminating, 4=restarting
+    uint32  restart_count
+    sint32  last_exit_code   // most recent observed return code; 0 if never exited
+    uint64  uptime_ms        // since current start_ts; 0 if not running
+    string  strategy         // supervisor only: one_for_one | one_for_all | rest_for_one | simple_one_for_one
+    uint32  max_restarts     // supervisor only
+    uint32  max_seconds      // supervisor only
+    string  start_cmd        // worker only — argv joined by space (informational)
+}
+
+// Full tree snapshot — flat list of ChildState rows; the GUI reconstructs
+// the hierarchy via parent_name links.
+message TreeSnapshot {
+    uint64  generation       // monotonically increasing
+    uint64  timestamp_ms     // wallclock at snapshot time
+    repeated ChildState children
+}
+
+// One supervision event. kind discriminates the union; payload-specific
+// fields are populated per kind:
+//   0 = child_started      — pid, child_name, supervisor_name
+//   1 = child_exited       — pid, exit_code, child_name, supervisor_name
+//   2 = restart_cascade    — strategy, supervisor_name (trigger), child_name (leading)
+//   3 = tombstone_written  — child_name, pid, tombstone_path
+//   4 = escalation         — supervisor_name, detail
+//   5 = tree_changed       — (debounced; consumers re-query GetTree)
+message SupervisionEvent {
+    uint32  kind
+    uint64  timestamp_ms
+    string  child_name
+    string  supervisor_name
+    sint32  pid
+    sint32  exit_code
+    string  strategy
+    string  tombstone_path
+    string  detail
+}
+
+// Periodic heartbeat. Doubles as keep-alive — the GUI declares the
+// connection stale if more than ~3 expected intervals pass without one.
+message HealthBeacon {
+    uint64  timestamp_ms
+    uint64  uptime_ms        // since the supervisor process started
+    uint64  generation       // matches TreeSnapshot.generation
+    uint32  total_workers
+    uint32  active_workers
+    uint64  total_restarts   // cumulative across all supervisors in tree
+    uint64  total_tombstones // cumulative count of tombstone files surfaced
+}
+
+// ---- control RPC types ---------------------------------------------------
+
+message GetTreeRequest {
+}
+
+message GetChildRequest {
+    string  name
+}
+
+message ChildSelector {
+    string  name
+}
+
+// Generic ack/error payload for action RPCs.
+//   status: 0=ok, 1=not_found, 2=already_running,
+//           3=already_stopped, 4=invalid_request
+message ControlReply {
+    uint32  status
+    string  message          // optional human-readable diagnostic
+}
+
+// ---- interfaces ----------------------------------------------------------
+
+interface clientServer SupervisorControlIf {
+    operation GetTree(in req: GetTreeRequest) returns TreeSnapshot
+    operation GetChild(in req: GetChildRequest) returns ChildState
+    operation RestartChild(in sel: ChildSelector) returns ControlReply
+    operation TerminateChild(in sel: ChildSelector) returns ControlReply
+    operation Stop() returns ControlReply
+}
+
+interface senderReceiver SupervisorEventIf {
+    data SupervisionEvent event
+    data HealthBeacon     health
+    data TreeSnapshot     snapshot
+}
+
+// ---- node ----------------------------------------------------------------
+
+// TIPC type 0x80020001 — sits above the FC range (0x80010001..0x80010012)
+// in a band reserved for system-level services. Instance 0 because the
+// supervisor is singleton per machine.
+
+node atomic Supervisor {
+    tipc type=0x80020001 instance=0
+    ports {
+        server  control provides SupervisorControlIf
+        sender  events  provides SupervisorEventIf
+    }
+    params {
+        // Period of the HealthBeacon emission in ms. The GUI uses this
+        // to compute its "stale connection" threshold.
+        heartbeat_period_ms : uint32 = 1000
+        // Period of the periodic TreeSnapshot broadcast. State-change
+        // events fire snapshots ad-hoc; this one is a safety net.
+        snapshot_period_ms  : uint32 = 5000
+    }
+}
+
+// ---- composition ---------------------------------------------------------
+// The supervisor stands alone in its own composition; the GUI imports
+// SupervisorControlIf / SupervisorEventIf separately to wire its ports.
+
+composition Supervisor {
+    prototype Supervisor supervisor
+}

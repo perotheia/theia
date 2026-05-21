@@ -1,0 +1,227 @@
+// Odd-path-monitor vendor system fragment.
+//
+// Declares per-PDU senderReceiver interfaces over the FlexRay signals
+// the odd-path-monitor app consumes. The message shapes themselves are
+// imported from the AUTOSAR PSP — we don't redeclare them here. Each
+// interface lists, in a // comment, the signals the app actually reads
+// (used/planned per docs/signals.md in the upstream repo).
+//
+// Categories:
+//   - Ego dynamics:  EML_01, LWI_01, ESP_05, Licht_hinten_01
+//   - ADAS state:    GRA_ACC_01, AEB_01, LDW_02, RCTA_01
+//   - Longitudinal:  ACC_06, ACC_07, ACC_10, KAS_01, FAS_VK_01
+//   - Situational:   Getriebe_11, EPB_01, ESP_32
+//   - Per-object:    BV2_ObjektHeader, BV2_Objekt_01..10
+
+package vendor.odd_path_client.system
+
+// PDU message defs come from the PSP's FIBEX import. textX cross-file
+// references are single-file, so the import is documentation; the
+// interfaces below use the bare type name and rely on a local
+// forward-decl block at the bottom to keep parse happy.
+import autosar.mlbevo_gen2_cmp_psp.system.mlbevo_gen2.*
+
+// ---- ACC_06 -----------------------------------------------------------------
+// planned: ACC_Sollbeschleunigung_02, ACC_Status_ACC, ACC_neg_Sollbeschl_Grad_02, ACC_pos_Sollbeschl_Grad_02
+interface senderReceiver ACC_06_Iface {
+    data ACC_06 pdu
+}
+
+// ---- ACC_07 -----------------------------------------------------------------
+// planned: STA_Verzoeg_Anf, STA_Verzoeg_Anf_Freigabe
+interface senderReceiver ACC_07_Iface {
+    data ACC_07 pdu
+}
+
+// ---- ACC_10 -----------------------------------------------------------------
+// planned: ANB_Teilbremsung_Freigabe, ANB_Zielbrems_Teilbrems_Verz_Anf, ANB_Zielbremsung_Freigabe, AWV1_Anf_Prefill
+interface senderReceiver ACC_10_Iface {
+    data ACC_10 pdu
+}
+
+// ---- AEB_01 -----------------------------------------------------------------
+// planned: AEB_Anf_Prefill, AEB_Charisma_Status, AEB_Freigabe, AEB_Verz_Anf, AEB_Warnung
+interface senderReceiver AEB_01_Iface {
+    data AEB_01 pdu
+}
+
+// ---- EML_01 -----------------------------------------------------------------
+// used:    EML_BeschlX, EML_GeschwX
+// planned: EML_GierRate
+interface senderReceiver EML_01_Iface {
+    data EML_01 pdu
+}
+
+// ---- EPB_01 -----------------------------------------------------------------
+// planned: EPB_Schalterposition
+interface senderReceiver EPB_01_Iface {
+    data EPB_01 pdu
+}
+
+// ---- ESP_05 -----------------------------------------------------------------
+// planned: ESP_Bremsdruck, ESP_Fahrer_bremst
+interface senderReceiver ESP_05_Iface {
+    data ESP_05 pdu
+}
+
+// ---- ESP_32 -----------------------------------------------------------------
+// planned: ESP_Aggregataktivitaet, ESP_Stillstandsflag
+interface senderReceiver ESP_32_Iface {
+    data ESP_32 pdu
+}
+
+// ---- FAS_VK_01 -----------------------------------------------------------------
+// planned: FAS_VK_Status, FAS_VK_Verz_Anf, FAS_VK_Verz_Anf_ASIL
+interface senderReceiver FAS_VK_01_Iface {
+    data FAS_VK_01 pdu
+}
+
+// ---- GRA_ACC_01 -----------------------------------------------------------------
+// planned: GRA_Hauptschalter, GRA_Limiter
+interface senderReceiver GRA_ACC_01_Iface {
+    data GRA_ACC_01 pdu
+}
+
+// ---- Getriebe_11 -----------------------------------------------------------------
+// planned: GE_Fahrstufe
+interface senderReceiver Getriebe_11_Iface {
+    data Getriebe_11 pdu
+}
+
+// ---- KAS_01 -----------------------------------------------------------------
+// planned: KAS_Kritikalitaetslevel, KAS_Status, KAS_Verz_Anf
+interface senderReceiver KAS_01_Iface {
+    data KAS_01 pdu
+}
+
+// ---- LDW_02 -----------------------------------------------------------------
+// planned: LDW_DLC, LDW_Status_LED_gelb, LDW_TLC, LKS_LED_an
+interface senderReceiver LDW_02_Iface {
+    data LDW_02 pdu
+}
+
+// ---- LWI_01 -----------------------------------------------------------------
+// planned: LWI_Lenkradwinkel
+interface senderReceiver LWI_01_Iface {
+    data LWI_01 pdu
+}
+
+// ---- Licht_hinten_01 -----------------------------------------------------------------
+// used:    LH_Blinker_HL_akt, LH_Blinker_HR_akt, LH_Bremslicht_H_aktiv
+interface senderReceiver Licht_hinten_01_Iface {
+    data Licht_hinten_01 pdu
+}
+
+// ---- RCTA_01 -----------------------------------------------------------------
+// planned: RCTA_Kritikalitaetslevel_links, RCTA_Kritikalitaetslevel_rechts, RCTA_Notbremsung_Anforderung, RCTA_Status
+interface senderReceiver RCTA_01_Iface {
+    data RCTA_01 pdu
+}
+
+// ---- BV2_ObjektHeader -----------------------------------------------------------------
+// used:    BV2_Sensor_PositionX, BV2_Sensor_PositionY
+// planned: BV2_FG_erkannt, BV2_Fr_HindernisDist, BV2_Fr_HindernisErkannt, BV2_Fr_HindernisExistWahrsch, BV2_Obj_NaheinschererLinks, BV2_Obj_NaheinschererRechts
+interface senderReceiver BV2_ObjektHeader_Iface {
+    data BV2_ObjektHeader pdu
+}
+
+// ---- BV2_Objekt_01 -----------------------------------------------------------------
+// used:    BV2_Obj_01_Bezugspunkt, BV2_Obj_01_Breite, BV2_Obj_01_GeschwX, BV2_Obj_01_GeschwY, BV2_Obj_01_ID, BV2_Obj_01_Klasse, BV2_Obj_01_PositionX, BV2_Obj_01_PositionY
+// planned: BV2_Obj_01_Alter, BV2_Obj_01_BeschlX, BV2_Obj_01_BeschlY, BV2_Obj_01_BlinkerL, BV2_Obj_01_BlinkerR, BV2_Obj_01_BremsLicht, BV2_Obj_01_ExistenzMass, BV2_Obj_01_KlassePlausib, BV2_Obj_01_ObjFreigabe, BV2_Obj_01_Orientierung, BV2_Obj_01_TTC
+interface senderReceiver BV2_Objekt_01_Iface {
+    data BV2_Objekt_01 pdu
+}
+
+// ---- BV2_Objekt_02 -----------------------------------------------------------------
+// used:    BV2_Obj_02_Bezugspunkt, BV2_Obj_02_Breite, BV2_Obj_02_GeschwX, BV2_Obj_02_GeschwY, BV2_Obj_02_ID, BV2_Obj_02_Klasse, BV2_Obj_02_PositionX, BV2_Obj_02_PositionY
+// planned: BV2_Obj_02_Alter, BV2_Obj_02_BeschlX, BV2_Obj_02_BeschlY, BV2_Obj_02_BlinkerL, BV2_Obj_02_BlinkerR, BV2_Obj_02_BremsLicht, BV2_Obj_02_ExistenzMass, BV2_Obj_02_KlassePlausib, BV2_Obj_02_ObjFreigabe, BV2_Obj_02_Orientierung, BV2_Obj_02_TTC
+interface senderReceiver BV2_Objekt_02_Iface {
+    data BV2_Objekt_02 pdu
+}
+
+// ---- BV2_Objekt_03 -----------------------------------------------------------------
+// used:    BV2_Obj_03_Bezugspunkt, BV2_Obj_03_Breite, BV2_Obj_03_GeschwX, BV2_Obj_03_GeschwY, BV2_Obj_03_ID, BV2_Obj_03_Klasse, BV2_Obj_03_PositionX, BV2_Obj_03_PositionY
+// planned: BV2_Obj_03_Alter, BV2_Obj_03_BeschlX, BV2_Obj_03_BeschlY, BV2_Obj_03_BlinkerL, BV2_Obj_03_BlinkerR, BV2_Obj_03_BremsLicht, BV2_Obj_03_ExistenzMass, BV2_Obj_03_KlassePlausib, BV2_Obj_03_ObjFreigabe, BV2_Obj_03_Orientierung, BV2_Obj_03_TTC
+interface senderReceiver BV2_Objekt_03_Iface {
+    data BV2_Objekt_03 pdu
+}
+
+// ---- BV2_Objekt_04 -----------------------------------------------------------------
+// used:    BV2_Obj_04_Bezugspunkt, BV2_Obj_04_Breite, BV2_Obj_04_GeschwX, BV2_Obj_04_GeschwY, BV2_Obj_04_ID, BV2_Obj_04_Klasse, BV2_Obj_04_PositionX, BV2_Obj_04_PositionY
+// planned: BV2_Obj_04_Alter, BV2_Obj_04_BeschlX, BV2_Obj_04_BeschlY, BV2_Obj_04_BlinkerL, BV2_Obj_04_BlinkerR, BV2_Obj_04_BremsLicht, BV2_Obj_04_ExistenzMass, BV2_Obj_04_KlassePlausib, BV2_Obj_04_ObjFreigabe, BV2_Obj_04_Orientierung, BV2_Obj_04_TTC
+interface senderReceiver BV2_Objekt_04_Iface {
+    data BV2_Objekt_04 pdu
+}
+
+// ---- BV2_Objekt_05 -----------------------------------------------------------------
+// used:    BV2_Obj_05_Bezugspunkt, BV2_Obj_05_Breite, BV2_Obj_05_GeschwX, BV2_Obj_05_GeschwY, BV2_Obj_05_ID, BV2_Obj_05_Klasse, BV2_Obj_05_PositionX, BV2_Obj_05_PositionY
+// planned: BV2_Obj_05_Alter, BV2_Obj_05_BeschlX, BV2_Obj_05_BeschlY, BV2_Obj_05_BlinkerL, BV2_Obj_05_BlinkerR, BV2_Obj_05_BremsLicht, BV2_Obj_05_ExistenzMass, BV2_Obj_05_KlassePlausib, BV2_Obj_05_ObjFreigabe, BV2_Obj_05_Orientierung, BV2_Obj_05_TTC
+interface senderReceiver BV2_Objekt_05_Iface {
+    data BV2_Objekt_05 pdu
+}
+
+// ---- BV2_Objekt_06 -----------------------------------------------------------------
+// used:    BV2_Obj_06_Bezugspunkt, BV2_Obj_06_Breite, BV2_Obj_06_GeschwX, BV2_Obj_06_GeschwY, BV2_Obj_06_ID, BV2_Obj_06_Klasse, BV2_Obj_06_PositionX, BV2_Obj_06_PositionY
+// planned: BV2_Obj_06_Alter, BV2_Obj_06_BeschlX, BV2_Obj_06_BeschlY, BV2_Obj_06_BlinkerL, BV2_Obj_06_BlinkerR, BV2_Obj_06_BremsLicht, BV2_Obj_06_ExistenzMass, BV2_Obj_06_KlassePlausib, BV2_Obj_06_ObjFreigabe, BV2_Obj_06_Orientierung, BV2_Obj_06_TTC
+interface senderReceiver BV2_Objekt_06_Iface {
+    data BV2_Objekt_06 pdu
+}
+
+// ---- BV2_Objekt_07 -----------------------------------------------------------------
+// used:    BV2_Obj_07_Bezugspunkt, BV2_Obj_07_Breite, BV2_Obj_07_GeschwX, BV2_Obj_07_GeschwY, BV2_Obj_07_ID, BV2_Obj_07_Klasse, BV2_Obj_07_PositionX, BV2_Obj_07_PositionY
+// planned: BV2_Obj_07_Alter, BV2_Obj_07_BeschlX, BV2_Obj_07_BeschlY, BV2_Obj_07_BlinkerL, BV2_Obj_07_BlinkerR, BV2_Obj_07_BremsLicht, BV2_Obj_07_ExistenzMass, BV2_Obj_07_KlassePlausib, BV2_Obj_07_ObjFreigabe, BV2_Obj_07_Orientierung, BV2_Obj_07_TTC
+interface senderReceiver BV2_Objekt_07_Iface {
+    data BV2_Objekt_07 pdu
+}
+
+// ---- BV2_Objekt_08 -----------------------------------------------------------------
+// used:    BV2_Obj_08_Bezugspunkt, BV2_Obj_08_Breite, BV2_Obj_08_GeschwX, BV2_Obj_08_GeschwY, BV2_Obj_08_ID, BV2_Obj_08_Klasse, BV2_Obj_08_PositionX, BV2_Obj_08_PositionY
+// planned: BV2_Obj_08_Alter, BV2_Obj_08_BeschlX, BV2_Obj_08_BeschlY, BV2_Obj_08_BlinkerL, BV2_Obj_08_BlinkerR, BV2_Obj_08_BremsLicht, BV2_Obj_08_ExistenzMass, BV2_Obj_08_KlassePlausib, BV2_Obj_08_ObjFreigabe, BV2_Obj_08_Orientierung, BV2_Obj_08_TTC
+interface senderReceiver BV2_Objekt_08_Iface {
+    data BV2_Objekt_08 pdu
+}
+
+// ---- BV2_Objekt_09 -----------------------------------------------------------------
+// used:    BV2_Obj_09_Bezugspunkt, BV2_Obj_09_Breite, BV2_Obj_09_GeschwX, BV2_Obj_09_GeschwY, BV2_Obj_09_ID, BV2_Obj_09_Klasse, BV2_Obj_09_PositionX, BV2_Obj_09_PositionY
+// planned: BV2_Obj_09_Alter, BV2_Obj_09_BeschlX, BV2_Obj_09_BeschlY, BV2_Obj_09_BlinkerL, BV2_Obj_09_BlinkerR, BV2_Obj_09_BremsLicht, BV2_Obj_09_ExistenzMass, BV2_Obj_09_KlassePlausib, BV2_Obj_09_ObjFreigabe, BV2_Obj_09_Orientierung, BV2_Obj_09_TTC
+interface senderReceiver BV2_Objekt_09_Iface {
+    data BV2_Objekt_09 pdu
+}
+
+// ---- BV2_Objekt_10 -----------------------------------------------------------------
+// used:    BV2_Obj_10_Bezugspunkt, BV2_Obj_10_Breite, BV2_Obj_10_GeschwX, BV2_Obj_10_GeschwY, BV2_Obj_10_ID, BV2_Obj_10_Klasse, BV2_Obj_10_PositionX, BV2_Obj_10_PositionY
+// planned: BV2_Obj_10_Alter, BV2_Obj_10_BeschlX, BV2_Obj_10_BeschlY, BV2_Obj_10_BlinkerL, BV2_Obj_10_BlinkerR, BV2_Obj_10_BremsLicht, BV2_Obj_10_ExistenzMass, BV2_Obj_10_KlassePlausib, BV2_Obj_10_ObjFreigabe, BV2_Obj_10_Orientierung, BV2_Obj_10_TTC
+interface senderReceiver BV2_Objekt_10_Iface {
+    data BV2_Objekt_10 pdu
+}
+
+// ---- forward-decl stubs for the imported PDU messages -----------------
+// textX cross-file references are single-file. The real shape lives
+// in autosar/mlbevo_gen2_cmp_psp/system/mlbevo_gen2/package.art.
+message ACC_06 { }
+message ACC_07 { }
+message ACC_10 { }
+message AEB_01 { }
+message EML_01 { }
+message EPB_01 { }
+message ESP_05 { }
+message ESP_32 { }
+message FAS_VK_01 { }
+message GRA_ACC_01 { }
+message Getriebe_11 { }
+message KAS_01 { }
+message LDW_02 { }
+message LWI_01 { }
+message Licht_hinten_01 { }
+message RCTA_01 { }
+message BV2_ObjektHeader { }
+message BV2_Objekt_01 { }
+message BV2_Objekt_02 { }
+message BV2_Objekt_03 { }
+message BV2_Objekt_04 { }
+message BV2_Objekt_05 { }
+message BV2_Objekt_06 { }
+message BV2_Objekt_07 { }
+message BV2_Objekt_08 { }
+message BV2_Objekt_09 { }
+message BV2_Objekt_10 { }

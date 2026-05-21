@@ -1,0 +1,92 @@
+// supervisor-gui — wxWidgets observer for the supervisor.
+//
+// Modelled on OTP observer (lib/observer/src/observer_*_wx.erl). The
+// GUI is a client of the supervisor over TIPC:
+//
+//   - calls SupervisorControlIf RPCs to populate the Tree pane on
+//     demand and to issue restart / terminate / stop;
+//   - receives SupervisorEventIf events to drive the Trace pane and
+//     keep the Tree state live without polling.
+//
+// The interface declarations below are forward-decl stubs because
+// textX cross-file references are single-file; the canonical
+// definitions live in services.supervisor.
+//
+// We re-use the services.supervisor package name so generated .proto
+// files share namespaces with the supervisor's — both ends decode the
+// same wire bytes without translation.
+
+package services.supervisor
+
+// ---- forward-decl stubs --------------------------------------------------
+// Real definitions live in services/supervisor/system/package.art.
+
+message GetTreeRequest    { }
+message GetChildRequest   { string name }
+message ChildSelector     { string name }
+message ChildState        { string name }
+message TreeSnapshot      { uint64 generation }
+message SupervisionEvent  { uint32 kind }
+message HealthBeacon      { uint64 timestamp_ms }
+message ControlReply      { uint32 status }
+
+interface clientServer SupervisorControlIf {
+    operation GetTree(in req: GetTreeRequest) returns TreeSnapshot
+    operation GetChild(in req: GetChildRequest) returns ChildState
+    operation RestartChild(in sel: ChildSelector) returns ControlReply
+    operation TerminateChild(in sel: ChildSelector) returns ControlReply
+    operation Stop() returns ControlReply
+}
+
+interface senderReceiver SupervisorEventIf {
+    data SupervisionEvent event
+    data HealthBeacon     health
+    data TreeSnapshot     snapshot
+}
+
+// ---- node ----------------------------------------------------------------
+
+// TIPC type 0x80020002 — second slot in the system-services band.
+// Singleton: one GUI per dev workstation talking to one supervisor.
+
+node atomic SupervisorGui {
+    tipc type=0x80020002 instance=0
+    ports {
+        client    control requires SupervisorControlIf
+        receiver  events  requires SupervisorEventIf
+    }
+    params {
+        // Where the GUI window opens. Sticky positioning happens
+        // outside the manifest (~/.config/supervisor-gui/state.json).
+        window_width_px  : uint32 = 1280
+        window_height_px : uint32 =  800
+
+        // How long after the most recent HealthBeacon to declare the
+        // connection stale and flash the status bar red. Match
+        // ~3× supervisor.heartbeat_period_ms by default.
+        stale_threshold_ms : uint32 = 3500
+
+        // Cap the trace ring buffer size (in entries) so a busy
+        // restart cascade doesn't eat all RAM.
+        trace_buffer_max : uint32 = 4096
+    }
+}
+
+// ---- composition ---------------------------------------------------------
+// Wires the GUI's two ports to the supervisor's matching ones.
+
+node atomic Supervisor {
+    tipc type=0x80020001 instance=0
+    ports {
+        server control provides SupervisorControlIf
+        sender events  provides SupervisorEventIf
+    }
+}
+
+composition SupervisorObserver {
+    prototype Supervisor    supervisor
+    prototype SupervisorGui gui
+
+    connect gui.control to supervisor.control
+    connect gui.events  to supervisor.events
+}

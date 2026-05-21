@@ -1,0 +1,128 @@
+cmake_minimum_required(VERSION 3.16)
+project(supervisor CXX)
+
+# User requested C++14 explicitly.
+set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release)
+endif()
+
+add_compile_options(-Wall -Wextra -Wpedantic)
+
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(YAML_CPP REQUIRED yaml-cpp)
+pkg_check_modules(PROTOBUF REQUIRED protobuf)
+
+# .proto files are generated from services/supervisor/system/package.art
+# by `artheia gen-proto`, then compiled with protoc into
+# build/generated/{ChildState.pb.cc, …}.
+#
+# We auto-run gen-proto at configure time if the outputs are missing
+# or older than the .art source. Requires `artheia` on PATH — install
+# with `pip install -e artheia/`. Skip with -DSKIP_GEN_PROTO=ON if you
+# want to manage the regeneration manually.
+find_program(PROTOC_EXECUTABLE protoc REQUIRED)
+
+set(PROTO_SRC_DIR  ${CMAKE_CURRENT_SOURCE_DIR}/generated/proto)
+set(PROTO_GEN_DIR  ${CMAKE_CURRENT_BINARY_DIR}/generated)
+file(MAKE_DIRECTORY ${PROTO_GEN_DIR})
+file(MAKE_DIRECTORY ${PROTO_SRC_DIR})
+
+set(ART_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/system/package.art)
+if(NOT SKIP_GEN_PROTO)
+    # Look on PATH, then in the artheia venv at the repo root.
+    find_program(ARTHEIA_EXECUTABLE
+        NAMES artheia
+        HINTS ${CMAKE_CURRENT_SOURCE_DIR}/../../artheia/.venv/bin
+    )
+    if(ARTHEIA_EXECUTABLE)
+        message(STATUS "Running ${ARTHEIA_EXECUTABLE} gen-proto on ${ART_SOURCE}")
+        execute_process(
+            COMMAND ${ARTHEIA_EXECUTABLE} gen-proto ${ART_SOURCE} --out ${PROTO_SRC_DIR}
+            RESULT_VARIABLE GEN_PROTO_RC
+        )
+        if(NOT GEN_PROTO_RC EQUAL 0)
+            message(WARNING "artheia gen-proto failed (rc=${GEN_PROTO_RC}); "
+                            "build will fail if generated/proto/ is empty")
+        endif()
+    else()
+        message(WARNING "artheia not found on PATH — generated/proto/ will not "
+                        "be regenerated. Install with `pip install -e artheia/`.")
+    endif()
+endif()
+
+file(GLOB PROTO_FILES ${PROTO_SRC_DIR}/*.proto)
+set(PROTO_GEN_SRCS)
+foreach(PROTO_FILE ${PROTO_FILES})
+    get_filename_component(PROTO_NAME ${PROTO_FILE} NAME_WE)
+    set(PB_CC ${PROTO_GEN_DIR}/${PROTO_NAME}.pb.cc)
+    set(PB_H  ${PROTO_GEN_DIR}/${PROTO_NAME}.pb.h)
+    add_custom_command(
+        OUTPUT  ${PB_CC} ${PB_H}
+        COMMAND ${PROTOC_EXECUTABLE}
+                --proto_path=${PROTO_SRC_DIR}
+                --cpp_out=${PROTO_GEN_DIR}
+                ${PROTO_FILE}
+        DEPENDS ${PROTO_FILE}
+        COMMENT "protoc ${PROTO_NAME}.proto"
+        VERBATIM
+    )
+    list(APPEND PROTO_GEN_SRCS ${PB_CC})
+endforeach()
+
+add_library(supervisor_proto OBJECT ${PROTO_GEN_SRCS})
+target_include_directories(supervisor_proto PUBLIC ${PROTO_GEN_DIR})
+target_compile_options(supervisor_proto PRIVATE
+    ${PROTOBUF_CFLAGS_OTHER}
+    -Wno-unused-parameter      # protoc-generated code
+    -Wno-pedantic
+)
+target_link_libraries(supervisor_proto PUBLIC ${PROTOBUF_LIBRARIES})
+
+add_executable(supervisor
+    src/main.cpp
+    src/runtime.cpp
+    src/spec.cpp
+    src/tipc_publisher.cpp
+    $<TARGET_OBJECTS:supervisor_proto>
+)
+
+target_include_directories(supervisor PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${YAML_CPP_INCLUDE_DIRS}
+    ${PROTOBUF_INCLUDE_DIRS}
+    ${PROTO_GEN_DIR}
+)
+
+target_link_libraries(supervisor PRIVATE
+    ${YAML_CPP_LIBRARIES}
+    ${PROTOBUF_LIBRARIES}
+    pthread
+)
+
+target_compile_options(supervisor PRIVATE ${YAML_CPP_CFLAGS_OTHER})
+
+# libtombstone — in-process crash forensics, linked by any daemon that
+# wants Android-style tombstones written on fatal signals.
+add_library(tombstone STATIC
+    tombstone/src/tombstone.cpp
+)
+
+target_include_directories(tombstone PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/tombstone/include
+)
+
+# A minimal demo daemon: links libtombstone, takes one of {segv, abort,
+# div0} on argv[1] after a delay, so the supervisor demo can show a
+# crash with tombstone collection end-to-end.
+add_executable(crasher
+    tombstone/demo/crasher.cpp
+)
+target_link_libraries(crasher PRIVATE tombstone)
+
+install(TARGETS supervisor RUNTIME DESTINATION bin)
+install(TARGETS crasher RUNTIME DESTINATION bin)
+install(TARGETS tombstone ARCHIVE DESTINATION lib)

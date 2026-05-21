@@ -1,0 +1,21 @@
+        // Core (CORE) — Adaptive Platform Functional Cluster.
+        //
+        // Provides KernelIf; requires: (none, root).
+
+        package services.core
+
+        interface clientServer KernelIf {
+    operation GetStatus()
+    operation Configure()
+}
+
+        node atomic CoreDaemon {
+            tipc type=0x80010001 instance=0
+            ports {
+                server core_status provides KernelIf
+            }
+        }
+
+        composition Core {
+            prototype CoreDaemon core_daemon
+        }

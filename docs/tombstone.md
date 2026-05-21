@@ -265,4 +265,3 @@ ERROR supervisor: supervisor root exceeded restart intensity (5 in 30s) — esca
 - `services/supervisor/src/runtime.cpp` — the supervisor side:
   `find_tombstone_dir`, `locate_tombstone`, the `tombstone for …`
   log line.
-- `supervisor/runtime.py` — same logic in the Python reference impl.

@@ -76,8 +76,8 @@ When a supervisor terminates a child it sends SIGTERM and waits
 
 ## Data shapes
 
-Authored in Python, serialized to YAML, executed by the supervisor
-binary. Both Python and C++ supervisors read the same YAML.
+Authored in Python (see `artheia/armanifest/`), serialized to YAML,
+executed by the C++ supervisor binary.
 
 ### `ChildSpec` (one leaf)
 
@@ -191,15 +191,17 @@ Loads the named Rig, calls `build_supervisor_tree`, serializes to YAML.
 ### Running the supervisor
 
 ```sh
-# Python implementation (reference).
-python -m supervisor run executor.yaml [--log-level INFO]
-
-# C++ implementation (production).
-./supervisor/cpp/build/supervisor run executor.yaml
+./services/supervisor/build/supervisor run executor.yaml [--root-dir DIR]
 ```
 
-Both binaries read the same YAML and have identical semantics. The
-Python version is the spec; the C++ version is the deployable.
+The C++ binary is the only implementation. The spec — strategies,
+restart types, shutdown semantics, escalation, tombstone surfacing —
+lives in this document and is exercised by the test suite under
+`services/supervisor/`. (A Python reference implementation existed
+through mid-2026 and was removed once the C++ caught up on every
+semantics row plus exclusively gained the TIPC publishing the
+supervisor-gui consumes. Two parallel implementations were a
+divergence trap.)
 
 ### Inspecting
 
@@ -264,8 +266,7 @@ running a real binary, say) tears down cleanly.
 
 ### Exit observation
 
-The supervisor sleeps in `select()` on a pipe wired to
-`signal.set_wakeup_fd` (Python) / `signalfd` (C++). SIGCHLD interrupts
+The supervisor sleeps in `select()` on a `signalfd`. SIGCHLD interrupts
 the sleep deterministically, the supervisor calls
 `waitpid(-1, WNOHANG)` in a loop to reap all available exits, then
 classifies and restarts as needed. No polling, no per-child threads.

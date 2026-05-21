@@ -25,9 +25,10 @@ set(PLATFORM_PROTO "${WORKSPACE_ROOT}/platform/proto" CACHE PATH
 set(BAZEL_BIN "${WORKSPACE_ROOT}/bazel-bin" CACHE PATH
     "Bazel output root; psp_nanopb TreeArtifact lives under here.")
 
-# Note: gw_client.{h,cpp} is vendored into app/ (one-time copy from
-# gateway/demo/pero_cmp_gw_cln_demo until libgw exposes it as a
-# public header).
+# gw_client.{h,cpp} is now a public header of libgw (lives under
+# ${LIBGW}/include/ and ${LIBGW}/src/). Apps pick it up via the libgw
+# include path below + a direct source-file reference; later, when
+# libgw ships an installed CMake package, this drops to find_package.
 
 set(PSP_PROTO_INC "${BAZEL_BIN}/autosar/mlbevo_gen2_cmp_psp/psp_nanopb_pb" CACHE PATH
     "nanopb headers (produced by bazel build //autosar/mlbevo_gen2_cmp_psp:psp_nanopb).")
@@ -61,7 +62,7 @@ add_executable(odd_path_client
     app/OddPathMonitor_main.cc
     app/impl/OddPathMonitor_handlers.cc
     
-    app/gw_client.cpp
+    ${LIBGW}/src/gw_client.cpp
     ${PLATFORM_PROTO}/gateway/system/status.pb.c
     
 )

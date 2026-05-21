@@ -1,0 +1,10 @@
+// Tiny proto used by the platform/runtime test suite. Stays inside
+// the test directory so the Bazel cc_test target is self-contained:
+// no dep on demo/ or any vendor app.
+syntax = "proto3";
+
+package platform_runtime_test;
+
+message Inc      { int32 n     = 1; }
+message Get      {}
+message GetReply { int32 value = 1; }

@@ -1,11 +1,17 @@
-load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
 
 """platform/runtime — host-runtime abstraction for applications + services.
 
-Provides the Adaptive-AUTOSAR-ish facade the generated apps target:
-LifecycleInterface, Logger, Clock, Timer, RuntimeContext. Lives at the
+Provides the gen_server-shaped actor stack (GenServer, NodeRef,
+TimerService, TipcMux, Tracer) plus the legacy Adaptive-AUTOSAR-ish
+facade (Logger, Clock, Timer, LifecycleInterface, RuntimeContext) that
+the existing OddPathMonitor stack still consumes. Lives at the
 workspace top level because it sits above both applications/ and
 services/.
+
+Wire / serialization helpers (RemoteCodec, encode_for_trace) include
+libgw's gw_proto.h, so this library carries a transitive dep on
+//gateway/libs/libgw:gw.
 
 Don't put gateway-comms-specific code here (CMP wire framing, FIBEX,
 PSP loading). That stays in gateway/libs/{pero_cmp_lnx, libgw}.
@@ -21,8 +27,42 @@ cc_library(
     copts = [
         "-Wall",
         "-Wextra",
-        "-std=c++14",
+        "-std=c++17",   # gen_server stack uses inline-vars + if-constexpr
         "-fPIC",
     ],
-    linkopts = ["-lpthread"],
+    deps = ["//gateway/libs/libgw:gw"],
+    linkopts = [
+        "-lpthread",
+        "-l:libprotobuf-nanopb.a",
+    ],
+)
+
+# ---- Test suite (gen_server runtime; mirrors slices of OTP's
+#      gen_server_SUITE.erl). Self-contained nanopb proto under
+#      test/proto/ so the cc_test has no external app dependencies.
+
+cc_library(
+    name = "test_protos",
+    srcs = ["test/proto/platform_runtime_test/messages.pb.c"],
+    hdrs = ["test/proto/platform_runtime_test/messages.pb.h"],
+    includes = ["test/proto"],
+    copts = ["-fPIC"],
+)
+
+cc_test(
+    name = "tests",
+    srcs = [
+        "test/test_main.cc",
+        "test/test_server.hh",
+        "test/test_codecs.hh",
+    ],
+    includes = ["test"],
+    copts = ["-std=c++17", "-Wall", "-Wextra"],
+    deps = [
+        ":runtime",
+        ":test_protos",
+    ],
+    # The 3-process cases (tipc_3process, tipc_3process_generated) skip
+    # cleanly when the demo's per-process binaries aren't on PATH —
+    # this Bazel test is self-contained.
 )

@@ -1,0 +1,138 @@
+// gen_server-shape API demo.
+//
+// Three nodes in one process, exchanging typed messages via in-process
+// mailboxes (no TIPC). The point is to validate the C++14 actor API
+// (call/cast/handle_call/handle_cast/handle_info + handle_call_result on
+// the caller side with an opaque ACT) before pulling it into libgw and
+// artheia codegen.
+//
+// Modeled directly on Erlang's gen_server, modulo async:
+//   * Each node owns its own thread + State; handlers run serially.
+//   * call(server, req, act, timeout) is the SYNC primitive that blocks
+//     on a std::promise the server thread fulfills after handle_call.
+//   * cast(server, req) is async fire-and-forget.
+//   * Caller-side reply handling goes through handle_call_result/
+//     handle_call_error/handle_call_timeout, dispatched by the
+//     framework via call_and_dispatch().
+//   * handle_info(const char*, State&) is the C-style catch-all for
+//     non-OTP messages (timer ticks, internal signals).
+
+package demo.system
+
+// ---- messages -----------------------------------------------------------
+
+// Increment counter by `n`. cast — no reply.
+message Inc {
+    int32 n
+}
+
+// Read counter value. call — replies with GetReply.
+message Get {
+}
+
+message GetReply {
+    int32 value
+}
+
+// ---- interfaces ---------------------------------------------------------
+
+// senderReceiver: one-way typed messages. Drives handle_cast on the
+// receiving side; the sender uses `cast(server, msg)`.
+interface senderReceiver IncIface {
+    data Inc inc
+}
+
+// clientServer: synchronous request/reply. Drives handle_call on the
+// receiving side; the client uses `call(server, Get{}, act, timeout)`
+// and receives the result via handle_call_result(GetReply, Act, State).
+interface clientServer CounterSrv {
+    operation Get() returns GetReply
+}
+
+// ---- nodes --------------------------------------------------------------
+
+// Holds the counter. Serves Get (sync) and accepts Inc (async).
+// Like every node, traceable at runtime via tracer_for("CounterNode").
+node atomic CounterNode {
+    tipc type=0xd0010001 instance=0
+    ports {
+        server   srv      provides CounterSrv
+        receiver inc_in   requires IncIface
+    }
+}
+
+// Drives the demo: 10 casts of Inc{5}, then one call(Get) and assert.
+// Needs auto-kickoff and a TimerService for its phase 3 cancel test.
+node atomic DriverNode {
+    tipc type=0xd0010002 instance=0
+    kick_off
+    requires_timers
+    ports {
+        sender inc_out      provides IncIface
+        client counter_call requires CounterSrv
+    }
+}
+
+// Periodic "tick" string via handle_info — self-schedules via send_after.
+node atomic TickerNode {
+    tipc type=0xd0010003 instance=0
+    kick_off
+    requires_timers
+    ports {
+    }
+}
+
+// ── Cross-process nodes ────────────────────────────────────────────────
+// Both talk to CounterNode over TIPC when placed in a different process.
+
+// Observer: polls counter.Get every 200ms.
+node atomic ObserverNode {
+    tipc type=0xd0010004 instance=0
+    kick_off
+    requires_timers
+    ports {
+        client counter_call requires CounterSrv
+    }
+}
+
+// Incrementer: every 300ms casts Inc{2} at counter.
+node atomic IncrementerNode {
+    tipc type=0xd0010005 instance=0
+    kick_off
+    requires_timers
+    ports {
+        sender inc_out provides IncIface
+    }
+}
+
+// ---- compositions ------------------------------------------------------
+
+// Single-process: everything local (existing demo binary uses this).
+composition Demo {
+    prototype CounterNode counter
+    prototype DriverNode  driver
+    prototype TickerNode  ticker
+
+    connect driver.inc_out      to counter.inc_in
+    connect driver.counter_call to counter.srv
+}
+
+// Three-process: counter+driver+ticker on P1 (the existing process,
+// unchanged), observer on P2, incrementer on P3. The two new processes
+// only ever talk to counter over TIPC; the existing process notices
+// nothing different beyond the inbound traffic on counter's port.
+//
+// Prototype names must be unique across compositions (textX cross-ref
+// scope) — using p1/p2/p3 suffixes.
+composition Demo3Way {
+    prototype CounterNode     counter_p1      on process P1
+    prototype DriverNode      driver_p1       on process P1
+    prototype TickerNode      ticker_p1       on process P1
+    prototype ObserverNode    observer_p2     on process P2
+    prototype IncrementerNode incrementer_p3  on process P3
+
+    connect driver_p1.inc_out         to counter_p1.inc_in
+    connect driver_p1.counter_call    to counter_p1.srv
+    connect observer_p2.counter_call  to counter_p1.srv
+    connect incrementer_p3.inc_out    to counter_p1.inc_in
+}

@@ -21,3 +21,11 @@ Documentation for the Porsche PERO CMP gateway workspace.
 - [Application generation & lifecycle](application.md) — `artheia gen-app`,
   the three-slice scaffold, `LifecycleInterface`, rx loop, handlers, build,
   and pcap-replay end-to-end run.
+
+## Runtime
+
+- [platform/runtime — the actor runtime](runtime.md) — actor nodes,
+  mailboxes, call/cast/send_request semantics, local + cross-process
+  refs, timers, runtime tracing, and generation from `.art`. Includes
+  sequence diagrams and implementation notes. The runtime under
+  `platform/runtime/` that newer applications build on.

@@ -33,3 +33,6 @@ dist/
 
 # Generated app build trees
 applications/*/build/
+
+# Demo project's CMake build dir
+/demo/build/

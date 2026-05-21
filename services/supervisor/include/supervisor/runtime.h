@@ -3,8 +3,10 @@
 #pragma once
 
 #include "supervisor/spec.h"
+#include "supervisor/tipc_publisher.h"
 
 #include <atomic>
+#include <chrono>
 #include <memory>
 #include <string>
 #include <vector>
@@ -53,6 +55,24 @@ private:
 
     // signalfd descriptor and a self-pipe wake-up fd for portability.
     int                              signal_fd_{-1};
+
+    // TIPC pub for the supervisor-gui.
+    TipcPublisher                    publisher_;
+    std::chrono::steady_clock::time_point start_time_{};
+    std::chrono::steady_clock::time_point last_heartbeat_{};
+    std::chrono::steady_clock::time_point last_snapshot_{};
+    uint64_t                         generation_{0};
+    uint64_t                         total_restarts_{0};
+    uint64_t                         total_tombstones_{0};
+
+    // Event emission helpers — JSON-shape these into one document per
+    // call and broadcast via publisher_.
+    void emit_event(uint32_t kind, const WorkerNode* worker,
+                    const SupervisorNode* sup, int exit_code,
+                    const std::string& tombstone_path,
+                    const std::string& detail);
+    void emit_health();
+    void emit_snapshot();
 };
 
 }  // namespace supervisor

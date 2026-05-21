@@ -3,6 +3,13 @@
 
 #include "supervisor/runtime.h"
 
+// Generated from services/supervisor/system/package.art by
+// `artheia gen-proto` and compiled by protoc via the CMake build.
+#include "ChildState.pb.h"
+#include "HealthBeacon.pb.h"
+#include "SupervisionEvent.pb.h"
+#include "TreeSnapshot.pb.h"
+
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
@@ -10,7 +17,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <dirent.h>
+#include <functional>
 #include <iostream>
+#include <ostream>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -62,6 +71,12 @@ std::string find_tombstone_dir(const supervisor::SupervisorNode* sup) {
     return {};
 }
 
+uint64_t epoch_ms() {
+    using namespace std::chrono;
+    return duration_cast<milliseconds>(
+        system_clock::now().time_since_epoch()).count();
+}
+
 // Locate the most recent tombstone matching <dir>/tombstone-<name>-<pid>-*.
 // Returns "" if no match. We pick the newest mtime to handle multi-run
 // noise.
@@ -96,6 +111,14 @@ Supervisor::Supervisor(std::unique_ptr<Node> root, std::string root_dir)
         throw std::runtime_error("root must be a supervisor");
     }
     root_ = &root_node_->sup;
+
+    start_time_      = std::chrono::steady_clock::now();
+    last_heartbeat_  = start_time_;
+    last_snapshot_   = start_time_;
+    // Best-effort: TIPC may not be available (no kernel module, no
+    // permission). open() logs the error and the publisher stays inert.
+    // The supervisor still runs; just no GUI feed.
+    publisher_.open(0x80020001, 0);
 
     // Block SIGCHLD/SIGTERM/SIGINT process-wide; we read them via signalfd.
     sigset_t mask;
@@ -232,6 +255,9 @@ void Supervisor::start_worker(WorkerNode& w) {
     // Parent.
     w.pid = pid;
     w.last_start = std::chrono::steady_clock::now();
+    emit_event(/*kind=child_started*/0, &w, supervisor_of(w),
+               /*exit_code=*/0, std::string{}, std::string{});
+    emit_snapshot();
 }
 
 void Supervisor::start_subtree(SupervisorNode& sup) {
@@ -482,6 +508,23 @@ int Supervisor::run() {
         // Reap any exited workers, regardless of whether select returned a
         // signalfd event — we may have missed coalesced SIGCHLDs.
         reap();
+
+        // Drain the TIPC publisher: accept new clients, ignore inbound bytes.
+        publisher_.poll();
+
+        // Periodic emissions. The .art file's heartbeat_period_ms /
+        // snapshot_period_ms params are the canonical schedule; hardcoded
+        // here until the param-from-manifest plumbing lands.
+        using namespace std::chrono;
+        const auto now = steady_clock::now();
+        if (now - last_heartbeat_ >= milliseconds(1000)) {
+            emit_health();
+            last_heartbeat_ = now;
+        }
+        if (now - last_snapshot_ >= milliseconds(5000)) {
+            emit_snapshot();
+            last_snapshot_ = now;
+        }
     }
 
     shutdown_subtree(*root_);
@@ -530,6 +573,107 @@ void Supervisor::reap() {
         }
         on_child_exit(w, rc, old_pid);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Event emission helpers — protobuf wire, schema from services.supervisor.
+// ---------------------------------------------------------------------------
+
+namespace {
+// Framing tags must match TipcPublisher::publish() comment.
+constexpr uint16_t kTagEvent    = 0x0001;
+constexpr uint16_t kTagHealth   = 0x0002;
+constexpr uint16_t kTagSnapshot = 0x0003;
+}  // namespace
+
+void Supervisor::emit_event(uint32_t kind,
+                            const WorkerNode* worker,
+                            const SupervisorNode* sup,
+                            int exit_code,
+                            const std::string& tombstone_path,
+                            const std::string& detail) {
+    ::services::supervisor::SupervisionEvent ev;
+    ev.set_kind(kind);
+    ev.set_timestamp_ms(epoch_ms());
+    if (worker) ev.set_child_name(worker->name);
+    if (sup)    ev.set_supervisor_name(sup->name);
+    ev.set_pid(worker ? worker->pid : -1);
+    ev.set_exit_code(exit_code);
+    if (sup) ev.set_strategy(to_string(sup->strategy));
+    ev.set_tombstone_path(tombstone_path);
+    ev.set_detail(detail);
+    publisher_.publish(kTagEvent, ev.SerializeAsString());
+}
+
+void Supervisor::emit_health() {
+    using namespace std::chrono;
+    const uint64_t uptime_ms =
+        duration_cast<milliseconds>(steady_clock::now() - start_time_).count();
+
+    uint32_t total = 0, active = 0;
+    for (auto* w : all_workers(*root_)) {
+        ++total;
+        if (w->pid > 0) ++active;
+    }
+
+    ::services::supervisor::HealthBeacon hb;
+    hb.set_timestamp_ms(epoch_ms());
+    hb.set_uptime_ms(uptime_ms);
+    hb.set_generation(generation_);
+    hb.set_total_workers(total);
+    hb.set_active_workers(active);
+    hb.set_total_restarts(total_restarts_);
+    hb.set_total_tombstones(total_tombstones_);
+    publisher_.publish(kTagHealth, hb.SerializeAsString());
+}
+
+void Supervisor::emit_snapshot() {
+    ++generation_;
+
+    ::services::supervisor::TreeSnapshot snap;
+    snap.set_generation(generation_);
+    snap.set_timestamp_ms(epoch_ms());
+
+    std::function<void(const SupervisorNode&, const std::string&)> walk =
+        [&](const SupervisorNode& sup, const std::string& parent) {
+            if (!parent.empty()) {
+                auto* row = snap.add_children();
+                row->set_name(sup.name);
+                row->set_parent_name(parent);
+                row->set_kind(1);
+                row->set_pid(-1);
+                row->set_state(2);
+                row->set_restart_count(
+                    static_cast<uint32_t>(sup.restart_history.size()));
+                row->set_strategy(to_string(sup.strategy));
+                row->set_max_restarts(static_cast<uint32_t>(sup.max_restarts));
+                row->set_max_seconds(static_cast<uint32_t>(sup.max_seconds));
+            }
+            for (const auto& c : sup.children) {
+                if (c->is_worker()) {
+                    std::string cmd;
+                    for (size_t i = 0; i < c->worker.start_cmd.size(); ++i) {
+                        if (i) cmd += ' ';
+                        cmd += c->worker.start_cmd[i];
+                    }
+                    uint32_t state = (c->worker.pid > 0) ? 2 : 0;
+                    if (c->worker.terminating) state = 3;
+                    auto* row = snap.add_children();
+                    row->set_name(c->worker.name);
+                    row->set_parent_name(sup.name);
+                    row->set_kind(0);
+                    row->set_pid(c->worker.pid);
+                    row->set_state(state);
+                    row->set_restart_count(0);
+                    row->set_start_cmd(cmd);
+                } else {
+                    walk(c->sup, sup.name);
+                }
+            }
+        };
+    walk(*root_, "");
+
+    publisher_.publish(kTagSnapshot, snap.SerializeAsString());
 }
 
 }  // namespace supervisor

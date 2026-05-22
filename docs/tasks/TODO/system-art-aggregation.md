@@ -25,35 +25,38 @@ CompositionElement — landed in the system-art task). What's missing is
 syntactic no-op, and every cross-package reference has to be matched by
 an inline forward-decl stub in the same file.
 
-## Precondition
+## Precondition — DONE
 
-**Packages must match directory paths 1:1.** Today they don't. Examples
-of the current mismatches:
+Package layout aligned with directory paths under a virtual `system.*`
+root, where `platform/system/` IS the workspace's `system` package
+root. Through the symlinks every component slot now matches:
 
-| filesystem path                                  | package decl today    | should be (path-aligned) |
-|--------------------------------------------------|-----------------------|--------------------------|
-| `services/system/log/package.art`                | `services.log`        | `services.system.log`    |
-| `services/system/com/package.art`                | `services.com`        | `services.system.com`    |
-| `platform/supervisor/system/package.art`         | `services.supervisor` | `platform.supervisor.system` (or similar) |
-| `gateway/system/package.art`                     | `gateway.system`      | `gateway.system` ✓       |
-| `demo/system/package.art`                        | `demo.system`         | `demo.system` ✓ (or move file → `demo/system/demo/package.art` for `system.demo`) |
+| filesystem (workspace view)                      | package                       |
+|--------------------------------------------------|-------------------------------|
+| `platform/system/services/<short>/package.art`   | `system.services.<short>`     |
+| `platform/system/services/<short>/component.art` | `system.services.<short>`     |
+| `platform/system/gateway/package.art`            | `system.gateway`              |
+| `platform/system/gateway/component.art`          | `system.gateway`              |
+| `platform/system/supervisor/package.art`         | `system.supervisor`           |
+| `platform/system/supervisor/component.art`       | `system.supervisor`           |
+| `platform/system/demo/package.art`               | `system.demo`                 |
+| `platform/system/demo/component.art`             | `system.demo`                 |
+| `platform/system/autosar/mlbevo_gen2/kcan/package.art`  | `system.autosar.mlbevo_gen2.kcan`  |
+| `platform/system/autosar/mlbevo_gen2/fibex/package.art` | `system.autosar.mlbevo_gen2.fibex` |
 
-User direction (2026-05-22): `services/system/log/` is already in the
-right filesystem shape — fixing the in-file `package services.log` →
-`package services.system.log` is the one-line change needed to make
-that FC import-resolvable. Repeat for the other 17 services.
+(Component sources still live on disk at e.g.
+`services/system/<short>/package.art` —  the aggregator symlinks
+expose the unified view.)
 
-For demo, the user wants the restructure:
-```
-demo/system/demo/package.art    # contains: package system.demo
-```
-so the demo composition sits under a virtual `system.*` root alongside
-`system.services.*` etc. This implies a parallel reshape of the
-top-level layout — to be agreed when starting this task.
+**Two .art files per dir** (package/component split): per-component
+`package.art` carries messages/interfaces/nodes; `component.art`
+carries the composition. Inside `component.art`, the referenced nodes
+are redeclared as **forward-decl stubs** until cross-file imports land
+(LSP already prefers non-stubs).
 
-Once packages and paths line up, `FQNImportURI`'s stock
-`importURI_converter` (replaces `.` with `/`, strips trailing `.*`)
-just works — no custom mapping needed.
+Once `FQNImportURI` resolves `import system.services.com.*` to
+`<root>/system/services/com/{package,component}.art`, the stubs can be
+removed mechanically.
 
 ## Implementation outline (from research)
 

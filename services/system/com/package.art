@@ -1,33 +1,29 @@
-        // Com (COM) — Adaptive Platform Functional Cluster.
-        //
-        // Provides ComIf; requires: core, osi, log, tsync.
+// Com (COM) — Adaptive Platform Functional Cluster.
+//
+// Provides ComIf; requires: core, osi, log, tsync.
 
-        package services.com
+package system.services.com
 
-        interface clientServer ComIf {
+interface clientServer ComIf {
     operation GetStatus()
     operation Configure()
 }
 
-interface clientServer KernelIf { }  // from services.core
+interface clientServer KernelIf { }  // from system.services.core
 
-interface clientServer OsIf { }  // from services.osi
+interface clientServer OsIf { }  // from system.services.osi
 
-interface clientServer LogIf { }  // from services.log
+interface clientServer LogIf { }  // from system.services.log
 
-interface clientServer TimeSyncIf { }  // from services.tsync
+interface clientServer TimeSyncIf { }  // from system.services.tsync
 
-        node atomic ComDaemon {
-            tipc type=0x80010008 instance=0
-            ports {
-                server com_status provides ComIf
+node atomic ComDaemon {
+    tipc type=0x80010008 instance=0
+    ports {
+        server com_status provides ComIf
         client requires_core requires KernelIf
         client requires_osi requires OsIf
         client requires_log requires LogIf
         client requires_tsync requires TimeSyncIf
-            }
-        }
-
-        composition Com {
-            prototype ComDaemon com_daemon
-        }
+    }
+}

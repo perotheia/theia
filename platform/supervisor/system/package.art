@@ -24,7 +24,7 @@
 // docs/supervision.md for our semantics. Proto3-tag assignment is
 // automatic in artheia — fields are listed positionally.
 
-package services.supervisor
+package system.supervisor
 
 // ---- messages ------------------------------------------------------------
 
@@ -90,13 +90,13 @@ message ThreadSample {
     string  comm                // /proc/<pid>/task/<tid>/comm
     uint32  cpu_pct             // per-thread CPU, hundredths of % (1234 == 12.34%)
     uint32  sched_policy        // sched_getscheduler() returns 0=OTHER,
-                                // 1=FIFO, 2=RR, 3=BATCH, 5=IDLE, 6=DEADLINE
+    // 1=FIFO, 2=RR, 3=BATCH, 5=IDLE, 6=DEADLINE
     uint32  sched_priority      // SCHED_FIFO/RR rt prio 1..99; otherwise 0
     sint32  nice                // -20..19 (SCHED_OTHER/BATCH)
     uint64  cpu_affinity_mask   // sched_getaffinity result; bit N = CPU N
-                                // allowed. 0 = "didn't sample".
+    // allowed. 0 = "didn't sample".
     uint32  last_cpu            // /proc/<pid>/task/<tid>/stat field 39
-                                // — last CPU this thread ran on
+    // — last CPU this thread ran on
 }
 
 // Full tree snapshot — flat list of ChildState rows; the GUI reconstructs
@@ -312,7 +312,3 @@ node atomic Supervisor {
 // ---- composition ---------------------------------------------------------
 // The supervisor stands alone in its own composition; the GUI imports
 // SupervisorControlIf / SupervisorEventIf separately to wire its ports.
-
-composition Supervisor {
-    prototype Supervisor supervisor
-}

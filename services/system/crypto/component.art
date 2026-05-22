@@ -1,0 +1,14 @@
+package system.services.crypto
+
+// Forward-decl: real node lives in this package's package.art.
+// Until artheia cross-file imports land (see
+// TODO/system-art-aggregation.md), composition files redeclare a
+// minimal node stub so the file parses standalone. LSP
+// go-to-definition prefers the non-stub.
+node atomic CryptoDaemon {
+    tipc type=0x80010006 instance=0
+}
+
+composition Crypto {
+    prototype CryptoDaemon crypto_daemon
+}

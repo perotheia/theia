@@ -1,0 +1,58 @@
+// Services aggregator — composition of all 18 Adaptive Platform
+// Functional Cluster compositions.
+//
+// Each FC's real composition lives in its component.art:
+//   system.services.com/component.art       — composition Com
+//   system.services.core/component.art      — composition Core
+//   ... (and so on for the 18 FCs)
+//
+// Until artheia cross-file imports land (see
+// TODO/system-art-aggregation.md), we redeclare empty stubs for each
+// FC composition so this file parses standalone. LSP go-to-definition
+// will jump from the stub to the real composition.
+
+package system.services
+
+// ---- forward-decl stubs: FC compositions live in their own component.art
+
+composition Com      { }
+composition Core     { }
+composition Crypto   { }
+composition Diag     { }
+composition Exec     { }
+composition Fw       { }
+composition Idsm     { }
+composition Log      { }
+composition Nm       { }
+composition Osi      { }
+composition Per      { }
+composition Phm      { }
+composition Rds      { }
+composition Shwa     { }
+composition Sm       { }
+composition Tsync    { }
+composition Ucm      { }
+composition Vucm     { }
+
+// ---- aggregator: the whole services layer in one composition --------------
+
+composition Services {
+    composition Com      com
+    composition Core     core
+    composition Crypto   crypto
+    composition Diag     diag
+    composition Exec     exec
+    composition Fw       fw
+    composition Idsm     idsm
+    composition Log      log
+    composition Nm       nm
+    composition Osi      osi
+    composition Per      per
+    composition Phm      phm
+    composition Rds      rds
+    composition Shwa     shwa
+    composition Sm       sm
+    composition Tsync    tsync
+    composition Ucm      ucm
+    composition Vucm     vucm
+}

@@ -1,24 +1,20 @@
-        // Log (LOG) — Adaptive Platform Functional Cluster.
-        //
-        // Provides LogIf; requires: core.
+// Log (LOG) — Adaptive Platform Functional Cluster.
+//
+// Provides LogIf; requires: core.
 
-        package services.log
+package system.services.log
 
-        interface clientServer LogIf {
+interface clientServer LogIf {
     operation GetStatus()
     operation Configure()
 }
 
-interface clientServer KernelIf { }  // from services.core
+interface clientServer KernelIf { }  // from system.services.core
 
-        node atomic LogDaemon {
-            tipc type=0x80010003 instance=0
-            ports {
-                server log_status provides LogIf
+node atomic LogDaemon {
+    tipc type=0x80010003 instance=0
+    ports {
+        server log_status provides LogIf
         client requires_core requires KernelIf
-            }
-        }
-
-        composition Log {
-            prototype LogDaemon log_daemon
-        }
+    }
+}

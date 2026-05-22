@@ -1,24 +1,20 @@
-        // Osi (OSI) — Adaptive Platform Functional Cluster.
-        //
-        // Provides OsIf; requires: core.
+// Osi (OSI) — Adaptive Platform Functional Cluster.
+//
+// Provides OsIf; requires: core.
 
-        package services.osi
+package system.services.osi
 
-        interface clientServer OsIf {
+interface clientServer OsIf {
     operation GetStatus()
     operation Configure()
 }
 
-interface clientServer KernelIf { }  // from services.core
+interface clientServer KernelIf { }  // from system.services.core
 
-        node atomic OsiDaemon {
-            tipc type=0x80010002 instance=0
-            ports {
-                server osi_status provides OsIf
+node atomic OsiDaemon {
+    tipc type=0x80010002 instance=0
+    ports {
+        server osi_status provides OsIf
         client requires_core requires KernelIf
-            }
-        }
-
-        composition Osi {
-            prototype OsiDaemon osi_daemon
-        }
+    }
+}

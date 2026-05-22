@@ -1,30 +1,26 @@
-        // Diag (DIAG) — Adaptive Platform Functional Cluster.
-        //
-        // Provides DiagIf; requires: core, log, com.
+// Diag (DIAG) — Adaptive Platform Functional Cluster.
+//
+// Provides DiagIf; requires: core, log, com.
 
-        package services.diag
+package system.services.diag
 
-        interface clientServer DiagIf {
+interface clientServer DiagIf {
     operation GetStatus()
     operation Configure()
 }
 
-interface clientServer KernelIf { }  // from services.core
+interface clientServer KernelIf { }  // from system.services.core
 
-interface clientServer LogIf { }  // from services.log
+interface clientServer LogIf { }  // from system.services.log
 
-interface clientServer ComIf { }  // from services.com
+interface clientServer ComIf { }  // from system.services.com
 
-        node atomic DiagDaemon {
-            tipc type=0x8001000C instance=0
-            ports {
-                server diag_status provides DiagIf
+node atomic DiagDaemon {
+    tipc type=0x8001000C instance=0
+    ports {
+        server diag_status provides DiagIf
         client requires_core requires KernelIf
         client requires_log requires LogIf
         client requires_com requires ComIf
-            }
-        }
-
-        composition Diag {
-            prototype DiagDaemon diag_daemon
-        }
+    }
+}

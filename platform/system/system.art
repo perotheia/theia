@@ -1,64 +1,52 @@
-// Platform composition.
+// Top-level system composition.
 //
-// Wires the runtime nodes that live on the host: the gateway service
-// and the active vendor application. AUTOSAR-side wire definitions
-// (`autosar/`) are referenced via per-PDU interfaces in the vendor
-// app — not directly here.
+// `platform/system/` IS the workspace's virtual root for the `system`
+// package. Through the symlinks here, every component's `.art` source
+// is visible under its directory-path-aligned FQN:
 //
-// Symlinks under platform/system/ point at the system fragments that
-// contribute to this composition:
-//   platform/system/odd_path_client -> ../../vendor/odd_path_client/system
-//   platform/system/gateway         -> ../../gateway/system
-//   platform/system/autosar         -> ../../autosar/mlbevo_gen2_cmp_psp/system
+//   platform/system/services/<short>/   →  system.services.<short>
+//   platform/system/gateway/             →  system.gateway
+//   platform/system/supervisor/          →  system.supervisor
+//   platform/system/demo/                →  system.demo
+//   platform/system/autosar/mlbevo_gen2/{kcan,fibex}/
+//                                        →  system.autosar.mlbevo_gen2.{kcan,fibex}
 //
-// textX cross-file references are single-file, so anything referenced
-// below as a prototype is also forward-declared inline. The real
-// shapes live in the imported fragments.
+// This file is the composition-of-compositions: it pulls each
+// sub-composition under one Platform body. Each component contributes
+// one composition declared in its own component.art.
+//
+// Until artheia cross-file imports land (see
+// TODO/system-art-aggregation.md), the referenced compositions and
+// nodes are redeclared here as forward-decl stubs so the file parses
+// standalone. LSP go-to-definition jumps from the stub to the real
+// composition.
 
-package platform.system
+package system
 
-import gateway.system.*
-import vendor.odd_path_client.system.*
-import vendor.odd_path_client.system.components.*
+// ---- forward-decl: compositions (real ones in their own component.art)
 
-// ---- forward-decl: Gateway (real decl in gateway/system) ---------------
+composition Services    { }     // system.services/system.art (FC aggregator)
+composition Demo3Way    { }     // system.demo/package.art    (the demo rig)
 
-message StatusReport {
-    uint32 uptime_ms
-    uint32 frames_rx
-    uint32 frames_tx
-    uint32 drops
-    bool   healthy
-}
+// ---- forward-decl: nodes used as bare prototypes -------------------------
 
-interface clientServer Status {
-    operation GetStatus() returns StatusReport
+node atomic Supervisor {
+    tipc type=0x80020001 instance=0
 }
 
 node atomic Gateway {
     tipc type=0xa0010001 instance=0
-    ports {
-        server status provides Status
-    }
 }
 
-// ---- forward-decl: OddPathMonitor (real decl in vendor/odd_path_client/
-// system/components/). Only the ports involved in the platform composition
-// need to appear here — the FlexRay receiver ports are local to the app.
-
-node atomic OddPathMonitor {
-    tipc type=0xc0010001 instance=0
-    ports {
-        client status_query requires Status
-    }
-}
-
-// ---- composition --------------------------------------------------------
+// ---- the top-level composition -------------------------------------------
+// Composition-of-compositions: services + the demo rig live under a
+// single Platform composition, alongside the platform-fabric nodes
+// (supervisor, gateway) that aren't FCs themselves.
 
 composition Platform {
-    prototype Gateway          gw
-    prototype OddPathMonitor   odd_path_monitor
+    composition Services svc
+    composition Demo3Way demo
 
-    // The app asks the gateway for its current health.
-    connect odd_path_monitor.status_query to gw.status
+    prototype Supervisor sup
+    prototype Gateway    gw
 }

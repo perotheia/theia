@@ -199,10 +199,47 @@ FcLayer = Layer(
 )
 
 
+# ---------------------------------------------------------------------------
+# Structured-DSL counterpart — :data:`FcSoftware` (mosaic-style).
+#
+# Same 18 FCs + supervisor tree as ``FcLayer`` above, but in the new
+# :class:`SoftwareSpecification` shape: set-typed fields with
+# :class:`Append` transforms inline. Built INCREMENTALLY today —
+# vehicle layers (e.g. ``DemoSoftware``) compose via
+# ``FcSoftware.squash(DemoLayer)``. The legacy ``FcLayer`` /
+# ``merge_layers`` route stays functional during the migration.
+#
+# Eventually ``FcLayer`` and the parallel ``COMPONENTS`` / ``PROCESSES``
+# / ``SUPERVISORS`` lists go away once every consumer reads
+# ``FcSoftware`` directly. Right now ``artheia.manifest.platform``
+# still imports the lists.
+# ---------------------------------------------------------------------------
+
+from typing import cast
+
+# Import from submodules directly (same pattern as the imports at the
+# top of this file). artheia.manifest.__init__ has a circular dep with
+# this module via platform.py — avoid triggering it.
+from artheia.manifest.rig import SoftwareSpecification, VehicleIdentity
+from artheia.manifest.transform import Append, SetTransformTypes  # noqa: E402
+
+FcSoftware: SoftwareSpecification = SoftwareSpecification(
+    vehicle=VehicleIdentity(name=""),  # rig layers override
+    applications=cast(set[SetTransformTypes], set()),  # rig layers add platform_app
+    execution_manifests=cast(set[SetTransformTypes], {
+        Append(p) for p in PROCESSES
+    }),
+    supervisors=cast(set[SetTransformTypes], {
+        Append(s) for s in SUPERVISORS
+    }),
+)
+
+
 __all__ = [
     "COMPONENTS",
     "EXECUTABLES",
     "PROCESSES",
     "SUPERVISORS",
     "FcLayer",
+    "FcSoftware",
 ]

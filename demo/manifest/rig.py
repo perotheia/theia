@@ -1,6 +1,6 @@
 """Demo deployment manifest — three-process layout for ``Demo3Way``.
 
-Composition reference (``demo/system/package.art``):
+Composition reference (``demo/system/demo/package.art``):
 
 ==============  ======================================  ==============
 process binary  hosted prototypes (.art)                start_cmd
@@ -15,13 +15,34 @@ and the LocalRefs of its hosted prototypes; cross-process traffic
 flows through RemoteRefs registered against the mux's listening
 TIPC service address.
 
-The Layer below ADDs the three process-level SwComponents on top of
-:data:`services.manifest.FcLayer` (which carries the 18 FCs). The
-resolved :data:`DemoRig` is the input to ``artheia executor emit`` and
-``artheia generate-manifest``.
+This file is being migrated from the legacy :class:`Layer` shape
+(parallel ``add_machines`` / ``add_components`` / ``add_executions``
+lists) to the structured-DSL :class:`SoftwareSpecification` shape
+(set-typed fields with inline :class:`Append` / :class:`Remove`
+transforms). See ``docs/tasks/PROGRESS/artheia-dsl-recovery.md`` for
+the recovery plan.
+
+What's exported:
+
+- ``DemoSoftware`` (NEW) — the :class:`SoftwareSpecification` for the
+  rig. Vehicle layers compose against it via ``.squash(...)``.
+- ``DemoRig`` (LEGACY) — the materialized :class:`Rig` for the CLI's
+  ``artheia executor emit`` / ``artheia gui emit`` (both still
+  ``isinstance(x, Rig)``-check on the export).
+- ``DemoLayer`` (LEGACY) — the old :class:`Layer`, kept for any
+  importer that still needs it.
+
+``DemoRig`` is produced by composing ``PlatformBase.squash(DemoLayer)``
+through the legacy path, then ``DemoSoftware.to_rig()`` reconciles to
+the same shape. Once the CLI switches to walk
+:class:`SoftwareSpecification` directly (phase 4), the legacy exports
+go away.
 """
 
 from __future__ import annotations
+
+from ipaddress import IPv4Address
+from typing import cast
 
 from artheia.manifest import (
     ApplicationManifest,
@@ -34,7 +55,6 @@ from artheia.manifest import (
     VehicleIdentity,
     merge_layers,
 )
-from artheia.manifest.platform import PlatformBase
 from artheia.manifest.application import (
     BuildTypeEnum,
     Executable,
@@ -48,9 +68,11 @@ from artheia.manifest.execution import (
     StateDependentStartupConfig,
     TerminationBehaviorEnum,
 )
-from ipaddress import IPv4Address
-
 from artheia.manifest.machine import CpuResource, IpEndpoint
+from artheia.manifest.platform import PlatformBase
+from artheia.manifest.rig import SoftwareSpecification
+from artheia.manifest.transform import Append, SetTransformTypes
+from services.manifest.fc import FcSoftware
 
 # ---------------------------------------------------------------------------
 # Demo machine — the host (workstation / dev box) the processes run on.
@@ -100,7 +122,7 @@ DEMO_COMPONENTS: list[SwComponent] = [
         # The art_node points at the top-level composition this process
         # materializes; the runtime constructs its hosted prototypes
         # locally and any other prototype as a RemoteRef.
-        art_node=f"demo.system/{art_class}",
+        art_node=f"system.demo/{art_class}",
     )
     for (name, art_class, target, _) in _DEMO_PROCESSES
 ]
@@ -153,9 +175,10 @@ DEMO_PROCESSES: list[Process] = [
     _process_for(name) for (name, _, _, _) in _DEMO_PROCESSES
 ]
 
+
 # ---------------------------------------------------------------------------
-# Demo layer — delta on top of services.manifest.FcLayer (already folded
-# into PlatformBase via artheia.manifest.platform).
+# Legacy path — DemoLayer + merge_layers(PlatformBase, [DemoLayer]) → DemoRig.
+# Kept until phase 4 swaps the CLI to walk SoftwareSpecification.
 # ---------------------------------------------------------------------------
 
 DemoLayer = Layer(
@@ -165,11 +188,6 @@ DemoLayer = Layer(
     add_components=DEMO_COMPONENTS,
     add_executions=DEMO_PROCESSES,
 )
-
-# ---------------------------------------------------------------------------
-# Final rig — PlatformBase carries the 18 FCs; DemoLayer pins the demo
-# binaries on top.
-# ---------------------------------------------------------------------------
 
 DemoRig: Rig = merge_layers(PlatformBase, [DemoLayer])
 
@@ -182,3 +200,33 @@ if DemoRig.applications:
         host_machine=DemoHost.name,
         components=DemoRig.applications[0].components,
     )
+
+
+# ---------------------------------------------------------------------------
+# Structured-DSL path — DemoSoftware = FcSoftware.squash(DemoSpecLayer).
+#
+# Mirrors the mosaic raj_syscomp.py pattern:
+#
+#     RajSoftware = MacanSoftware.squash(RajLayer).squash(...)
+#
+# Here the chain is:
+#
+#     DemoSoftware = FcSoftware.squash(DemoSpecLayer)
+#
+# DemoSpecLayer carries the demo-specific deltas (vehicle identity,
+# the demo_host machine, the three demo process binaries). FcSoftware
+# is the platform-services base. The result is a fully-merged spec
+# that .to_rig()s to the same shape as the legacy DemoRig above.
+# ---------------------------------------------------------------------------
+
+DemoSpecLayer = SoftwareSpecification(
+    vehicle=VehicleIdentity(name="demo", make="theia", model="gen_server-demo"),
+    machines=cast(set[SetTransformTypes], {
+        Append(DemoHost),
+    }),
+    execution_manifests=cast(set[SetTransformTypes], {
+        Append(p) for p in DEMO_PROCESSES
+    }),
+)
+
+DemoSoftware: SoftwareSpecification = FcSoftware.squash(DemoSpecLayer)

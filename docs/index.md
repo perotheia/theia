@@ -30,14 +30,23 @@ Documentation for the Porsche PERO CMP gateway workspace.
   sequence diagrams and implementation notes. The runtime under
   `platform/runtime/` that newer applications build on.
 
-## Manifest DSL
+## Artheia
 
-- [Manifest DSL reference](manifest-dsl.md) — `Layer.squash` +
+All artheia-side docs live under [`artheia/`](artheia/):
+
+- [Overview](artheia/README.md) — what artheia is and how to start.
+- [Manual](artheia/manual.md) — comprehensive user manual.
+- [Manifest module reference](artheia/manifest.md) — per-file map of
+  the manifest dataclass hierarchy.
+- [Manifest DSL reference](artheia/manifest-dsl.md) — `Layer.squash` +
   `SoftwareSpecification` + set transforms (`Append` / `Remove`) +
-  value markers (`Undefined` / `Default` / `Defer`). The
-  mosaic-style structured DSL for composing vendor / platform /
-  vehicle manifest layers.
-- [Tutorial: bootstrap a rig from system.art](tutorials/gen-rig.md)
-  — end-to-end walkthrough of `artheia gen-rig`, the generator
-  that emits a starter `rig.py` from a top-level artheia
-  composition.
+  value markers (`Undefined` / `Default` / `Defer`). The mosaic-style
+  structured DSL for composing vendor / platform / vehicle manifest
+  layers.
+- [Tutorial: bootstrap a rig from system.art](artheia/gen-rig.md) —
+  end-to-end walkthrough of `artheia gen-rig`, the generator that
+  emits a starter `rig.py` from a top-level artheia composition.
+- [Export reference](artheia/export.md) — what the artheia codegen
+  emits and how to consume it downstream.
+- [VS Code extension](artheia/vscode-extension.md) — `.art` syntax
+  + LSP integration for editor support.

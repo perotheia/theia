@@ -258,7 +258,7 @@ Optional (with sensible defaults):
   (root / ar_sup / core_sup / app_sup / etc).
 - Resolve cross-file `import` in the .art (today single-file
   compositions only; see
-  `docs/tasks/TODO/system-art-aggregation.md`).
+  [`../tasks/TODO/system-art-aggregation.md`](../tasks/TODO/system-art-aggregation.md)).
 - Round-trip your edits — once you edit the generated file,
   re-running the generator overwrites your changes.
 
@@ -303,7 +303,7 @@ artheia gen-rig vendor/myrig/system/system.art \
 
 ## Related
 
-- `docs/manifest-dsl.md` — manifest DSL reference.
-- `artheia/manifest/README.md` — per-file module map.
-- `docs/tasks/DONE/generate-rig-from-system.md` — the spec
-  ticket that drove `gen-rig`.
+- [`manifest-dsl.md`](manifest-dsl.md) — manifest DSL reference.
+- [`manifest.md`](manifest.md) — per-file module map.
+- [`../tasks/DONE/generate-rig-from-system.md`](../tasks/DONE/generate-rig-from-system.md)
+  — the spec ticket that drove `gen-rig`.

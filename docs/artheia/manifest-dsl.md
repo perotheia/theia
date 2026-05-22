@@ -1,8 +1,8 @@
 # Manifest DSL — `Layer.squash` + `SoftwareSpecification`
 
 Reference for the structured manifest DSL that landed in
-`docs/tasks/DONE/artheia-dsl-recovery.md`. Companion to the per-file
-reference in `artheia/manifest/README.md`.
+[`../tasks/DONE/artheia-dsl-recovery.md`](../tasks/DONE/artheia-dsl-recovery.md).
+Companion to the per-file reference in [`manifest.md`](manifest.md).
 
 ## TL;DR
 
@@ -221,7 +221,7 @@ All three emit commands accept either a `Rig` or a
 `SoftwareSpecification` attribute. Auto-pick (no `--rig` flag)
 prefers `*Software` over `*Rig` over plain `Rig`.
 
-See `docs/tutorials/gen-rig.md` for the bootstrap tutorial.
+See [`gen-rig.md`](gen-rig.md) for the bootstrap tutorial.
 
 ## Migration cookbook
 
@@ -308,8 +308,10 @@ overlays just the fields it differs in.
 
 ## Related docs
 
-- `artheia/manifest/README.md` — per-file reference.
-- `docs/tutorials/gen-rig.md` — bootstrap a rig.py from .art.
-- `docs/AUTOSAR/manifest.md`, `docs/AUTOSAR/adaptive.md` —
-  upstream Adaptive AUTOSAR manifest spec.
-- `docs/tasks/DONE/artheia-dsl-recovery.md` — the spec ticket.
+- [`manifest.md`](manifest.md) — per-file reference.
+- [`gen-rig.md`](gen-rig.md) — bootstrap a rig.py from .art.
+- [`../AUTOSAR/manifest.md`](../AUTOSAR/manifest.md),
+  [`../AUTOSAR/adaptive.md`](../AUTOSAR/adaptive.md) — upstream
+  Adaptive AUTOSAR manifest spec.
+- [`../tasks/DONE/artheia-dsl-recovery.md`](../tasks/DONE/artheia-dsl-recovery.md)
+  — the spec ticket.

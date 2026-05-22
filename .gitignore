@@ -63,3 +63,7 @@ build/
 #   artheia gen-proto platform/supervisor/system/package.art \
 #       --out platform/supervisor/generated/proto
 /platform/supervisor/generated/
+
+# Docker deploy runtime outputs.
+deploy/.staging/
+deploy/logs/

@@ -1,0 +1,60 @@
+# deploy/Dockerfile.base — common base image for theia per-machine containers.
+#
+# Provides:
+#   - Ubuntu 24.04 base
+#   - opkg (for installing the per-machine .ipk produced by
+#     `bazel build @rig_<name>//<machine>:image`)
+#   - puppet-agent (apply-mode, no master needed)
+#   - systemd (PID 1) for graceful supervisor lifecycle
+#   - bash + coreutils for the run-supervisor entrypoint
+#
+# Per-machine images (central, compute) layer on top:
+#   FROM theia-base:latest
+#   COPY <machine>.ipk + run-supervisor.sh + puppet manifest
+#
+# Build: docker build -f deploy/Dockerfile.base -t theia-base:latest deploy/
+
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        gnupg \
+        bash \
+        coreutils \
+        opkg \
+        systemd \
+        systemd-sysv \
+        puppet-agent \
+        && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Puppet ships at /opt/puppetlabs/bin — make it discoverable.
+ENV PATH=/opt/puppetlabs/bin:$PATH
+
+# Theia per-machine layout:
+#   /opt/theia/         — install root (opkg --offline-root pivot)
+#   /etc/theia/         — config (executor.yaml, machines.yaml)
+#   /var/log/theia/     — supervisor logs + tombstones
+#   /etc/puppet/        — puppet manifests + modules
+RUN mkdir -p /opt/theia /etc/theia /var/log/theia/tombstones /etc/puppet
+
+# Mounted in by docker-compose:
+#   /opt/theia/ipk/<machine>.ipk   the per-machine deploy bundle
+#   /etc/puppet/manifests/<host>.pp
+#   /etc/puppet/modules/theia/     shared puppet module
+
+# Entrypoint: applies puppet, then execs systemd as PID 1.
+COPY run-supervisor.sh /usr/local/bin/run-supervisor.sh
+RUN chmod +x /usr/local/bin/run-supervisor.sh
+
+# Trap: systemd-as-PID-1 inside Docker requires --privileged or specific
+# cgroup configuration. For the dev compose we skip systemd and run the
+# supervisor binary in foreground from run-supervisor.sh (the script
+# autodetects whether systemd is usable).
+
+ENTRYPOINT ["/usr/local/bin/run-supervisor.sh"]

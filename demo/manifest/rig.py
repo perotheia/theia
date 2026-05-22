@@ -75,23 +75,53 @@ from artheia.manifest.transform import Append, SetTransformTypes
 from services.manifest.fc import FcSoftware
 
 # ---------------------------------------------------------------------------
-# Demo machine — the host (workstation / dev box) the processes run on.
+# Demo machines.
+#
+# Two-host topology designed for the Docker-compose deployment under
+# `deploy/`:
+#
+#   central — services (18 FCs) + gateway. The GUI connects here for
+#             supervisor introspection.
+#   compute — demo binaries (3 process binaries materializing
+#             Demo3Way's per-process compositions).
+#
+# Single-host setups (legacy) can keep collapsing both to one machine
+# by overriding the host_machine bindings in their own SoftwareSpec
+# layer. The default below is the multi-host shape.
 # ---------------------------------------------------------------------------
 
-DemoHost = MachineManifest(
-    name="demo_host",
+CentralHost = MachineManifest(
+    name="central_host",
     hardware=HardwareResource(
-        cpu=CpuResource(architecture=CpuArchitecture.AARCH64),
+        cpu=CpuResource(architecture=CpuArchitecture.X86_64),
     ),
-    # Per-machine services/com gRPC endpoint — the GUI connects here.
-    # Multi-machine rigs assign distinct ports when several machines
-    # share one host. The supervisor itself is *not* exposed directly;
-    # it's an in-host TIPC node bridged by com.
+    # services/com gRPC endpoint — the GUI connects here. In the
+    # Docker scenario this is the bridge-IP of the `central` container
+    # on the shared network. Loopback default keeps single-host bring-
+    # up working.
     com_endpoint=IpEndpoint(
         address=IPv4Address("127.0.0.1"),
         port=7700,
     ),
 )
+
+ComputeHost = MachineManifest(
+    name="compute_host",
+    hardware=HardwareResource(
+        cpu=CpuResource(architecture=CpuArchitecture.AARCH64),
+    ),
+    # The compute container exposes a distinct gRPC port so a multi-
+    # machine GUI can talk to both supervisors (one tab per machine).
+    com_endpoint=IpEndpoint(
+        address=IPv4Address("127.0.0.1"),
+        port=7701,
+    ),
+)
+
+# Legacy alias for any caller that still references DemoHost (the
+# original single-host name). Points at central by default — the
+# services+gateway side is what most existing tests assert against.
+DemoHost = CentralHost
 
 # ---------------------------------------------------------------------------
 # Process binaries.
@@ -224,22 +254,43 @@ if DemoRig.applications:
 # that .to_rig()s to the same shape as the legacy DemoRig above.
 # ---------------------------------------------------------------------------
 
-# Same-identity (name="platform_app") Append merges via Layer.squash;
-# the result is one ApplicationManifest with host_machine="demo_host"
-# and components = FcSoftware's 18 + the demo's 3.
-_DemoPlatformApp = ApplicationManifest(
+# Two ApplicationManifests, each bound to its own machine:
+#
+#   platform_app on central — services (18 FCs from FcSoftware) +
+#                              gateway. Same-identity Append merges
+#                              into FcSoftware's platform_app: host
+#                              binding overrides "" → central_host,
+#                              components stay as the 18 FCs (the
+#                              demo binaries are routed to compute_app
+#                              via the next Append, NOT here).
+#   compute_app on compute — the three demo binaries (Demo3Way's
+#                             per-process compositions).
+#
+# This split is what makes `bazel build @rig_demo//central_host:image`
+# and `@rig_demo//compute_host:image` produce two distinct .ipks for
+# Docker deployment under `deploy/`.
+
+_PlatformAppOverlay = ApplicationManifest(
     name="platform_app",
-    host_machine=DemoHost.name,
-    components=list(DEMO_COMPONENTS),  # merged onto FcSoftware's via squash
+    host_machine=CentralHost.name,
+    components=[],  # let squash inherit FcSoftware's 18 FC components
+)
+
+_ComputeApp = ApplicationManifest(
+    name="compute_app",
+    host_machine=ComputeHost.name,
+    components=list(DEMO_COMPONENTS),
 )
 
 DemoSpecLayer = SoftwareSpecification(
     vehicle=VehicleIdentity(name="demo", make="theia", model="gen_server-demo"),
     machines=cast(set[SetTransformTypes], {
-        Append(DemoHost),
+        Append(CentralHost),
+        Append(ComputeHost),
     }),
     applications=cast(set[SetTransformTypes], {
-        Append(_DemoPlatformApp),
+        Append(_PlatformAppOverlay),
+        Append(_ComputeApp),
     }),
     execution_manifests=cast(set[SetTransformTypes], {
         Append(p) for p in DEMO_PROCESSES

@@ -1,0 +1,103 @@
+# deploy/docker-compose.yml — two-host Theia bringup in Docker.
+#
+# Topology (matches demo/manifest/rig.py::DemoSoftware):
+#
+#   central — services (18 FCs) + gateway, exposes gRPC on host:7700.
+#   compute — demo binaries, exposes gRPC on host:7701.
+#
+# Both containers share a bridge network so gRPC + TIPC traffic
+# crosses cleanly. The artheia rig manifest's machines.yaml records
+# the gRPC endpoints; a GUI client running on the host (or in a
+# third container) connects to both.
+#
+# Pre-flight (run from workspace root):
+#
+#   # 1. Workspace venv with artheia installed.
+#   python3 -m venv .venv && .venv/bin/pip install -e ./artheia
+#   export PATH="$PWD/.venv/bin:$PATH"
+#
+#   # 2. Build the supervisor binary (CMake — not yet a Bazel target).
+#   cd platform/supervisor && cmake -S . -B build && cmake --build build -j
+#   cd ../..
+#
+#   # 3. Build the per-machine .ipks via Bazel rig extension.
+#   PATH="$PWD/.venv/bin:$PATH" bazel build @rig_demo//:all
+#
+#   # 4. Stage artifacts into deploy/.staging/ (compose's bind-mount source).
+#   ./deploy/stage.sh           # see deploy/stage.sh
+#
+#   # 5. Build the base + per-host images.
+#   docker compose -f deploy/docker-compose.yml build
+#
+#   # 6. Bring it up.
+#   docker compose -f deploy/docker-compose.yml up
+#
+# Tear-down:  Ctrl-C, then `docker compose -f deploy/docker-compose.yml down`.
+
+services:
+
+  central:
+    image: theia-central:latest
+    build:
+      context: .                       # deploy/
+      dockerfile: central/Dockerfile
+    container_name: theia-central
+    hostname: central
+    networks:
+      theia_net:
+        aliases: [central, central_host]
+    ports:
+      - "7700:7700"     # supervisor → host: services/com gRPC bridge
+    volumes:
+      # Per-machine .ipk + the two YAMLs Bazel emits via @rig_demo//:all.
+      # stage.sh copies them into deploy/.staging/<machine_name>/ipk/
+      # where <machine_name> matches the rig.py MachineManifest.name
+      # (`central_host`, `compute_host`).
+      - ./.staging/central_host/ipk:/opt/theia/ipk:ro
+      # Puppet manifests (central.pp) + the shared theia module.
+      - ./puppet:/etc/puppet:ro
+      # Supervisor binary built from CMake. Until packaged as part of
+      # the .ipk, we bind-mount it directly. Read-only — Puppet doesn't
+      # need to write here.
+      - ../platform/supervisor/build/supervisor:/usr/bin/theia-supervisor:ro
+      # Logs persist to ./logs/ for inspection after teardown.
+      - ./logs/central:/var/log/theia
+    environment:
+      - HOSTNAME=central
+      - TZ=UTC
+    restart: unless-stopped
+
+  compute:
+    image: theia-compute:latest
+    build:
+      context: .
+      dockerfile: compute/Dockerfile
+    container_name: theia-compute
+    hostname: compute
+    networks:
+      theia_net:
+        aliases: [compute, compute_host]
+    ports:
+      - "7701:7701"
+    volumes:
+      - ./.staging/compute_host/ipk:/opt/theia/ipk:ro
+      - ./puppet:/etc/puppet:ro
+      - ../platform/supervisor/build/supervisor:/usr/bin/theia-supervisor:ro
+      - ./logs/compute:/var/log/theia
+    environment:
+      - HOSTNAME=compute
+      - TZ=UTC
+    restart: unless-stopped
+    # compute can't start until central is up — the gateway lives on
+    # central and the demo's TIPC clients dial central via the bridge.
+    depends_on:
+      - central
+
+networks:
+  theia_net:
+    driver: bridge
+    # Static subnet so the artheia machines.yaml addresses are stable
+    # across `compose down/up` cycles.
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24

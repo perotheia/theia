@@ -1,0 +1,100 @@
+cmake_minimum_required(VERSION 3.16)
+project(services_com CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release)
+endif()
+
+add_compile_options(-Wall -Wextra)
+
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(PROTOBUF REQUIRED protobuf)
+pkg_check_modules(GRPCPP   REQUIRED grpc++)
+find_program(PROTOC_EXECUTABLE     protoc           REQUIRED)
+find_program(GRPC_CPP_PLUGIN       grpc_cpp_plugin  REQUIRED)
+
+# Reuse the supervisor's protos verbatim — same wire schema.
+set(SUP_PROTO_DIR   ${CMAKE_CURRENT_SOURCE_DIR}/../../platform/supervisor/generated/proto)
+set(COM_PROTO_DIR   ${CMAKE_CURRENT_SOURCE_DIR}/proto)
+set(PROTO_GEN_DIR   ${CMAKE_CURRENT_BINARY_DIR}/generated)
+file(MAKE_DIRECTORY ${PROTO_GEN_DIR})
+
+# Supervisor protos — only the ones com directly references. Standard
+# protoc (no grpc plugin). Same generated_proto layout used elsewhere.
+set(SUP_PROTOS
+    ChildSelector ChildSpec ChildState ControlReply ControlRequest
+    DeleteChildRequest GetChildRequest GetTreeRequest HealthBeacon
+    HeartbeatReport SendTimeoutReport StartChildRequest
+    SupervisionEvent TreeSnapshot)
+set(SUP_PROTO_SRCS)
+foreach(P ${SUP_PROTOS})
+    set(PB_CC ${PROTO_GEN_DIR}/${P}.pb.cc)
+    set(PB_H  ${PROTO_GEN_DIR}/${P}.pb.h)
+    add_custom_command(
+        OUTPUT ${PB_CC} ${PB_H}
+        COMMAND ${PROTOC_EXECUTABLE}
+                --proto_path=${SUP_PROTO_DIR}
+                --cpp_out=${PROTO_GEN_DIR}
+                ${SUP_PROTO_DIR}/${P}.proto
+        DEPENDS ${SUP_PROTO_DIR}/${P}.proto
+        COMMENT "protoc ${P}.proto"
+        VERBATIM
+    )
+    list(APPEND SUP_PROTO_SRCS ${PB_CC})
+endforeach()
+
+# com's own .proto needs both standard protoc (for the message types)
+# and grpc_cpp_plugin (for the service stubs). Reference the supervisor
+# protos via -I so imports resolve.
+set(BRIDGE_PROTO_PB_CC      ${PROTO_GEN_DIR}/supervisor_bridge.pb.cc)
+set(BRIDGE_PROTO_PB_H       ${PROTO_GEN_DIR}/supervisor_bridge.pb.h)
+set(BRIDGE_PROTO_GRPC_CC    ${PROTO_GEN_DIR}/supervisor_bridge.grpc.pb.cc)
+set(BRIDGE_PROTO_GRPC_H     ${PROTO_GEN_DIR}/supervisor_bridge.grpc.pb.h)
+
+add_custom_command(
+    OUTPUT  ${BRIDGE_PROTO_PB_CC} ${BRIDGE_PROTO_PB_H}
+            ${BRIDGE_PROTO_GRPC_CC} ${BRIDGE_PROTO_GRPC_H}
+    COMMAND ${PROTOC_EXECUTABLE}
+            --proto_path=${COM_PROTO_DIR}
+            --proto_path=${SUP_PROTO_DIR}
+            --cpp_out=${PROTO_GEN_DIR}
+            --grpc_out=${PROTO_GEN_DIR}
+            --plugin=protoc-gen-grpc=${GRPC_CPP_PLUGIN}
+            ${COM_PROTO_DIR}/supervisor_bridge.proto
+    DEPENDS ${COM_PROTO_DIR}/supervisor_bridge.proto
+    COMMENT "protoc (+grpc) supervisor_bridge.proto"
+    VERBATIM
+)
+
+add_executable(services-com
+    src/main.cpp
+    src/tipc_uplink.cpp
+    ${SUP_PROTO_SRCS}
+    ${BRIDGE_PROTO_PB_CC}
+    ${BRIDGE_PROTO_GRPC_CC}
+)
+
+target_include_directories(services-com PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${PROTOBUF_INCLUDE_DIRS}
+    ${GRPCPP_INCLUDE_DIRS}
+    ${PROTO_GEN_DIR}
+)
+
+target_link_libraries(services-com PRIVATE
+    ${PROTOBUF_LIBRARIES}
+    ${GRPCPP_LIBRARIES}
+    -lgrpc -lgpr
+    pthread
+)
+
+# Suppress noisy protobuf-generated-source warnings.
+target_compile_options(services-com PRIVATE
+    -Wno-unused-parameter
+    -Wno-pedantic
+)
+
+install(TARGETS services-com RUNTIME DESTINATION bin)

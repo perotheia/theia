@@ -1,0 +1,60 @@
+// services/com gRPC bridge.
+//
+// External operators (supervisor-gui, dashboards, fleet manager) speak
+// gRPC; the supervisor on each machine speaks TIPC. This service is
+// the translation layer hosted on each machine; one gRPC server per
+// machine (one per Machine in the artheia rig).
+//
+// Reuses the supervisor's existing message types verbatim — no
+// translation/redefinition. ChildState, SupervisionEvent, etc. come
+// from platform/supervisor/system/package.art via the same protoc
+// pipeline; we just import them with relative paths the gRPC plugin
+// can find.
+
+syntax = "proto3";
+
+package services.com;
+
+import "ChildState.proto";
+import "ChildSpec.proto";
+import "ChildSelector.proto";
+import "ControlReply.proto";
+import "HealthBeacon.proto";
+import "SupervisionEvent.proto";
+import "TreeSnapshot.proto";
+
+// One streamed observation from the supervisor. Discriminated union
+// — exactly one of the three fields is populated per message.
+message SupervisorObservation {
+    oneof kind {
+        services.supervisor.SupervisionEvent event    = 1;
+        services.supervisor.HealthBeacon     health   = 2;
+        services.supervisor.TreeSnapshot     snapshot = 3;
+    }
+}
+
+// Empty subscribe request — observers attach blindly. Future extensions
+// could carry a filter (e.g. "only events kind=X") but the current GUI
+// wants the whole firehose.
+message SubscribeRequest {}
+
+// Unary RPC carriers. Each wraps a supervisor-side request.
+message StartChildCall  { services.supervisor.ChildSpec     spec = 1; }
+message DeleteChildCall { string name = 1; }
+
+service SupervisorView {
+    // Server-streaming firehose of every observation the supervisor
+    // emits over its TIPC events port. Clients open one of these per
+    // machine and dispatch by oneof kind.
+    rpc Subscribe(SubscribeRequest) returns (stream SupervisorObservation);
+
+    // Unary mutators — directly mirror OTP supervisor's child API.
+    rpc StartChild     (StartChildCall)
+        returns (services.supervisor.ControlReply);
+    rpc DeleteChild    (DeleteChildCall)
+        returns (services.supervisor.ControlReply);
+    rpc RestartChild   (services.supervisor.ChildSelector)
+        returns (services.supervisor.ControlReply);
+    rpc TerminateChild (services.supervisor.ChildSelector)
+        returns (services.supervisor.ControlReply);
+}

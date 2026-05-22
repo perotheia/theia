@@ -29,3 +29,15 @@ Documentation for the Porsche PERO CMP gateway workspace.
   refs, timers, runtime tracing, and generation from `.art`. Includes
   sequence diagrams and implementation notes. The runtime under
   `platform/runtime/` that newer applications build on.
+
+## Manifest DSL
+
+- [Manifest DSL reference](manifest-dsl.md) — `Layer.squash` +
+  `SoftwareSpecification` + set transforms (`Append` / `Remove`) +
+  value markers (`Undefined` / `Default` / `Defer`). The
+  mosaic-style structured DSL for composing vendor / platform /
+  vehicle manifest layers.
+- [Tutorial: bootstrap a rig from system.art](tutorials/gen-rig.md)
+  — end-to-end walkthrough of `artheia gen-rig`, the generator
+  that emits a starter `rig.py` from a top-level artheia
+  composition.

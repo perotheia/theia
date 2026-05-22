@@ -85,11 +85,36 @@ private:
     void emit_snapshot();
 
     // Inbound TIPC dispatch — called by the publisher's poll() when
-    // a client frame lands. Phase 3 fills in ControlRequest handling
-    // (StartChild / RestartChild / TerminateChild / DeleteChild),
-    // phase 4 fills HeartbeatReport / SendTimeoutReport.
+    // a client frame lands. Routes by tag into the dedicated handlers
+    // below; replies via publisher_.reply_to(client_fd, ...).
     void on_inbound_frame(int client_fd, uint16_t tag,
                           const std::string& payload);
+
+    // ---- ControlRequest handlers (phase 3) ---------------------------------
+    // Each returns a populated ControlReply payload (correlation_id is
+    // filled by the caller). All look up children by name in the
+    // current tree and mutate as the OTP semantics require.
+    WorkerNode*     find_worker_by_name(const std::string& name);
+    SupervisorNode* find_supervisor_by_name(const std::string& name);
+
+    // OTP start_child / delete_child: hot-add and hot-remove. Both
+    // mutate the parent supervisor's children vector in place.
+    // start_child returns the newly-spawned pid (or -1 if start_cmd
+    // is missing / fork failed).
+    // delete_child fails with status=running if the spec is still
+    // running; the caller must terminate_child first.
+    pid_t        do_start_child(const std::string& parent_sup,
+                                const std::string& name,
+                                const std::vector<std::string>& start_cmd,
+                                int restart, int shutdown, int type,
+                                const std::vector<std::string>& modules,
+                                /*out*/ uint32_t& status);
+    uint32_t     do_delete_child(const std::string& name);
+
+    // RestartChild = stop then start. TerminateChild = stop with the
+    // spec retained for a later RestartChild.
+    uint32_t     do_restart_child(const std::string& name);
+    uint32_t     do_terminate_child(const std::string& name);
 
     // /proc/<pid>/{stat,status} sampler — one row per supervised pid.
     // Refreshed inside the main loop on the heartbeat tick and read by

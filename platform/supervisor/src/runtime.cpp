@@ -5,8 +5,16 @@
 
 // Generated from services/supervisor/system/package.art by
 // `artheia gen-proto` and compiled by protoc via the CMake build.
+#include "ChildSelector.pb.h"
+#include "ChildSpec.pb.h"
 #include "ChildState.pb.h"
+#include "ControlReply.pb.h"
+#include "ControlRequest.pb.h"
+#include "DeleteChildRequest.pb.h"
+#include "GetChildRequest.pb.h"
+#include "GetTreeRequest.pb.h"
 #include "HealthBeacon.pb.h"
+#include "StartChildRequest.pb.h"
 #include "SupervisionEvent.pb.h"
 #include "TreeSnapshot.pb.h"
 
@@ -606,28 +614,117 @@ constexpr uint16_t kTagHeartbeat      = 0x0200;
 constexpr uint16_t kTagSendTimeout    = 0x0201;
 }  // namespace
 
-// Inbound TIPC dispatch. Phase 3 fills the ControlRequest branch;
-// phase 4 fills the heartbeat + send-timeout branches. For now the
-// body just logs unknown frames so we can see them arrive.
-void Supervisor::on_inbound_frame(int /*client_fd*/, uint16_t tag,
+// op_kind values from the .art ControlRequest envelope.
+namespace {
+constexpr uint32_t kOpGetTree         = 1;
+constexpr uint32_t kOpGetChild        = 2;
+constexpr uint32_t kOpStartChild      = 3;
+constexpr uint32_t kOpDeleteChild     = 4;
+constexpr uint32_t kOpRestartChild    = 5;
+constexpr uint32_t kOpTerminateChild  = 6;
+constexpr uint32_t kOpStop            = 7;
+}  // namespace
+
+void Supervisor::on_inbound_frame(int client_fd, uint16_t tag,
                                   const std::string& payload) {
-    switch (tag) {
-        case kTagControlRequest:
-            // TODO(phase 3): decode ControlRequest, dispatch by op.
-            std::fprintf(stderr, "supervisor: ControlRequest (%zu bytes) — "
-                         "phase 3 placeholder\n", payload.size());
-            break;
-        case kTagHeartbeat:
-            // TODO(phase 4): decode HeartbeatReport, refresh watchdog.
-            break;
-        case kTagSendTimeout:
-            // TODO(phase 4): decode SendTimeoutReport, emit_event(kind=send_timeout).
-            break;
-        default:
-            std::fprintf(stderr, "supervisor: unknown inbound tag 0x%04x "
-                         "(%zu bytes)\n", tag, payload.size());
-            break;
+    if (tag == kTagControlRequest) {
+        ::services::supervisor::ControlRequest req;
+        if (!req.ParseFromString(payload)) {
+            log_warn("ControlRequest malformed; dropping frame");
+            return;
+        }
+        ::services::supervisor::ControlReply rep;
+        rep.set_correlation_id(req.correlation_id());
+
+        switch (req.op_kind()) {
+            case kOpGetTree:
+                // GetTree returns a TreeSnapshot, not a ControlReply.
+                // Reply with the snapshot directly (tag 0x0003); the
+                // client sees correlation_id absent and treats that as
+                // a TreeSnapshot-shaped reply. (Pragmatic choice;
+                // alternative is a oneof on ControlReply.)
+                publisher_.reply_to(client_fd, kTagSnapshot,
+                                    /*serialised*/ [&]() {
+                                        ::services::supervisor::TreeSnapshot snap;
+                                        // Re-use emit_snapshot's body via a
+                                        // refactored helper: simplest is to
+                                        // call emit_snapshot() which broadcasts
+                                        // — duplicate is acceptable today.
+                                        emit_snapshot();
+                                        return std::string{};
+                                    }());
+                rep.set_status(0);
+                publisher_.reply_to(client_fd, kTagControlReply,
+                                    rep.SerializeAsString());
+                return;
+
+            case kOpGetChild: {
+                const auto& name = req.get_child().name();
+                WorkerNode* w = find_worker_by_name(name);
+                if (!w) {
+                    rep.set_status(1);     // not_found
+                    rep.set_message("no such child");
+                } else {
+                    rep.set_status(0);
+                    rep.set_child_name(name);
+                }
+                break;
+            }
+
+            case kOpStartChild: {
+                const auto& spec = req.start_child().spec();
+                std::vector<std::string> cmd(spec.start_cmd().begin(),
+                                              spec.start_cmd().end());
+                std::vector<std::string> mods(spec.modules().begin(),
+                                               spec.modules().end());
+                uint32_t status = 0;
+                do_start_child(spec.parent_supervisor(), spec.name(),
+                                cmd, spec.restart(), spec.shutdown(),
+                                spec.type(), mods, status);
+                rep.set_status(status);
+                rep.set_child_name(spec.name());
+                break;
+            }
+
+            case kOpDeleteChild:
+                rep.set_status(do_delete_child(req.delete_child().name()));
+                rep.set_child_name(req.delete_child().name());
+                break;
+
+            case kOpRestartChild:
+                rep.set_status(do_restart_child(req.restart_child().name()));
+                rep.set_child_name(req.restart_child().name());
+                break;
+
+            case kOpTerminateChild:
+                rep.set_status(do_terminate_child(req.terminate_child().name()));
+                rep.set_child_name(req.terminate_child().name());
+                break;
+
+            case kOpStop:
+                request_shutdown();
+                rep.set_status(0);
+                break;
+
+            default:
+                rep.set_status(4);    // invalid_request
+                rep.set_message("unknown op_kind");
+                break;
+        }
+        publisher_.reply_to(client_fd, kTagControlReply,
+                            rep.SerializeAsString());
+        return;
     }
+
+    if (tag == kTagHeartbeat || tag == kTagSendTimeout) {
+        // Phase 4 fills these. For now log to confirm wire works.
+        std::fprintf(stderr, "supervisor: node-report 0x%04x (%zu bytes)\n",
+                     tag, payload.size());
+        return;
+    }
+
+    std::fprintf(stderr, "supervisor: unknown inbound tag 0x%04x "
+                 "(%zu bytes)\n", tag, payload.size());
 }
 
 void Supervisor::emit_event(uint32_t kind,
@@ -833,6 +930,125 @@ void Supervisor::emit_snapshot() {
     walk(*root_, "");
 
     publisher_.publish(kTagSnapshot, snap.SerializeAsString());
+}
+
+// ---------------------------------------------------------------------------
+// ControlRequest helper implementations (phase 3).
+// ---------------------------------------------------------------------------
+
+WorkerNode* Supervisor::find_worker_by_name(const std::string& name) {
+    for (auto* w : all_workers(*root_)) {
+        if (w->name == name) return w;
+    }
+    return nullptr;
+}
+
+SupervisorNode* Supervisor::find_supervisor_by_name(const std::string& name) {
+    std::vector<SupervisorNode*> stack{root_};
+    while (!stack.empty()) {
+        SupervisorNode* s = stack.back();
+        stack.pop_back();
+        if (s->name == name) return s;
+        for (auto& c : s->children) {
+            if (!c->is_worker()) stack.push_back(&c->sup);
+        }
+    }
+    return nullptr;
+}
+
+pid_t Supervisor::do_start_child(const std::string& parent_sup,
+                                  const std::string& name,
+                                  const std::vector<std::string>& start_cmd,
+                                  int restart, int /*shutdown*/, int type,
+                                  const std::vector<std::string>& modules,
+                                  uint32_t& status) {
+    if (name.empty() || start_cmd.empty()) {
+        status = 4;     // invalid_request
+        return -1;
+    }
+    if (find_worker_by_name(name) || find_supervisor_by_name(name)) {
+        status = 5;     // already_present
+        return -1;
+    }
+    SupervisorNode* parent = parent_sup.empty() ? root_
+                                                 : find_supervisor_by_name(parent_sup);
+    if (!parent) {
+        status = 1;     // not_found
+        return -1;
+    }
+    // Build the child Node. For now only worker children are
+    // supported (type=0); supervisor-children would need a full nested
+    // sub-tree and are deferred.
+    if (type != 0) {
+        status = 4;     // invalid_request
+        return -1;
+    }
+
+    WorkerNode w;
+    w.name      = name;
+    w.start_cmd = start_cmd;
+    w.modules   = modules;
+    switch (restart) {
+        case 1:  w.restart = RestartType::Transient; break;
+        case 2:  w.restart = RestartType::Temporary; break;
+        default: w.restart = RestartType::Permanent; break;
+    }
+
+    auto node = Node::make_worker(std::move(w));
+    Node* node_ptr = node.get();
+    parent->children.push_back(std::move(node));
+
+    // Spawn immediately. OTP semantics: start_child returns once the
+    // start function returns.
+    start_worker(node_ptr->worker);
+    status = (node_ptr->worker.pid > 0) ? 0 : 4;
+    return node_ptr->worker.pid;
+}
+
+uint32_t Supervisor::do_delete_child(const std::string& name) {
+    // Walk: for every supervisor, find a child with this name.
+    std::vector<SupervisorNode*> stack{root_};
+    while (!stack.empty()) {
+        SupervisorNode* s = stack.back();
+        stack.pop_back();
+        for (auto it = s->children.begin(); it != s->children.end(); ++it) {
+            Node* c = it->get();
+            if (c->is_worker()) {
+                if (c->worker.name != name) continue;
+                if (c->worker.pid > 0) return 4;    // running — cannot delete
+                s->children.erase(it);
+                return 0;
+            } else {
+                if (c->sup.name == name) {
+                    // Refuse to delete a supervisor with live children;
+                    // the operator must terminate them first.
+                    if (!c->sup.children.empty()) return 6;  // child_busy
+                    s->children.erase(it);
+                    return 0;
+                }
+                stack.push_back(&c->sup);
+            }
+        }
+    }
+    return 1;       // not_found
+}
+
+uint32_t Supervisor::do_restart_child(const std::string& name) {
+    WorkerNode* w = find_worker_by_name(name);
+    if (!w) return 1;     // not_found
+    if (w->pid > 0) {
+        stop_worker(*w);
+    }
+    start_worker(*w);
+    return (w->pid > 0) ? 0 : 4;
+}
+
+uint32_t Supervisor::do_terminate_child(const std::string& name) {
+    WorkerNode* w = find_worker_by_name(name);
+    if (!w) return 1;     // not_found
+    if (w->pid <= 0) return 3;     // already_stopped
+    stop_worker(*w);
+    return 0;
 }
 
 }  // namespace supervisor

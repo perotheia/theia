@@ -151,6 +151,35 @@ message ControlReply {
     // (StartChild's return needs to confirm the assigned id, for
     // instance — observer's start_child returns {ok, pid} in OTP).
     string  child_name
+    // Correlation id from the originating ControlRequest. Lets the
+    // client pair the reply with the request that emitted it
+    // (multiple in-flight requests on one socket are allowed).
+    uint64  correlation_id
+}
+
+// Envelope for inbound RPC calls on the supervisor's TIPC socket.
+// op_kind selects which sub-message is meaningful:
+//   1 = GetTree         (use get_tree)
+//   2 = GetChild        (use get_child)
+//   3 = StartChild      (use start_child)
+//   4 = DeleteChild     (use delete_child)
+//   5 = RestartChild    (use restart_child / ChildSelector)
+//   6 = TerminateChild  (use terminate_child / ChildSelector)
+//   7 = Stop            (no payload needed)
+//
+// The supervisor decodes ControlRequest, dispatches by op_kind, and
+// emits exactly one ControlReply with the matching correlation_id
+// onto the same fd that delivered the request.
+message ControlRequest {
+    uint32              op_kind
+    uint64              correlation_id
+
+    GetTreeRequest       get_tree
+    GetChildRequest      get_child
+    StartChildRequest    start_child
+    DeleteChildRequest   delete_child
+    ChildSelector        restart_child
+    ChildSelector        terminate_child
 }
 
 // ---- node→supervisor reports ---------------------------------------------

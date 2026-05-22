@@ -44,12 +44,14 @@ def _component_for(short: str) -> SwComponent:
     """One bazel-buildable handle per FC.
 
     ``bazel_target`` points at where the FC's source/build files would
-    live once they're real (today only ``services/supervisor`` and
-    ``services/pero_cmp_gw_svc`` are buildable). ``art_node`` follows the
-    package declaration inside ``services/system/<short>/package.art``,
-    which is ``services.<short>`` (the directory layout under
-    ``services/system/`` is filesystem-only and does NOT show up in the
-    package path).
+    live once they're real. Platform-fabric components like the
+    supervisor and the gateway service live under ``platform/`` (not
+    ``services/``); FCs themselves keep the ``//services/<short>`` label
+    layout for source-tree purposes. The .art declaration lives at
+    ``platform/system/<short>/package.art`` (symlinked from
+    ``services/system/<short>/package.art``). The package path is
+    ``services.<short>`` regardless of the filesystem layout —
+    package paths and source-tree paths are independent.
     """
     daemon_class = "".join(p.capitalize() for p in short.split("_")) + "Daemon"
     return SwComponent(
@@ -160,8 +162,8 @@ SUPERVISORS: list[SupervisorNode] = [
         strategy=RestartStrategy.ONE_FOR_ONE,
         # "log" is in CLUSTERS for AUTOSAR spec-completeness but has no
         # daemon — logs go to files/console/syslog directly (no FC needed).
-        # The trace service lives in services/log/ for convenience, but
-        # is a different facility — declared separately.
+        # The trace service (forthcoming) lives at services/log/ for
+        # convenience, but is a different facility — declared separately.
         children=["per", "rds"],
     ),
     SupervisorNode(

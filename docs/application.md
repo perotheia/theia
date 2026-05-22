@@ -258,10 +258,10 @@ Pcap replay is the easiest way to drive it without real hardware:
 
 ```sh
 sudo modprobe tipc          # one-time, host-level
-bazel build //services/pero_cmp_gw_svc:cmp_gw
+bazel build //platform/gateway:cmp_gw
 
 # Terminal 1: cmp_gw replays a pcap into the TIPC fabric.
-./bazel-bin/services/pero_cmp_gw_svc/cmp_gw \
+./bazel-bin/platform/gateway/cmp_gw \
     --pcap up/acc07_20s.pcap --loop \
     169.254.8.3 ./bazel-bin/autosar/mlbevo_gen2_cmp_psp
 

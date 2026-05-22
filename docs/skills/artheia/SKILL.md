@@ -166,10 +166,10 @@ Drives the gateway service's codegen. Reads a signal-selection CSV
 artheia gen-app-dispatch \
     --psp-root autosar/mlbevo_gen2_cmp_psp \
     --csv vendor/<vendor>/config/signal_filter.csv \
-    --out services/pero_cmp_gw_svc/generated/
+    --out platform/gateway/generated/
 ```
 
-The gateway service's `services/pero_cmp_gw_svc/generate.sh`
+The gateway service's `platform/gateway/generate.sh`
 wraps this and resolves the CSV by `$VENDOR` (e.g. `VENDOR=tornado`).
 
 ### `signal-filter` — interactive REPL
@@ -245,7 +245,7 @@ or the gitlab-default-README rebase; do those by hand).
 # Each gateway-consuming vendor: re-run their gw codegen with the
 # vendor CSV. For odd_path_client today the CSV is empty; for tornado
 # it's the demo_signals fixture.
-cd services/pero_cmp_gw_svc && VENDOR=tornado bash generate.sh
+cd platform/gateway && VENDOR=tornado bash generate.sh
 ```
 
 ### `lsp` — start the language server

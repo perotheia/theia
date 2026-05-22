@@ -37,9 +37,9 @@ toolchain(
     target_compatible_with = [
         "@platforms//os:none",
         "@platforms//cpu:arm",
-        "//platforms:cortex_r4f",
-        "//platforms:big_endian",
-        "//platforms:gcc_arm",
+        "//toolchains:cortex_r4f",
+        "//toolchains:big_endian",
+        "//toolchains:gcc_arm",
     ],
     toolchain      = ":cortex_r4f_toolchain",
     toolchain_type = "@bazel_tools//tools/cpp:toolchain_type",

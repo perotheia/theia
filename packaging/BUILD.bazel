@@ -76,7 +76,7 @@ pkg_opkg(
     description = "PERO CMP gateway NIF service (ASAM-CMP UDP → TIPC clients)",
     depends     = "pero-libgw, pero-libcmpdecoder, pero-libpsp",
     files = {
-        "//services/pero_cmp_gw_svc:cmp_gw": "/usr/bin/cmp_gw",
+        "//platform/gateway:cmp_gw": "/usr/bin/cmp_gw",
     },
     postinst = """#!/bin/sh
 # Enable and start the service if systemd is available
@@ -114,7 +114,7 @@ pkg_opkg(
         # For now use a placeholder; comment out until cross-compile is available.
         # "//gateway/firmware/pero_cmp_ti_gw:pero_cmp_ti_gw.elf": "/usr/share/pero-gw-fw/pero_cmp_ti_gw.elf",
         # Use cmp_gw as a placeholder to keep the target buildable on host
-        "//services/pero_cmp_gw_svc:cmp_gw": "/usr/share/pero-gw-fw/README",
+        "//platform/gateway:cmp_gw": "/usr/share/pero-gw-fw/README",
     },
 )
 
@@ -128,7 +128,7 @@ pkg_opkg(
     depends     = "pero-libcmpdecoder, pero-libpsp, pero-libgw, pero-gw-svc, pero-gw-client",
     files = {
         # Empty package — only installs deps
-        "//services/pero_cmp_gw_svc:cmp_gw": "/usr/share/pero-gw-stack/installed",
+        "//platform/gateway:cmp_gw": "/usr/share/pero-gw-stack/installed",
     },
 )
 

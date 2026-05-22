@@ -26,9 +26,9 @@ cc_toolchain(
     objcopy_files        = ":ti_cgt_all_files",
     strip_files          = ":ti_cgt_all_files",
     target_compatible_with = [
-        "//platforms:cortex_r4f",
-        "//platforms:big_endian",
-        "//platforms:ti_armcl",
+        "//toolchains:cortex_r4f",
+        "//toolchains:big_endian",
+        "//toolchains:ti_armcl",
     ],
 )
 
@@ -42,9 +42,9 @@ toolchain(
     target_compatible_with = [
         "@platforms//os:none",
         "@platforms//cpu:arm",
-        "//platforms:cortex_r4f",
-        "//platforms:big_endian",
-        "//platforms:ti_armcl",
+        "//toolchains:cortex_r4f",
+        "//toolchains:big_endian",
+        "//toolchains:ti_armcl",
     ],
     toolchain      = ":ti_arm_cgt_18_toolchain",
     toolchain_type = "@bazel_tools//tools/cpp:toolchain_type",

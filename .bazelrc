@@ -14,7 +14,7 @@ build:linux --compiler=gcc
 
 # ── TI ARM CGT 18.1.1.LTS — original CCS 8 compiler (armcl) ─────────────
 # Requires /opt/ti/cgt_arm_18.1.1.LTS/ installed.
-build:ti_arm_cgt_18 --platforms=//platforms:tms570lc43xx_ti
+build:ti_arm_cgt_18 --platforms=//toolchains:tms570lc43xx_ti
 build:ti_arm_cgt_18 --extra_toolchains=//toolchains/ti_arm_cgt_18:cc_suite
 build:ti_arm_cgt_18 --strategy=CppCompile=local
 build:ti_arm_cgt_18 --strategy=CppLink=local

@@ -41,12 +41,12 @@ signal: 11 (SIGSEGV), code: 1 (SEGV_MAPERR)
 fault addr: 0x0
 
 --- backtrace ---
-/home/axadmin/repo/theia_runtime/services/supervisor/build/crasher(+0x2558)[0x5ef35c13d558]
+/home/axadmin/repo/theia_runtime/platform/supervisor/build/crasher(+0x2558)[0x5ef35c13d558]
 /lib/x86_64-linux-gnu/libc.so.6(+0x42520)[0x79fcd0842520]
-./services/supervisor/build/crasher(+0x145f)[0x61453f7c745f]
+./platform/supervisor/build/crasher(+0x145f)[0x61453f7c745f]
 /lib/x86_64-linux-gnu/libc.so.6(+0x29d90)[0x79fcd0829d90]
 /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80)[0x79fcd0829e40]
-./services/supervisor/build/crasher(+0x15c5)[0x61453f7c75c5]
+./platform/supervisor/build/crasher(+0x15c5)[0x61453f7c75c5]
 
 --- /proc/self/maps ---
 61453f7c6000-61453f7c7000 r--p 00000000 103:02 6171810      /…/crasher
@@ -202,8 +202,8 @@ itself doesn't write tombstones — only daemons that link
 
 ```sh
 # Build everything.
-cmake -S services/supervisor -B services/supervisor/build
-cmake --build services/supervisor/build
+cmake -S platform/supervisor -B platform/supervisor/build
+cmake --build platform/supervisor/build
 
 # Run a daemon that's going to crash on purpose.
 cat > /tmp/crash_demo.yaml <<'YAML'
@@ -214,13 +214,13 @@ max_seconds: 30
 tombstone_dir: /tmp/tombstones
 children:
 - name: crasher
-  start_cmd: [services/supervisor/build/crasher, --mode, segv, --delay, "2"]
+  start_cmd: [platform/supervisor/build/crasher, --mode, segv, --delay, "2"]
   restart: permanent
   shutdown: 5000
   type: worker
 YAML
 
-./services/supervisor/build/supervisor run /tmp/crash_demo.yaml
+./platform/supervisor/build/supervisor run /tmp/crash_demo.yaml
 ```
 
 What you see in the log:
@@ -258,10 +258,10 @@ ERROR supervisor: supervisor root exceeded restart intensity (5 in 30s) — esca
 
 ## Files
 
-- `services/supervisor/tombstone/include/tombstone/tombstone.h` — public API.
-- `services/supervisor/tombstone/src/tombstone.cpp` — implementation.
-- `services/supervisor/tombstone/demo/crasher.cpp` — demo daemon
+- `platform/supervisor/tombstone/include/tombstone/tombstone.h` — public API.
+- `platform/supervisor/tombstone/src/tombstone.cpp` — implementation.
+- `platform/supervisor/tombstone/demo/crasher.cpp` — demo daemon
   (`--mode {segv,abort,div0,none}`).
-- `services/supervisor/src/runtime.cpp` — the supervisor side:
+- `platform/supervisor/src/runtime.cpp` — the supervisor side:
   `find_tombstone_dir`, `locate_tombstone`, the `tombstone for …`
   log line.

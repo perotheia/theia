@@ -1,4 +1,18 @@
-"""Platforms for pero_theia cross-compilation targets."""
+"""Bazel cross-compilation target platforms for pero_theia.
+
+Lives under ``toolchains/`` because each ``platform()`` here pairs with
+one ``cc_toolchain()`` defined in a sibling directory
+(``toolchains/ti_arm_cgt_18/``, ``toolchains/arm_gcc_7_2017q4/``).
+
+Label form:
+    //toolchains:linux_x86_64
+    //toolchains:tms570lc43xx_ti
+    //toolchains:tms570lc43xx_gcc
+
+The constraint setting+values defined here (mcu_core, endianness, fpu,
+c_compiler) are referenced from the toolchain BUILD files as
+``//toolchains:cortex_r4f`` etc.
+"""
 
 package(default_visibility = ["//visibility:public"])
 

@@ -16,7 +16,7 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(YAML_CPP REQUIRED yaml-cpp)
 pkg_check_modules(PROTOBUF REQUIRED protobuf)
 
-# .proto files are generated from services/supervisor/system/package.art
+# .proto files are generated from platform/supervisor/system/package.art
 # by `artheia gen-proto`, then compiled with protoc into
 # build/generated/{ChildState.pb.cc, …}.
 #

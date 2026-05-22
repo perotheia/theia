@@ -92,7 +92,7 @@ export PATH="$PWD/.venv/bin:$PATH"
 
 # 4. Build Linux host targets
 bazel build //gateway/libs/pero_cmp_lnx/demo:all          # pero-decode, pero-filter, pero-timesync
-bazel build //services/pero_cmp_gw_svc:cmp_gw
+bazel build //platform/gateway:cmp_gw
 bazel build //gateway/demo/pero_cmp_gw_cln_demo:cmp_gw_client
 bazel build //autosar/mlbevo_gen2_cmp_psp:codec    # PSP codegen + compile (~6000 .c files)
 bazel build //autosar/mlbevo_gen2_cmp_psp:psp_so   # libpsp.so
@@ -114,7 +114,7 @@ with no manual pre-steps.
 | `//gateway/libs/pero_cmp_lnx/demo:pero-decode` | `pero-decode` | host |
 | `//gateway/libs/pero_cmp_lnx/demo:pero-filter` | `pero-filter` | host |
 | `//gateway/libs/pero_cmp_lnx/demo:pero-timesync` | `pero-timesync` | host |
-| `//services/pero_cmp_gw_svc:cmp_gw` | `cmp_gw` | host |
+| `//platform/gateway:cmp_gw` | `cmp_gw` | host |
 | `//gateway/demo/pero_cmp_gw_cln_demo:cmp_gw_client` | `cmp_gw_client` | host |
 | `//autosar/mlbevo_gen2_cmp_psp:codec` | `codec.a` (5948 .c files) | host |
 | `//autosar/mlbevo_gen2_cmp_psp:psp` | `psp.a` | host |

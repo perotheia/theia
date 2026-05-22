@@ -114,14 +114,14 @@ that's all the supervisor binary needs to know.
 ## Dependency derivation
 
 Static dependency information lives in `.art` files at
-`platforms/system/services/<short>/package.art`. Each FC's atomic node
+`platform/system/<short>/package.art`. Each FC's atomic node
 declares the interface it **provides** (server port) and the
 interfaces it **requires** (client ports). A topological sort of
 these edges yields a start order: `core` first, leaf FCs last.
 
 `build_supervisor_tree(rig)` in `artheia.manifest.supervisor`:
 
-1. Walks `platforms/system/services/<short>/package.art` via the
+1. Walks `platform/system/<short>/package.art` via the
    artheia textX parser.
 2. For each FC, records its provided interface and the interfaces it
    requires. Resolves required→provider FC short-names.
@@ -191,13 +191,13 @@ Loads the named Rig, calls `build_supervisor_tree`, serializes to YAML.
 ### Running the supervisor
 
 ```sh
-./services/supervisor/build/supervisor run executor.yaml [--root-dir DIR]
+./platform/supervisor/build/supervisor run executor.yaml [--root-dir DIR]
 ```
 
 The C++ binary is the only implementation. The spec — strategies,
 restart types, shutdown semantics, escalation, tombstone surfacing —
 lives in this document and is exercised by the test suite under
-`services/supervisor/`. (A Python reference implementation existed
+`platform/supervisor/`. (A Python reference implementation existed
 through mid-2026 and was removed once the C++ caught up on every
 semantics row plus exclusively gained the TIPC publishing the
 supervisor-gui consumes. Two parallel implementations were a

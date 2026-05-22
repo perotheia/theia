@@ -24,7 +24,7 @@ include(${wxWidgets_USE_FILE})
 # the GUI compiles the same exact messages without a copy step.
 find_program(PROTOC_EXECUTABLE protoc REQUIRED)
 
-set(PROTO_SRC_DIR  ${CMAKE_CURRENT_SOURCE_DIR}/../services/supervisor/generated/proto)
+set(PROTO_SRC_DIR  ${CMAKE_CURRENT_SOURCE_DIR}/../platform/supervisor/generated/proto)
 set(PROTO_GEN_DIR  ${CMAKE_CURRENT_BINARY_DIR}/generated)
 file(MAKE_DIRECTORY ${PROTO_GEN_DIR})
 

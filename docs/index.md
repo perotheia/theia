@@ -50,3 +50,11 @@ All artheia-side docs live under [`artheia/`](artheia/):
   emits and how to consume it downstream.
 - [VS Code extension](artheia/vscode-extension.md) — `.art` syntax
   + LSP integration for editor support.
+- [Shell completion](artheia/completion.md) — tab-complete for
+  `artheia` and the workspace launcher `theia`.
+
+## Workspace launcher
+
+- `theia.py` at the workspace root — single dispatcher for artheia
+  + bazel + repo + supervisor bringup. See `theia --help` and
+  [shell completion setup](artheia/completion.md).

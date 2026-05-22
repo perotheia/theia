@@ -1,6 +1,6 @@
 ---
 name: artheia
-description: Run common artheia (Porsche CMP system DSL) workflows. Args: parse | import-fibex | import-dbc | regen-autosar | regen-netgraph | regen-host-netgraph | gen-app-dispatch | signal-filter | vendor-new | lsp | vscode-install | regen-all
+description: Run common artheia (Porsche CMP system DSL) workflows. Args: parse | import-fibex | import-dbc | gen-rig | regen-autosar | regen-netgraph | regen-host-netgraph | gen-app-dispatch | signal-filter | vendor-new | lsp | vscode-install | regen-all | completion
 disable-model-invocation: true
 ---
 
@@ -20,6 +20,7 @@ documents each one's signature.
 
 | Command | Reads | Writes |
 | --- | --- | --- |
+| `parse` | any `.art` | parse summary (validation) |
 | `import-fibex` | FIBEX cluster `.xml` | per-bus `catalog.json` + `package.art` |
 | `import-dbc` | `.dbc` file | per-bus `catalog.json` + `package.art` |
 | `gen-netgraph-partition` | catalog.json | `netgraph.json` (PDU → bus address) |
@@ -27,9 +28,16 @@ documents each one's signature.
 | `gen-host-netgraph` | platform composition `.art` files | `host_netgraph.json` (port → TIPC) |
 | `gen-app-dispatch` | PSP manifests + signal CSV | per-app dispatch_table.{c,h} |
 | `gen-signal-filter` | vendor system tree | `signal_filter.csv` |
-| `parse` | any `.art` | parse summary (validation) |
+| `gen-rig` | top-level `.art` composition | vendor `rig.py` scaffold |
+| `executor emit` | rig (Rig or SoftwareSpecification) | `executor.yaml` (supervisor tree) |
+| `gui emit` | rig | `machines.yaml` (per-machine gRPC endpoints) |
+| `generate-manifest` | rig | full deploy manifest YAML |
 
 Full diagram + per-artefact schema is in the architecture doc.
+For the complete current command list run `artheia --help` (or
+`theia --help` for the workspace launcher). For the manifest DSL
+(`SoftwareSpecification` + `Layer.squash`) see
+[../../artheia/manifest-dsl.md](../../artheia/manifest-dsl.md).
 
 ## Targets
 
@@ -185,6 +193,32 @@ artheia signal-filter --config autosar/mlbevo_gen2_cmp_psp/config
 REPL commands: `<signal_name>` (prefix match), `msg:<name>`,
 `bus:<name>`, `sel`, `del`, `csv`, `clear`, `help`, `q`.
 
+### `gen-rig <art_file>` — bootstrap a rig.py from a composition
+
+Walks a top-level `.art` composition, groups prototypes by their
+`on process X` annotation, and emits a starter `rig.py` exporting
+a `SoftwareSpecification` composed against `FcSoftware`.
+
+```sh
+artheia gen-rig demo/system/demo/package.art \
+    --composition Demo3Way \
+    --vehicle-name demo \
+    --machine-name demo_host \
+    --bazel-package //demo \
+    --out demo/manifest/rig.py
+```
+
+After generation the user edits TODO markers (machine CPU
+arch / endpoint, per-process scheduling) in the emitted file.
+Don't regenerate — that overwrites the edits.
+
+Acceptance test: regenerating today's `demo/manifest/rig.py` from
+`Demo3Way` and running `artheia executor emit` on the result
+produces byte-identical `executor.yaml`.
+
+Full tutorial: [../../artheia/gen-rig.md](../../artheia/gen-rig.md).
+Manifest DSL reference: [../../artheia/manifest-dsl.md](../../artheia/manifest-dsl.md).
+
 ### `vendor-new <vendor>` — scaffold a vendor app
 
 Step-by-step recipe (the skill does NOT automate the GitLab create
@@ -280,6 +314,22 @@ The extension provides:
 
 Reload VS Code after installation. Open a `.art` file; status bar
 should show "artheia" once the LSP attaches.
+
+### `completion` — enable shell tab-completion
+
+Click ships completion out of the box. Drop into your shell rc:
+
+```bash
+# bash (~/.bashrc)
+eval "$(_ARTHEIA_COMPLETE=bash_source artheia)"
+eval "$(_THEIA_COMPLETE=bash_source theia)"
+```
+
+Replace `bash_source` with `zsh_source` / `fish_source` for the
+other shells. Open a new shell; `theia <Tab>` lists all
+subcommands.
+
+Full doc: [../../artheia/completion.md](../../artheia/completion.md).
 
 ## Notes
 

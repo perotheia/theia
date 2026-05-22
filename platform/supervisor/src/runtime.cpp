@@ -14,6 +14,8 @@
 #include "GetChildRequest.pb.h"
 #include "GetTreeRequest.pb.h"
 #include "HealthBeacon.pb.h"
+#include "HeartbeatReport.pb.h"
+#include "SendTimeoutReport.pb.h"
 #include "StartChildRequest.pb.h"
 #include "SupervisionEvent.pb.h"
 #include "TreeSnapshot.pb.h"
@@ -538,6 +540,11 @@ int Supervisor::run() {
         const auto now = steady_clock::now();
         if (now - last_heartbeat_ >= milliseconds(1000)) {
             emit_health();
+            // Same tick: scan for nodes that haven't reported a
+            // HeartbeatReport in too long; SIGTERM them and let the
+            // strategy restart. Nodes with no recorded heartbeat are
+            // exempt (not all daemons participate in alive supervision).
+            check_heartbeats();
             last_heartbeat_ = now;
         }
         // 1 Hz snapshot — gives htop-like refresh rate on the GUI side.
@@ -716,10 +723,39 @@ void Supervisor::on_inbound_frame(int client_fd, uint16_t tag,
         return;
     }
 
-    if (tag == kTagHeartbeat || tag == kTagSendTimeout) {
-        // Phase 4 fills these. For now log to confirm wire works.
-        std::fprintf(stderr, "supervisor: node-report 0x%04x (%zu bytes)\n",
-                     tag, payload.size());
+    if (tag == kTagHeartbeat) {
+        ::services::supervisor::HeartbeatReport hb;
+        if (!hb.ParseFromString(payload)) {
+            log_warn("HeartbeatReport malformed");
+            return;
+        }
+        pid_t pid = hb.pid();
+        auto& s   = heartbeats_[pid];
+        s.last_seen = std::chrono::steady_clock::now();
+        s.last_seq = hb.seq();
+        std::fprintf(stderr,
+                     "supervisor: heartbeat node=%s pid=%d seq=%llu\n",
+                     hb.node_name().c_str(), pid,
+                     static_cast<unsigned long long>(hb.seq()));
+        return;
+    }
+    if (tag == kTagSendTimeout) {
+        ::services::supervisor::SendTimeoutReport rep;
+        if (!rep.ParseFromString(payload)) {
+            log_warn("SendTimeoutReport malformed");
+            return;
+        }
+        // Surface as a supervision event; the GUI Trace tab renders it
+        // alongside crashes. Use the supervisor's "send_timeout" kind=7
+        // (one past tree_changed); kind names live in the supervisor-gui
+        // panels/trace_panel.cpp table.
+        std::ostringstream detail;
+        detail << rep.caller_node() << " → " << rep.callee_node()
+               << " " << rep.iface() << "." << rep.method()
+               << " budget=" << rep.budget_ms()
+               << "ms observed=" << rep.observed_ms() << "ms";
+        emit_event(/*kind=*/7, /*worker=*/nullptr, /*sup=*/nullptr,
+                   /*exit_code=*/0, /*tombstone=*/"", detail.str());
         return;
     }
 
@@ -1049,6 +1085,56 @@ uint32_t Supervisor::do_terminate_child(const std::string& name) {
     if (w->pid <= 0) return 3;     // already_stopped
     stop_worker(*w);
     return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Watchdog (phase 4).
+//
+// Convention: a worker is "watched" once it has sent at least one
+// HeartbeatReport. Bash daemons / passive children that never report
+// stay exempt. The grace period is hardcoded here (3 × the expected
+// 1 Hz period, i.e. 3s without a beat = wedged). The manifest carries
+// watchdog_max_missed on the supervisor's .art node; param-from-art
+// plumbing is a follow-up.
+// ---------------------------------------------------------------------------
+
+void Supervisor::check_heartbeats() {
+    using namespace std::chrono;
+    const auto now = steady_clock::now();
+    constexpr milliseconds kMaxAge{3000};  // 3s = 3 missed beats at 1Hz
+
+    // Drop entries for pids that aren't alive any more (avoids growing
+    // unbounded as workers get restarted with new pids).
+    auto alive = all_workers(*root_);
+    std::map<pid_t, WorkerNode*> by_pid;
+    for (auto* w : alive) {
+        if (w->pid > 0) by_pid[w->pid] = w;
+    }
+
+    for (auto it = heartbeats_.begin(); it != heartbeats_.end(); ) {
+        if (by_pid.find(it->first) == by_pid.end()) {
+            it = heartbeats_.erase(it);
+            continue;
+        }
+        auto age = duration_cast<milliseconds>(now - it->second.last_seen);
+        if (age > kMaxAge) {
+            WorkerNode* w = by_pid[it->first];
+            std::ostringstream msg;
+            msg << "watchdog: " << w->name << " (pid=" << w->pid
+                << ") missed heartbeats (last seen "
+                << age.count() << " ms ago); SIGTERMing";
+            log_warn(msg.str());
+            // Surface as a supervision event with kind=8 (watchdog).
+            emit_event(/*kind=*/8, w, supervisor_of(*w), 0, "", msg.str());
+            // Kill — the normal SIGCHLD reap + restart strategy applies.
+            ::kill(w->pid, SIGTERM);
+            // Drop the entry now; the next heartbeat (from the
+            // restarted instance, if it heartbeats at all) re-arms.
+            it = heartbeats_.erase(it);
+        } else {
+            ++it;
+        }
+    }
 }
 
 }  // namespace supervisor

@@ -133,6 +133,20 @@ private:
 
     std::map<pid_t, ProcSample>      sample_;
     std::chrono::steady_clock::time_point last_proc_sample_{};
+
+    // Watchdog state (phase 4): last heartbeat timestamp per pid + the
+    // last seq we saw. ``check_heartbeats()`` runs every tick of the
+    // main loop; pids that have missed `kHeartbeatMaxAge` get SIGTERMed
+    // and the restart strategy kicks in via the normal on_child_exit
+    // path. We only watchdog pids that have ever delivered a beat —
+    // children configured without a HeartbeatPublisher (most demo /
+    // bash daemons) are exempt.
+    struct HeartbeatState {
+        std::chrono::steady_clock::time_point last_seen;
+        uint64_t                              last_seq{0};
+    };
+    std::map<pid_t, HeartbeatState>  heartbeats_;
+    void check_heartbeats();
 };
 
 }  // namespace supervisor

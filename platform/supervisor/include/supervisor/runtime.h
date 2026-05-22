@@ -120,6 +120,21 @@ private:
     // Refreshed inside the main loop on the heartbeat tick and read by
     // emit_snapshot. Resource facts ride on each ChildState wire row
     // so the GUI never reads /proc itself.
+    // One thread's snapshot — mirrors the .art ThreadSample message
+    // 1:1 so emit_snapshot can copy fields straight into the protobuf.
+    struct ThreadEntry {
+        uint32_t  tid{0};
+        std::string comm;
+        uint32_t  cpu_pct{0};
+        uint32_t  sched_policy{0};
+        uint32_t  sched_priority{0};
+        int32_t   nice{0};
+        uint64_t  cpu_affinity_mask{0};
+        uint32_t  last_cpu{0};
+        // Delta state: previous (utime+stime) jiffies for this tid.
+        uint64_t  prev_jiffies{0};
+    };
+
     struct ProcSample {
         uint32_t cpu_pct{0};           // hundredths of a percent
         uint64_t rss_kb{0};
@@ -130,6 +145,10 @@ private:
         // Previous (utime + stime) in jiffies — used to compute the
         // delta CPU% each tick.
         uint64_t prev_jiffies{0};
+
+        // Per-thread breakdown, keyed by tid so delta computation
+        // survives across ticks.
+        std::map<uint32_t, ThreadEntry> threads_detail;
     };
     void sample_procs();               // refresh sample_ for all live pids
 

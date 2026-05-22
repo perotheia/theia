@@ -1,28 +1,36 @@
 // Processes panel — observer_pro_wx.erl analogue.
 //
-// Flat htop-style wxListCtrl. Every row is one worker (ChildState
-// kind=0) from the latest per-machine TreeSnapshot. Resource columns
-// (cpu%, rss/shared/data/vsz_kb, threads) come straight off the wire — the
-// supervisor on the remote machine is the only thing that touches
-// /proc; the GUI just renders.
+// Two-level htop-style wxTreeListCtrl. Top-level rows are workers
+// (ChildState kind=0) from the latest per-machine TreeSnapshot; each
+// process row expands to one child row per thread (ThreadSample on the
+// wire). Resource columns come straight off the wire — the supervisor
+// on the remote machine is the only thing that touches /proc; the GUI
+// just renders.
 //
-// Columns (in display order):
+// Process columns (in display order):
 //   name | pid | parent_sup | machine | state | uptime | restarts
 //   | last_exit | cpu% | rss_kb | shared_kb | data_kb | vsz_kb | threads
 //
-// rss_kb  — total resident set
-// shared_kb — Shared_Clean+Shared_Dirty (memory others can also map;
-//             libraries mostly)
-// data_kb — VmData = heap + bss + data segment (what the app
-//             actually "allocated"; closest analogue to the user-visible
-//             memory footprint)
+// Thread rows reuse the same column layout where it overlaps and
+// surface per-thread fields in otherwise-unused columns:
+//   name      → "tid=<tid> <comm>"
+//   pid       → tid
+//   parent    → policy (OTHER/FIFO/RR/BATCH/IDLE/DEADLINE)
+//   machine   → "prio=<rt_prio> nice=<nice>"
+//   state     → "cpu=<n>"            (last_ran_on_cpu)
+//   uptime    → ""                   (not per-thread)
+//   restarts  → ""
+//   last_exit → ""
+//   cpu%      → per-thread cpu%
+//   rss_kb..  → ""                   (no per-thread memory split)
+//   threads   → "0x<mask>"           (cpu_affinity_mask)
 
 #include "sup_gui/panels.h"
 
 #include "TreeSnapshot.pb.h"
 
 #include <wx/wx.h>
-#include <wx/listctrl.h>
+#include <wx/treelist.h>
 
 #include <algorithm>
 #include <cstdio>
@@ -45,6 +53,18 @@ const char* state_name(uint32_t s) {
     }
 }
 
+const char* policy_name(uint32_t p) {
+    switch (p) {
+        case 0: return "OTHER";
+        case 1: return "FIFO";
+        case 2: return "RR";
+        case 3: return "BATCH";
+        case 5: return "IDLE";
+        case 6: return "DEADLINE";
+        default: return "?";
+    }
+}
+
 }  // namespace
 
 // ProcessSampler placeholder — class is forward-declared in panels.h
@@ -58,22 +78,23 @@ public:
 
 ProcessesPanel::ProcessesPanel(wxWindow* parent) : PanelBase(parent) {
     auto* sizer = new wxBoxSizer(wxVERTICAL);
-    list_ = new wxListCtrl(this, wxID_ANY, wxDefaultPosition, wxDefaultSize,
-                           wxLC_REPORT | wxLC_SINGLE_SEL);
-    list_->InsertColumn( 0, "name",       wxLIST_FORMAT_LEFT,   180);
-    list_->InsertColumn( 1, "pid",        wxLIST_FORMAT_RIGHT,   80);
-    list_->InsertColumn( 2, "parent_sup", wxLIST_FORMAT_LEFT,   140);
-    list_->InsertColumn( 3, "machine",    wxLIST_FORMAT_LEFT,   120);
-    list_->InsertColumn( 4, "state",      wxLIST_FORMAT_LEFT,    90);
-    list_->InsertColumn( 5, "uptime",     wxLIST_FORMAT_RIGHT,  100);
-    list_->InsertColumn( 6, "restarts",   wxLIST_FORMAT_RIGHT,   80);
-    list_->InsertColumn( 7, "last_exit",  wxLIST_FORMAT_RIGHT,   90);
-    list_->InsertColumn( 8, "cpu%",       wxLIST_FORMAT_RIGHT,   70);
-    list_->InsertColumn( 9, "rss_kb",     wxLIST_FORMAT_RIGHT,  100);
-    list_->InsertColumn(10, "shared_kb",  wxLIST_FORMAT_RIGHT,  100);
-    list_->InsertColumn(11, "data_kb",    wxLIST_FORMAT_RIGHT,  100);
-    list_->InsertColumn(12, "vsz_kb",     wxLIST_FORMAT_RIGHT,  100);
-    list_->InsertColumn(13, "threads",    wxLIST_FORMAT_RIGHT,   80);
+    list_ = new wxTreeListCtrl(this, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+                               wxTL_DEFAULT_STYLE);
+    // Column 0 is the tree column (always wxALIGN_LEFT).
+    list_->AppendColumn("name",       180);
+    list_->AppendColumn("pid/tid",     80, wxALIGN_RIGHT);
+    list_->AppendColumn("parent/policy",140);
+    list_->AppendColumn("machine/sched",140);
+    list_->AppendColumn("state/cpu",   100);
+    list_->AppendColumn("uptime",      100, wxALIGN_RIGHT);
+    list_->AppendColumn("restarts",     80, wxALIGN_RIGHT);
+    list_->AppendColumn("last_exit",    90, wxALIGN_RIGHT);
+    list_->AppendColumn("cpu%",         70, wxALIGN_RIGHT);
+    list_->AppendColumn("rss_kb",      100, wxALIGN_RIGHT);
+    list_->AppendColumn("shared_kb",   100, wxALIGN_RIGHT);
+    list_->AppendColumn("data_kb",     100, wxALIGN_RIGHT);
+    list_->AppendColumn("vsz_kb",      100, wxALIGN_RIGHT);
+    list_->AppendColumn("threads/mask",120, wxALIGN_RIGHT);
 
     sizer->Add(list_, 1, wxEXPAND | wxALL, 4);
     SetSizer(sizer);
@@ -110,6 +131,18 @@ void ProcessesPanel::on_frame(const std::string& machine_name,
         r.data_kb        = c.data_kb();
         r.vsz_kb         = c.vsz_kb();
         r.threads        = c.threads();
+        for (const auto& t : c.threads_detail()) {
+            ThreadRow tr;
+            tr.tid               = t.tid();
+            tr.comm              = t.comm();
+            tr.cpu_pct           = t.cpu_pct();
+            tr.sched_policy      = t.sched_policy();
+            tr.sched_priority    = t.sched_priority();
+            tr.nice              = t.nice();
+            tr.cpu_affinity_mask = t.cpu_affinity_mask();
+            tr.last_cpu          = t.last_cpu();
+            r.thread_rows.push_back(std::move(tr));
+        }
         v.push_back(std::move(r));
     }
     refresh_list();
@@ -132,31 +165,64 @@ void ProcessesPanel::refresh_list() {
                   return a.name < b.name;
               });
 
+    // Remember which process rows were expanded, by (machine, name), so
+    // a 1Hz refresh doesn't collapse the user's open subtrees.
+    std::map<std::pair<std::string, std::string>, bool> expanded;
+    for (auto item = list_->GetFirstItem(); item.IsOk();
+         item = list_->GetNextSibling(item)) {
+        // Tree column holds the worker name; machine is column 3 from
+        // the parent row only.
+        auto name    = std::string(list_->GetItemText(item, 0).ToUTF8());
+        auto machine = std::string(list_->GetItemText(item, 3).ToUTF8());
+        expanded[{machine, name}] = list_->IsExpanded(item);
+    }
+
     list_->Freeze();
     list_->DeleteAllItems();
-    for (size_t i = 0; i < rows.size(); ++i) {
-        const ProcessRow& r = rows[i];
-        long row = list_->InsertItem(static_cast<long>(i), r.name);
-        list_->SetItem(row,  1, wxString::Format("%d", r.pid));
-        list_->SetItem(row,  2, r.parent_name);
-        list_->SetItem(row,  3, r.machine);
-        list_->SetItem(row,  4, state_name(r.state));
-        list_->SetItem(row,  5, wxString::Format("%llu",
+    auto root = list_->GetRootItem();
+    for (const ProcessRow& r : rows) {
+        auto item = list_->AppendItem(root, r.name);
+        list_->SetItemText(item,  1, wxString::Format("%d", r.pid));
+        list_->SetItemText(item,  2, r.parent_name);
+        list_->SetItemText(item,  3, r.machine);
+        list_->SetItemText(item,  4, state_name(r.state));
+        list_->SetItemText(item,  5, wxString::Format("%llu",
             static_cast<unsigned long long>(r.uptime_ms / 1000)));
-        list_->SetItem(row,  6, wxString::Format("%u", r.restart_count));
-        list_->SetItem(row,  7, wxString::Format("%d", r.last_exit_code));
-        // cpu% is hundredths of a percent on the wire.
-        list_->SetItem(row,  8, wxString::Format("%.2f",
+        list_->SetItemText(item,  6, wxString::Format("%u", r.restart_count));
+        list_->SetItemText(item,  7, wxString::Format("%d", r.last_exit_code));
+        list_->SetItemText(item,  8, wxString::Format("%.2f",
             static_cast<double>(r.cpu_pct) / 100.0));
-        list_->SetItem(row,  9, wxString::Format("%llu",
+        list_->SetItemText(item,  9, wxString::Format("%llu",
             static_cast<unsigned long long>(r.rss_kb)));
-        list_->SetItem(row, 10, wxString::Format("%llu",
+        list_->SetItemText(item, 10, wxString::Format("%llu",
             static_cast<unsigned long long>(r.shared_kb)));
-        list_->SetItem(row, 11, wxString::Format("%llu",
+        list_->SetItemText(item, 11, wxString::Format("%llu",
             static_cast<unsigned long long>(r.data_kb)));
-        list_->SetItem(row, 12, wxString::Format("%llu",
+        list_->SetItemText(item, 12, wxString::Format("%llu",
             static_cast<unsigned long long>(r.vsz_kb)));
-        list_->SetItem(row, 13, wxString::Format("%u", r.threads));
+        list_->SetItemText(item, 13, wxString::Format("%u", r.threads));
+
+        for (const ThreadRow& t : r.thread_rows) {
+            auto child = list_->AppendItem(item,
+                wxString::Format("tid=%u %s", t.tid, t.comm.c_str()));
+            list_->SetItemText(child,  1, wxString::Format("%u", t.tid));
+            list_->SetItemText(child,  2, policy_name(t.sched_policy));
+            list_->SetItemText(child,  3, wxString::Format(
+                "prio=%u nice=%d", t.sched_priority, t.nice));
+            list_->SetItemText(child,  4,
+                wxString::Format("cpu=%u", t.last_cpu));
+            // 5-7: uptime/restarts/last_exit are per-process only.
+            list_->SetItemText(child,  8, wxString::Format("%.2f",
+                static_cast<double>(t.cpu_pct) / 100.0));
+            // 9-12: memory is per-process only.
+            list_->SetItemText(child, 13, wxString::Format(
+                "0x%llx", static_cast<unsigned long long>(t.cpu_affinity_mask)));
+        }
+
+        auto it = expanded.find({r.machine, r.name});
+        if (it != expanded.end() && it->second) {
+            list_->Expand(item);
+        }
     }
     list_->Thaw();
 }

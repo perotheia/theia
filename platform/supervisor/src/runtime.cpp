@@ -908,6 +908,144 @@ bool read_proc_smaps_rollup_shared(pid_t pid, uint64_t* shared_kb) {
 
 }  // namespace
 
+// ----- per-thread sampling helpers -----------------------------------------
+//
+// /proc/<pid>/task/<tid>/stat layout (proc(5)):
+//   tid (comm-with-parens) state ppid pgrp session tty_nr tpgid flags
+//   minflt cminflt majflt cmajflt utime stime cutime cstime priority
+//   nice num_threads itrealvalue starttime vsize rss rsslim startcode
+//   endcode startstack kstkesp kstkeip signal blocked sigignore
+//   sigcatch wchan nswap cnswap exit_signal processor rt_priority
+//   policy delayacct_blkio_ticks guest_time cguest_time start_data
+//   ...
+// We want utime(14) stime(15) priority(18) nice(19) num_threads(20)
+// last_cpu(39) rt_priority(40) policy(41).
+
+namespace {
+
+bool read_thread_stat(pid_t pid, uint32_t tid,
+                       uint64_t* utime, uint64_t* stime,
+                       int32_t* nice, uint32_t* last_cpu,
+                       uint32_t* rt_priority, uint32_t* policy) {
+    char path[80];
+    std::snprintf(path, sizeof(path), "/proc/%d/task/%u/stat",
+                  static_cast<int>(pid), tid);
+    FILE* f = std::fopen(path, "r");
+    if (!f) return false;
+    char buf[1024];
+    size_t n = std::fread(buf, 1, sizeof(buf) - 1, f);
+    std::fclose(f);
+    if (n == 0) return false;
+    buf[n] = '\0';
+    char* rp = std::strrchr(buf, ')');
+    if (!rp) return false;
+    rp += 2;     // skip ") "
+    // Walk from field 3 to field 14 (utime).
+    int skip = 11;
+    while (skip > 0 && *rp) {
+        if (*rp == ' ') --skip;
+        ++rp;
+    }
+    long long ut = 0, st = 0, nc = 0;
+    long      lcpu = 0, rtprio = 0, pol = 0;
+    // utime (14) stime (15) [cutime cstime priority] (16..18 ignored)
+    // nice (19) [num_threads itrealvalue starttime vsize rss rsslim
+    // startcode endcode startstack kstkesp kstkeip signal blocked
+    // sigignore sigcatch wchan nswap cnswap exit_signal] (20..38 ignored)
+    // processor (39) rt_priority (40) policy (41).
+    // Field layout (proc(5)) after comm-with-parens consumed:
+    //   14 utime    15 stime    16 cutime  17 cstime   18 priority
+    //   19 nice     20 num_threads  21 itrealvalue  22 starttime
+    //   23 vsize    24 rss    25 rsslim   26 startcode  27 endcode
+    //   28 startstack  29 kstkesp  30 kstkeip  31 signal  32 blocked
+    //   33 sigignore  34 sigcatch  35 wchan  36 nswap  37 cnswap
+    //   38 exit_signal  39 processor  40 rt_priority  41 policy
+    int matched = std::sscanf(rp,
+        "%lld %lld %*d %*d %*d %lld "          /* 14 ut, 15 st, 16-18 skip, 19 nice */
+        "%*d %*d %*d "                         /* 20 num_thr, 21 itreal, 22 starttime */
+        "%*d %*d %*d %*d %*d %*d %*d "         /* 23-29 vsize..kstkesp */
+        "%*d %*d %*d %*d %*d %*d %*d %*d %*d " /* 30-38 kstkeip..exit_signal */
+        "%ld %ld %ld",                         /* 39 processor, 40 rt_prio, 41 policy */
+        &ut, &st, &nc, &lcpu, &rtprio, &pol);
+    if (matched < 6) return false;
+    *utime       = static_cast<uint64_t>(ut);
+    *stime       = static_cast<uint64_t>(st);
+    *nice        = static_cast<int32_t>(nc);
+    *last_cpu    = static_cast<uint32_t>(lcpu);
+    *rt_priority = static_cast<uint32_t>(rtprio);
+    *policy      = static_cast<uint32_t>(pol);
+    return true;
+}
+
+bool read_thread_comm(pid_t pid, uint32_t tid, std::string* out) {
+    char path[80];
+    std::snprintf(path, sizeof(path), "/proc/%d/task/%u/comm",
+                  static_cast<int>(pid), tid);
+    FILE* f = std::fopen(path, "r");
+    if (!f) return false;
+    char buf[64] = {0};
+    size_t n = std::fread(buf, 1, sizeof(buf) - 1, f);
+    std::fclose(f);
+    if (n == 0) return false;
+    // strip trailing newline
+    while (n > 0 && (buf[n-1] == '\n' || buf[n-1] == '\r')) buf[--n] = 0;
+    out->assign(buf, n);
+    return true;
+}
+
+// /proc/<pid>/task/<tid>/status has Cpus_allowed: <hex>; pack the
+// first 64 bits into a uint64_t mask.
+bool read_thread_affinity_mask(pid_t pid, uint32_t tid, uint64_t* mask) {
+    char path[80];
+    std::snprintf(path, sizeof(path), "/proc/%d/task/%u/status",
+                  static_cast<int>(pid), tid);
+    FILE* f = std::fopen(path, "r");
+    if (!f) return false;
+    char line[256];
+    bool ok = false;
+    while (std::fgets(line, sizeof(line), f)) {
+        if (std::strncmp(line, "Cpus_allowed:", 13) == 0) {
+            // Hex, possibly comma-separated u32 words MSW-first. Strip
+            // commas, parse as one big hex; keep low 64 bits.
+            std::string hex;
+            for (char* p = line + 13; *p; ++p) {
+                if (std::isxdigit(static_cast<unsigned char>(*p))) hex.push_back(*p);
+            }
+            if (!hex.empty()) {
+                uint64_t v = 0;
+                for (char c : hex) {
+                    v = (v << 4) | static_cast<uint64_t>(
+                        c >= 'a' ? c - 'a' + 10 :
+                        c >= 'A' ? c - 'A' + 10 : c - '0');
+                }
+                *mask = v;
+                ok = true;
+            }
+            break;
+        }
+    }
+    std::fclose(f);
+    return ok;
+}
+
+// List the TIDs under /proc/<pid>/task/. Skip non-numeric entries.
+std::vector<uint32_t> list_tids(pid_t pid) {
+    char path[64];
+    std::snprintf(path, sizeof(path), "/proc/%d/task", static_cast<int>(pid));
+    DIR* d = opendir(path);
+    std::vector<uint32_t> out;
+    if (!d) return out;
+    struct dirent* e;
+    while ((e = readdir(d)) != nullptr) {
+        if (e->d_name[0] < '0' || e->d_name[0] > '9') continue;
+        out.push_back(static_cast<uint32_t>(std::strtoul(e->d_name, nullptr, 10)));
+    }
+    closedir(d);
+    return out;
+}
+
+}  // namespace
+
 void Supervisor::sample_procs() {
     // Compute the wall-clock interval since the previous sample to
     // normalise cpu% (jiffies → percentage of one CPU).
@@ -954,6 +1092,45 @@ void Supervisor::sample_procs() {
         if (read_proc_smaps_rollup_shared(w->pid, &shared)) {
             s.shared_kb = shared;
         }
+
+        // Per-thread sample. Carry forward previous tick's per-tid
+        // jiffies counter so cpu% has a proper delta basis. TIDs that
+        // disappear (thread exited) get pruned by rebuilding the map.
+        auto tids = list_tids(w->pid);
+        std::map<uint32_t, ThreadEntry> next_threads;
+        for (uint32_t tid : tids) {
+            ThreadEntry te = s.threads_detail[tid];      // carry prev_jiffies
+            te.tid = tid;
+            uint64_t ut = 0, st = 0;
+            int32_t  nc = 0;
+            uint32_t lcpu = 0, rt = 0, pol = 0;
+            if (!read_thread_stat(w->pid, tid, &ut, &st, &nc,
+                                   &lcpu, &rt, &pol)) {
+                // thread vanished mid-read; skip
+                continue;
+            }
+            uint64_t cur = ut + st;
+            uint64_t delta = (te.prev_jiffies <= cur) ? (cur - te.prev_jiffies) : 0;
+            te.prev_jiffies = cur;
+            if (interval_s > 0.0) {
+                double pct = static_cast<double>(delta) /
+                             (static_cast<double>(clk_tck) * interval_s) * 100.0;
+                if (pct < 0.0)   pct = 0.0;
+                if (pct > 6553.0) pct = 6553.0;
+                te.cpu_pct = static_cast<uint32_t>(pct * 100.0 + 0.5);
+            }
+            te.nice           = nc;
+            te.last_cpu       = lcpu;
+            te.sched_priority = rt;
+            te.sched_policy   = pol;
+            (void)read_thread_comm(w->pid, tid, &te.comm);
+            uint64_t mask = 0;
+            (void)read_thread_affinity_mask(w->pid, tid, &mask);
+            te.cpu_affinity_mask = mask;
+            next_threads[tid] = te;
+        }
+        s.threads_detail = std::move(next_threads);
+
         next[w->pid] = s;
     }
     sample_.swap(next);
@@ -1009,6 +1186,19 @@ void Supervisor::emit_snapshot() {
                             row->set_threads  (it->second.threads);
                             row->set_shared_kb(it->second.shared_kb);
                             row->set_data_kb  (it->second.data_kb);
+                            // Per-thread detail. One entry per TID.
+                            for (const auto& kv : it->second.threads_detail) {
+                                const auto& te = kv.second;
+                                auto* ts = row->add_threads_detail();
+                                ts->set_tid              (te.tid);
+                                ts->set_comm             (te.comm);
+                                ts->set_cpu_pct          (te.cpu_pct);
+                                ts->set_sched_policy     (te.sched_policy);
+                                ts->set_sched_priority   (te.sched_priority);
+                                ts->set_nice             (te.nice);
+                                ts->set_cpu_affinity_mask(te.cpu_affinity_mask);
+                                ts->set_last_cpu         (te.last_cpu);
+                            }
                         }
                     }
                 } else {

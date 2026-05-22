@@ -26,6 +26,7 @@
 // Forward-decl in the global namespace so wx pointer types resolve
 // correctly without pulling those headers in here.
 class wxListCtrl;
+class wxTreeListCtrl;
 class wxStaticText;
 class wxStaticBox;
 class wxBoxSizer;
@@ -104,6 +105,18 @@ class ProcessSampler;  // legacy placeholder; the sampler now lives on
                        // the supervisor side and ships cpu/rss/threads
                        // through ChildState. See processes_panel.cpp.
 
+// One thread as it appears under a process row in the tree.
+struct ThreadRow {
+    uint32_t tid               = 0;
+    std::string comm;
+    uint32_t cpu_pct           = 0;  // hundredths of a percent
+    uint32_t sched_policy      = 0;
+    uint32_t sched_priority    = 0;
+    int32_t  nice              = 0;
+    uint64_t cpu_affinity_mask = 0;
+    uint32_t last_cpu          = 0;
+};
+
 // One worker as it appears in the htop-style list. Filled from a
 // remote ChildState — the GUI never touches /proc; the supervisor
 // samples and ships these via the wire.
@@ -122,6 +135,7 @@ struct ProcessRow {
     uint64_t    data_kb         = 0;   // heap+bss+data — "memory used by app"
     uint64_t    vsz_kb          = 0;   // virtual size
     uint32_t    threads         = 0;
+    std::vector<ThreadRow> thread_rows;
 };
 
 // "Processes" — flat htop-style list. Every row is one worker from the
@@ -145,7 +159,7 @@ private:
     // that machine's vector; rows from other machines stay intact.
     std::map<std::string, std::vector<ProcessRow>> rows_by_machine_;
 
-    ::wxListCtrl*                   list_{nullptr};
+    ::wxTreeListCtrl*               list_{nullptr};
     std::unique_ptr<ProcessSampler> sampler_;
 };
 

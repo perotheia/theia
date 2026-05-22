@@ -66,9 +66,37 @@ message ChildState {
     uint32  cpu_pct          // CPU usage in hundredths of % (1234 == 12.34 %)
     uint64  rss_kb           // resident set size (kB), /proc/<pid>/status VmRSS
     uint64  vsz_kb           // virtual size (kB), /proc/<pid>/status VmSize
-    uint32  threads          // /proc/<pid>/stat field 20
+    uint32  threads          // /proc/<pid>/stat field 20 — thread count
     uint64  shared_kb        // Shared_Clean+Shared_Dirty from smaps_rollup
     uint64  data_kb          // /proc/<pid>/status VmData — heap + bss + data
+
+    // Per-thread detail (one entry per TID, sampled from
+    // /proc/<pid>/task/<tid>/{stat,status,sched,comm}). The `threads`
+    // field above is the count; this is the breakdown the GUI shows
+    // as expandable child rows.
+    repeated ThreadSample threads_detail
+}
+
+// One thread's worth of resource + scheduling info, sampled from
+// /proc/<pid>/task/<tid>/. Read at the same 1 Hz tick the parent
+// process is sampled. AUTOSAR's PHM monitors processes; we extend it
+// downward to threads because each artheia ``node atomic`` is its
+// own thread inside a process — pinning the process to cores 0-3
+// then pinning one specific node to core 0 (with SCHED_FIFO/prio 80)
+// is the common shape for an FC that has both a real-time worker
+// and bookkeeping threads.
+message ThreadSample {
+    uint32  tid                 // task id (Linux LWP)
+    string  comm                // /proc/<pid>/task/<tid>/comm
+    uint32  cpu_pct             // per-thread CPU, hundredths of % (1234 == 12.34%)
+    uint32  sched_policy        // sched_getscheduler() returns 0=OTHER,
+                                // 1=FIFO, 2=RR, 3=BATCH, 5=IDLE, 6=DEADLINE
+    uint32  sched_priority      // SCHED_FIFO/RR rt prio 1..99; otherwise 0
+    sint32  nice                // -20..19 (SCHED_OTHER/BATCH)
+    uint64  cpu_affinity_mask   // sched_getaffinity result; bit N = CPU N
+                                // allowed. 0 = "didn't sample".
+    uint32  last_cpu            // /proc/<pid>/task/<tid>/stat field 39
+                                // — last CPU this thread ran on
 }
 
 // Full tree snapshot — flat list of ChildState rows; the GUI reconstructs

@@ -51,10 +51,24 @@ message ChildState {
     string  start_cmd        // worker only — argv joined by space (informational)
 
     // Resource samples (worker only; 0 for supervisors / stopped workers).
+    //
+    // Memory breakdown lifted from /proc/<pid>/status and
+    // /proc/<pid>/smaps_rollup. RSS is the headline "what's in RAM";
+    // shared is the portion mapped via file/shmem that any other
+    // process can also be mapping (libraries, mostly); data is the
+    // process-private writable region (heap + bss + data segment) —
+    // the closest analogue of "how much memory my application
+    // actually consumed".
+    //
+    //     rss_kb = shared_kb + private_resident
+    //     vsz_kb = rss_kb + swapped + not-yet-faulted-in pages
+    //     data_kb ≈ heap + bss + .data (VmData)
     uint32  cpu_pct          // CPU usage in hundredths of % (1234 == 12.34 %)
     uint64  rss_kb           // resident set size (kB), /proc/<pid>/status VmRSS
     uint64  vsz_kb           // virtual size (kB), /proc/<pid>/status VmSize
     uint32  threads          // /proc/<pid>/stat field 20
+    uint64  shared_kb        // Shared_Clean+Shared_Dirty from smaps_rollup
+    uint64  data_kb          // /proc/<pid>/status VmData — heap + bss + data
 }
 
 // Full tree snapshot — flat list of ChildState rows; the GUI reconstructs

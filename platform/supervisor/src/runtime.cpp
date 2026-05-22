@@ -839,25 +839,71 @@ bool read_proc_stat(pid_t pid, uint64_t* utime, uint64_t* stime,
     return true;
 }
 
-bool read_proc_status(pid_t pid, uint64_t* rss_kb, uint64_t* vsz_kb) {
+bool read_proc_status(pid_t pid, uint64_t* rss_kb, uint64_t* vsz_kb,
+                       uint64_t* data_kb) {
     char path[64];
     std::snprintf(path, sizeof(path), "/proc/%d/status", static_cast<int>(pid));
     FILE* f = std::fopen(path, "r");
     if (!f) return false;
     char line[256];
-    bool got_rss = false, got_vsz = false;
+    bool got_rss = false, got_vsz = false, got_data = false;
     while (std::fgets(line, sizeof(line), f)) {
         if (!got_rss && std::strncmp(line, "VmRSS:", 6) == 0) {
             unsigned long v = 0;
-            if (std::sscanf(line + 6, "%lu", &v) == 1) { *rss_kb = v; got_rss = true; }
+            if (std::sscanf(line + 6, "%lu", &v) == 1) {
+                *rss_kb = v; got_rss = true;
+            }
         } else if (!got_vsz && std::strncmp(line, "VmSize:", 7) == 0) {
             unsigned long v = 0;
-            if (std::sscanf(line + 7, "%lu", &v) == 1) { *vsz_kb = v; got_vsz = true; }
+            if (std::sscanf(line + 7, "%lu", &v) == 1) {
+                *vsz_kb = v; got_vsz = true;
+            }
+        } else if (!got_data && std::strncmp(line, "VmData:", 7) == 0) {
+            unsigned long v = 0;
+            if (std::sscanf(line + 7, "%lu", &v) == 1) {
+                *data_kb = v; got_data = true;
+            }
         }
-        if (got_rss && got_vsz) break;
+        if (got_rss && got_vsz && got_data) break;
     }
     std::fclose(f);
-    return got_rss && got_vsz;
+    return got_rss && got_vsz;        // data_kb is best-effort
+}
+
+// /proc/<pid>/smaps_rollup is the cheap whole-VMA summary added in
+// Linux 4.14 — single page of pre-summed counters instead of
+// O(VMAs) lines of smaps. Returns the sum of Shared_Clean +
+// Shared_Dirty (the "any other process could be mapping these too"
+// resident bytes). Returns false on kernels too old or perms denied.
+bool read_proc_smaps_rollup_shared(pid_t pid, uint64_t* shared_kb) {
+    char path[64];
+    std::snprintf(path, sizeof(path), "/proc/%d/smaps_rollup",
+                  static_cast<int>(pid));
+    FILE* f = std::fopen(path, "r");
+    if (!f) return false;
+    uint64_t sc = 0, sd = 0;
+    bool got_sc = false, got_sd = false;
+    char line[256];
+    while (std::fgets(line, sizeof(line), f)) {
+        if (!got_sc && std::strncmp(line, "Shared_Clean:", 13) == 0) {
+            unsigned long v = 0;
+            if (std::sscanf(line + 13, "%lu", &v) == 1) {
+                sc = v; got_sc = true;
+            }
+        } else if (!got_sd && std::strncmp(line, "Shared_Dirty:", 13) == 0) {
+            unsigned long v = 0;
+            if (std::sscanf(line + 13, "%lu", &v) == 1) {
+                sd = v; got_sd = true;
+            }
+        }
+        if (got_sc && got_sd) break;
+    }
+    std::fclose(f);
+    if (got_sc && got_sd) {
+        *shared_kb = sc + sd;
+        return true;
+    }
+    return false;
 }
 
 }  // namespace
@@ -898,10 +944,15 @@ void Supervisor::sample_procs() {
                 s.cpu_pct = static_cast<uint32_t>(pct * 100.0 + 0.5);
             }
         }
-        uint64_t rss = 0, vsz = 0;
-        if (read_proc_status(w->pid, &rss, &vsz)) {
-            s.rss_kb = rss;
-            s.vsz_kb = vsz;
+        uint64_t rss = 0, vsz = 0, data = 0;
+        if (read_proc_status(w->pid, &rss, &vsz, &data)) {
+            s.rss_kb  = rss;
+            s.vsz_kb  = vsz;
+            s.data_kb = data;       // 0 if VmData line absent (rare)
+        }
+        uint64_t shared = 0;
+        if (read_proc_smaps_rollup_shared(w->pid, &shared)) {
+            s.shared_kb = shared;
         }
         next[w->pid] = s;
     }
@@ -952,10 +1003,12 @@ void Supervisor::emit_snapshot() {
                     if (c->worker.pid > 0) {
                         auto it = sample_.find(c->worker.pid);
                         if (it != sample_.end()) {
-                            row->set_cpu_pct(it->second.cpu_pct);
-                            row->set_rss_kb (it->second.rss_kb);
-                            row->set_vsz_kb (it->second.vsz_kb);
-                            row->set_threads(it->second.threads);
+                            row->set_cpu_pct  (it->second.cpu_pct);
+                            row->set_rss_kb   (it->second.rss_kb);
+                            row->set_vsz_kb   (it->second.vsz_kb);
+                            row->set_threads  (it->second.threads);
+                            row->set_shared_kb(it->second.shared_kb);
+                            row->set_data_kb  (it->second.data_kb);
                         }
                     }
                 } else {

@@ -124,6 +124,8 @@ private:
         uint32_t cpu_pct{0};           // hundredths of a percent
         uint64_t rss_kb{0};
         uint64_t vsz_kb{0};
+        uint64_t shared_kb{0};         // Shared_Clean+Shared_Dirty (smaps_rollup)
+        uint64_t data_kb{0};           // VmData — heap+bss+data
         uint32_t threads{0};
         // Previous (utime + stime) in jiffies — used to compute the
         // delta CPU% each tick.

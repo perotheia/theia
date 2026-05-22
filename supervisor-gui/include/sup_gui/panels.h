@@ -117,8 +117,10 @@ struct ProcessRow {
     int32_t     last_exit_code  = 0;
     uint64_t    uptime_ms       = 0;
     uint32_t    cpu_pct         = 0;   // hundredths of a percent
-    uint64_t    rss_kb          = 0;
-    uint64_t    vsz_kb          = 0;
+    uint64_t    rss_kb          = 0;   // resident set size (total)
+    uint64_t    shared_kb       = 0;   // shared with other processes
+    uint64_t    data_kb         = 0;   // heap+bss+data — "memory used by app"
+    uint64_t    vsz_kb          = 0;   // virtual size
     uint32_t    threads         = 0;
 };
 

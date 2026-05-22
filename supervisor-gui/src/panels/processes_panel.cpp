@@ -2,13 +2,20 @@
 //
 // Flat htop-style wxListCtrl. Every row is one worker (ChildState
 // kind=0) from the latest per-machine TreeSnapshot. Resource columns
-// (cpu%, rss_kb, vsz_kb, threads) come straight off the wire — the
+// (cpu%, rss/shared/data/vsz_kb, threads) come straight off the wire — the
 // supervisor on the remote machine is the only thing that touches
 // /proc; the GUI just renders.
 //
 // Columns (in display order):
 //   name | pid | parent_sup | machine | state | uptime | restarts
-//   | last_exit | cpu% | rss_kb | vsz_kb | threads
+//   | last_exit | cpu% | rss_kb | shared_kb | data_kb | vsz_kb | threads
+//
+// rss_kb  — total resident set
+// shared_kb — Shared_Clean+Shared_Dirty (memory others can also map;
+//             libraries mostly)
+// data_kb — VmData = heap + bss + data segment (what the app
+//             actually "allocated"; closest analogue to the user-visible
+//             memory footprint)
 
 #include "sup_gui/panels.h"
 
@@ -63,8 +70,10 @@ ProcessesPanel::ProcessesPanel(wxWindow* parent) : PanelBase(parent) {
     list_->InsertColumn( 7, "last_exit",  wxLIST_FORMAT_RIGHT,   90);
     list_->InsertColumn( 8, "cpu%",       wxLIST_FORMAT_RIGHT,   70);
     list_->InsertColumn( 9, "rss_kb",     wxLIST_FORMAT_RIGHT,  100);
-    list_->InsertColumn(10, "vsz_kb",     wxLIST_FORMAT_RIGHT,  100);
-    list_->InsertColumn(11, "threads",    wxLIST_FORMAT_RIGHT,   80);
+    list_->InsertColumn(10, "shared_kb",  wxLIST_FORMAT_RIGHT,  100);
+    list_->InsertColumn(11, "data_kb",    wxLIST_FORMAT_RIGHT,  100);
+    list_->InsertColumn(12, "vsz_kb",     wxLIST_FORMAT_RIGHT,  100);
+    list_->InsertColumn(13, "threads",    wxLIST_FORMAT_RIGHT,   80);
 
     sizer->Add(list_, 1, wxEXPAND | wxALL, 4);
     SetSizer(sizer);
@@ -97,6 +106,8 @@ void ProcessesPanel::on_frame(const std::string& machine_name,
         r.uptime_ms      = c.uptime_ms();
         r.cpu_pct        = c.cpu_pct();
         r.rss_kb         = c.rss_kb();
+        r.shared_kb      = c.shared_kb();
+        r.data_kb        = c.data_kb();
         r.vsz_kb         = c.vsz_kb();
         r.threads        = c.threads();
         v.push_back(std::move(r));
@@ -140,8 +151,12 @@ void ProcessesPanel::refresh_list() {
         list_->SetItem(row,  9, wxString::Format("%llu",
             static_cast<unsigned long long>(r.rss_kb)));
         list_->SetItem(row, 10, wxString::Format("%llu",
+            static_cast<unsigned long long>(r.shared_kb)));
+        list_->SetItem(row, 11, wxString::Format("%llu",
+            static_cast<unsigned long long>(r.data_kb)));
+        list_->SetItem(row, 12, wxString::Format("%llu",
             static_cast<unsigned long long>(r.vsz_kb)));
-        list_->SetItem(row, 11, wxString::Format("%u", r.threads));
+        list_->SetItem(row, 13, wxString::Format("%u", r.threads));
     }
     list_->Thaw();
 }

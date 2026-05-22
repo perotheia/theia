@@ -15,5 +15,5 @@ license = { text = "MIT" }
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["vendor*"]
+include = ["vendor*", "services*", "demo*"]
 exclude = ["artheia*", "autosar*", "gateway*", "docs*", "up*", "tests*"]

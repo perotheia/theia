@@ -105,7 +105,8 @@ std::string locate_tombstone(const std::string& dir,
 
 }  // namespace
 
-Supervisor::Supervisor(std::unique_ptr<Node> root, std::string root_dir)
+Supervisor::Supervisor(std::unique_ptr<Node> root, std::string root_dir,
+                       uint16_t listen_port)
     : root_node_(std::move(root)), root_dir_(std::move(root_dir)) {
     if (!root_node_ || !root_node_->is_supervisor()) {
         throw std::runtime_error("root must be a supervisor");
@@ -115,10 +116,10 @@ Supervisor::Supervisor(std::unique_ptr<Node> root, std::string root_dir)
     start_time_      = std::chrono::steady_clock::now();
     last_heartbeat_  = start_time_;
     last_snapshot_   = start_time_;
-    // Best-effort: TIPC may not be available (no kernel module, no
-    // permission). open() logs the error and the publisher stays inert.
+    // Best-effort: the listen socket may be claimed (EADDRINUSE) or
+    // refused. open() logs the error and the publisher stays inert.
     // The supervisor still runs; just no GUI feed.
-    publisher_.open(0x80020001, 0);
+    publisher_.open(listen_port);
 
     // Block SIGCHLD/SIGTERM/SIGINT process-wide; we read them via signalfd.
     sigset_t mask;
@@ -509,7 +510,7 @@ int Supervisor::run() {
         // signalfd event — we may have missed coalesced SIGCHLDs.
         reap();
 
-        // Drain the TIPC publisher: accept new clients, ignore inbound bytes.
+        // Drain the TCP publisher: accept new clients, ignore inbound bytes.
         publisher_.poll();
 
         // Periodic emissions. The .art file's heartbeat_period_ms /
@@ -521,7 +522,10 @@ int Supervisor::run() {
             emit_health();
             last_heartbeat_ = now;
         }
-        if (now - last_snapshot_ >= milliseconds(5000)) {
+        // 1 Hz snapshot — gives htop-like refresh rate on the GUI side.
+        // sample_procs() inside emit_snapshot normalises cpu% by actual
+        // elapsed wall time so the rate can change without distortion.
+        if (now - last_snapshot_ >= milliseconds(1000)) {
             emit_snapshot();
             last_snapshot_ = now;
         }
@@ -580,7 +584,7 @@ void Supervisor::reap() {
 // ---------------------------------------------------------------------------
 
 namespace {
-// Framing tags must match TipcPublisher::publish() comment.
+// Framing tags must match TcpPublisher's frame layout (see header).
 constexpr uint16_t kTagEvent    = 0x0001;
 constexpr uint16_t kTagHealth   = 0x0002;
 constexpr uint16_t kTagSnapshot = 0x0003;
@@ -627,7 +631,112 @@ void Supervisor::emit_health() {
     publisher_.publish(kTagHealth, hb.SerializeAsString());
 }
 
+// /proc reader helpers — see header for the design intent.
+namespace {
+
+bool read_proc_stat(pid_t pid, uint64_t* utime, uint64_t* stime,
+                    uint32_t* threads) {
+    char path[64];
+    std::snprintf(path, sizeof(path), "/proc/%d/stat", static_cast<int>(pid));
+    FILE* f = std::fopen(path, "r");
+    if (!f) return false;
+    char buf[1024];
+    size_t n = std::fread(buf, 1, sizeof(buf) - 1, f);
+    std::fclose(f);
+    if (n == 0) return false;
+    buf[n] = '\0';
+    // Skip past the parenthesised comm; fields 14/15 are utime/stime,
+    // field 20 is num_threads (proc(5)).
+    char* rp = std::strrchr(buf, ')');
+    if (!rp) return false;
+    rp += 2;
+    int skip = 11;     // jump from field 3 to field 14
+    while (skip > 0 && *rp) {
+        if (*rp == ' ') --skip;
+        ++rp;
+    }
+    long long ut = 0, st = 0;
+    long      th = 0;
+    int matched = std::sscanf(rp, "%lld %lld %*d %*d %*d %*d %ld",
+                              &ut, &st, &th);
+    if (matched < 3) return false;
+    *utime   = static_cast<uint64_t>(ut);
+    *stime   = static_cast<uint64_t>(st);
+    *threads = static_cast<uint32_t>(th);
+    return true;
+}
+
+bool read_proc_status(pid_t pid, uint64_t* rss_kb, uint64_t* vsz_kb) {
+    char path[64];
+    std::snprintf(path, sizeof(path), "/proc/%d/status", static_cast<int>(pid));
+    FILE* f = std::fopen(path, "r");
+    if (!f) return false;
+    char line[256];
+    bool got_rss = false, got_vsz = false;
+    while (std::fgets(line, sizeof(line), f)) {
+        if (!got_rss && std::strncmp(line, "VmRSS:", 6) == 0) {
+            unsigned long v = 0;
+            if (std::sscanf(line + 6, "%lu", &v) == 1) { *rss_kb = v; got_rss = true; }
+        } else if (!got_vsz && std::strncmp(line, "VmSize:", 7) == 0) {
+            unsigned long v = 0;
+            if (std::sscanf(line + 7, "%lu", &v) == 1) { *vsz_kb = v; got_vsz = true; }
+        }
+        if (got_rss && got_vsz) break;
+    }
+    std::fclose(f);
+    return got_rss && got_vsz;
+}
+
+}  // namespace
+
+void Supervisor::sample_procs() {
+    // Compute the wall-clock interval since the previous sample to
+    // normalise cpu% (jiffies → percentage of one CPU).
+    auto now = std::chrono::steady_clock::now();
+    double interval_s = 0.0;
+    if (last_proc_sample_.time_since_epoch().count() != 0) {
+        interval_s = std::chrono::duration<double>(
+                         now - last_proc_sample_).count();
+    }
+    last_proc_sample_ = now;
+
+    long clk_tck = sysconf(_SC_CLK_TCK);
+    if (clk_tck <= 0) clk_tck = 100;
+
+    // Build the set of live pids; drop the rest from the map.
+    auto workers = all_workers(*root_);
+    std::map<pid_t, ProcSample> next;
+    for (auto* w : workers) {
+        if (w->pid <= 0) continue;
+        ProcSample s = sample_[w->pid];   // carry forward prev_jiffies
+        uint64_t ut = 0, st = 0;
+        uint32_t th = 0;
+        if (read_proc_stat(w->pid, &ut, &st, &th)) {
+            uint64_t cur = ut + st;
+            uint64_t delta = (s.prev_jiffies <= cur) ? (cur - s.prev_jiffies) : 0;
+            s.prev_jiffies = cur;
+            s.threads      = th;
+            if (interval_s > 0.0) {
+                // jiffies per second = clk_tck. CPU% = delta / (clk_tck * interval) * 100
+                double pct = static_cast<double>(delta) /
+                             (static_cast<double>(clk_tck) * interval_s) * 100.0;
+                if (pct < 0.0)   pct = 0.0;
+                if (pct > 6553.0) pct = 6553.0;  // fits in u32 ×100
+                s.cpu_pct = static_cast<uint32_t>(pct * 100.0 + 0.5);
+            }
+        }
+        uint64_t rss = 0, vsz = 0;
+        if (read_proc_status(w->pid, &rss, &vsz)) {
+            s.rss_kb = rss;
+            s.vsz_kb = vsz;
+        }
+        next[w->pid] = s;
+    }
+    sample_.swap(next);
+}
+
 void Supervisor::emit_snapshot() {
+    sample_procs();
     ++generation_;
 
     ::services::supervisor::TreeSnapshot snap;
@@ -666,6 +775,16 @@ void Supervisor::emit_snapshot() {
                     row->set_state(state);
                     row->set_restart_count(0);
                     row->set_start_cmd(cmd);
+                    // Resource samples — taken in sample_procs() above.
+                    if (c->worker.pid > 0) {
+                        auto it = sample_.find(c->worker.pid);
+                        if (it != sample_.end()) {
+                            row->set_cpu_pct(it->second.cpu_pct);
+                            row->set_rss_kb (it->second.rss_kb);
+                            row->set_vsz_kb (it->second.vsz_kb);
+                            row->set_threads(it->second.threads);
+                        }
+                    }
                 } else {
                     walk(c->sup, sup.name);
                 }

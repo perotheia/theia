@@ -3,19 +3,22 @@
 #pragma once
 
 #include "supervisor/spec.h"
-#include "supervisor/tipc_publisher.h"
+#include "supervisor/tcp_publisher.h"
 
 #include <atomic>
 #include <chrono>
+#include <map>
 #include <memory>
 #include <string>
+#include <sys/types.h>
 #include <vector>
 
 namespace supervisor {
 
 class Supervisor {
 public:
-    explicit Supervisor(std::unique_ptr<Node> root, std::string root_dir);
+    Supervisor(std::unique_ptr<Node> root, std::string root_dir,
+               uint16_t listen_port = TcpPublisher::kDefaultPort);
     ~Supervisor();
 
     Supervisor(const Supervisor&)            = delete;
@@ -56,8 +59,8 @@ private:
     // signalfd descriptor and a self-pipe wake-up fd for portability.
     int                              signal_fd_{-1};
 
-    // TIPC pub for the supervisor-gui.
-    TipcPublisher                    publisher_;
+    // TCP pub for the supervisor-gui.
+    TcpPublisher                     publisher_;
     std::chrono::steady_clock::time_point start_time_{};
     std::chrono::steady_clock::time_point last_heartbeat_{};
     std::chrono::steady_clock::time_point last_snapshot_{};
@@ -73,6 +76,24 @@ private:
                     const std::string& detail);
     void emit_health();
     void emit_snapshot();
+
+    // /proc/<pid>/{stat,status} sampler — one row per supervised pid.
+    // Refreshed inside the main loop on the heartbeat tick and read by
+    // emit_snapshot. Resource facts ride on each ChildState wire row
+    // so the GUI never reads /proc itself.
+    struct ProcSample {
+        uint32_t cpu_pct{0};           // hundredths of a percent
+        uint64_t rss_kb{0};
+        uint64_t vsz_kb{0};
+        uint32_t threads{0};
+        // Previous (utime + stime) in jiffies — used to compute the
+        // delta CPU% each tick.
+        uint64_t prev_jiffies{0};
+    };
+    void sample_procs();               // refresh sample_ for all live pids
+
+    std::map<pid_t, ProcSample>      sample_;
+    std::chrono::steady_clock::time_point last_proc_sample_{};
 };
 
 }  // namespace supervisor

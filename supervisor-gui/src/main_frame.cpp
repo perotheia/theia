@@ -6,11 +6,12 @@
 #include <wx/statusbr.h>
 #include <wx/timer.h>
 
+#include <utility>
+
 namespace sup_gui {
 
 wxDEFINE_EVENT(EVT_SUP_FRAME, wxThreadEvent);
 
-// IDs for menu / timer events.
 enum : int {
     ID_STATUS_TIMER = wxID_HIGHEST + 1,
 };
@@ -20,105 +21,135 @@ wxBEGIN_EVENT_TABLE(MainFrame, wxFrame)
     EVT_TIMER(ID_STATUS_TIMER, MainFrame::on_status_tick)
 wxEND_EVENT_TABLE()
 
-MainFrame::MainFrame()
+namespace {
+
+// Tag the machine_name into wxThreadEvent without losing the binary
+// payload. We pack {machine_name, payload} into a small struct posted
+// as the event's payload.
+struct FrameMsg {
+    std::string machine_name;
+    std::string payload;
+};
+
+}  // namespace
+
+MainFrame::MainFrame(std::vector<MachineEndpoint> machines)
     : wxFrame(nullptr, wxID_ANY, "supervisor-gui",
               wxDefaultPosition, wxSize(1280, 800)) {
 
     notebook_ = new wxNotebook(this, wxID_ANY);
-    tree_       = new TreePanel      (notebook_);
-    processes_  = new ProcessPanel   (notebook_);
-    trace_      = new TracePanel     (notebook_);
-    tombstones_ = new TombstonePanel (notebook_);
-    perf_       = new PerfPanel      (notebook_);
-    notebook_->AddPage(tree_,       "Tree");
-    notebook_->AddPage(processes_,  "Processes");
-    notebook_->AddPage(trace_,      "Trace");
-    notebook_->AddPage(tombstones_, "Tombstones");
-    notebook_->AddPage(perf_,       "Perf");
+    // Order matches OTP observer_wx.erl tab order.
+    system_panel_  = new SystemPanel       (notebook_);
+    load_charts_   = new LoadChartsPanel   (notebook_);
+    applications_  = new ApplicationsPanel (notebook_);
+    processes_     = new ProcessesPanel    (notebook_);
+    trace_         = new TracePanel        (notebook_);
+    notebook_->AddPage(system_panel_, "System");
+    notebook_->AddPage(load_charts_,  "Load Charts");
+    notebook_->AddPage(applications_, "Applications");
+    notebook_->AddPage(processes_,    "Processes");
+    notebook_->AddPage(trace_,        "Trace");
 
     auto* sizer = new wxBoxSizer(wxVERTICAL);
     sizer->Add(notebook_, 1, wxEXPAND);
     SetSizer(sizer);
 
     CreateStatusBar(2);
-    SetStatusText("disconnected", 0);
-    SetStatusText("",             1);
+    SetStatusText("connecting…", 0);
+    SetStatusText("", 1);
 
-    // Bind the custom event to our handler.
     Bind(EVT_SUP_FRAME, &MainFrame::on_sup_frame, this);
 
-    // Status timer ticks every 500ms to refresh the "stale" indicator.
     status_timer_ = new wxTimer(this, ID_STATUS_TIMER);
     status_timer_->Start(500);
 
-    // Wire the TIPC client. Address matches services.supervisor.Supervisor
-    // in supervisor-gui/system/package.art.
-    tipc_ = std::unique_ptr<TipcClient>(new TipcClient(
-        0x80020001, 0,
-        [this](uint16_t tag, std::string payload) {
-            post_frame_from_thread(tag, std::move(payload));
-        }));
-    tipc_->start();
+    // One TcpClient per machine row. Each client funnels frames into
+    // the same wxQueueEvent path.
+    for (const auto& m : machines) {
+        clients_.emplace_back(new TcpClient(
+            m.name, m.address, m.port,
+            [this](const std::string& machine_name, uint16_t tag,
+                   std::string payload) {
+                post_frame_from_thread(machine_name, tag, std::move(payload));
+            }));
+        clients_.back()->start();
+    }
 }
 
 MainFrame::~MainFrame() {
-    if (tipc_) tipc_->stop();
+    for (auto& c : clients_) {
+        if (c) c->stop();
+    }
 }
 
-void MainFrame::post_frame_from_thread(uint16_t tag, std::string payload) {
+void MainFrame::post_frame_from_thread(const std::string& machine_name,
+                                       uint16_t tag,
+                                       std::string payload) {
     auto* evt = new wxThreadEvent(EVT_SUP_FRAME);
-    // Stuff tag + payload into the event. wxThreadEvent has SetInt /
-    // SetString — sufficient for our binary payload (std::string is
-    // byte-clean; wxString conversion would corrupt it, so we go via
-    // SetExtraLong as a sentinel and ship the bytes via SetPayload).
     evt->SetInt(static_cast<int>(tag));
-    evt->SetPayload(payload);
+    FrameMsg msg;
+    msg.machine_name = machine_name;
+    msg.payload      = std::move(payload);
+    evt->SetPayload(msg);
     wxQueueEvent(this, evt);
 }
 
 void MainFrame::on_sup_frame(wxThreadEvent& evt) {
     const uint16_t tag = static_cast<uint16_t>(evt.GetInt());
-    const std::string payload = evt.GetPayload<std::string>();
+    const FrameMsg msg = evt.GetPayload<FrameMsg>();
 
-    // 0x0002 = HealthBeacon. Stamp the heartbeat clock; full decode happens
-    // in the panels.
-    if (tag == 0x0002) {
+    if (tag == 0x0002) {  // HealthBeacon
         last_heartbeat_.store(
             std::chrono::steady_clock::now().time_since_epoch().count());
     }
 
-    tree_      ->on_frame(tag, payload);
-    processes_ ->on_frame(tag, payload);
-    trace_     ->on_frame(tag, payload);
-    tombstones_->on_frame(tag, payload);
-    perf_      ->on_frame(tag, payload);
+    system_panel_ ->on_frame(msg.machine_name, tag, msg.payload);
+    load_charts_  ->on_frame(msg.machine_name, tag, msg.payload);
+    applications_ ->on_frame(msg.machine_name, tag, msg.payload);
+    processes_    ->on_frame(msg.machine_name, tag, msg.payload);
+    trace_        ->on_frame(msg.machine_name, tag, msg.payload);
 }
 
-void MainFrame::on_close(wxCloseEvent& evt) {
-    if (tipc_) tipc_->stop();
+void MainFrame::on_close(wxCloseEvent& /*evt*/) {
+    for (auto& c : clients_) {
+        if (c) c->stop();
+    }
     if (status_timer_) status_timer_->Stop();
     Destroy();
 }
 
 void MainFrame::on_status_tick(wxTimerEvent&) {
-    if (!tipc_) return;
-    if (!tipc_->is_connected()) {
-        SetStatusText("disconnected", 0);
-        SetStatusText("",             1);
+    size_t connected = 0;
+    for (const auto& c : clients_) {
+        if (c && c->is_connected()) ++connected;
+    }
+
+    if (clients_.empty()) {
+        SetStatusText("no machines configured", 0);
+        SetStatusText("", 1);
         return;
     }
-    auto now    = std::chrono::steady_clock::now();
-    auto hb     = std::chrono::steady_clock::time_point(
-                    std::chrono::steady_clock::duration(last_heartbeat_.load()));
-    auto age_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - hb).count();
-    if (last_heartbeat_.load() == 0) {
-        SetStatusText("connected (no heartbeat yet)", 0);
-    } else if (age_ms > 3500) {
-        SetStatusText("stale heartbeat", 0);
+
+    wxString status;
+    if (connected == clients_.size()) {
+        status.Printf("connected (%zu/%zu)", connected, clients_.size());
+    } else if (connected == 0) {
+        status.Printf("disconnected (0/%zu)", clients_.size());
     } else {
-        SetStatusText("connected", 0);
+        status.Printf("partial (%zu/%zu)", connected, clients_.size());
     }
-    SetStatusText(wxString::Format("hb age %lld ms", static_cast<long long>(age_ms)), 1);
+    SetStatusText(status, 0);
+
+    if (last_heartbeat_.load() == 0) {
+        SetStatusText("no heartbeat yet", 1);
+    } else {
+        auto now = std::chrono::steady_clock::now();
+        auto hb  = std::chrono::steady_clock::time_point(
+                       std::chrono::steady_clock::duration(last_heartbeat_.load()));
+        auto age_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - hb).count();
+        SetStatusText(
+            wxString::Format("hb age %lld ms", static_cast<long long>(age_ms)), 1);
+    }
 }
 
 }  // namespace sup_gui

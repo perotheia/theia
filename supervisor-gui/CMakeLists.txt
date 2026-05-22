@@ -56,40 +56,35 @@ target_compile_options(supervisor_gui_proto PRIVATE
 )
 target_link_libraries(supervisor_gui_proto PUBLIC ${PROTOBUF_LIBRARIES})
 
+# yaml-cpp — for parsing machines.yaml on the GUI side.
+pkg_check_modules(YAMLCPP REQUIRED yaml-cpp)
+
 # Main GUI binary.
 add_executable(supervisor-gui
     src/main.cpp
     src/main_frame.cpp
-    src/tipc_client.cpp
-    src/panels/tree_panel.cpp
-    src/panels/process_panel.cpp
+    src/tcp_client.cpp
+    src/machines.cpp
+    src/panels/system_panel.cpp
+    src/panels/load_charts_panel.cpp
+    src/panels/applications_panel.cpp
+    src/panels/processes_panel.cpp
     src/panels/trace_panel.cpp
-    src/panels/tombstone_panel.cpp
-    src/panels/perf_panel.cpp
     $<TARGET_OBJECTS:supervisor_gui_proto>
 )
 
 target_include_directories(supervisor-gui PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${PROTOBUF_INCLUDE_DIRS}
+    ${YAMLCPP_INCLUDE_DIRS}
     ${PROTO_GEN_DIR}
 )
 
 target_link_libraries(supervisor-gui PRIVATE
     ${wxWidgets_LIBRARIES}
     ${PROTOBUF_LIBRARIES}
+    ${YAMLCPP_LIBRARIES}
     pthread
 )
 
 install(TARGETS supervisor-gui RUNTIME DESTINATION bin)
-
-# Headless smoke-test probe (no wx). Same TIPC client, prints frames to
-# stderr. Useful in CI / containers without a display server.
-add_executable(tipc_probe
-    src/tipc_probe.cpp
-    src/tipc_client.cpp
-)
-target_include_directories(tipc_probe PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-)
-target_link_libraries(tipc_probe PRIVATE pthread)

@@ -76,7 +76,7 @@ When a supervisor terminates a child it sends SIGTERM and waits
 
 ## Data shapes
 
-Authored in Python (see `artheia/armanifest/`), serialized to YAML,
+Authored in Python (see `artheia/manifest/`), serialized to YAML,
 executed by the C++ supervisor binary.
 
 ### `ChildSpec` (one leaf)
@@ -119,7 +119,7 @@ declares the interface it **provides** (server port) and the
 interfaces it **requires** (client ports). A topological sort of
 these edges yields a start order: `core` first, leaf FCs last.
 
-`build_supervisor_tree(rig)` in `artheia.armanifest.supervisor`:
+`build_supervisor_tree(rig)` in `artheia.manifest.supervisor`:
 
 1. Walks `platforms/system/services/<short>/package.art` via the
    artheia textX parser.

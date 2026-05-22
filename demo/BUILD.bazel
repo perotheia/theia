@@ -1,0 +1,78 @@
+"""demo/BUILD.bazel — Bazel targets for the demo rig binaries.
+
+Targets named here match the `bazel_target` strings in
+demo/manifest/rig.py's SwComponents:
+
+    //demo:p1_main  ← demo/build/p1_main (via gen-app-composition)
+    //demo:p2_main  ← demo/build/p2_main
+    //demo:p3_main  ← demo/build/p3_main
+
+PLACEHOLDER STATE: today the demo binaries are built by
+`artheia gen-app-composition` into CMake projects under demo/build/.
+This BUILD.bazel exposes each as a `genrule`-produced bash stub so
+the rig synthetic repo (@rig_demo//demo_host:image) can package them
+into an .ipk without falling over.
+
+To replace a stub with a real cc_binary:
+
+  load("@rules_cc//cc:defs.bzl", "cc_binary")
+
+  cc_binary(
+      name = "p1_main",
+      srcs = [
+          "src/generated/Demo3Way__P1_refs.hh",  # produced by gen-app-composition
+          "src/Demo3Way__P1.cc",                  # hand-written entry
+          ...
+      ],
+      deps = [
+          "//platform/runtime:libruntime",
+          "//demo:demo_pb",   # nanopb-generated demo proto
+      ],
+  )
+
+Until the CMake → cc_binary bridge is wired up, the stubs below
+satisfy the rig manifest's references and let `bazel build
+@rig_demo//demo_host:image` complete end-to-end.
+"""
+
+package(default_visibility = ["//visibility:public"])
+
+# Three placeholder binaries. Each is a tiny shell script that, when
+# run, logs its name and sleeps — same shape as the bash daemons
+# under theia_runtime/vendor/apps/<name>/daemon.sh that the supervisor
+# spawns today.
+#
+# The `_main` suffix matches the convention `gen-app-composition`
+# emits and what demo/manifest/rig.py references.
+
+_STUB_CMD = '''cat > $@ <<'STUB'
+#!/usr/bin/env bash
+# AUTO-GENERATED placeholder for {name}. Replace with a real cc_binary
+# once gen-app-composition's CMake output is bridged into Bazel.
+echo "[{name}] placeholder running pid=$$"
+trap "echo '[{name}] received SIGTERM; exiting'; exit 0" TERM
+while true; do sleep 60; done
+STUB
+chmod +x $@
+'''
+
+genrule(
+    name = "p1_main_stub",
+    outs = ["p1_main"],
+    cmd = _STUB_CMD.format(name = "demo_p1"),
+    executable = True,
+)
+
+genrule(
+    name = "p2_main_stub",
+    outs = ["p2_main"],
+    cmd = _STUB_CMD.format(name = "demo_p2"),
+    executable = True,
+)
+
+genrule(
+    name = "p3_main_stub",
+    outs = ["p3_main"],
+    cmd = _STUB_CMD.format(name = "demo_p3"),
+    executable = True,
+)

@@ -123,6 +123,11 @@ DEMO_COMPONENTS: list[SwComponent] = [
         # materializes; the runtime constructs its hosted prototypes
         # locally and any other prototype as a RemoteRef.
         art_node=f"system.demo/{art_class}",
+        # Demo binaries are real Bazel targets — see demo/BUILD.bazel.
+        # The 18 FC SwComponents in services/manifest/fc.py default to
+        # bazel_buildable=False (they're bash daemons under
+        # theia_runtime/, not yet bridged into Bazel).
+        bazel_buildable=True,
     )
     for (name, art_class, target, _) in _DEMO_PROCESSES
 ]

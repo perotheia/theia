@@ -17,9 +17,9 @@ module(
 )
 
 # ── Standard Bazel rules ───────────────────────────────────────────────────
-bazel_dep(name = "platforms",    version = "0.0.11")
-bazel_dep(name = "rules_cc",     version = "0.2.17")
-bazel_dep(name = "rules_pkg",    version = "1.1.0")
+bazel_dep(name = "platforms", version = "0.0.11")
+bazel_dep(name = "rules_cc", version = "0.2.17")
+bazel_dep(name = "rules_pkg", version = "1.1.0")
 
 # ── Python (code generators) ───────────────────────────────────────────────
 bazel_dep(name = "rules_python", version = "1.7.0")
@@ -42,5 +42,22 @@ bazel_dep(name = "nanopb", version = "0.4.9.1")
 # ── Toolchain registrations ────────────────────────────────────────────────
 # ARM GCC 7-2017-q4 (open-source, CCS 8 era)
 register_toolchains("//toolchains/arm_gcc_7_2017q4:cc_suite")
+
 # TI ARM CGT 18.1.1.LTS (original CCS 8 proprietary compiler)
 register_toolchains("//toolchains/ti_arm_cgt_18:cc_suite")
+
+# ── Rig module extension ──────────────────────────────────────────────────
+# Materialize synthetic Bazel repos from artheia rig.py modules at
+# MODULE-resolution time. Each `rig_ext.declare(...)` line below
+# becomes a `@<name>//` repo with per-machine deploy bundles
+# (`@<name>//<machine>:image`).
+#
+# Requires the workspace `.venv/bin/artheia` to exist (run
+# `pip install -e artheia/` once). See `docs/artheia/bazel.md`.
+
+rig_ext = use_extension("//rules:rig.bzl", "rig_ext")
+rig_ext.declare(
+    name = "rig_demo",
+    rig_module = "demo.manifest.rig",
+)
+use_repo(rig_ext, "rig_demo")

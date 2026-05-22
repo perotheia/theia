@@ -1,0 +1,15 @@
+"""tools/BUILD.bazel — workspace helper scripts.
+
+We expose `artheia_wrapper.sh` as a plain executable file rather than
+a sh_binary, to avoid pulling in rules_shell as a MODULE dependency
+just for one wrapper. Genrules that need it use `$(rootpath ...)` and
+shell it out directly.
+"""
+
+package(default_visibility = ["//visibility:public"])
+
+# An executable file. Genrules reference via $(rootpath
+# //tools:artheia_wrapper.sh) and invoke as `bash $(rootpath ...)`.
+exports_files(
+    ["artheia_wrapper.sh"],
+)

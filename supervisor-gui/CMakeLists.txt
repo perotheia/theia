@@ -1,7 +1,8 @@
 cmake_minimum_required(VERSION 3.16)
 project(supervisor_gui CXX)
 
-set(CMAKE_CXX_STANDARD 14)
+# C++17 needed for the gRPC client API.
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -9,45 +10,71 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
-add_compile_options(-Wall -Wextra -Wpedantic)
+add_compile_options(-Wall -Wextra)
 
-# Dependencies.
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(PROTOBUF REQUIRED protobuf)
+pkg_check_modules(GRPCPP   REQUIRED grpc++)
+pkg_check_modules(YAMLCPP  REQUIRED yaml-cpp)
 
-# wxWidgets — try the 3.2 first, fall back to 3.0.
 find_package(wxWidgets REQUIRED COMPONENTS core base aui)
 include(${wxWidgets_USE_FILE})
 
-# .proto compilation — the supervisor's .art is the source of truth for
-# the wire schema. We point at the supervisor's gen-proto outputs so
-# the GUI compiles the same exact messages without a copy step.
-find_program(PROTOC_EXECUTABLE protoc REQUIRED)
+find_program(PROTOC_EXECUTABLE protoc           REQUIRED)
+find_program(GRPC_CPP_PLUGIN   grpc_cpp_plugin  REQUIRED)
 
-set(PROTO_SRC_DIR  ${CMAKE_CURRENT_SOURCE_DIR}/../platform/supervisor/generated/proto)
+# Supervisor's .proto pile — wire-side message types.
+set(SUP_PROTO_DIR  ${CMAKE_CURRENT_SOURCE_DIR}/../platform/supervisor/generated/proto)
+# services/com's bridge .proto — gRPC service surface.
+set(COM_PROTO_DIR  ${CMAKE_CURRENT_SOURCE_DIR}/../services/com/proto)
 set(PROTO_GEN_DIR  ${CMAKE_CURRENT_BINARY_DIR}/generated)
 file(MAKE_DIRECTORY ${PROTO_GEN_DIR})
 
-file(GLOB PROTO_FILES ${PROTO_SRC_DIR}/*.proto)
-set(PROTO_GEN_SRCS)
-foreach(PROTO_FILE ${PROTO_FILES})
+# All supervisor protos.
+file(GLOB SUP_PROTO_FILES ${SUP_PROTO_DIR}/*.proto)
+set(SUP_PROTO_GEN_SRCS)
+foreach(PROTO_FILE ${SUP_PROTO_FILES})
     get_filename_component(PROTO_NAME ${PROTO_FILE} NAME_WE)
     set(PB_CC ${PROTO_GEN_DIR}/${PROTO_NAME}.pb.cc)
     set(PB_H  ${PROTO_GEN_DIR}/${PROTO_NAME}.pb.h)
     add_custom_command(
-        OUTPUT  ${PB_CC} ${PB_H}
+        OUTPUT ${PB_CC} ${PB_H}
         COMMAND ${PROTOC_EXECUTABLE}
-                --proto_path=${PROTO_SRC_DIR}
+                --proto_path=${SUP_PROTO_DIR}
                 --cpp_out=${PROTO_GEN_DIR}
                 ${PROTO_FILE}
         DEPENDS ${PROTO_FILE}
         COMMENT "protoc ${PROTO_NAME}.proto"
         VERBATIM
     )
-    list(APPEND PROTO_GEN_SRCS ${PB_CC})
+    list(APPEND SUP_PROTO_GEN_SRCS ${PB_CC})
 endforeach()
 
-add_library(supervisor_gui_proto OBJECT ${PROTO_GEN_SRCS})
+# Bridge .proto — message types + gRPC client stubs.
+set(BRIDGE_PB_CC   ${PROTO_GEN_DIR}/supervisor_bridge.pb.cc)
+set(BRIDGE_PB_H    ${PROTO_GEN_DIR}/supervisor_bridge.pb.h)
+set(BRIDGE_GRPC_CC ${PROTO_GEN_DIR}/supervisor_bridge.grpc.pb.cc)
+set(BRIDGE_GRPC_H  ${PROTO_GEN_DIR}/supervisor_bridge.grpc.pb.h)
+add_custom_command(
+    OUTPUT  ${BRIDGE_PB_CC} ${BRIDGE_PB_H}
+            ${BRIDGE_GRPC_CC} ${BRIDGE_GRPC_H}
+    COMMAND ${PROTOC_EXECUTABLE}
+            --proto_path=${COM_PROTO_DIR}
+            --proto_path=${SUP_PROTO_DIR}
+            --cpp_out=${PROTO_GEN_DIR}
+            --grpc_out=${PROTO_GEN_DIR}
+            --plugin=protoc-gen-grpc=${GRPC_CPP_PLUGIN}
+            ${COM_PROTO_DIR}/supervisor_bridge.proto
+    DEPENDS ${COM_PROTO_DIR}/supervisor_bridge.proto
+    COMMENT "protoc (+grpc) supervisor_bridge.proto"
+    VERBATIM
+)
+
+add_library(supervisor_gui_proto OBJECT
+    ${SUP_PROTO_GEN_SRCS}
+    ${BRIDGE_PB_CC}
+    ${BRIDGE_GRPC_CC}
+)
 target_include_directories(supervisor_gui_proto PUBLIC ${PROTO_GEN_DIR})
 target_compile_options(supervisor_gui_proto PRIVATE
     ${PROTOBUF_CFLAGS_OTHER}
@@ -56,13 +83,11 @@ target_compile_options(supervisor_gui_proto PRIVATE
 )
 target_link_libraries(supervisor_gui_proto PUBLIC ${PROTOBUF_LIBRARIES})
 
-# Main GUI binary.
-# Transport sources (tcp_client + machines) removed in phase 0 of the
-# TCP→TIPC→gRPC migration; the gRPC client lands in phase 6 and pulls
-# in grpc++ + the bridge's .proto here.
 add_executable(supervisor-gui
     src/main.cpp
     src/main_frame.cpp
+    src/grpc_client.cpp
+    src/machines.cpp
     src/panels/system_panel.cpp
     src/panels/load_charts_panel.cpp
     src/panels/applications_panel.cpp
@@ -74,12 +99,17 @@ add_executable(supervisor-gui
 target_include_directories(supervisor-gui PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${PROTOBUF_INCLUDE_DIRS}
+    ${GRPCPP_INCLUDE_DIRS}
+    ${YAMLCPP_INCLUDE_DIRS}
     ${PROTO_GEN_DIR}
 )
 
 target_link_libraries(supervisor-gui PRIVATE
     ${wxWidgets_LIBRARIES}
     ${PROTOBUF_LIBRARIES}
+    ${GRPCPP_LIBRARIES}
+    ${YAMLCPP_LIBRARIES}
+    -lgrpc -lgpr
     pthread
 )
 

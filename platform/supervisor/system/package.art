@@ -110,12 +110,77 @@ message ChildSelector {
     string  name
 }
 
+// Mirror of supervisor::ChildSpec (the runtime data type) on the wire
+// — used by StartChild to inject a new child into a live tree. Field
+// set is OTP's child_spec map flattened to a flat proto message; the
+// runtime side reconstructs a ChildSpec from it.
+//
+// restart: 0=permanent (default), 1=transient, 2=temporary.
+// type:    0=worker (default), 1=supervisor.
+// shutdown: positive milliseconds, OR one of the sentinels -1=brutal_kill,
+//           -2=infinity.
+message ChildSpec {
+    string  name
+    string  parent_supervisor   // name of the SupervisorNode to add into
+    repeated string start_cmd   // argv (only meaningful for type=worker)
+    uint32  restart             // 0/1/2 — see above
+    sint32  shutdown            // ms or sentinel
+    uint32  type                // 0=worker / 1=supervisor
+    repeated string modules     // informational
+}
+
+message StartChildRequest {
+    ChildSpec spec
+}
+
+// Use ChildSelector for DeleteChild — the spec exists; we want it gone.
+// Distinct message kept for naming clarity at the wire / RPC layer.
+message DeleteChildRequest {
+    string  name
+}
+
 // Generic ack/error payload for action RPCs.
 //   status: 0=ok, 1=not_found, 2=already_running,
-//           3=already_stopped, 4=invalid_request
+//           3=already_stopped, 4=invalid_request,
+//           5=already_present (StartChild only),
+//           6=child_busy (delete/start while restart cascade in flight)
 message ControlReply {
     uint32  status
     string  message          // optional human-readable diagnostic
+    // Echo back the resulting child name when it's meaningful
+    // (StartChild's return needs to confirm the assigned id, for
+    // instance — observer's start_child returns {ok, pid} in OTP).
+    string  child_name
+}
+
+// ---- node→supervisor reports ---------------------------------------------
+
+// Periodic heartbeat sent by every reporting node to the supervisor's
+// NodeReportIf receiver. The supervisor tracks last_heartbeat per pid
+// and SIGTERMs nodes that miss K consecutive deadlines (treated as an
+// abnormal exit; restart strategy applies). Schedule lives in the
+// node's platform/runtime HeartbeatPublisher (manifest-driven period).
+//
+// monotonic_ns is the node's CLOCK_MONOTONIC reading at emit time;
+// the supervisor compares to its own clock_diff_ns for skew detection.
+message HeartbeatReport {
+    string  node_name
+    sint32  pid
+    uint64  seq                 // monotonic per-node, gaps == missed sends
+    uint64  monotonic_ns
+}
+
+// Emitted by a node when its outbound call/cast/send_request did not
+// complete inside the configured budget. AUTOSAR PHM-flavoured: this
+// is "deadline supervision" with the budget on the *send* side. Plug
+// into the runtime's call timeout path (handle_call_timeout) to fire.
+message SendTimeoutReport {
+    string  caller_node
+    string  callee_node
+    string  iface              // e.g. "CounterSrv"
+    string  method             // e.g. "Get"
+    uint32  budget_ms
+    uint32  observed_ms
 }
 
 // ---- interfaces ----------------------------------------------------------
@@ -123,6 +188,8 @@ message ControlReply {
 interface clientServer SupervisorControlIf {
     operation GetTree(in req: GetTreeRequest) returns TreeSnapshot
     operation GetChild(in req: GetChildRequest) returns ChildState
+    operation StartChild(in req: StartChildRequest) returns ControlReply
+    operation DeleteChild(in req: DeleteChildRequest) returns ControlReply
     operation RestartChild(in sel: ChildSelector) returns ControlReply
     operation TerminateChild(in sel: ChildSelector) returns ControlReply
     operation Stop() returns ControlReply
@@ -134,6 +201,15 @@ interface senderReceiver SupervisorEventIf {
     data TreeSnapshot     snapshot
 }
 
+// Inbound — every running node sends to this receiver. The supervisor
+// runs a watchdog timer per pid, treating K consecutive missed
+// HeartbeatReports as an abnormal exit. SendTimeoutReport feeds into
+// the SupervisorEventIf trace (kind=send_timeout) so the GUI sees it.
+interface senderReceiver NodeReportIf {
+    data HeartbeatReport   heartbeat
+    data SendTimeoutReport send_timeout
+}
+
 // ---- node ----------------------------------------------------------------
 
 // TIPC type 0x80020001 — sits above the FC range (0x80010001..0x80010012)
@@ -143,8 +219,9 @@ interface senderReceiver SupervisorEventIf {
 node atomic Supervisor {
     tipc type=0x80020001 instance=0
     ports {
-        server  control provides SupervisorControlIf
-        sender  events  provides SupervisorEventIf
+        server   control  provides SupervisorControlIf
+        sender   events   provides SupervisorEventIf
+        receiver reports  requires NodeReportIf
     }
     params {
         // Period of the HealthBeacon emission in ms. The GUI uses this
@@ -153,6 +230,11 @@ node atomic Supervisor {
         // Period of the periodic TreeSnapshot broadcast. State-change
         // events fire snapshots ad-hoc; this one is a safety net.
         snapshot_period_ms  : uint32 = 5000
+        // Watchdog: terminate a node that misses this many consecutive
+        // expected HeartbeatReports. Combined with the node's emit
+        // period this gives the time-to-kill of a wedged daemon.
+        // Default 3 ≈ 3 × node_heartbeat_period (typically 3s).
+        watchdog_max_missed : uint32 = 3
     }
 }
 

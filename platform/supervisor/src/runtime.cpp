@@ -115,10 +115,19 @@ Supervisor::Supervisor(std::unique_ptr<Node> root, std::string root_dir)
     start_time_      = std::chrono::steady_clock::now();
     last_heartbeat_  = start_time_;
     last_snapshot_   = start_time_;
-    // Event publishing intentionally absent: phase 1b reconnects this
-    // via the TIPC GenServer publisher in services/com. emit_event /
-    // emit_health / emit_snapshot still run (so the snapshot / sampler
-    // pipeline stays exercised) but do not transmit.
+
+    // Bind the supervisor's TIPC service. .art declares this address —
+    // hardcoded here until the param-from-manifest plumbing lands.
+    // Best-effort: if the kernel lacks AF_TIPC (no module / no perms)
+    // the supervisor still runs; just no GUI / com feed.
+    publisher_.open(0x80020001, 0);
+
+    // Inbound dispatch lambda captures `this` for routing. Phases 3+4
+    // add real handler bodies; today every tag is a quiet drop.
+    publisher_.set_inbound_callback(
+        [this](int fd, uint16_t tag, const std::string& payload) {
+            on_inbound_frame(fd, tag, payload);
+        });
 
     // Block SIGCHLD/SIGTERM/SIGINT process-wide; we read them via signalfd.
     sigset_t mask;
@@ -509,6 +518,11 @@ int Supervisor::run() {
         // signalfd event — we may have missed coalesced SIGCHLDs.
         reap();
 
+        // Drain the TIPC socket: accept new clients, deliver inbound
+        // ControlRequest / HeartbeatReport / SendTimeoutReport frames
+        // to on_inbound_frame() via the installed callback.
+        publisher_.poll();
+
         // Periodic emissions. The .art file's heartbeat_period_ms /
         // snapshot_period_ms params are the canonical schedule; hardcoded
         // here until the param-from-manifest plumbing lands.
@@ -580,19 +594,40 @@ void Supervisor::reap() {
 // ---------------------------------------------------------------------------
 
 namespace {
-// Framing tags retained for the phase-1b TIPC re-wiring; see
-// platform/supervisor/system/package.art for the canonical schema.
-constexpr uint16_t kTagEvent    = 0x0001;
-constexpr uint16_t kTagHealth   = 0x0002;
-constexpr uint16_t kTagSnapshot = 0x0003;
+// Framing tags — see platform/supervisor/system/package.art docstring
+// for the canonical schema.
+constexpr uint16_t kTagEvent          = 0x0001;
+constexpr uint16_t kTagHealth         = 0x0002;
+constexpr uint16_t kTagSnapshot       = 0x0003;
+// Inbound tags (filled by phase 3 / phase 4):
+constexpr uint16_t kTagControlRequest = 0x0100;
+constexpr uint16_t kTagControlReply   = 0x0101;
+constexpr uint16_t kTagHeartbeat      = 0x0200;
+constexpr uint16_t kTagSendTimeout    = 0x0201;
 }  // namespace
 
-// publish_*() — transport stubs. Phase 1b wires these into the TIPC
-// GenServer publisher hosted in services/com. Kept as separate methods
-// (rather than inlining into the emit_*() flow) so the call sites can
-// stay where they are while the transport swaps.
-static void publish_stub(uint16_t /*tag*/, const std::string& /*serialized*/) {
-    // intentional: no-op until services/com bridges over TIPC.
+// Inbound TIPC dispatch. Phase 3 fills the ControlRequest branch;
+// phase 4 fills the heartbeat + send-timeout branches. For now the
+// body just logs unknown frames so we can see them arrive.
+void Supervisor::on_inbound_frame(int /*client_fd*/, uint16_t tag,
+                                  const std::string& payload) {
+    switch (tag) {
+        case kTagControlRequest:
+            // TODO(phase 3): decode ControlRequest, dispatch by op.
+            std::fprintf(stderr, "supervisor: ControlRequest (%zu bytes) — "
+                         "phase 3 placeholder\n", payload.size());
+            break;
+        case kTagHeartbeat:
+            // TODO(phase 4): decode HeartbeatReport, refresh watchdog.
+            break;
+        case kTagSendTimeout:
+            // TODO(phase 4): decode SendTimeoutReport, emit_event(kind=send_timeout).
+            break;
+        default:
+            std::fprintf(stderr, "supervisor: unknown inbound tag 0x%04x "
+                         "(%zu bytes)\n", tag, payload.size());
+            break;
+    }
 }
 
 void Supervisor::emit_event(uint32_t kind,
@@ -611,7 +646,7 @@ void Supervisor::emit_event(uint32_t kind,
     if (sup) ev.set_strategy(to_string(sup->strategy));
     ev.set_tombstone_path(tombstone_path);
     ev.set_detail(detail);
-    publish_stub(kTagEvent, ev.SerializeAsString());
+    publisher_.publish(kTagEvent, ev.SerializeAsString());
 }
 
 void Supervisor::emit_health() {
@@ -633,7 +668,7 @@ void Supervisor::emit_health() {
     hb.set_active_workers(active);
     hb.set_total_restarts(total_restarts_);
     hb.set_total_tombstones(total_tombstones_);
-    publish_stub(kTagHealth, hb.SerializeAsString());
+    publisher_.publish(kTagHealth, hb.SerializeAsString());
 }
 
 // /proc reader helpers — see header for the design intent.
@@ -797,7 +832,7 @@ void Supervisor::emit_snapshot() {
         };
     walk(*root_, "");
 
-    publish_stub(kTagSnapshot, snap.SerializeAsString());
+    publisher_.publish(kTagSnapshot, snap.SerializeAsString());
 }
 
 }  // namespace supervisor

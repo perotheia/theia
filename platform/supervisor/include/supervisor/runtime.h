@@ -1,18 +1,15 @@
 // The Supervisor class. fork/exec, signal handling, restart logic.
 //
-// Transport for events / health / snapshots is intentionally absent
-// from this class — that responsibility now lives in services/com,
-// which speaks to the supervisor over TIPC like every other FC. This
-// class focuses on POSIX process supervision: fork/exec, signalfd,
-// restart-strategy dispatch, /proc sampling for child resource facts.
-//
-// The publish call sites in emit_*() are kept (as no-op stubs for now)
-// because phase 1b will wire them to the runtime's GenServer TIPC
-// publisher; restoring publishing is a 1-line plumbing change there.
+// Transport: the supervisor exposes itself as a TIPC service at the
+// address declared in platform/supervisor/system/package.art (TIPC
+// type 0x80020001 / instance 0). Same SOCK_SEQPACKET framing every
+// other artheia node uses. services/com bridges this to gRPC for the
+// external GUI; in-host actors talk to it directly.
 
 #pragma once
 
 #include "supervisor/spec.h"
+#include "supervisor/tipc_publisher.h"
 
 #include <atomic>
 #include <chrono>
@@ -67,6 +64,12 @@ private:
     // signalfd descriptor and a self-pipe wake-up fd for portability.
     int                              signal_fd_{-1};
 
+    // TIPC fan-out at the .art-declared address. Hosts both the
+    // outbound publish path (events / health / snapshots) and the
+    // inbound dispatch hook for ControlRequest (phase 3) /
+    // HeartbeatReport / SendTimeoutReport (phase 4).
+    TipcPublisher                    publisher_;
+
     std::chrono::steady_clock::time_point start_time_{};
     std::chrono::steady_clock::time_point last_heartbeat_{};
     std::chrono::steady_clock::time_point last_snapshot_{};
@@ -74,15 +77,19 @@ private:
     uint64_t                         total_restarts_{0};
     uint64_t                         total_tombstones_{0};
 
-    // Event-shape helpers. Today these are stubs (transport removed
-    // with the TCP publisher); phase 1b reconnects them via the TIPC
-    // GenServer publisher.
     void emit_event(uint32_t kind, const WorkerNode* worker,
                     const SupervisorNode* sup, int exit_code,
                     const std::string& tombstone_path,
                     const std::string& detail);
     void emit_health();
     void emit_snapshot();
+
+    // Inbound TIPC dispatch — called by the publisher's poll() when
+    // a client frame lands. Phase 3 fills in ControlRequest handling
+    // (StartChild / RestartChild / TerminateChild / DeleteChild),
+    // phase 4 fills HeartbeatReport / SendTimeoutReport.
+    void on_inbound_frame(int client_fd, uint16_t tag,
+                          const std::string& payload);
 
     // /proc/<pid>/{stat,status} sampler — one row per supervised pid.
     // Refreshed inside the main loop on the heartbeat tick and read by

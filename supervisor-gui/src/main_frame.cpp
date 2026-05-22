@@ -6,8 +6,6 @@
 #include <wx/statusbr.h>
 #include <wx/timer.h>
 
-#include <utility>
-
 namespace sup_gui {
 
 wxDEFINE_EVENT(EVT_SUP_FRAME, wxThreadEvent);
@@ -21,19 +19,7 @@ wxBEGIN_EVENT_TABLE(MainFrame, wxFrame)
     EVT_TIMER(ID_STATUS_TIMER, MainFrame::on_status_tick)
 wxEND_EVENT_TABLE()
 
-namespace {
-
-// Tag the machine_name into wxThreadEvent without losing the binary
-// payload. We pack {machine_name, payload} into a small struct posted
-// as the event's payload.
-struct FrameMsg {
-    std::string machine_name;
-    std::string payload;
-};
-
-}  // namespace
-
-MainFrame::MainFrame(std::vector<MachineEndpoint> machines)
+MainFrame::MainFrame()
     : wxFrame(nullptr, wxID_ANY, "supervisor-gui",
               wxDefaultPosition, wxSize(1280, 800)) {
 
@@ -55,7 +41,7 @@ MainFrame::MainFrame(std::vector<MachineEndpoint> machines)
     SetSizer(sizer);
 
     CreateStatusBar(2);
-    SetStatusText("connecting…", 0);
+    SetStatusText("no transport — waiting on services/com", 0);
     SetStatusText("", 1);
 
     Bind(EVT_SUP_FRAME, &MainFrame::on_sup_frame, this);
@@ -63,93 +49,29 @@ MainFrame::MainFrame(std::vector<MachineEndpoint> machines)
     status_timer_ = new wxTimer(this, ID_STATUS_TIMER);
     status_timer_->Start(500);
 
-    // One TcpClient per machine row. Each client funnels frames into
-    // the same wxQueueEvent path.
-    for (const auto& m : machines) {
-        clients_.emplace_back(new TcpClient(
-            m.name, m.address, m.port,
-            [this](const std::string& machine_name, uint16_t tag,
-                   std::string payload) {
-                post_frame_from_thread(machine_name, tag, std::move(payload));
-            }));
-        clients_.back()->start();
-    }
+    // Transport intentionally absent until services/com is up.
+    // Phase 6 wires a gRPC client here; each frame it emits will fan
+    // through post_frame_from_thread() into the existing panel
+    // dispatch via wxQueueEvent(EVT_SUP_FRAME).
 }
 
-MainFrame::~MainFrame() {
-    for (auto& c : clients_) {
-        if (c) c->stop();
-    }
-}
-
-void MainFrame::post_frame_from_thread(const std::string& machine_name,
-                                       uint16_t tag,
-                                       std::string payload) {
-    auto* evt = new wxThreadEvent(EVT_SUP_FRAME);
-    evt->SetInt(static_cast<int>(tag));
-    FrameMsg msg;
-    msg.machine_name = machine_name;
-    msg.payload      = std::move(payload);
-    evt->SetPayload(msg);
-    wxQueueEvent(this, evt);
-}
+MainFrame::~MainFrame() = default;
 
 void MainFrame::on_sup_frame(wxThreadEvent& evt) {
-    const uint16_t tag = static_cast<uint16_t>(evt.GetInt());
-    const FrameMsg msg = evt.GetPayload<FrameMsg>();
-
-    if (tag == 0x0002) {  // HealthBeacon
-        last_heartbeat_.store(
-            std::chrono::steady_clock::now().time_since_epoch().count());
-    }
-
-    system_panel_ ->on_frame(msg.machine_name, tag, msg.payload);
-    load_charts_  ->on_frame(msg.machine_name, tag, msg.payload);
-    applications_ ->on_frame(msg.machine_name, tag, msg.payload);
-    processes_    ->on_frame(msg.machine_name, tag, msg.payload);
-    trace_        ->on_frame(msg.machine_name, tag, msg.payload);
+    // Once the gRPC client is up (phase 6), it posts ThreadEvents with
+    // payload = (machine_name, tag, payload). Panels filter and decode.
+    // Until then, this handler exists but is never invoked.
+    (void)evt;
 }
 
 void MainFrame::on_close(wxCloseEvent& /*evt*/) {
-    for (auto& c : clients_) {
-        if (c) c->stop();
-    }
     if (status_timer_) status_timer_->Stop();
     Destroy();
 }
 
 void MainFrame::on_status_tick(wxTimerEvent&) {
-    size_t connected = 0;
-    for (const auto& c : clients_) {
-        if (c && c->is_connected()) ++connected;
-    }
-
-    if (clients_.empty()) {
-        SetStatusText("no machines configured", 0);
-        SetStatusText("", 1);
-        return;
-    }
-
-    wxString status;
-    if (connected == clients_.size()) {
-        status.Printf("connected (%zu/%zu)", connected, clients_.size());
-    } else if (connected == 0) {
-        status.Printf("disconnected (0/%zu)", clients_.size());
-    } else {
-        status.Printf("partial (%zu/%zu)", connected, clients_.size());
-    }
-    SetStatusText(status, 0);
-
-    if (last_heartbeat_.load() == 0) {
-        SetStatusText("no heartbeat yet", 1);
-    } else {
-        auto now = std::chrono::steady_clock::now();
-        auto hb  = std::chrono::steady_clock::time_point(
-                       std::chrono::steady_clock::duration(last_heartbeat_.load()));
-        auto age_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - hb).count();
-        SetStatusText(
-            wxString::Format("hb age %lld ms", static_cast<long long>(age_ms)), 1);
-    }
+    // Empty status until the transport is wired. The text shown at
+    // construction stays; nothing to refresh.
 }
 
 }  // namespace sup_gui

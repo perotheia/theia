@@ -105,8 +105,7 @@ std::string locate_tombstone(const std::string& dir,
 
 }  // namespace
 
-Supervisor::Supervisor(std::unique_ptr<Node> root, std::string root_dir,
-                       uint16_t listen_port)
+Supervisor::Supervisor(std::unique_ptr<Node> root, std::string root_dir)
     : root_node_(std::move(root)), root_dir_(std::move(root_dir)) {
     if (!root_node_ || !root_node_->is_supervisor()) {
         throw std::runtime_error("root must be a supervisor");
@@ -116,10 +115,10 @@ Supervisor::Supervisor(std::unique_ptr<Node> root, std::string root_dir,
     start_time_      = std::chrono::steady_clock::now();
     last_heartbeat_  = start_time_;
     last_snapshot_   = start_time_;
-    // Best-effort: the listen socket may be claimed (EADDRINUSE) or
-    // refused. open() logs the error and the publisher stays inert.
-    // The supervisor still runs; just no GUI feed.
-    publisher_.open(listen_port);
+    // Event publishing intentionally absent: phase 1b reconnects this
+    // via the TIPC GenServer publisher in services/com. emit_event /
+    // emit_health / emit_snapshot still run (so the snapshot / sampler
+    // pipeline stays exercised) but do not transmit.
 
     // Block SIGCHLD/SIGTERM/SIGINT process-wide; we read them via signalfd.
     sigset_t mask;
@@ -510,9 +509,6 @@ int Supervisor::run() {
         // signalfd event — we may have missed coalesced SIGCHLDs.
         reap();
 
-        // Drain the TCP publisher: accept new clients, ignore inbound bytes.
-        publisher_.poll();
-
         // Periodic emissions. The .art file's heartbeat_period_ms /
         // snapshot_period_ms params are the canonical schedule; hardcoded
         // here until the param-from-manifest plumbing lands.
@@ -584,11 +580,20 @@ void Supervisor::reap() {
 // ---------------------------------------------------------------------------
 
 namespace {
-// Framing tags must match TcpPublisher's frame layout (see header).
+// Framing tags retained for the phase-1b TIPC re-wiring; see
+// platform/supervisor/system/package.art for the canonical schema.
 constexpr uint16_t kTagEvent    = 0x0001;
 constexpr uint16_t kTagHealth   = 0x0002;
 constexpr uint16_t kTagSnapshot = 0x0003;
 }  // namespace
+
+// publish_*() — transport stubs. Phase 1b wires these into the TIPC
+// GenServer publisher hosted in services/com. Kept as separate methods
+// (rather than inlining into the emit_*() flow) so the call sites can
+// stay where they are while the transport swaps.
+static void publish_stub(uint16_t /*tag*/, const std::string& /*serialized*/) {
+    // intentional: no-op until services/com bridges over TIPC.
+}
 
 void Supervisor::emit_event(uint32_t kind,
                             const WorkerNode* worker,
@@ -606,7 +611,7 @@ void Supervisor::emit_event(uint32_t kind,
     if (sup) ev.set_strategy(to_string(sup->strategy));
     ev.set_tombstone_path(tombstone_path);
     ev.set_detail(detail);
-    publisher_.publish(kTagEvent, ev.SerializeAsString());
+    publish_stub(kTagEvent, ev.SerializeAsString());
 }
 
 void Supervisor::emit_health() {
@@ -628,7 +633,7 @@ void Supervisor::emit_health() {
     hb.set_active_workers(active);
     hb.set_total_restarts(total_restarts_);
     hb.set_total_tombstones(total_tombstones_);
-    publisher_.publish(kTagHealth, hb.SerializeAsString());
+    publish_stub(kTagHealth, hb.SerializeAsString());
 }
 
 // /proc reader helpers — see header for the design intent.
@@ -792,7 +797,7 @@ void Supervisor::emit_snapshot() {
         };
     walk(*root_, "");
 
-    publisher_.publish(kTagSnapshot, snap.SerializeAsString());
+    publish_stub(kTagSnapshot, snap.SerializeAsString());
 }
 
 }  // namespace supervisor

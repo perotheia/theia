@@ -77,14 +77,9 @@ std::unique_ptr<Node> load_supervisor(const YAML::Node& y, SupervisorNode* paren
     s.max_seconds  = y["max_seconds"].as<int>(5);
     s.parent       = parent;
     if (y["tombstone_dir"]) s.tombstone_dir = y["tombstone_dir"].as<std::string>();
-    if (y["listen_port"]) {
-        int v = y["listen_port"].as<int>();
-        if (v <= 0 || v > 65535) {
-            throw std::runtime_error(
-                "supervisor '" + s.name + "': listen_port out of range");
-        }
-        s.listen_port = static_cast<uint16_t>(v);
-    }
+    // listen_port: ignored — TCP transport has been removed; the
+    // services/com bridge in phase 2 will host the GUI-facing endpoint
+    // and read its TCP/gRPC port from its own machine manifest entry.
 
     auto node = Node::make_supervisor(std::move(s));
     SupervisorNode* self = &node->sup;

@@ -1,9 +1,18 @@
 // The Supervisor class. fork/exec, signal handling, restart logic.
+//
+// Transport for events / health / snapshots is intentionally absent
+// from this class — that responsibility now lives in services/com,
+// which speaks to the supervisor over TIPC like every other FC. This
+// class focuses on POSIX process supervision: fork/exec, signalfd,
+// restart-strategy dispatch, /proc sampling for child resource facts.
+//
+// The publish call sites in emit_*() are kept (as no-op stubs for now)
+// because phase 1b will wire them to the runtime's GenServer TIPC
+// publisher; restoring publishing is a 1-line plumbing change there.
 
 #pragma once
 
 #include "supervisor/spec.h"
-#include "supervisor/tcp_publisher.h"
 
 #include <atomic>
 #include <chrono>
@@ -17,8 +26,7 @@ namespace supervisor {
 
 class Supervisor {
 public:
-    Supervisor(std::unique_ptr<Node> root, std::string root_dir,
-               uint16_t listen_port = TcpPublisher::kDefaultPort);
+    Supervisor(std::unique_ptr<Node> root, std::string root_dir);
     ~Supervisor();
 
     Supervisor(const Supervisor&)            = delete;
@@ -59,8 +67,6 @@ private:
     // signalfd descriptor and a self-pipe wake-up fd for portability.
     int                              signal_fd_{-1};
 
-    // TCP pub for the supervisor-gui.
-    TcpPublisher                     publisher_;
     std::chrono::steady_clock::time_point start_time_{};
     std::chrono::steady_clock::time_point last_heartbeat_{};
     std::chrono::steady_clock::time_point last_snapshot_{};
@@ -68,8 +74,9 @@ private:
     uint64_t                         total_restarts_{0};
     uint64_t                         total_tombstones_{0};
 
-    // Event emission helpers — JSON-shape these into one document per
-    // call and broadcast via publisher_.
+    // Event-shape helpers. Today these are stubs (transport removed
+    // with the TCP publisher); phase 1b reconnects them via the TIPC
+    // GenServer publisher.
     void emit_event(uint32_t kind, const WorkerNode* worker,
                     const SupervisorNode* sup, int exit_code,
                     const std::string& tombstone_path,

@@ -61,12 +61,13 @@ DemoHost = MachineManifest(
     hardware=HardwareResource(
         cpu=CpuResource(architecture=CpuArchitecture.AARCH64),
     ),
-    # Per-machine supervisor listen endpoint — the GUI connects here to
-    # observe this machine. Multi-machine rigs assign distinct ports
-    # when several machines share one host.
-    supervisor_endpoint=IpEndpoint(
+    # Per-machine services/com gRPC endpoint — the GUI connects here.
+    # Multi-machine rigs assign distinct ports when several machines
+    # share one host. The supervisor itself is *not* exposed directly;
+    # it's an in-host TIPC node bridged by com.
+    com_endpoint=IpEndpoint(
         address=IPv4Address("127.0.0.1"),
-        port=7610,
+        port=7700,
     ),
 )
 

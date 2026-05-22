@@ -99,11 +99,6 @@ struct SupervisorNode {
     // a child dies from a fatal signal. Leaf supervisors inherit by
     // walking up to the root. Empty == no tombstone surfacing.
     std::string tombstone_dir;
-
-    // Project extension (root-only): TCP port for the supervisor-gui
-    // feed. 0 == use the supervisor binary's default (7610).
-    // Lifted from MachineManifest.supervisor_endpoint at emit time.
-    uint16_t listen_port{0};
 };
 
 // Tagged-union: a tree node is either a worker (leaf) or a supervisor

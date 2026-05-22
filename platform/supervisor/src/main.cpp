@@ -3,7 +3,6 @@
 
 #include "supervisor/runtime.h"
 #include "supervisor/spec.h"
-#include "supervisor/tcp_publisher.h"
 
 #include <cerrno>
 #include <cstdio>
@@ -23,7 +22,7 @@ void on_signal(int /*signum*/) {
 
 void print_usage(const char* argv0) {
     std::fprintf(stderr,
-        "usage: %s run <manifest.yaml> [--root-dir DIR] [--listen-port PORT]\n",
+        "usage: %s run <manifest.yaml> [--root-dir DIR]\n",
         argv0);
 }
 
@@ -37,21 +36,11 @@ int main(int argc, char** argv) {
 
     std::string manifest = argv[2];
     std::string root_dir = ".";
-    uint16_t    cli_listen_port = 0;       // 0 = use manifest, else binary default
 
     for (int i = 3; i < argc; ++i) {
         std::string a = argv[i];
         if (a == "--root-dir" && i + 1 < argc) {
             root_dir = argv[++i];
-        } else if (a == "--listen-port" && i + 1 < argc) {
-            const char* p = argv[++i];
-            char* end = nullptr;
-            long v = std::strtol(p, &end, 10);
-            if (end == p || *end != '\0' || v <= 0 || v > 65535) {
-                std::fprintf(stderr, "invalid --listen-port: %s\n", p);
-                return 2;
-            }
-            cli_listen_port = static_cast<uint16_t>(v);
         } else {
             print_usage(argv[0]);
             return 2;
@@ -70,17 +59,7 @@ int main(int argc, char** argv) {
 
     try {
         auto root = supervisor::load_manifest(manifest);
-
-        // Resolve listen port: CLI flag wins, else manifest, else binary default.
-        uint16_t port = supervisor::TcpPublisher::kDefaultPort;
-        if (root && root->is_supervisor() && root->sup.listen_port != 0) {
-            port = root->sup.listen_port;
-        }
-        if (cli_listen_port != 0) {
-            port = cli_listen_port;
-        }
-
-        supervisor::Supervisor sup(std::move(root), root_dir, port);
+        supervisor::Supervisor sup(std::move(root), root_dir);
         g_sup = &sup;
 
         // SIGTERM/SIGINT are delivered via signalfd to the runtime, but

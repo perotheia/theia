@@ -86,7 +86,6 @@ add_executable(supervisor
     src/main.cpp
     src/runtime.cpp
     src/spec.cpp
-    src/tcp_publisher.cpp
     $<TARGET_OBJECTS:supervisor_proto>
 )
 

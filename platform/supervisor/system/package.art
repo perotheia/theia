@@ -1,26 +1,24 @@
-// Supervisor — OTP-style process supervisor exposed over TCP.
+// Supervisor — OTP-style process supervisor exposed as a normal
+// artheia TIPC node.
 //
-// The supervisor listens on TCP port 7610 (overridable via the
-// supervisor binary's --listen-port flag) and fans out framed
-// protobuf datagrams to every connected GUI client. The wire shape is:
-//
-//     uint32_be(payload_len) + uint16_be(type_tag) + protobuf_bytes
-//
-// type_tag discriminates which schema below the payload deserializes
-// as. See services/supervisor/include/supervisor/tcp_publisher.h for
-// the full transport contract.
-//
-// Two service interfaces:
+// The supervisor is a platform-fabric component (not an FC, not an
+// application) that fork/exec's children and applies an OTP restart
+// strategy to their exits. It exposes its observability surface as
+// two artheia interfaces over TIPC, like any other platform node:
 //
 //   SupervisorControlIf (clientServer)
 //     — RPC surface modelled on OTP supervisor.erl exports:
 //       which_children/1, which_child/2, count_children/1,
-//       restart_child/2, terminate_child/2, stop/1.
-//     Used by the supervisor-gui to query state and request actions.
+//       restart_child/2, terminate_child/2, start_child/2,
+//       delete_child/2, stop/1.
+//     services/com bridges this to gRPC for the GUI; in-host clients
+//     can talk to it directly over TIPC.
 //
 //   SupervisorEventIf (senderReceiver)
 //     — push stream of supervision events for the GUI's trace pane,
-//       plus a periodic Health beacon that doubles as keep-alive.
+//       plus a periodic Health beacon that doubles as keep-alive,
+//       plus a periodic TreeSnapshot carrying live per-child state
+//       and resource samples.
 //
 // Reference: see up/otp/lib/stdlib/src/supervisor.erl and
 // docs/supervision.md for our semantics. Proto3-tag assignment is

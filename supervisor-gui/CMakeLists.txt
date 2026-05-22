@@ -56,15 +56,13 @@ target_compile_options(supervisor_gui_proto PRIVATE
 )
 target_link_libraries(supervisor_gui_proto PUBLIC ${PROTOBUF_LIBRARIES})
 
-# yaml-cpp — for parsing machines.yaml on the GUI side.
-pkg_check_modules(YAMLCPP REQUIRED yaml-cpp)
-
 # Main GUI binary.
+# Transport sources (tcp_client + machines) removed in phase 0 of the
+# TCP→TIPC→gRPC migration; the gRPC client lands in phase 6 and pulls
+# in grpc++ + the bridge's .proto here.
 add_executable(supervisor-gui
     src/main.cpp
     src/main_frame.cpp
-    src/tcp_client.cpp
-    src/machines.cpp
     src/panels/system_panel.cpp
     src/panels/load_charts_panel.cpp
     src/panels/applications_panel.cpp
@@ -76,14 +74,12 @@ add_executable(supervisor-gui
 target_include_directories(supervisor-gui PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${PROTOBUF_INCLUDE_DIRS}
-    ${YAMLCPP_INCLUDE_DIRS}
     ${PROTO_GEN_DIR}
 )
 
 target_link_libraries(supervisor-gui PRIVATE
     ${wxWidgets_LIBRARIES}
     ${PROTOBUF_LIBRARIES}
-    ${YAMLCPP_LIBRARIES}
     pthread
 )
 

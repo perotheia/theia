@@ -220,12 +220,26 @@ from typing import cast
 # Import from submodules directly (same pattern as the imports at the
 # top of this file). artheia.manifest.__init__ has a circular dep with
 # this module via platform.py — avoid triggering it.
+from artheia.manifest.application import ApplicationManifest
 from artheia.manifest.rig import SoftwareSpecification, VehicleIdentity
 from artheia.manifest.transform import Append, SetTransformTypes  # noqa: E402
 
+# One ``ApplicationManifest`` bagging every SwComponent. Rig layers
+# refine: typically Append(ApplicationManifest(name="platform_app",
+# host_machine=<rig_host>, components=[...rig_components])) to bind to a
+# specific host AND add per-rig binaries. Identity is the name, so
+# Append-with-same-name merges via Layer.squash.
+_PlatformApplication = ApplicationManifest(
+    name="platform_app",
+    host_machine="",  # rig layers fill in
+    components=list(COMPONENTS),
+)
+
 FcSoftware: SoftwareSpecification = SoftwareSpecification(
     vehicle=VehicleIdentity(name=""),  # rig layers override
-    applications=cast(set[SetTransformTypes], set()),  # rig layers add platform_app
+    applications=cast(set[SetTransformTypes], {
+        Append(_PlatformApplication),
+    }),
     execution_manifests=cast(set[SetTransformTypes], {
         Append(p) for p in PROCESSES
     }),

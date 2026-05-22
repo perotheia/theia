@@ -347,3 +347,38 @@ code." This spec is the deliverable for the "think hard" step.
   this. Updated to point here.
 - `docs/tasks/TODO/autosar-regen-package-names.md` — independent.
   Autosar regenerator updates.
+
+
+# Resolution (2026-05-22)
+
+All 5 phases landed.
+
+- **Phase 0** — ported `transform.py` from theia_runtime. Added
+  `Layer.squash`, `Append`/`Remove` set transforms, `Undefined`/`Default`/
+  `Defer` value markers, `simplify`. Kept legacy `Add`/`Override`/
+  `apply_ops` as compat shims at the bottom.
+- **Phase 1** — added `SoftwareSpecification(Layer)` to
+  `manifest/rig.py`. Set-typed fields default to `Undefined()` so a
+  layer that omits a field inherits the base's value during squash.
+  Added `to_rig()` bridge for the legacy CLI.
+- **Phase 2** — added `identifiable_dataclass` decorator that
+  restores `__hash__` + `__eq__` after `@dataclass` runs. Switched
+  37 manifest `Identifiable` subclasses from `@dataclass` to
+  `@identifiable_dataclass`. Now hashable for set membership.
+- **Phase 3** — adopted in `services/manifest/fc.py` and
+  `demo/manifest/rig.py`. Both files now export both the legacy
+  (`FcLayer`/`DemoRig`) and the new (`FcSoftware`/`DemoSoftware`)
+  shapes. Equivalent — verified by test
+  `test_demo_software_to_rig_equivalent_to_legacy_demo_rig`.
+- **Phase 4** — CLI (`artheia executor emit`, `artheia gui emit`,
+  `artheia generate-manifest`) gains a `_resolve_rig` helper that
+  accepts either `Rig` or `SoftwareSpecification` exports and
+  auto-materializes via `to_rig()`. Auto-pick prefers
+  `*Software` over `*Rig` for new code. Added `list[Identifiable]`
+  branch to `Layer.squash` so same-identity `ApplicationManifest`
+  squashes merge their `components` lists (FC + rig binaries)
+  instead of wholesale replace.
+
+`artheia executor emit demo.manifest.rig` produces byte-identical
+`executor.yaml` whether invoked via `DemoRig` (legacy) or
+`DemoSoftware` (new). 100 tests pass (was 60 pre-session).

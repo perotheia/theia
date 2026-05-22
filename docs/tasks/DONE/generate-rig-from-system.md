@@ -260,3 +260,43 @@ output file — one `rig.py.j2` template under
   per-domain grouping) that can't be derived from .art.
 - Multi-machine deployment rigs — the generated machine is always
   a single host; multi-machine support means user-edits.
+
+# Resolution (2026-05-22)
+
+`artheia gen-rig <art_file> --composition <name> --out <path>` lands.
+
+Generator (`artheia/generators/rig.py`):
+- Extracts the composition from the .art file via
+  `flatten_composition` (which handles nested `composition Foo bar`
+  refs once cross-file imports clear — today flat compositions work).
+- Groups prototypes by `on process X` annotation, deterministic.
+- Emits a runnable Python module that exports `<Vehicle>Software:
+  SoftwareSpecification = FcSoftware.squash(<Vehicle>SpecLayer)` —
+  the structured-DSL shape, NOT the legacy `Layer`/`merge_layers`
+  path (per the DSL-recovery direction).
+
+CLI (`artheia gen-rig`):
+- `--composition <name>` selects the top-level composition.
+- `--out <path>` writes the rig.py (refuses non-empty existing).
+- `--vehicle-name`, `--machine-name`, `--bazel-package` overridable;
+  sensible defaults derive from `--out`.
+- `--grpc-port`, `--force` for the obvious.
+
+Acceptance: regenerating today's `demo/manifest/rig.py` from
+`Demo3Way` and running `artheia executor emit` produces byte-
+identical `executor.yaml`. 5 new tests
+(`tests/test_gen_rig.py`) cover the path.
+
+## Remaining work
+
+Both blockers cleared for the demo case (single-file composition):
+- `artheia-dsl-recovery.md` — done.
+- `system-art-aggregation.md` — only matters when generating from a
+  composition-of-compositions (`composition Platform { composition
+  Services svc; composition Demo3Way demo }`). Single-file
+  compositions like `Demo3Way` work today.
+
+When cross-file imports land, gen-rig will work on the top-level
+`Platform` composition too — no changes to the generator needed;
+just `flatten_composition` will see real prototypes inside the
+inner refs.

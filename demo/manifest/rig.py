@@ -219,10 +219,22 @@ if DemoRig.applications:
 # that .to_rig()s to the same shape as the legacy DemoRig above.
 # ---------------------------------------------------------------------------
 
+# Same-identity (name="platform_app") Append merges via Layer.squash;
+# the result is one ApplicationManifest with host_machine="demo_host"
+# and components = FcSoftware's 18 + the demo's 3.
+_DemoPlatformApp = ApplicationManifest(
+    name="platform_app",
+    host_machine=DemoHost.name,
+    components=list(DEMO_COMPONENTS),  # merged onto FcSoftware's via squash
+)
+
 DemoSpecLayer = SoftwareSpecification(
     vehicle=VehicleIdentity(name="demo", make="theia", model="gen_server-demo"),
     machines=cast(set[SetTransformTypes], {
         Append(DemoHost),
+    }),
+    applications=cast(set[SetTransformTypes], {
+        Append(_DemoPlatformApp),
     }),
     execution_manifests=cast(set[SetTransformTypes], {
         Append(p) for p in DEMO_PROCESSES

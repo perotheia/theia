@@ -188,7 +188,7 @@ node atomic SmDaemon {
     }
 
     statem {
-        states  Off Starting Running Degraded Update Shutdown
+        states  [Off, Starting, Running, Degraded, Update, Shutdown]
         initial Off
         data    SmData         // typed data carried through the FSM
 
@@ -224,14 +224,14 @@ NodeDecl:
 ;
 
 StateMBody:
-    'states'  states*=ID
-    'initial' initial=[ID]
+    'states'  '[' states*=ID[','] ']'
+    'initial' initial=ID
     ('data' data_type=[MessageDecl|FQN])?
     on_blocks*=StateBlock
 ;
 
 StateBlock:
-    'on' state=[ID] ':'
+    'on' state=ID ':'
         rules*=TransitionRule
 ;
 
@@ -241,12 +241,19 @@ TransitionRule:
 ;
 
 TransitionTarget:
-    ('halt') | (state=[ID] ('after' timeout=Duration)?)
+    halt?='halt' | (state=ID ('after' timeout=Duration)?)
 ;
 
 Duration:
     /[0-9]+(ms|s|m|h)/    // e.g. "30s", "500ms"
 ;
+
+// Note: `states` / `initial` / `state` use bare `ID` rather than
+// `[ID]` because textX treats `[ID]` as a cross-ref to instances of
+// class `ID`, but `ID` is a primitive (built-in token). The bare-ID
+// form captures the token as a string. Validation of "initial is a
+// declared state" / "transition target is a declared state" lives in
+// Python (StateMSpec.validate), not textX.
 ```
 
 ### Lowering: `.art` → C++
@@ -320,7 +327,7 @@ node atomic SmDaemon {
     }
 
     statem {
-        states  OFF STARTING RUNNING DEGRADED UPDATE SHUTDOWN
+        states  [OFF, STARTING, RUNNING, DEGRADED, UPDATE, SHUTDOWN]
         initial OFF
         data    SmStateMsg
 

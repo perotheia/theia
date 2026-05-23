@@ -1,9 +1,19 @@
-# services/manifest — FC layer (PlatformBase + FcLayer).
+# services/manifest — service-layer Python sources.
 #
 # Exposed for downstream manifest builds (//demo/manifest:rig_sources).
+#
+# The export name kept the historical alias `fc_sources` for one
+# release as a backwards-compat shim. New callers use `service_sources`.
 
 filegroup(
-    name = "fc_sources",
+    name = "service_sources",
     srcs = glob(["**/*.py"]),
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "fc_sources",
+    actual = ":service_sources",
+    deprecation = "rename: use //services/manifest:service_sources",
     visibility = ["//visibility:public"],
 )

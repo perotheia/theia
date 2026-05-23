@@ -14,7 +14,7 @@ filegroup(
         "rig.py",
         "__init__.py",
         # FC layer the rig inherits from.
-        "//services/manifest:fc_sources",
+        "//services/manifest:service_sources",
         # All .art files anywhere in the system tree (we glob from
         # the package root so '..' is unnecessary).
         "//platform/system:art_sources",

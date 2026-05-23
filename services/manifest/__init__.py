@@ -8,4 +8,4 @@ Upper layers (e.g. ``demo/manifest/rig.py``) compose on top via
 :func:`artheia.manifest.merge_layers`.
 """
 
-from services.manifest.fc import FcLayer  # noqa: F401
+from services.manifest.service import FcLayer  # noqa: F401

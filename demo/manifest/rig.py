@@ -75,7 +75,7 @@ from artheia.manifest.machine import CpuResource, IpEndpoint
 from artheia.manifest.platform import PlatformBase
 from artheia.manifest.rig import SoftwareSpecification
 from artheia.manifest.transform import Append, SetTransformTypes
-from services.manifest.fc import FcSoftware
+from services.manifest.service import FcSoftware
 
 # ---------------------------------------------------------------------------
 # Demo machines.
@@ -220,7 +220,7 @@ DEMO_COMPONENTS: list[SwComponent] = [
         # locally and any other prototype as a RemoteRef.
         art_node=f"system.demo/{art_class}",
         # Demo binaries are real Bazel targets — see demo/BUILD.bazel.
-        # The 18 FC SwComponents in services/manifest/fc.py default to
+        # The 18 FC SwComponents in services/manifest/service.py default to
         # bazel_buildable=False (they're bash daemons under
         # theia_runtime/, not yet bridged into Bazel).
         bazel_buildable=True,

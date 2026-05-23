@@ -1,0 +1,196 @@
+name: root
+strategy: one_for_all
+max_restarts: 3
+max_seconds: 5
+tombstone_dir: /tmp/tombstones
+children:
+- name: ar_sup
+  strategy: rest_for_one
+  max_restarts: 3
+  max_seconds: 5
+  children:
+  - name: core_sup
+    strategy: rest_for_one
+    max_restarts: 3
+    max_seconds: 5
+    children:
+    - name: exec
+      start_cmd:
+      - services/exec/daemon.sh
+      restart: permanent
+      shutdown: 5000
+      type: worker
+      modules:
+      - services/exec
+    - name: core
+      start_cmd:
+      - services/core/daemon.sh
+      restart: permanent
+      shutdown: 5000
+      type: worker
+      modules:
+      - services/core
+    - name: crypto
+      start_cmd:
+      - services/crypto/daemon.sh
+      restart: permanent
+      shutdown: 5000
+      type: worker
+      modules:
+      - services/crypto
+    - name: sm
+      start_cmd:
+      - services/sm/daemon.sh
+      restart: permanent
+      shutdown: 5000
+      type: worker
+      modules:
+      - services/sm
+    - name: network_sup
+      strategy: one_for_one
+      max_restarts: 3
+      max_seconds: 5
+      children:
+      - name: nm
+        start_cmd:
+        - services/nm/daemon.sh
+        restart: permanent
+        shutdown: 5000
+        type: worker
+        modules:
+        - services/nm
+      - name: com
+        start_cmd:
+        - services/com/daemon.sh
+        restart: permanent
+        shutdown: 5000
+        type: worker
+        modules:
+        - services/com
+      - name: osi
+        start_cmd:
+        - services/osi/daemon.sh
+        restart: permanent
+        shutdown: 5000
+        type: worker
+        modules:
+        - services/osi
+      - name: idsm
+        start_cmd:
+        - services/idsm/daemon.sh
+        restart: permanent
+        shutdown: 5000
+        type: worker
+        modules:
+        - services/idsm
+      - name: diag
+        start_cmd:
+        - services/diag/daemon.sh
+        restart: permanent
+        shutdown: 5000
+        type: worker
+        modules:
+        - services/diag
+      - name: tsync
+        start_cmd:
+        - services/tsync/daemon.sh
+        restart: permanent
+        shutdown: 5000
+        type: worker
+        modules:
+        - services/tsync
+    - name: host_svc_sup
+      strategy: one_for_one
+      max_restarts: 3
+      max_seconds: 5
+      children:
+      - name: per
+        start_cmd:
+        - services/per/daemon.sh
+        restart: permanent
+        shutdown: 5000
+        type: worker
+        modules:
+        - services/per
+      - name: rds
+        start_cmd:
+        - services/rds/daemon.sh
+        restart: permanent
+        shutdown: 5000
+        type: worker
+        modules:
+        - services/rds
+    - name: pltf_sup
+      strategy: one_for_one
+      max_restarts: 3
+      max_seconds: 5
+      children:
+      - name: phm
+        start_cmd:
+        - services/phm/daemon.sh
+        restart: permanent
+        shutdown: 5000
+        type: worker
+        modules:
+        - services/phm
+      - name: ucm
+        start_cmd:
+        - services/ucm/daemon.sh
+        restart: permanent
+        shutdown: 5000
+        type: worker
+        modules:
+        - services/ucm
+      - name: vucm
+        start_cmd:
+        - services/vucm/daemon.sh
+        restart: permanent
+        shutdown: 5000
+        type: worker
+        modules:
+        - services/vucm
+      - name: shwa
+        start_cmd:
+        - services/shwa/daemon.sh
+        restart: permanent
+        shutdown: 5000
+        type: worker
+        modules:
+        - services/shwa
+      - name: fw
+        start_cmd:
+        - services/fw/daemon.sh
+        restart: permanent
+        shutdown: 5000
+        type: worker
+        modules:
+        - services/fw
+  - name: app_sup
+    strategy: one_for_one
+    max_restarts: 3
+    max_seconds: 5
+    children:
+    - name: demo_p1
+      start_cmd:
+      - vendor/apps/demo_p1/daemon.sh
+      restart: permanent
+      shutdown: 5000
+      type: worker
+      modules:
+      - //demo:p1_main
+    - name: demo_p2
+      start_cmd:
+      - vendor/apps/demo_p2/daemon.sh
+      restart: permanent
+      shutdown: 5000
+      type: worker
+      modules:
+      - //demo:p2_main
+    - name: demo_p3
+      start_cmd:
+      - vendor/apps/demo_p3/daemon.sh
+      restart: permanent
+      shutdown: 5000
+      type: worker
+      modules:
+      - //demo:p3_main

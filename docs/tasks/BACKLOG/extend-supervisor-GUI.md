@@ -165,8 +165,8 @@ as a separate task to schedule before the phase that needs it.
 - Phase 2: `SystemInfo` RPC + .art message — supervisor side ~80 LOC
 - Phase 7: extend ChildState with `SocketInfo[]`, supervisor samples
   `/proc/<pid>/net/tcp` — ~150 LOC
-- Phase 8: `etcd_endpoints` on Machine manifest, etcd client lib in
-  GUI (etcd-cpp-apiv3 or etcdctl shim) — ~200 LOC + dependency
+- Phase 8: superseded by `etcd-state-backbone.md` — the Table Viewer
+  tab consumes the etcd data published by that plan's Phase 2.
 - Phase 9: tombstone list RPC (read-only walk of /var/log/theia/
   tombstones) — ~60 LOC
 

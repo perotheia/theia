@@ -17,7 +17,7 @@
 #include <utility>
 #include <vector>
 
-namespace system_services_per {
+namespace ara::per {
 
 
 // ---- PerDaemon ----------------------------------------------------------
@@ -86,4 +86,4 @@ private:
 
 
 
-}  // namespace system_services_per
+}  // namespace ara::per

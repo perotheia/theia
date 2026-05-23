@@ -13,7 +13,7 @@
 
 #include <cstdio>
 
-namespace system_services_com {
+namespace ara::com {
 
 
 
@@ -36,4 +36,4 @@ ComEmpty ComDaemon::handle_call(
 }
 
 
-}  // namespace system_services_com
+}  // namespace ara::com

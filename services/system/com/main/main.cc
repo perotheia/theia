@@ -27,7 +27,7 @@ int main() {
     std::signal(SIGINT,  on_signal);
     std::signal(SIGTERM, on_signal);
 
-    using namespace system_services_com;
+    using namespace ara::com;
 
     demo::runtime::TimerService timers;
     (void)timers;  // wired into the daemon if it needs send_after

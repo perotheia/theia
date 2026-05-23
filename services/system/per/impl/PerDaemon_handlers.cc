@@ -13,7 +13,7 @@
 
 #include <cstdio>
 
-namespace system_services_per {
+namespace ara::per {
 
 
 
@@ -36,4 +36,4 @@ PerEmpty PerDaemon::handle_call(
 }
 
 
-}  // namespace system_services_per
+}  // namespace ara::per

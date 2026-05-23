@@ -17,7 +17,7 @@
 #include <utility>
 #include <vector>
 
-namespace system_services_ucm {
+namespace ara::ucm {
 
 
 // ---- UcmDaemon ----------------------------------------------------------
@@ -81,4 +81,4 @@ private:
 
 
 
-}  // namespace system_services_ucm
+}  // namespace ara::ucm

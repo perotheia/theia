@@ -17,7 +17,7 @@
 #include <utility>
 #include <vector>
 
-namespace system_services_exec {
+namespace ara::exec {
 
 
 // ---- ExecDaemon ----------------------------------------------------------
@@ -85,4 +85,4 @@ private:
 
 
 
-}  // namespace system_services_exec
+}  // namespace ara::exec

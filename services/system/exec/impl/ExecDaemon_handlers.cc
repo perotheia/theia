@@ -13,7 +13,7 @@
 
 #include <cstdio>
 
-namespace system_services_exec {
+namespace ara::exec {
 
 
 
@@ -36,4 +36,4 @@ ExecEmpty ExecDaemon::handle_call(
 }
 
 
-}  // namespace system_services_exec
+}  // namespace ara::exec

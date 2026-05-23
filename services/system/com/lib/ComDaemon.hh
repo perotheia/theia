@@ -17,7 +17,7 @@
 #include <utility>
 #include <vector>
 
-namespace system_services_com {
+namespace ara::com {
 
 
 // ---- ComDaemon ----------------------------------------------------------
@@ -84,4 +84,4 @@ private:
 
 
 
-}  // namespace system_services_com
+}  // namespace ara::com

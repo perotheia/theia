@@ -13,7 +13,7 @@
 
 #include <cstdio>
 
-namespace system_services_ucm {
+namespace ara::ucm {
 
 
 
@@ -27,4 +27,4 @@ UcmReply UcmDaemon::handle_call(
 }
 
 
-}  // namespace system_services_ucm
+}  // namespace ara::ucm

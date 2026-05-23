@@ -59,20 +59,45 @@ declared in the manifest.
 
 ## Manifest — definition
 
-> A **Manifest** is a formal specification of configuration content,
-> combined with other artifacts (typically binaries containing executable
-> code) to which the Manifest applies, in order to provide specific
-> functionality.
+A **Manifest** is a formal specification of configuration content,
+combined with other artifacts (typically binaries containing executable
+code) to which the Manifest applies, in order to provide specific
+functionality.
 
-A Manifest of one Functional Cluster may be split across several physical
-files. The transformation from the design-time manifest (model-level) to
-the deploy-time manifest (the artifact actually shipped to the target) is
-called **serialization**.
+### Manifests and Serialization
+
+A Manifest is a formal specification of configuration content combined with executable code.
+
+```mermaid
+graph TD
+    M[Manifest Categories]
+
+    M --> AM[Application Manifest]
+    AM --> |Describes| AD[App Deployment, Service Endpoints, App Startup]
+
+    M --> MM[Machine Manifest]
+    MM --> |Describes| MD[Machine/ECU Config, Network Interfaces, Hardware Resources]
+
+    M --> SM[Service Manifest]
+    SM --> |Describes| SD[Service-oriented Comm Bindings, Transport Layer Endpoints]
+
+    M --> EM[Execution Manifest]
+    EM --> |Describes| ED[Process Binding, Timing, Priority, Startup Dependencies]
 
 ```
-  Design Manifest  ──serialization──▶  Deploy Manifest
-  (model, ARXML)                       (artifact on target)
-```
+
+**Serialization:** The step to change from a Design Manifest (ARXML) to a Deploy Manifest (JSON/Conf).
+
+### Integration and Deployment
+
+After completing implementation, the output artifacts include:
+
+1. AA and FC Executables
+2. Shared Libraries and Headers
+3. Deployment Manifests (`.json`, `.conf`)
+
+Integration involves deploying these POSIX-compatible artifacts onto a specific machine hardware and connecting them to the operating system and platform-level software.
+
 
 ## Manifest kinds we need
 

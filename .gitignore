@@ -87,3 +87,5 @@ deploy/logs/
 # not in pero_theia. We only ship build artifacts (install/) and our
 # own integration glue.
 /third_party/etcd-cpp-apiv3/
+core.*
+.gdb_history

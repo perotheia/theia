@@ -25,6 +25,15 @@ public:
         GOOGLE_PROTOBUF_VERIFY_VERSION;
         SetAppName("supervisor-gui");
 
+        // Route wx log messages to stderr instead of the default modal
+        // wxLogGui dialog. wxLogGui's DoLogRecord walks parent windows
+        // looking for a status bar — that path crashed when called from
+        // a panel without a stable frame parent (Phase 4b SIGSEGV in
+        // EtcdPanelImpl::refresh_keys → wxLogStatus → TryBefore).
+        // An operator GUI logs to terminal, not pop-ups; this is also
+        // friendlier under `theia-supervisor-gui &` in a shell.
+        delete wxLog::SetActiveTarget(new wxLogStderr());
+
         std::vector<sup_gui::MachineEndpoint> machines;
         if (!machines_yaml_.empty()) {
             machines = sup_gui::load_machines_yaml(

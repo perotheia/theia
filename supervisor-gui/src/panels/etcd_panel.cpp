@@ -262,7 +262,7 @@ private:
             client_ = std::make_unique<etcd::SyncClient>(last_endpoint_);
         } catch (const std::exception& e) {
             client_.reset();
-            wxLogStatus(outer_, "etcd connect failed: %s", e.what());
+            wxLogMessage("etcd connect failed: %s", e.what());
             return;
         }
         // Force one Range — proves the channel works AND populates initial
@@ -271,11 +271,11 @@ private:
         try {
             auto r = client_->ls(prefix_->GetValue().ToStdString());
             if (!r.is_ok() && r.error_code() != 0) {
-                wxLogStatus(outer_, "etcd ls error: %d %s",
+                wxLogMessage("etcd ls error: %d %s",
                             r.error_code(), r.error_message().c_str());
             }
         } catch (const std::exception& e) {
-            wxLogStatus(outer_, "etcd ls exception: %s", e.what());
+            wxLogMessage("etcd ls exception: %s", e.what());
         }
     }
 
@@ -297,7 +297,7 @@ private:
                 },
                 /*recursive=*/true);
         } catch (const std::exception& e) {
-            wxLogStatus(outer_, "etcd watch failed: %s", e.what());
+            wxLogMessage("etcd watch failed: %s", e.what());
             watch_->SetValue(false);
         }
     }
@@ -321,11 +321,11 @@ private:
         try {
             resp = client_->ls(prefix);
         } catch (const std::exception& e) {
-            wxLogStatus(outer_, "etcd ls exception: %s", e.what());
+            wxLogMessage("etcd ls exception: %s", e.what());
             return;
         }
         if (!resp.is_ok() && resp.error_code() != 0) {
-            wxLogStatus(outer_, "etcd ls error: %d %s",
+            wxLogMessage("etcd ls error: %d %s",
                         resp.error_code(), resp.error_message().c_str());
             return;
         }
@@ -342,7 +342,7 @@ private:
                 wxString::Format("%zu", v.as_string().size()));
             last_keys_.push_back(k);
         }
-        wxLogStatus(outer_, "etcd: %zu keys under '%s'",
+        wxLogMessage("etcd: %zu keys under '%s'",
                     last_keys_.size(), prefix.c_str());
     }
 
@@ -352,7 +352,7 @@ private:
         try {
             resp = client_->get(key);
         } catch (const std::exception& e) {
-            wxLogStatus(outer_, "etcd get exception: %s", e.what());
+            wxLogMessage("etcd get exception: %s", e.what());
             return;
         }
         if (!resp.is_ok()) {
@@ -447,15 +447,15 @@ private:
         try {
             resp = client_->put(key, value);
         } catch (const std::exception& e) {
-            wxLogStatus(outer_, "etcd put exception: %s", e.what());
+            wxLogMessage("etcd put exception: %s", e.what());
             return;
         }
         if (!resp.is_ok()) {
-            wxLogStatus(outer_, "etcd put error: %d %s",
+            wxLogMessage("etcd put error: %d %s",
                         resp.error_code(), resp.error_message().c_str());
             return;
         }
-        wxLogStatus(outer_, "saved %s (rev=%lld)",
+        wxLogMessage("saved %s (rev=%lld)",
                     key.c_str(), static_cast<long long>(resp.index()));
         // Refresh the row's metadata.
         show_value_for(key);
@@ -473,15 +473,15 @@ private:
         try {
             auto r = client_->rm(key);
             if (!r.is_ok()) {
-                wxLogStatus(outer_, "etcd rm error: %d %s",
+                wxLogMessage("etcd rm error: %d %s",
                             r.error_code(), r.error_message().c_str());
                 return;
             }
         } catch (const std::exception& e) {
-            wxLogStatus(outer_, "etcd rm exception: %s", e.what());
+            wxLogMessage("etcd rm exception: %s", e.what());
             return;
         }
-        wxLogStatus(outer_, "deleted %s", key.c_str());
+        wxLogMessage("deleted %s", key.c_str());
         refresh_keys();
         value_text_->Clear();
         detail_meta_->Clear();
@@ -495,7 +495,7 @@ private:
         if (wxTheClipboard->Open()) {
             wxTheClipboard->SetData(new wxTextDataObject(k));
             wxTheClipboard->Close();
-            wxLogStatus(outer_, "copied: %s", k.c_str().AsChar());
+            wxLogMessage("copied: %s", k.c_str().AsChar());
         }
     }
 };

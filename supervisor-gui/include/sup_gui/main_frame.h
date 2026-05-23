@@ -26,6 +26,7 @@ class ApplicationsPanel;
 class ProcessesPanel;
 class EtcdPanel;
 class TracePanel;
+class MachinesPanel;
 
 // Custom wx event posted from any GrpcClient thread when a frame
 // arrives. MainFrame handles it and routes to every panel.
@@ -40,12 +41,15 @@ private:
     void on_sup_frame(wxThreadEvent& evt);
     void on_close(wxCloseEvent& evt);
     void on_status_tick(wxTimerEvent& evt);
+    void on_menu(wxCommandEvent& evt);
+    void on_machine_focus(wxCommandEvent& evt);
 
     void post_frame_from_thread(const std::string& machine_name,
                                  uint16_t tag,
                                  std::string payload);
 
     wxNotebook*              notebook_{nullptr};
+    MachinesPanel*           machines_panel_{nullptr};
     SystemPanel*             system_panel_{nullptr};
     LoadChartsPanel*         load_charts_{nullptr};
     ApplicationsPanel*       applications_{nullptr};

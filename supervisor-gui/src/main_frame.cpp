@@ -3,8 +3,11 @@
 
 #include <wx/wx.h>
 #include <wx/notebook.h>
+#include <wx/splitter.h>
 #include <wx/statusbr.h>
 #include <wx/timer.h>
+#include <wx/menu.h>
+#include <wx/aboutdlg.h>
 
 #include <utility>
 
@@ -14,6 +17,15 @@ wxDEFINE_EVENT(EVT_SUP_FRAME, wxThreadEvent);
 
 enum : int {
     ID_STATUS_TIMER = wxID_HIGHEST + 1,
+    // File / Machines / View / Help menu IDs.
+    ID_MENU_REFRESH_MACHINES = wxID_HIGHEST + 100,
+    ID_MENU_CONNECT_ALL      = wxID_HIGHEST + 101,
+    ID_MENU_DISCONNECT_ALL   = wxID_HIGHEST + 102,
+    // The right-click context menu IDs in machines_panel.cpp.
+    // Re-declared here for the dispatch in handle_focus_event().
+    ID_CTX_CONNECT     = wxID_HIGHEST + 5001,
+    ID_CTX_DISCONNECT  = wxID_HIGHEST + 5002,
+    ID_CTX_SHOW_TRACE  = wxID_HIGHEST + 5003,
 };
 
 wxBEGIN_EVENT_TABLE(MainFrame, wxFrame)
@@ -30,15 +42,53 @@ struct FrameMsg {
 
 MainFrame::MainFrame(std::vector<MachineEndpoint> machines)
     : wxFrame(nullptr, wxID_ANY, "supervisor-gui",
-              wxDefaultPosition, wxSize(1280, 800)) {
+              wxDefaultPosition, wxSize(1400, 800)) {
 
-    notebook_ = new wxNotebook(this, wxID_ANY);
-    system_panel_  = new SystemPanel       (notebook_);
-    load_charts_   = new LoadChartsPanel   (notebook_);
-    applications_  = new ApplicationsPanel (notebook_);
-    processes_     = new ProcessesPanel    (notebook_);
-    etcd_panel_    = new EtcdPanel         (notebook_);
-    trace_         = new TracePanel        (notebook_);
+    // --- menu bar ----------------------------------------------------
+    {
+        auto* mb = new wxMenuBar();
+
+        auto* file_menu = new wxMenu();
+        file_menu->Append(ID_MENU_REFRESH_MACHINES,
+                          "&Refresh machines\tCtrl+R",
+                          "Reload machine endpoints from machines.yaml");
+        file_menu->AppendSeparator();
+        file_menu->Append(wxID_EXIT,
+                          "&Quit\tCtrl+Q",
+                          "Close the supervisor GUI");
+        mb->Append(file_menu, "&File");
+
+        auto* machines_menu = new wxMenu();
+        machines_menu->Append(ID_MENU_CONNECT_ALL,
+                              "&Connect all",
+                              "Start gRPC clients for every machine");
+        machines_menu->Append(ID_MENU_DISCONNECT_ALL,
+                              "&Disconnect all",
+                              "Stop every gRPC client (state stays cached)");
+        mb->Append(machines_menu, "&Machines");
+
+        auto* help_menu = new wxMenu();
+        help_menu->Append(wxID_ABOUT,
+                          "&About supervisor-gui\tF1");
+        mb->Append(help_menu, "&Help");
+
+        SetMenuBar(mb);
+    }
+
+    // --- splitter: machines panel | notebook -------------------------
+    auto* splitter = new wxSplitterWindow(this, wxID_ANY,
+                                            wxDefaultPosition, wxDefaultSize,
+                                            wxSP_LIVE_UPDATE | wxSP_3DBORDER);
+    splitter->SetMinimumPaneSize(160);
+
+    machines_panel_ = new MachinesPanel(splitter);
+    notebook_       = new wxNotebook(splitter, wxID_ANY);
+    system_panel_   = new SystemPanel       (notebook_);
+    load_charts_    = new LoadChartsPanel   (notebook_);
+    applications_   = new ApplicationsPanel (notebook_);
+    processes_      = new ProcessesPanel    (notebook_);
+    etcd_panel_     = new EtcdPanel         (notebook_);
+    trace_          = new TracePanel        (notebook_);
     notebook_->AddPage(system_panel_, "System");
     notebook_->AddPage(load_charts_,  "Load Charts");
     notebook_->AddPage(applications_, "Applications");
@@ -46,18 +96,35 @@ MainFrame::MainFrame(std::vector<MachineEndpoint> machines)
     notebook_->AddPage(etcd_panel_,   "Table Viewer");
     notebook_->AddPage(trace_,        "Trace");
 
-    auto* sizer = new wxBoxSizer(wxVERTICAL);
-    sizer->Add(notebook_, 1, wxEXPAND);
-    SetSizer(sizer);
+    splitter->SplitVertically(machines_panel_, notebook_, 220);
 
-    CreateStatusBar(2);
-    SetStatusText("connecting…", 0);
-    SetStatusText("", 1);
+    // --- status bar (3 fields: connected count + focused machine + hb age)
+    CreateStatusBar(3);
+    SetStatusText("starting…", 0);
+    SetStatusText("",          1);
+    SetStatusText("",          2);
 
     Bind(EVT_SUP_FRAME, &MainFrame::on_sup_frame, this);
 
+    // Catch all the menu-bar selections + the per-row context-menu
+    // events that MachinesPanel posts up.
+    Bind(wxEVT_MENU, &MainFrame::on_menu, this);
+    Bind(EVT_MACHINE_FOCUS, &MainFrame::on_machine_focus, this);
+
     status_timer_ = new wxTimer(this, ID_STATUS_TIMER);
     status_timer_->Start(500);
+
+    // Populate the machines side panel.
+    std::vector<MachineRow> rows;
+    rows.reserve(machines.size());
+    for (const auto& m : machines) {
+        MachineRow r;
+        r.name    = m.name;
+        r.address = m.address + ":" + std::to_string(m.port);
+        r.state   = MachineConnState::Connecting;
+        rows.push_back(std::move(r));
+    }
+    machines_panel_->set_machines(std::move(rows));
 
     // One GrpcClient per machine.
     for (auto& m : machines) {
@@ -116,11 +183,24 @@ void MainFrame::on_close(wxCloseEvent& /*evt*/) {
 void MainFrame::on_status_tick(wxTimerEvent&) {
     size_t connected = 0;
     for (const auto& c : clients_) {
-        if (c && c->is_connected()) ++connected;
+        if (!c) continue;
+        const bool ok = c->is_connected();
+        if (ok) ++connected;
+        // Push per-row state into the side panel so its dots stay
+        // current. We don't have a "down" signal from GrpcClient
+        // yet — "not connected" is collapsed onto Connecting here.
+        if (machines_panel_) {
+            machines_panel_->set_state(
+                c->machine_name(),
+                ok ? MachineConnState::Connected
+                   : MachineConnState::Connecting);
+        }
     }
+
     if (clients_.empty()) {
         SetStatusText("no machines configured", 0);
         SetStatusText("", 1);
+        SetStatusText("", 2);
         return;
     }
     wxString status;
@@ -133,15 +213,125 @@ void MainFrame::on_status_tick(wxTimerEvent&) {
     }
     SetStatusText(status, 0);
 
+    if (machines_panel_) {
+        std::string f = machines_panel_->focused();
+        SetStatusText(f.empty() ? wxString("no machine focused")
+                                 : wxString::Format("focus: %s", f.c_str()),
+                       1);
+    }
+
     if (last_heartbeat_.load() == 0) {
-        SetStatusText("no heartbeat yet", 1);
+        SetStatusText("no heartbeat yet", 2);
     } else {
         auto now = std::chrono::steady_clock::now();
         auto hb  = std::chrono::steady_clock::time_point(
                        std::chrono::steady_clock::duration(last_heartbeat_.load()));
         auto age_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - hb).count();
         SetStatusText(
-            wxString::Format("hb age %lld ms", static_cast<long long>(age_ms)), 1);
+            wxString::Format("hb age %lld ms", static_cast<long long>(age_ms)), 2);
+    }
+}
+
+void MainFrame::on_menu(wxCommandEvent& evt) {
+    switch (evt.GetId()) {
+        case wxID_EXIT:
+            Close(true);
+            return;
+
+        case wxID_ABOUT: {
+            wxAboutDialogInfo info;
+            info.SetName("supervisor-gui");
+            info.SetVersion("0.1");
+            info.SetDescription(
+                "Theia supervisor / observer GUI.\n\n"
+                "Modelled on Erlang/OTP observer — System / Load Charts /\n"
+                "Applications / Processes / Table Viewer (etcd) / Trace.\n"
+                "Connects to one or more target machines via services/com\n"
+                "(gRPC) and reads etcd directly for the Table Viewer.");
+            info.SetCopyright("(C) 2026 — Theia / robofortis.com");
+            wxAboutBox(info, this);
+            return;
+        }
+
+        case ID_MENU_REFRESH_MACHINES:
+            // No-op today — machines.yaml is loaded once at startup.
+            // Plumbing to re-read + diff + reconcile GrpcClients is
+            // out of scope for this commit; the menu hook is in
+            // place so the future change is one function away.
+            wxLogStatus(this, "Refresh machines: not implemented");
+            return;
+
+        case ID_MENU_CONNECT_ALL:
+            for (auto& c : clients_) if (c) c->start();
+            wxLogStatus(this, "Connect all: %zu clients", clients_.size());
+            return;
+
+        case ID_MENU_DISCONNECT_ALL:
+            for (auto& c : clients_) if (c) c->stop();
+            if (machines_panel_) {
+                // Reflect state immediately; the next status_tick
+                // also resyncs but the user expects instant feedback.
+                // (no good way to iterate machines without saving the
+                // names — skip; next tick covers it.)
+            }
+            wxLogStatus(this, "Disconnect all: %zu clients", clients_.size());
+            return;
+
+        default:
+            evt.Skip();
+            return;
+    }
+}
+
+void MainFrame::on_machine_focus(wxCommandEvent& evt) {
+    // EVT_MACHINE_FOCUS does double duty:
+    //  - GetInt() == 0  → row selected; GetString() = machine name
+    //                     (or "" when selection cleared)
+    //  - GetInt() == ID_CTX_*  → a context-menu action was clicked;
+    //                            GetString() = machine name
+    const std::string name = evt.GetString().ToStdString();
+    switch (evt.GetInt()) {
+        case 0:
+            // Selection-changed: panels can subscribe themselves if
+            // they want machine focus. MainFrame just updates the
+            // status bar at the next tick.
+            return;
+
+        case ID_CTX_CONNECT:
+            for (auto& c : clients_) {
+                if (c && c->machine_name() == name) { c->start(); break; }
+            }
+            wxLogStatus(this, "Connect %s", name.c_str());
+            return;
+
+        case ID_CTX_DISCONNECT:
+            for (auto& c : clients_) {
+                if (c && c->machine_name() == name) { c->stop(); break; }
+            }
+            if (machines_panel_) {
+                machines_panel_->set_state(name,
+                    MachineConnState::Disconnected);
+            }
+            wxLogStatus(this, "Disconnect %s", name.c_str());
+            return;
+
+        case ID_CTX_SHOW_TRACE:
+            // Switch to the Trace tab. The trace panel doesn't yet
+            // know about machine focus (Phase 10 of the GUI plan
+            // wires this); selecting the Trace tab is enough for now.
+            if (notebook_) {
+                for (size_t i = 0; i < notebook_->GetPageCount(); ++i) {
+                    if (notebook_->GetPageText(i) == "Trace") {
+                        notebook_->SetSelection(i);
+                        break;
+                    }
+                }
+            }
+            wxLogStatus(this, "Show in Trace: %s", name.c_str());
+            return;
+
+        default:
+            return;
     }
 }
 

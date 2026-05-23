@@ -104,6 +104,7 @@ add_executable(supervisor-gui
     src/panels/applications_panel.cpp
     src/panels/processes_panel.cpp
     src/panels/etcd_panel.cpp
+    src/panels/machines_panel.cpp
     src/panels/trace_panel.cpp
     $<TARGET_OBJECTS:supervisor_gui_proto>
 )

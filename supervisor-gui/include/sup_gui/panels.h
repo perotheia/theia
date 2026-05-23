@@ -26,6 +26,8 @@
 // Forward-decl in the global namespace so wx pointer types resolve
 // correctly without pulling those headers in here.
 class wxListCtrl;
+class wxListEvent;
+class wxMouseEvent;
 class wxTreeListCtrl;
 class wxStaticText;
 class wxStaticBox;
@@ -162,6 +164,59 @@ private:
     ::wxTreeListCtrl*               list_{nullptr};
     std::unique_ptr<ProcessSampler> sampler_;
 };
+
+// Connection state of a machine (the supervisor-gui's view of it).
+// The actual transport health is tracked by GrpcClient::is_connected();
+// MachinesPanel synthesizes the user-facing label.
+enum class MachineConnState {
+    Disconnected,   // explicitly disconnected by the operator
+    Connecting,     // a GrpcClient is up but no frames yet
+    Connected,      // at least one frame received recently
+    Down,           // was Connected, then frames stopped arriving
+};
+
+// One row in the machines side panel — keyed by name, with a status
+// glyph + the address+port so the operator can sanity-check the
+// rig config.
+struct MachineRow {
+    std::string       name;
+    std::string       address;   // host:port for display
+    MachineConnState  state{MachineConnState::Disconnected};
+};
+
+// "Machines" — left-side side panel (sibling to the notebook).
+// Lists every target machine from the loaded machines.yaml, with a
+// colored dot for connection state. Right-click for Connect /
+// Disconnect / Show in Trace. Selecting a row broadcasts the
+// machine name on EVT_MACHINE_FOCUS so other panels can scope.
+class MachinesPanel : public wxPanel {
+public:
+    explicit MachinesPanel(wxWindow* parent);
+    ~MachinesPanel() override;
+
+    // Replace the row set wholesale (initial load + reload from the
+    // File → Refresh Machines menu).
+    void set_machines(std::vector<MachineRow> rows);
+
+    // Update one row's state. Called by MainFrame's status timer.
+    void set_state(const std::string& machine_name, MachineConnState s);
+
+    // Currently-focused (selected) machine, or empty when no row
+    // is selected.
+    std::string focused() const;
+
+private:
+    void on_right_click(wxMouseEvent& evt);
+    void on_select(wxListEvent& evt);
+    void redraw();
+
+    ::wxListCtrl*           list_{nullptr};
+    std::vector<MachineRow> rows_;
+};
+
+// Posted whenever the selected row changes. Carries the machine
+// name in GetString() — empty means "selection cleared".
+wxDECLARE_EVENT(EVT_MACHINE_FOCUS, wxCommandEvent);
 
 // "Table Viewer (etcd)" — observer's ETS-tab analogue, but the
 // backing store is etcd. Browse any key under a user-typed prefix;

@@ -1,161 +1,283 @@
-# FC build-out — implement SM's cooperation partners
+# FC build-out — generator redesign + 4 binaries
 
 Goal: every cooperation partner SM names in
 `docs/autosar/services/sm.md §3.B` becomes a real `cc_binary` —
-EXEC, COM, UCM, PER. Each follows the SM pattern (GenServer /
-GenStateM derivative + handle_call/cast + subscriber wiring) and
-appears in the supervisor's `executor.yaml`.
+EXEC, COM, UCM, PER. **And** the artheia application generator
+becomes the e2e tool that produces them: user writes .art, runs
+`artheia gen-app`, gets a 3-slice C++ scaffold ready to compile.
 
-This unlocks the next-tier conversation: cross-FC integration tests
-where SM drives state changes and partners actually react.
+This means redesigning `gen-app` to fit the FC shape (GenServer /
+GenStateM derivative) — the existing gen-app targets PSP-driven
+signal routing (gateway/odd_path_client), not Adaptive FCs.
 
-## What changed in scope vs the sm phase
+## What the user does, end-to-end
 
-| Aspect | sm phase (done) | This phase |
-|---|---|---|
-| Messages | hand-rolled POD in `sm_messages.hh` | `artheia gen-proto` → `platform/proto/system/services/<fc>/*.pb.{h,c}` |
-| start_cmd | hardcoded `services/sm/daemon.sh` fallback | dropped; explicit `Process.start_cmd` field |
-| Binaries | 1 (sm) | +4 (exec, com, ucm, per) |
-| Cross-FC messages | `from_sm` receiver decls only | full message types per cooperation arrow |
+```sh
+# 1. Author the .art
+$ vim services/system/exec/package.art
 
-## Phases (commit boundaries)
+# 2. Regenerate the scaffold
+$ artheia gen-app services/system/exec/package.art --out services/system/exec/
+generated:  services/system/exec/lib/                (every regen)
+generated:  services/system/exec/main/                (every regen)
+generated:  services/system/exec/impl/                (first time only)
+generated:  manifest/services/exec/manifest.py        (persistent)
+generated:  manifest/services/exec/executor.py        (persistent)
+generated:  platform/proto/system/services/exec/...   (every regen)
 
-### A — gen-proto wiring (artheia + theia)
+# 3. Implement the handlers
+$ vim services/system/exec/impl/ExecDaemon_handlers.cc
 
-1. Confirm `artheia gen-proto` emits what we need. **Done in survey:**
-   ```
-   $ artheia gen-proto services/system/sm/package.art --out /tmp/x
-   /tmp/x/SmStateMsg.proto
-   /tmp/x/SystemBoot.proto
-   ...
-   ```
-   Output is flat under `--out`. Each .proto has
-   `package services.services.sm;` (note the `system → services`
-   rewrite for C++ namespace safety — see
-   `artheia/artheia/generators/proto.py:_PROTO_PACKAGE_LEAD_RENAMES`).
-   This is intentional, not a bug.
+# 4. Build
+$ bazel build //services/system/exec:exec
+```
 
-2. Decide layout: each FC owns
-   `platform/proto/system/services/<fc>/` (mirror of
-   `system.services.<fc>` .art package).
+Idempotent: re-run step 2 anytime. `lib/` + `main/` + proto +
+manifest files get refreshed; `impl/` is preserved unless
+`--force` is passed.
 
-3. Bazel: each `platform/proto/system/services/<fc>/BUILD.bazel`
-   exposes `<msg>_pb_c` and `<msg>_pb_h` filegroups (mirroring
-   `platform/proto/gateway/system/BUILD.bazel`).
-   `platform/proto/BUILD.bazel` rolls them into the existing
-   `:platform_protos` cc_library.
-
-4. Today: nanopb's `.pb.c` / `.pb.h` are committed alongside the
-   `.proto` (one-shot via system `nanopb_generator`). A future
-   genrule-driven regen lands later; for this phase we manually
-   regen and commit, same as the gateway/system pattern.
-
-### B — sm migration to gen-proto'd headers (theia)
-
-1. Run `artheia gen-proto services/system/sm/package.art --out
-   platform/proto/system/services/sm/`.
-2. Run `nanopb_generator` on each .proto to emit .pb.{c,h}.
-3. Write `platform/proto/system/services/sm/BUILD.bazel`.
-4. Add to `platform/proto/BUILD.bazel`.
-5. Delete `services/system/sm/include/sm/sm_messages.hh`.
-6. Update `services/system/sm/include/sm/sm_daemon.hh` and
-   `SmDaemonStateMBase.hh` to `#include "system/services/sm/SmStateMsg.pb.h"`.
-   This means using nanopb's C struct shape — the underscored names
-   like `services_services_sm_SmStateMsg` need a using-decl or alias.
-7. Re-run `bazel test //services/system/sm:test_sm_daemon` — must
-   pass unchanged.
-
-### C — drop daemon.sh (artheia + theia)
-
-1. artheia: add `Process.start_cmd: list[str]` field. When set, the
-   manifest emission uses it; when empty, `_fc_child` emits an
-   empty `start_cmd` and logs a build-time warning (`fc <name> has
-   no start_cmd — supervisor will refuse to start it`).
-2. Remove the `services/{short}/daemon.sh` default fallback.
-3. Make `services.manifest.service` / `demo.manifest.rig` set
-   `start_cmd=["bazel-bin/services/system/sm/sm"]` for sm (or via
-   an Override mechanism — TBD when implementing).
-4. Run `artheia executor emit --machine central_host
-   demo.manifest.rig` and confirm sm's start_cmd is the real path.
-
-### D — cross-FC message declarations (theia)
-
-For each cooperation arrow in `sm.md §3.B`, declare the
-corresponding message types in the *receiver's* .art:
-
-| Arrow | Where to declare | Messages |
-|---|---|---|
-| SM → EM "Function Group state" | `services/system/exec/package.art` | `FunctionGroupRequest{group, state}` + `interface clientServer ExecCtl` |
-| SM → COM "network gating" | `services/system/com/package.art` | `NetworkBindingRequest{enabled}` + `interface clientServer ComCtl` |
-| SM → UCM "update mode" | `services/system/ucm/package.art` | UCM already has `UpdateCtl`; just add `UpdateModeRequest` |
-| SM → PER "persist state" | `services/system/per/package.art` | `WriteRequest{key,value}`, `ReadRequest{key}`, `interface clientServer PersistencyIf` (replaces current empty forward decl) |
-| EM → PHM "crash report" | `services/system/phm/package.art` | not in scope this phase |
-| DM → SM "DTC" + NM → SM "wakeup" | `services/system/sm/package.art` | inbound to SM — not in scope this phase |
-
-### E — binaries for EXEC, COM, UCM, PER (theia)
-
-For each FC, following the sm pattern:
+## Generated layout (per FC)
 
 ```
 services/system/<fc>/
-  include/<fc>/<Fc>Daemon.hh    # GenServer derivative
-  src/main.cc                    # entry + stderr subscriber + signal handler
-  test/test_<fc>_daemon.cc       # in-process integration test
-  BUILD.bazel                    # cc_library + cc_binary + cc_test
+  package.art                                  ← human-authored
+  component.art                                ← human-authored
+
+  lib/                                          ← every regen
+    <Node>.hh                                   message wiring, ports,
+                                                RemoteCodec, dispatch
+    <Node>_lib.cc                               registrations
+    BUILD.bazel                                 cc_library
+
+  main/                                         ← every regen
+    main.cc                                     thread executor +
+                                                TimerService boot
+    BUILD.bazel                                 cc_binary
+
+  impl/                                         ← FIRST-TIME-ONLY
+    <Node>_handlers.cc                          message handlers
+                                                (noop stubs)
+    BUILD.bazel                                 (also write-once?
+                                                 see open question)
+
+platform/proto/system/services/<fc>/            ← every regen
+  <Msg>.proto                                   nanopb-style proto3
+  <Msg>.pb.{c,h}                                committed nanopb output
+  BUILD.bazel                                   per-message filegroups
+
+manifest/services/<fc>/                         ← persistent
+  manifest.py                                   SwComponent + Executable
+                                                (every regen, but stable
+                                                across runs)
+  executor.py                                   StartupConfig + start_cmd
+                                                (every regen, but stable
+                                                across runs)
 ```
 
-Per-FC specifics:
+## Three slices — explicit semantics
 
-| FC | Subscribes to SmStateStream | Server port | Action on state |
+| Slice | Purpose | Regenerated? | What's in it |
 |---|---|---|---|
-| **EXEC** | yes | `ExecCtl::StartGroup/StopGroup` | log received SmStateMsg; future: spawn supervised processes |
-| **COM** | yes | `ComCtl::EnableBindings` | log; future: enable/disable network discovery |
-| **UCM** | yes | `UpdateCtl::RequestUpdate` | log; on UpdateRequest, post SM event via TIPC |
-| **PER** | no (it's the backend, not a consumer) | `PersistencyIf::Read/Write` | in-memory key→value map; future: file-backed |
+| **lib** | "message wiring" | YES, every regen | proto-derived message types, RemoteCodec<T>::service_id table, dispatch-entry registration, port→message bindings. The .art is the source of truth; lib follows. |
+| **main** | "thread executor" | YES, every regen | TimerService + TipcMux setup, instantiate each node from .art, call `start_statem`/`start`, register inbound dispatch entries from lib, wait on SIGINT, orderly stop. |
+| **impl** | "user handlers" | NO (write-once) | One stub method per receiver-port event / handle_call / handle_cast / on_enter. Empty noop bodies. User owns this file after first emit. |
 
-### F — wiring (theia)
+Re-run with `--force` overwrites impl too (printed warning naming
+each file overwritten).
 
-1. `services.manifest.service` adds each FC's bazel_target +
-   start_cmd override.
-2. `artheia executor emit --machine central_host demo.manifest.rig`
-   shows all four under `core_sup`'s children.
-3. `bazel test //services/system/...` runs all four FCs' tests.
+## Manifests split: manifest.py vs executor.py
+
+| File | Owns | Reason for split |
+|---|---|---|
+| `manifest/services/<fc>/manifest.py` | SwComponent + Executable + RootSwComponentPrototype | These describe **what the FC IS**: identity, daemon-class name, build target. Stable across rebuilds. |
+| `manifest/services/<fc>/executor.py` | Process + StateDependentStartupConfig + StartupConfig + start_cmd | These describe **how the FC RUNS**: the runtime contract the supervisor consumes. Editable by deployer (start_cmd, scheduling policy, restart type). |
+
+Both get regenerated by `gen-app`, but they have stable content
+(stable IDs / stable field order) so a regen with no .art changes
+is a no-op for git. The current `services/manifest/service.py`
+churns every time the FC list changes; the per-FC split fixes that.
+
+A new top-level `manifest/services/__init__.py` re-exports lists by
+walking the per-FC files:
+
+```python
+# manifest/services/__init__.py — generated header, hand-edited middle
+COMPONENTS = []
+EXECUTABLES = []
+PROCESSES = []
+for fc in ("sm", "exec", "com", "ucm", "per"):
+    mod = importlib.import_module(f"manifest.services.{fc}.manifest")
+    COMPONENTS.append(mod.COMPONENT)
+    EXECUTABLES.append(mod.EXECUTABLE)
+    PROCESSES.append(importlib.import_module(
+        f"manifest.services.{fc}.executor").PROCESS)
+```
+
+## When the FC has internal interfaces — `system.py`
+
+If a `composition` in `component.art` wires multiple nodes inside
+one process (intra-process actor-to-actor connects), the generator
+also emits `manifest/services/<fc>/system.py` describing the
+internal topology (which node hosts which port, which connect
+arrows are intra-process casts vs inter-process TIPC). This is the
+artheia composition lowered to Python form.
+
+Today's SM is a single-node FC so `system.py` is trivially the
+node itself; the file is only "interesting" for composite FCs.
+
+## Phases (commit boundaries)
+
+### A — gen-proto integration (artheia + theia)
+
+Make `gen-app` emit proto alongside the app. Today gen-app
+*consumes* proto from `--psp-proto-root`; redesign so the FC path
+generates proto from the same .art.
+
+- artheia: factor `generators/proto.py::generate_proto` to take an
+  output root (`platform/proto/`) and a package-derived subdir
+  (`system/services/<fc>/`). Today it's flat under `--out`.
+- artheia: add a `--proto-out platform/proto/` flag to gen-app
+  that triggers the proto emission.
+- theia: regen sm's protos under `platform/proto/system/services/sm/`.
+- theia: wire `platform/proto/system/services/sm/BUILD.bazel`.
+
+### B — sm migration to gen-proto'd headers
+
+- Delete `services/system/sm/include/sm/sm_messages.hh`.
+- Update `services/system/sm/include/sm/{SmDaemonStateMBase,sm_daemon}.hh`
+  to `#include "system/services/sm/SmStateMsg.pb.h"`.
+- The nanopb C struct names are underscored — typedef them to
+  cleaner C++ names at the include boundary OR live with the
+  underscores.
+- Run `bazel test //services/system/sm:test_sm_daemon` — must pass.
+
+### C — gen-app redesign for FCs
+
+This is the meaty one. The existing gen-app's templates target
+LifecycleInterface + GwMessageHeader-style PSP routing. For an FC
+that derives from GenServer/GenStateM we need new templates:
+
+- `templates/fc_app/Daemon.hh.j2` — class declaration (lib)
+- `templates/fc_app/Daemon_lib.cc.j2` — RemoteCodec, dispatch (lib)
+- `templates/fc_app/main.cc.j2` — TimerService + TipcMux boot (main)
+- `templates/fc_app/Daemon_handlers.cc.j2` — handler stubs (impl)
+- `templates/fc_app/BUILD.bazel.lib.j2`
+- `templates/fc_app/BUILD.bazel.main.j2`
+- `templates/fc_app/BUILD.bazel.impl.j2`
+- `templates/fc_app/manifest.py.j2`
+- `templates/fc_app/executor.py.j2`
+- `templates/fc_app/system.py.j2` (composite-FC case)
+
+Plus a new `generators/fc_app.py` (analog of `generators/cpp_app.py`)
+with the slice/skip-vs-overwrite logic + `--force`.
+
+CLI: `artheia gen-app --kind fc <package.art> --out <fc-dir>`
+(new --kind flag distinguishes FC mode from existing PSP mode).
+Or: `artheia gen-fc-app` if the dispatch is cleaner.
+
+### D — Drop daemon.sh (artheia + theia)
+
+- artheia: add `Process.start_cmd: list[str]` field with default
+  `[]`.
+- artheia: `_fc_child` no longer synthesizes `services/{short}/daemon.sh`.
+  When `start_cmd` is empty, emit empty (and log a warning).
+- theia: `manifest/services/sm/executor.py` sets the real path
+  `//services/system/sm:sm` (resolved at build time to
+  `bazel-bin/...`).
+- theia: regenerate `services/manifest/service.py` (or replace it
+  with the `manifest/services/__init__.py` aggregator).
+
+### E — Cross-FC message declarations (theia)
+
+Add cooperation messages to each FC's `package.art`:
+
+| In | New message |
+|---|---|
+| `services/system/exec/package.art` | `FunctionGroupRequest{group, state}` + `interface clientServer ExecCtl { operation StartGroup / StopGroup }` |
+| `services/system/com/package.art` | `NetworkBindingRequest{enabled}` + `interface clientServer ComCtl { operation EnableBindings }` |
+| `services/system/ucm/package.art` | already has UpdateCtl; add `UpdateModeRequest{mode}` |
+| `services/system/per/package.art` | replace empty `interface PersistencyIf {}` forward decl with `WriteRequest{key,value}`, `ReadRequest{key}`, `ReadReply{value,found}`, `WriteEmpty{}` + populated `interface clientServer PersistencyIf` |
+
+### F — Generate + commit 4 FC binaries
+
+For each FC: `artheia gen-app --kind fc services/system/<fc>/package.art
+--out services/system/<fc>/`. Commit the generated tree + the impl
+that has been augmented with realistic noop bodies.
+
+Per-FC handler behaviour (noop minimum):
+- All four log received SmStateMsg to stderr.
+- PER additionally keeps an in-memory map for Read/Write.
+- UCM's RequestUpdate posts a TIPC cast to SM (the only one
+  with actual outbound TIPC in this round).
+
+### G — Wire to supervisor + smoke test
+
+- `manifest/services/__init__.py` (aggregator) feeds all 5 FCs
+  (sm + 4 new) into the supervisor tree.
+- `artheia executor emit --machine central_host demo.manifest.rig`
+  shows all 5 under core_sup with real start_cmd paths.
+- `bazel test //services/system/...:test_*` exercises each FC's
+  in-process integration test.
 
 ## Out of scope (deferred)
 
 - DM and NM (sm.md inbound arrows — they post events TO sm rather
-  than receiving SmStateStream; need their own design pass).
-- PHM (EM→PHM crash report) — needs EM to actually spawn processes
-  first.
-- Cross-process TIPC subscription wiring. All four binaries today
-  are in-process-only; partners get the broadcast through stand-in
-  callbacks in tests. The actual TIPC publisher / subscriber on
-  SmStateStream is a separate work item.
-- Bazel-driven nanopb regen. Today the .pb.{c,h} are committed.
-- gen-cpp-stubs integration. The `_gen.h` it emits today is a C-API
-  facade that doesn't match GenServer's shape; integration is its
-  own design pass.
+  than receiving SmStateStream).
+- PHM (EM→PHM crash report) — needs EM to actually spawn processes.
+- Real cross-process TIPC subscription wiring on SmStateStream.
+  All 5 binaries today are in-process-only; TIPC publication is its
+  own work item.
+- Bazel-driven nanopb regen via genrule. Today the .pb.{c,h} are
+  committed alongside the .proto (same pattern as
+  platform/proto/gateway/system/).
+- statem block support in gen-app — gen-cpp-stubs already handles
+  this; gen-app for now ignores `statem` blocks and the user adds
+  their statem-derived class hand-rolled in impl (until gen-app is
+  taught to emit both regular and statem-derived FCs).
 
-## Survey notes (already done)
+## Open questions for this redesign
 
-- 18 TIPC IDs across `services/system/*/package.art` are all
-  distinct in range `0x80010001..0x80010012`. No collisions.
-- Only sm has a binary today. All other FCs are .art-only.
-- gen-proto exists, works, has stable output shape.
-- `platform/proto/gateway/system/` is a working precedent for the
-  per-package proto layout.
-- nanopb is in MODULE.bazel (0.4.9.1). Existing cc_library
-  consumers link via `-l:libprotobuf-nanopb.a`.
+1. **gen-app templates: keep existing PSP templates or replace?**
+   Two parallel sets (PSP-mode for gateway/odd_path apps, FC-mode
+   for system FCs) with `--kind` flag is simplest but means two
+   code paths to maintain.
+2. **BUILD.bazel in impl/ — write-once or every regen?**
+   The BUILD glob would normally be regen, but if the user adds
+   a test, the BUILD changes too. Probably: write-once but with
+   a sentinel comment instructing "if you delete this, regen will
+   reemit".
+3. **manifest.py / executor.py — Python that *imports* artheia,
+   or pure-data YAML/TOML?**
+   Pure-data is reload-cheap but loses Python expressivity
+   (Overrides). Python preserves the existing rig.py flow but
+   means generated Python has to be correct on every regen.
+   Recommend: Python, generated with stable formatting.
+4. **--force scope.** `--force` overwrites everything including
+   impl. Or do we have `--force-impl` (only impl) and `--force-all`?
+   Recommend: `--force` = "yes, overwrite impl too", with prompted
+   confirmation in TTY mode and a banner listing files about to be
+   overwritten.
+5. **Where does the daemon class live — `lib` or `impl`?**
+   Class declaration in `lib/<Node>.hh` (regenerated, but stable —
+   only changes when .art changes). Member function bodies for
+   handlers in `impl/<Node>_handlers.cc` (write-once). Constructor +
+   member init in `lib/<Node>_lib.cc` (regenerated).
+   This is the existing 3-slice split — we adopt it.
 
-## Decision log
+## Decision log (this turn)
 
-- **Proto path layout**: `platform/proto/system/services/<fc>/` —
-  mirrors the .art package hierarchy, not the source-tree location.
-  This means the include path is
-  `#include "system/services/<fc>/<Msg>.pb.h"` (with C++ namespace
-  `services::services::<fc>::<Msg>` per the leading-segment
-  rewrite).
-- **daemon.sh strategy**: drop, don't redirect. Build-time warning
-  for FCs with no start_cmd is the honest signal.
-- **Hand-rolled POD lifetime**: gone once Phase B lands. Going
-  forward, every FC consumes proto-emitted headers.
+- gen-proto stays as a debug command; gen-app becomes the real
+  entry point for users.
+- Manifest split: per-FC dir under `manifest/services/<fc>/` with
+  `manifest.py` + `executor.py`. The current
+  `services/manifest/service.py` is replaced by a
+  walking aggregator.
+- start_cmd: explicit per-FC, dropped fallback.
+- 3-slice (lib/main/impl) shape preserved from existing gen-app
+  but retargeted for GenServer/GenStateM-shaped daemons.
+- Composite-FC `system.py` only emitted when component.art has
+  multi-node composition.
+
+## Status
+
+Plan committed. Phase A starts next.

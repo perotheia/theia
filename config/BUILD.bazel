@@ -1,0 +1,65 @@
+# config/BUILD.bazel — Bazel platform constraints + selectable configs.
+#
+# Each `platform()` here corresponds to one target environment Theia
+# builds for. Today only two:
+#
+#   //config:host   — workspace host (linux x86_64, whatever you run
+#                     bazel on; matches the docker-compose stack)
+#   //config:rpi4   — Raspberry Pi 4 (linux aarch64, Debian bookworm)
+#
+# Usage from the command line:
+#
+#   bazel build @rig_demo//compute_host:image \
+#       --platforms=//config:rpi4
+#
+# Adding a new target (Pi Zero, Pi 5, NVIDIA Jetson…): copy the rpi4
+# block, change cpu/os, point at a corresponding sysroot in
+# third_party/sysroot/, add a toolchain-<name>.cmake.
+#
+# Why no toolchain() registration here:
+# - The C++ binaries (supervisor, services-com) build via CMake, not
+#   Bazel — see cmake/toolchain-rpi4.cmake. Bazel's role for those
+#   is to package the *already-built* binaries into per-machine .ipk
+#   bundles via rules/rig.bzl + rules/opkg.bzl.
+# - For pure-Bazel Linux targets, register toolchains via MODULE.bazel
+#   bazel_dep(...) instead.
+
+package(default_visibility = ["//visibility:public"])
+
+# -----------------------------------------------------------------------------
+# Platforms — keys consumed by select() in rules/rig.bzl and elsewhere.
+# -----------------------------------------------------------------------------
+
+platform(
+    name = "host",
+    constraint_values = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:linux",
+    ],
+)
+
+platform(
+    name = "rpi4",
+    constraint_values = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:linux",
+    ],
+)
+
+# -----------------------------------------------------------------------------
+# config_setting shortcuts — let rules/rig.bzl select() on these names
+# instead of writing constraint expressions verbatim. The platform
+# constraint approach (`bazel build --platforms=//config:rpi4`) sets
+# @platforms//cpu values, which the selects below convert into the
+# arch token the .ipk packager wants.
+# -----------------------------------------------------------------------------
+
+config_setting(
+    name = "is_amd64",
+    constraint_values = ["@platforms//cpu:x86_64"],
+)
+
+config_setting(
+    name = "is_arm64",
+    constraint_values = ["@platforms//cpu:aarch64"],
+)

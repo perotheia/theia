@@ -143,11 +143,21 @@ pkg_opkg(
     name = "image",
     package = "{vehicle}-{machine}",
     version = "1.0.0",
-    # `amd64` is dpkg's name for x86_64. opkg accepts either; we
-    # standardize on the Debian name so the resulting archive is
-    # installable via `dpkg -i` on Ubuntu / Debian hosts too (the
-    # archive format is identical — ar + control.tar.gz + data.tar.gz).
-    arch = "amd64",
+    # Arch is selected from the active --platforms. With no flag
+    # we default to amd64 (workspace host + docker compose stack).
+    # Pass --platforms=//config:rpi4 to flip to arm64. Adding a
+    # new target arch: extend //config:BUILD.bazel + the select
+    # below + drop a matching sysroot under third_party/sysroot/.
+    #
+    # `amd64`/`arm64` are dpkg's names. opkg accepts either; we
+    # standardize on Debian names so the archive is `dpkg -i`-able
+    # on Debian/Ubuntu hosts (archive format is identical — ar +
+    # control.tar.gz + data.tar.gz).
+    arch = select({{
+        "@pero_theia//config:is_arm64": "arm64",
+        "@pero_theia//config:is_amd64": "amd64",
+        "//conditions:default":         "amd64",
+    }}),
     description = "Deploy bundle for {vehicle} on {machine}",
     section = "apps",
     files = {{

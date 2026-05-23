@@ -141,8 +141,23 @@ that's bare-metal — separate toolchain, no shared object pipeline.
    aarch64 ELF). `--help` runs cleanly under qemu. The TIPC-connect
    smoke needs a real Pi 4 (qemu-user-static doesn't emulate AF_TIPC
    sockets reliably); deferred to step 7.
-5. Wire up Bazel `//config:rpi4` platform + arch selection in
-   `rules/rig.bzl`.
+5. ~~Wire up Bazel `//config:rpi4` platform + arch selection in
+   `rules/rig.bzl`.~~ **DONE.** `//config:BUILD.bazel` declares both
+   `host` (linux + x86_64) and `rpi4` (linux + aarch64) platforms,
+   plus `is_amd64`/`is_arm64` config_settings. `rules/rig.bzl`'s
+   `pkg_opkg(arch=...)` is now a `select()` keyed on those settings.
+   Verified all three paths:
+   - Default (no flag) → `demo-compute_host_1.0.0_amd64.ipk`
+   - `--platforms=//config:host` → same amd64
+   - `--platforms=//config:rpi4` → `demo-compute_host_1.0.0_arm64.ipk`
+   Control file's `Architecture:` field tracks; ipk name reflects arch.
+
+   Note: today's compute_host components are `bazel_buildable=False`
+   placeholder shell scripts, so the produced .ipk is arch-agnostic
+   content with arch-tagged metadata. When the demo apps + FCs grow
+   real cc_binary targets, Bazel's cc toolchain selection will need
+   the same `//config:rpi4` wiring (separate piece of work — see
+   step 6 below).
 6. Test: `bazel build @rig_demo//compute_host:image --platforms=//config:rpi4`
    produces an arm64 .ipk, `dpkg -i` it on a Pi 4, supdbg from the
    workspace connects to `pi-ip:7700`.

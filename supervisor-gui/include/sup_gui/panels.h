@@ -80,11 +80,15 @@ private:
 
 // "Load Charts" — periodic perf / health graphs. Today renders a
 // placeholder; once we have per-pid sampling it plots CPU / memory.
+class LoadChartsCanvas;  // defined in load_charts_panel.cpp
 class LoadChartsPanel : public PanelBase {
 public:
     explicit LoadChartsPanel(wxWindow* parent);
     void on_frame(const std::string& machine_name, uint16_t tag,
                   const std::string& payload) override;
+
+private:
+    LoadChartsCanvas* canvas_{nullptr};
 };
 
 class ApplicationsCanvas;  // defined in applications_panel.cpp

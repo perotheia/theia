@@ -86,7 +86,16 @@ def _executable_for(short: str) -> Executable:
 # dev tree; the install-time .ipk / .deb mapping rewrites these paths
 # to the on-target install location.
 START_CMDS: dict[str, list[str]] = {
-    "sm": ["bazel-bin/services/system/sm/sm"],
+    # sm — hand-rolled binary; the executable lives at the package root.
+    "sm":   ["bazel-bin/services/system/sm/sm"],
+    # The four sm.md §3.B cooperation partners are gen-app-emitted; each
+    # is laid out as services/system/<fc>/{lib,main,impl}/ with the
+    # cc_binary in main/. Path matches the executor.py emitted by
+    # `artheia gen-app --kind fc`.
+    "exec": ["bazel-bin/services/system/exec/main/exec"],
+    "com":  ["bazel-bin/services/system/com/main/com"],
+    "ucm":  ["bazel-bin/services/system/ucm/main/ucm"],
+    "per":  ["bazel-bin/services/system/per/main/per"],
 }
 
 

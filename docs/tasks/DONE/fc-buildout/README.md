@@ -278,6 +278,59 @@ Per-FC handler behaviour (noop minimum):
 - Composite-FC `system.py` only emitted when component.art has
   multi-node composition.
 
-## Status
+## Status — DONE 2026-05-24
 
-Plan committed. Phase A starts next.
+All 7 phases (A→G) shipped across this session. End-to-end flow:
+
+```
+.art for 4 FCs (exec/com/ucm/per)
+  ↓  artheia gen-app --kind fc        (Phase C)
+  ↓     (calls gen-proto-package      (Phase A, integrated))
+  ↓  nanopb_generator                  (manual today; future genrule)
+  ↓  bazel build //services/system/<fc>/main:<fc>
+  ↓  ./bazel-bin/services/system/<fc>/main/<fc>
+  → daemon comes up on its TIPC address, parks on SIGTERM
+```
+
+Five buildable + runnable FC binaries:
+  sm   (hand-rolled — preserved its on_enter / subscriber surface)
+  exec (gen-app emitted; SM→EM trigger surface)
+  com  (gen-app emitted; SM→COM network gating surface)
+  ucm  (gen-app emitted; UCM→SM update-mode surface)
+  per  (gen-app emitted; persistency backend)
+
+All five appear under `core_sup` in
+`artheia executor emit --machine central_host demo.manifest.rig`
+with real `bazel-bin/...` start_cmd paths.
+
+The remaining 13 FCs in CLUSTERS (core, crypto, nm, osi, idsm, diag,
+tsync, phm, vucm, shwa, fw, rds, log) are still .art-only — they
+emit a UserWarning at executor-emit time. They become real binaries
+the same way: write/edit the .art, run gen-app --kind fc,
+nanopb_generator, bazel build.
+
+### Commit landmarks
+
+- A — artheia `4c32598` (proto filesystem path = source spec)
+- B — theia `b4bcbf9` (sm migrates to gen-proto'd headers)
+- C — artheia `f511bb4` + `bf9f25b` (gen-app --kind fc + handle_info fix)
+- D — artheia `e29ab4c`, theia `e426d14` (drop daemon.sh;
+       Process.start_cmd field)
+- E — theia `d9a41b8` (cross-FC messages on exec/com/ucm)
+- F — theia `989ef2a` (4 FC binaries via gen-app)
+- G — theia (this commit) (supervisor wiring + smoke)
+
+### Known shortcuts
+
+- nanopb regen is still manual (`nanopb_generator <fc>.proto` after
+  gen-app). Bazel-driven regen via genrule lands later.
+- The 4 generated FCs have noop handlers — they log received
+  messages to stderr and return defaults. Real behaviour (UCM→SM
+  TIPC cast on UpdateRequest, EXEC spawning FG processes, COM
+  switching network bindings) ships as the per-FC behaviour
+  iterations land.
+- sm's hand-rolled binary doesn't follow the gen-app layout (it
+  uses src/ + a flat BUILD.bazel; the others use lib/main/impl/).
+  Migrating sm onto the gen-app shape would erase real logic
+  (subscriber table + handle_call(SmRequest) translation); not
+  worth doing until the gen-app templates support that pattern.

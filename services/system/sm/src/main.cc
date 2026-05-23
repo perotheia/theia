@@ -30,14 +30,14 @@ std::atomic<bool> g_running{true};
 void on_signal(int /*sig*/) { g_running.store(false); }
 
 const char* state_name(system_services_sm::SmState s) {
-    using S = system_services_sm::SmState;
+    using namespace system_services_sm;
     switch (s) {
-    case S::OFF:       return "OFF";
-    case S::STARTING:  return "STARTING";
-    case S::RUNNING:   return "RUNNING";
-    case S::DEGRADED:  return "DEGRADED";
-    case S::UPDATE:    return "UPDATE";
-    case S::SHUTDOWN:  return "SHUTDOWN";
+    case SmState_OFF:       return "OFF";
+    case SmState_STARTING:  return "STARTING";
+    case SmState_RUNNING:   return "RUNNING";
+    case SmState_DEGRADED:  return "DEGRADED";
+    case SmState_UPDATE:    return "UPDATE";
+    case SmState_SHUTDOWN:  return "SHUTDOWN";
     }
     return "?";
 }

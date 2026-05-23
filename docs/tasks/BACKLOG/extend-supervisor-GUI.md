@@ -148,14 +148,17 @@ unblocks the panels.
   stderr.
 - Right-click: copy path, delete, mark resolved.
 
-### Phase 10 — Trace Overview rework (#2d from the brief)
+### Phase 10 — Trace Overview rework (Wireshark-style)
 
-- Left side: collapsible tree (machines → children → threads), with
-  checkboxes. Filters the trace stream.
-- Center: scrolling event log (existing TracePanel content).
-- Right: detail pane for the selected event (full fields,
-  correlation id chain).
-- Header buttons: clear, save to file, jump to live.
+Detailed spec in
+[`GUI-trace-panel-wireshark-style.md`](GUI-trace-panel-wireshark-style.md).
+Short version: top pane is a virtual list of events
+(time-offset / machine / kind / child / parent / brief detail);
+bottom pane is a wxTreeCtrl that lazy-decodes the *selected* row
+into Header / Subject / Cause / Tombstone / Raw groups. Filter
+input at the top. Data source: etcd watch on `/theia/events/`.
+Lazy protobuf decode — top list shows only header fields, bottom
+pane runs full decode on selection.
 
 ### Phase 11 — End-to-end polish
 

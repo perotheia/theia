@@ -1,20 +1,22 @@
 # Generated nanopb sources for the system.services.ucm package.
-# Layout mirrors platform/proto/gateway/system/ — filegroups consumed
-# by platform/proto/BUILD.bazel's :platform_protos cc_library.
+# .pb.{c,h} are produced by the genrule from ucm.proto; not committed.
 
 package(default_visibility = ["//visibility:public"])
 
-filegroup(
-    name = "ucm_pb_c",
-    srcs = ["ucm.pb.c"],
-)
-
-filegroup(
-    name = "ucm_pb_h",
-    srcs = ["ucm.pb.h"],
-)
-
-filegroup(
-    name = "ucm_proto",
+genrule(
+    name = "ucm_pb",
     srcs = ["ucm.proto"],
+    outs = [
+        "ucm.pb.c",
+        "ucm.pb.h",
+    ],
+    cmd = "set -e;"
+        + " in_dir=$$(dirname $(location ucm.proto));"
+        + " out_dir=$$(dirname $(location ucm.pb.c));"
+        + " nanopb_generator -I $$in_dir -D $$out_dir ucm.proto;",
+    local = True,
 )
+
+filegroup(name = "ucm_pb_c", srcs = ["ucm.pb.c"])
+filegroup(name = "ucm_pb_h", srcs = ["ucm.pb.h"])
+filegroup(name = "ucm_proto", srcs = ["ucm.proto"])

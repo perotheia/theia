@@ -1,20 +1,22 @@
 # Generated nanopb sources for the system.services.exec package.
-# Layout mirrors platform/proto/gateway/system/ — filegroups consumed
-# by platform/proto/BUILD.bazel's :platform_protos cc_library.
+# .pb.{c,h} are produced by the genrule from exec.proto; not committed.
 
 package(default_visibility = ["//visibility:public"])
 
-filegroup(
-    name = "exec_pb_c",
-    srcs = ["exec.pb.c"],
-)
-
-filegroup(
-    name = "exec_pb_h",
-    srcs = ["exec.pb.h"],
-)
-
-filegroup(
-    name = "exec_proto",
+genrule(
+    name = "exec_pb",
     srcs = ["exec.proto"],
+    outs = [
+        "exec.pb.c",
+        "exec.pb.h",
+    ],
+    cmd = "set -e;"
+        + " in_dir=$$(dirname $(location exec.proto));"
+        + " out_dir=$$(dirname $(location exec.pb.c));"
+        + " nanopb_generator -I $$in_dir -D $$out_dir exec.proto;",
+    local = True,
 )
+
+filegroup(name = "exec_pb_c", srcs = ["exec.pb.c"])
+filegroup(name = "exec_pb_h", srcs = ["exec.pb.h"])
+filegroup(name = "exec_proto", srcs = ["exec.proto"])

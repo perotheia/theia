@@ -1,22 +1,33 @@
 # Generated nanopb sources for the system.services.sm package.
 #
-# The .proto sits at platform/proto/<art-pkg-as-path>/<leaf>.proto.
-# For services/system/sm/package.art (package system.services.sm),
-# that maps to platform/proto/system/services/sm/sm.proto. Apps
-# `#include "system/services/sm/sm.pb.h"` once they put
-# platform/proto/ on their include path.
+# .pb.{c,h} are now BUILT, not committed: the genrule below invokes
+# nanopb_generator (a system-installed tool) on the .proto. To
+# regenerate manually for inspection, run from the repo root:
 #
-# nanopb's emitted struct/enum names are prefixed with the libc-safe
-# proto package (services_services_sm_*). Consumers either use those
-# directly or alias them to shorter C++ names — see
-# services/system/sm/include/sm/sm_messages.hh for the alias pattern.
+#   nanopb_generator platform/proto/system/services/sm/sm.proto
 #
-# Today the .pb.{h,c} are committed alongside the .proto (one-shot
-# nanopb_generator output). A Bazel-driven regen will replace this
-# with `genrule` / `nanopb_generate` later; the file targets below
-# stay the same so callers don't need to change.
+# Earlier revisions committed the .pb.{c,h} alongside the .proto;
+# they're regenerable, so the genrule is the source of truth now.
 
 package(default_visibility = ["//visibility:public"])
+
+genrule(
+    name = "sm_pb",
+    srcs = ["sm.proto"],
+    outs = [
+        "sm.pb.c",
+        "sm.pb.h",
+    ],
+    cmd = "set -e;"
+        + " in_dir=$$(dirname $(location sm.proto));"
+        + " out_dir=$$(dirname $(location sm.pb.c));"
+        + " nanopb_generator -I $$in_dir -D $$out_dir sm.proto;",
+    tools = [],
+    # nanopb_generator is host-installed; if not on PATH, builds fail
+    # with a clear error. Future: hermetic via @nanopb//:nanopb_generator
+    # once the Bazel module exposes a usable tool target.
+    local = True,
+)
 
 filegroup(
     name = "sm_pb_c",

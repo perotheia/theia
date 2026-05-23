@@ -1,20 +1,22 @@
 # Generated nanopb sources for the system.services.com package.
-# Layout mirrors platform/proto/gateway/system/ — filegroups consumed
-# by platform/proto/BUILD.bazel's :platform_protos cc_library.
+# .pb.{c,h} are produced by the genrule from com.proto; not committed.
 
 package(default_visibility = ["//visibility:public"])
 
-filegroup(
-    name = "com_pb_c",
-    srcs = ["com.pb.c"],
-)
-
-filegroup(
-    name = "com_pb_h",
-    srcs = ["com.pb.h"],
-)
-
-filegroup(
-    name = "com_proto",
+genrule(
+    name = "com_pb",
     srcs = ["com.proto"],
+    outs = [
+        "com.pb.c",
+        "com.pb.h",
+    ],
+    cmd = "set -e;"
+        + " in_dir=$$(dirname $(location com.proto));"
+        + " out_dir=$$(dirname $(location com.pb.c));"
+        + " nanopb_generator -I $$in_dir -D $$out_dir com.proto;",
+    local = True,
 )
+
+filegroup(name = "com_pb_c", srcs = ["com.pb.c"])
+filegroup(name = "com_pb_h", srcs = ["com.pb.h"])
+filegroup(name = "com_proto", srcs = ["com.proto"])

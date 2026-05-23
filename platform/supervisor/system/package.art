@@ -75,6 +75,34 @@ message ChildState {
     // field above is the count; this is the breakdown the GUI shows
     // as expandable child rows.
     repeated ThreadSample threads_detail
+
+    // Open TCP/TIPC sockets owned by this pid. Populated from
+    // /proc/<pid>/net/tcp{,6} on the supervisor side. Empty when the
+    // sampler hasn't run yet (D2 schema-only commit; parser lands
+    // separately) or when the worker has no sockets.
+    //
+    // The GUI's "Sockets" tab (Phase 7) folds rows across all
+    // children into one table.
+    repeated SocketInfo sockets
+}
+
+// One open socket from /proc/<pid>/net/tcp{,6}. Fields are a flat
+// projection of the kernel's tcp_seq_show output. State numbers
+// match the kernel's TCP_* enum:
+//   1=ESTABLISHED  2=SYN_SENT  3=SYN_RECV  4=FIN_WAIT1  5=FIN_WAIT2
+//   6=TIME_WAIT    7=CLOSE     8=CLOSE_WAIT 9=LAST_ACK  10=LISTEN
+//   11=CLOSING
+// TIPC sockets are reported through the same struct with
+// family=AF_TIPC; address/peer carry a string repr of the TIPC name.
+message SocketInfo {
+    uint32  family          // AF_INET=2, AF_INET6=10, AF_TIPC=30
+    uint32  proto           // IPPROTO_TCP=6 ; informational
+    uint32  state           // see comment above
+    string  local           // "addr:port" or TIPC name
+    string  remote          // "addr:port" or "" for LISTEN/TIPC server
+    uint64  inode           // socket inode (matches /proc/<pid>/fd entry)
+    uint32  rx_queue        // bytes in receive queue
+    uint32  tx_queue        // bytes in transmit queue
 }
 
 // One thread's worth of resource + scheduling info, sampled from

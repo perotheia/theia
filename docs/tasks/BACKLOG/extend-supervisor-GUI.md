@@ -140,13 +140,24 @@ unblocks the panels.
   Theia etcd client library (consider `etcd-cpp-apiv3` or shell out
   to `etcdctl` for v1).
 
-### Phase 9 — Tombstones tab (replaces observer's nothing — net new)
+### Phase 9 — DROPPED (tombstones fold into Trace)
 
-- List every tombstone under `/var/log/theia/tombstones/<child>/`,
-  sortable by mtime, child name, exit code.
-- Double-click: dialog with full tombstone log + last 50 lines of
-  stderr.
-- Right-click: copy path, delete, mark resolved.
+Tombstones do NOT get their own tab. The supervisor already emits
+a `SupervisionEvent` with `tombstone_path` set whenever it writes
+one; that event flows through `services/log` (BACKLOG #196) into
+`/theia/events/` and lands in the Trace tab like any other
+supervision event.
+
+Trace's lazy-decode tree (see Phase 10 / `GUI-trace-panel-wireshark-style.md`)
+gets a **Tombstone** detail group: when the selected event has a
+non-empty `tombstone_path`, the group renders a file-tail of the
+tombstone log + stderr. Lazy — only loaded when the user clicks
+the row.
+
+This avoids a redundant tab and keeps "things that happened" in
+one place. The operator scrolls Trace, sees a RED tombstone row,
+clicks it, sees the post-mortem. Same UX as Wireshark "Follow
+TCP stream" minus the wandering.
 
 ### Phase 10 — Trace Overview rework (Wireshark-style)
 
@@ -179,6 +190,11 @@ as a separate task to schedule before the phase that needs it.
 - Phase 2: `SystemInfo` RPC + .art message — supervisor side ~80 LOC
 - Phase 7: extend ChildState with `SocketInfo[]`, supervisor samples
   `/proc/<pid>/net/tcp` — ~150 LOC
+- Phase 10 (Trace tombstones): `services/log` binary (BACKLOG #196)
+  consumes the supervisor's SupervisionEvent stream and persists each
+  event into `/theia/events/<machine>/<ts>-<seq>`. The supervisor
+  ALREADY writes tombstones to disk + emits the event with the path;
+  services/log just bridges. ~150 LOC.
 - Phase 8: superseded by `etcd-state-backbone.md` — the Table Viewer
   tab consumes the etcd data published by that plan's Phase 2.
 - Phase 9: tombstone list RPC (read-only walk of /var/log/theia/

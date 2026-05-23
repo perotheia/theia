@@ -1,0 +1,68 @@
+# supervisor-gui Bazel wrapper around the canonical CMakeLists.txt.
+#
+# Pattern: rules_foreign_cc's cmake() rule. CMakeLists.txt stays the
+# source of truth (clangd / IDE / out-of-Bazel dev all use it directly),
+# but `bazel build //supervisor-gui:supervisor-gui` produces the same
+# binary into bazel-bin/ — usable from the rig pipeline + downstream
+# packaging rules.
+#
+# Out-of-tree build dir under bazel-bin/ replaces the in-tree build/
+# dir for Bazel-driven invocations. The CMake build/ dir still works
+# for direct `cmake -S . -B build` development.
+
+load("@rules_foreign_cc//foreign_cc:defs.bzl", "cmake")
+
+package(default_visibility = ["//visibility:public"])
+
+# All sources CMakeLists needs to see, plus the in-tree generated/
+# stubs once they exist. proto generation is driven by CMakeLists
+# itself (see its protoc stanza) so we don't try to feed it from
+# Bazel — fewer moving parts, slower full-rebuilds but correct.
+filegroup(
+    name = "all_srcs",
+    srcs = glob(
+        [
+            "CMakeLists.txt",
+            "include/**",
+            "src/**",
+            "system/**",
+        ],
+        allow_empty = False,
+    ) + [
+        # supervisor-gui's CMakeLists pulls .protos from two sibling
+        # directories via ${CMAKE_CURRENT_SOURCE_DIR}/.. — they have
+        # to live in the sandbox too.
+        "//services/com:proto_srcs",
+        "//platform/supervisor:proto_srcs",
+    ],
+)
+
+# The cmake() rule defaults to library outputs; we override
+# `out_binaries` since supervisor-gui is an executable.
+#
+# `lib_source` is a label, NOT a path — cmake() copies its contents
+# into a sandbox before running CMake, so the build is reproducible.
+#
+# `cache_entries` is the Bazel-side mirror of -D... flags. We point
+# at the etcd-cpp-apiv3 install prefix the same way the CMake build
+# does. The install lives under third_party/, which is gitignored
+# but `repo sync`'d.
+cmake(
+    name = "supervisor-gui",
+    lib_source = ":all_srcs",
+    out_binaries = ["supervisor-gui"],
+    cache_entries = {
+        # Mirror of CMakeLists's default. Bazel's sandbox doesn't see
+        # the workspace path the CMakeLists computes from
+        # ${CMAKE_CURRENT_SOURCE_DIR}, so we pass it explicitly.
+        "ETCD_CPP_PREFIX": "$$EXT_BUILD_ROOT$$/third_party/etcd-cpp-apiv3/install",
+    },
+    # The vendored etcd-cpp-apiv3 install sits outside the sandboxed
+    # source dir, so we'd ordinarily lose access to it. data= adds
+    # the install tree as a build-time dep so Bazel exposes it.
+    data = ["//third_party:etcd-cpp-apiv3-install"],
+    # CMake needs to find protoc + grpc_cpp_plugin + wxWidgets +
+    # yaml-cpp + protobuf + grpc++ + cpprest + boost. All host-apt
+    # packages — Bazel doesn't sandbox /usr by default in cmake().
+    targets = ["supervisor-gui"],
+)

@@ -1,0 +1,16 @@
+# services/com — gRPC bridge between the in-host supervisor (TIPC)
+# and external clients (GUI / dashboards). Built today by CMake;
+# this BUILD.bazel just exposes its sources so other Bazel targets
+# can sandbox them. A future native-Bazel cc_binary lives elsewhere.
+
+package(default_visibility = ["//visibility:public"])
+
+# .proto sources consumed by supervisor-gui's CMake build via its
+# ${CMAKE_CURRENT_SOURCE_DIR}/../services/com/proto path.
+filegroup(
+    name = "proto_srcs",
+    srcs = glob(
+        ["proto/**/*.proto"],
+        allow_empty = False,
+    ),
+)

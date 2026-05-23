@@ -1,0 +1,22 @@
+# platform/supervisor — OTP-style process supervisor. Built today by
+# CMake (see CMakeLists.txt). This BUILD.bazel exposes the generated
+# proto sources so other Bazel targets — notably supervisor-gui's
+# rules_foreign_cc wrapper — can sandbox them.
+#
+# A future native-Bazel cc_binary that fully replaces the CMake build
+# would land alongside, but isn't required for the current Bazel
+# integration goal (driving CMake from Bazel + producing per-machine
+# .ipk / .deb).
+
+package(default_visibility = ["//visibility:public"])
+
+# Pre-generated .proto sources (artheia gen-proto output committed
+# under generated/proto/). Consumed by supervisor-gui's CMake build
+# via ${CMAKE_CURRENT_SOURCE_DIR}/../platform/supervisor/generated/proto.
+filegroup(
+    name = "proto_srcs",
+    srcs = glob(
+        ["generated/proto/**/*.proto"],
+        allow_empty = False,
+    ),
+)

@@ -1,0 +1,41 @@
+# third_party/BUILD.bazel — exposes vendored deps to the Bazel graph.
+#
+# The dirs under third_party/ are pulled by `repo sync` from public
+# sources (github remote in .repo/manifests/default.xml). Their own
+# BUILD systems are CMake/Make/etc., NOT Bazel — we don't drop
+# BUILD.bazel files inside them because that would pollute the
+# foreign repos' git status.
+#
+# Instead we expose specific artifacts via filegroup labels here.
+
+package(default_visibility = ["//visibility:public"])
+
+# etcd-cpp-apiv3 — vendored at v0.2.14, built+installed by an
+# out-of-Bazel cmake invocation into third_party/etcd-cpp-apiv3/install/.
+# Consumers (supervisor-gui, platform/supervisor) feed this filegroup
+# to rules_foreign_cc's cmake() rule via `data = [...]` so the install
+# tree is materialized inside the sandbox.
+#
+# Bootstrap if missing:
+#   repo sync etcd-cpp-apiv3/etcd-cpp-apiv3
+#   cmake -S third_party/etcd-cpp-apiv3 \
+#         -B third_party/etcd-cpp-apiv3/build \
+#         -DCMAKE_INSTALL_PREFIX=third_party/etcd-cpp-apiv3/install \
+#         -DBUILD_ETCD_TESTS=OFF -DETCD_W_STRICT=OFF
+#   cmake --build third_party/etcd-cpp-apiv3/build -j
+#   cmake --install third_party/etcd-cpp-apiv3/build
+filegroup(
+    name = "etcd-cpp-apiv3-install",
+    srcs = glob(
+        ["etcd-cpp-apiv3/install/**"],
+        allow_empty = True,
+    ),
+)
+
+# Alias under the dir name so consumers can write
+# //third_party/etcd-cpp-apiv3:install and read intent at the
+# call site.
+alias(
+    name = "etcd-cpp-apiv3",
+    actual = ":etcd-cpp-apiv3-install",
+)

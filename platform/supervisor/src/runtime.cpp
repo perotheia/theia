@@ -12,7 +12,9 @@
 #include "ControlRequest.pb.h"
 #include "DeleteChildRequest.pb.h"
 #include "GetChildRequest.pb.h"
+#include "GetSystemInfoRequest.pb.h"
 #include "GetTreeRequest.pb.h"
+#include "SystemInfo.pb.h"
 #include "HealthBeacon.pb.h"
 #include "HeartbeatReport.pb.h"
 #include "SendTimeoutReport.pb.h"
@@ -26,6 +28,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <sys/utsname.h>
 #include <dirent.h>
 #include <functional>
 #include <iostream>
@@ -640,6 +643,7 @@ namespace {
 constexpr uint16_t kTagEvent          = 0x0001;
 constexpr uint16_t kTagHealth         = 0x0002;
 constexpr uint16_t kTagSnapshot       = 0x0003;
+constexpr uint16_t kTagSystemInfo     = 0x0004;  // reply to GetSystemInfo
 // Inbound tags (filled by phase 3 / phase 4):
 constexpr uint16_t kTagControlRequest = 0x0100;
 constexpr uint16_t kTagControlReply   = 0x0101;
@@ -656,6 +660,7 @@ constexpr uint32_t kOpDeleteChild     = 4;
 constexpr uint32_t kOpRestartChild    = 5;
 constexpr uint32_t kOpTerminateChild  = 6;
 constexpr uint32_t kOpStop            = 7;
+constexpr uint32_t kOpGetSystemInfo   = 8;
 }  // namespace
 
 void Supervisor::on_inbound_frame(int client_fd, uint16_t tag,
@@ -738,6 +743,19 @@ void Supervisor::on_inbound_frame(int client_fd, uint16_t tag,
                 request_shutdown();
                 rep.set_status(0);
                 break;
+
+            case kOpGetSystemInfo: {
+                // Reply with a SystemInfo payload first (tag
+                // kTagSystemInfo), then a status=0 ControlReply
+                // for symmetry. The two messages carry the same
+                // correlation_id; services/com pairs by tag.
+                ::services::supervisor::SystemInfo info;
+                do_get_system_info(info);
+                publisher_.reply_to(client_fd, kTagSystemInfo,
+                                     info.SerializeAsString());
+                rep.set_status(0);
+                break;
+            }
 
             default:
                 rep.set_status(4);    // invalid_request
@@ -1365,6 +1383,102 @@ uint32_t Supervisor::do_terminate_child(const std::string& name) {
     if (w->pid <= 0) return 3;     // already_stopped
     stop_worker(*w);
     return 0;
+}
+
+
+// ---------------------------------------------------------------------------
+// SystemInfo — host facts from uname(2) + /proc + /etc/os-release.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+std::string slurp_text(const char* path) {
+    FILE* f = std::fopen(path, "rb");
+    if (!f) return {};
+    std::string out;
+    char buf[1024];
+    while (true) {
+        size_t n = std::fread(buf, 1, sizeof(buf), f);
+        if (n == 0) break;
+        out.append(buf, n);
+    }
+    std::fclose(f);
+    return out;
+}
+
+std::string parse_os_release_pretty(const std::string& body) {
+    const char* k = "PRETTY_NAME=";
+    size_t pos = body.find(k);
+    if (pos == std::string::npos) return {};
+    pos += std::strlen(k);
+    if (pos < body.size() && body[pos] == '"') ++pos;
+    size_t end = pos;
+    while (end < body.size() && body[end] != '"' && body[end] != '\n') ++end;
+    return body.substr(pos, end - pos);
+}
+
+uint64_t parse_mem_total_kb(const std::string& body) {
+    size_t pos = body.find("MemTotal:");
+    if (pos == std::string::npos) return 0;
+    pos += std::strlen("MemTotal:");
+    while (pos < body.size() && body[pos] == ' ') ++pos;
+    char* end = nullptr;
+    return std::strtoull(body.c_str() + pos, &end, 10);
+}
+
+uint64_t parse_uptime_sec(const std::string& body) {
+    char* end = nullptr;
+    double v = std::strtod(body.c_str(), &end);
+    return v > 0 ? static_cast<uint64_t>(v) : 0;
+}
+
+}  // namespace
+
+
+void Supervisor::do_get_system_info(
+        ::services::supervisor::SystemInfo& info) {
+    struct utsname u{};
+    if (::uname(&u) == 0) {
+        info.set_hostname(u.nodename);
+        std::string kernel;
+        kernel.reserve(64);
+        kernel.append(u.sysname).append(" ")
+              .append(u.release).append(" ")
+              .append(u.machine);
+        info.set_kernel(kernel);
+    }
+
+    info.set_os_pretty_name(
+        parse_os_release_pretty(slurp_text("/etc/os-release")));
+
+    long cpus = ::sysconf(_SC_NPROCESSORS_ONLN);
+    if (cpus > 0) info.set_cpu_count(static_cast<uint32_t>(cpus));
+
+    info.set_total_ram_kb(parse_mem_total_kb(slurp_text("/proc/meminfo")));
+    info.set_uptime_sec  (parse_uptime_sec  (slurp_text("/proc/uptime")));
+
+    // Build-time facts injected via -D... when the build wires them.
+    // Defaults to empty when undefined, matching .art proto3 default.
+#ifdef THEIA_GIT_SHA
+    info.set_theia_git_sha(THEIA_GIT_SHA);
+#endif
+#ifdef THEIA_BUILD_TIMESTAMP
+    info.set_build_timestamp(THEIA_BUILD_TIMESTAMP);
+#endif
+
+    // Wall-clock millis when this supervisor process started.
+    // start_time_ is a steady_clock point, so we approximate by
+    // measuring delta-since-now in milliseconds and subtracting
+    // from the current wall-clock.
+    using namespace std::chrono;
+    auto now_wall = system_clock::now();
+    auto elapsed  = duration_cast<milliseconds>(
+                       steady_clock::now() - start_time_);
+    auto started_wall = now_wall -
+        duration_cast<system_clock::duration>(elapsed);
+    info.set_start_timestamp_ms(
+        duration_cast<milliseconds>(
+            started_wall.time_since_epoch()).count());
 }
 
 // ---------------------------------------------------------------------------

@@ -131,6 +131,12 @@ private:
     uint32_t     do_restart_child(const std::string& name);
     uint32_t     do_terminate_child(const std::string& name);
 
+    // GetSystemInfo — populate a SystemInfo with host facts on demand.
+    // Best-effort; missing fields stay at proto defaults. Cheap
+    // (uname + a few /proc + /etc reads); not cached.
+    void         do_get_system_info(
+                     ::services::supervisor::SystemInfo& info_out);
+
     // /proc/<pid>/{stat,status} sampler — one row per supervised pid.
     // Refreshed inside the main loop on the heartbeat tick and read by
     // emit_snapshot. Resource facts ride on each ChildState wire row

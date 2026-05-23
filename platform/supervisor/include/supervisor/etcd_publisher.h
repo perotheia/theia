@@ -49,6 +49,7 @@ namespace services { namespace supervisor {
 class ChildState;
 class HealthBeacon;
 class SupervisionEvent;
+class SystemInfo;
 class TreeSnapshot;
 }}
 

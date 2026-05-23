@@ -1,0 +1,129 @@
+# Cross-compile Theia to Raspberry Pi 4 (aarch64)
+
+Goal: produce per-machine deploy bundles for a Raspberry Pi 4 target —
+the same `bazel build @rig_<name>//<machine>:image` pipeline that
+emits an `amd64` `.ipk` today should also emit an `arm64` `.ipk`
+installable on a Pi 4 running 64-bit Raspberry Pi OS (Debian-based).
+
+This is the first non-x86 Linux target after the docker compose
+host. The Hercules firmware already cross-compiles (TI ARM-CGT), but
+that's bare-metal — separate toolchain, no shared object pipeline.
+
+## Why
+
+- **Customer hardware**: the gateway BU + a couple of dev rigs run
+  on Pi 4 class boards; we currently hand-build there. A first-class
+  cross-compile fold collapses ~30 min of manual setup per board.
+- **Bazel hygiene**: forces us to express toolchain selection as a
+  `--platforms=//config:rpi4` flag rather than implicit
+  host-toolchain. Catches a class of "works on my machine" bugs.
+- **services-com on arm64**: today's gRPC bridge binary is amd64-only.
+  A real cross-compile validates the full stack (TIPC, gRPC,
+  protobuf, abseil) on a non-x86 target.
+
+## Pieces
+
+1. **Bazel platform + toolchain**
+   - Define `//config:rpi4` platform constraint
+     (`cpu=aarch64, os=linux`).
+   - Pick a cross-toolchain. Two realistic options:
+     - `aarch64-linux-gnu-gcc` from `gcc-aarch64-linux-gnu` apt package
+       on the workspace host (simplest, ABI-compatible with Debian
+       bookworm aarch64).
+     - A hermetic toolchain from `bazel-contrib/toolchains_llvm` or
+       `grailbio/bazel-toolchain` (cleaner but more setup).
+   - Recommend gcc-aarch64-linux-gnu for the first cut — matches what
+     the customer's Pi runs, ABI-stable, no extra Bazel deps.
+
+2. **Sysroot for runtime libs**
+   - The supervisor + services-com link against libyaml-cpp, libprotobuf,
+     libgrpc++, libabsl, libstdc++. We need an aarch64 copy of each
+     for link-time, plus matching sonames at runtime on the Pi.
+   - Two options:
+     - **debootstrap a small sysroot** under `third_party/sysroot/rpi4/`,
+       install matching `lib*-dev` packages, point Bazel at it. Local,
+       reproducible, fits the existing manifest model.
+     - **Build deps from source** via `rules_foreign_cc`. More work
+       but eliminates the sysroot-bundling step.
+   - Recommend debootstrap for the first cut; revisit if it grows
+     unwieldy.
+
+3. **Update `pkg_opkg` arch**
+   - `rules/rig.bzl` currently hardcodes `arch = "amd64"` (see
+     `_machine_targets`). It needs to read the target platform:
+     `arch = "arm64"` when `//config:rpi4` is selected, else `amd64`.
+   - The Bazel `select()` on `@platforms//cpu:arm64` returns the
+     right value. The .ipk name (`demo-<machine>_1.0.0_arm64.ipk`)
+     should also reflect the arch.
+
+4. **Per-machine rig.py mapping**
+   - `demo/manifest/rig.py`'s `ComputeHost` is declared `aarch64`
+     already (the rig metadata, not just amd64 hardcoded). Verify
+     it's wired through to Bazel platform selection — today the
+     pkg_opkg arch is hardcoded regardless of rig.py.
+
+5. **Cross-compile services-com + supervisor**
+   - Both are CMake projects (`platform/supervisor/`,
+     `services/com/`), NOT Bazel. Need either:
+     - **Path A**: keep them as CMake; add `toolchain-rpi4.cmake`
+       and a `build-rpi4/` out-of-tree dir. CI/dev does
+       `cmake -S . -B build-rpi4 -DCMAKE_TOOLCHAIN_FILE=...`.
+     - **Path B**: migrate them into Bazel so the rig-level platform
+       selection drives them too. Bigger lift.
+   - Recommend Path A (cmake toolchain file) for the first cut.
+
+6. **TIPC on Pi 4**
+   - Sanity-check: `modprobe tipc` on the Pi 4's kernel. Mainline
+     Raspberry Pi OS 12 (bookworm) ships TIPC as a module — no
+     custom kernel build needed. Worth a one-line verification
+     before committing to the architecture.
+
+7. **Deploy mechanism**
+   - The docker compose path doesn't change; the Pi gets the .ipk
+     pushed by `scp` + `dpkg -i` (Pi runs Debian, so dpkg works the
+     same way the container's dpkg path does — we already de-risked
+     this when switching from opkg to dpkg).
+   - Add `tools/deploy_rpi4.sh` that wraps:
+     ```
+     bazel build @rig_<n>//<machine>:image --platforms=//config:rpi4
+     scp bazel-bin/.../<machine>.ipk pi@<host>:/tmp/
+     ssh pi@<host> 'sudo dpkg -i /tmp/<machine>.ipk'
+     ```
+
+## Out of scope (this task)
+
+- Pi Zero / Pi 3 (armv6/v7) — separate platform constraint, separate
+  sysroot. Add later if a customer asks.
+- Pi RP2040 (Cortex-M0+) — bare-metal like Hercules; would need its
+  own TI-style toolchain integration, not the Linux pipeline.
+- Yocto/buildroot images — we deploy to the customer's existing
+  Pi OS rootfs, not a Theia-owned image.
+
+## Order of work (suggested)
+
+1. Install `gcc-aarch64-linux-gnu` on the workspace host; verify
+   `aarch64-linux-gnu-gcc --version` works (no Bazel involvement).
+2. Debootstrap a minimal aarch64 sysroot under
+   `third_party/sysroot/rpi4/` with libyaml-cpp / libprotobuf /
+   libgrpc++ / libabsl + their `-dev`.
+3. Add `cmake/toolchain-rpi4.cmake` and cross-build the supervisor
+   binary. Manual scp to a Pi 4 and verify it runs (without the .ipk
+   pipeline — just `./supervisor --help`). This de-risks the
+   sysroot before touching Bazel.
+4. Cross-build services-com the same way. Verify TIPC connect on the
+   Pi 4 (start supervisor → start services-com → curl/grpcurl from
+   another machine).
+5. Wire up Bazel `//config:rpi4` platform + arch selection in
+   `rules/rig.bzl`.
+6. Test: `bazel build @rig_demo//compute_host:image --platforms=//config:rpi4`
+   produces an arm64 .ipk, `dpkg -i` it on a Pi 4, supdbg from the
+   workspace connects to `pi-ip:7700`.
+
+## Related
+
+- `docs/tasks/DONE/` will record the per-phase commits.
+- `deploy/docker-compose.yml` stays amd64-only; the Pi 4 path is
+  out-of-container deploy.
+- supdbg already works against any reachable services-com regardless
+  of arch — the gRPC wire format is the same, so step 6's validation
+  is "supdbg --target pi:7700 tree" returning a tree.

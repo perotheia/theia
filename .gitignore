@@ -67,3 +67,7 @@ build/
 # Docker deploy runtime outputs.
 deploy/.staging/
 deploy/logs/
+
+# supdbg's grpc_tools.protoc output. Regenerate with:
+#   tools/supdbg/gen_protos.sh
+/tools/supdbg/_gen/

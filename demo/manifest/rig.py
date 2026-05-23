@@ -257,8 +257,17 @@ _PLATFORM_FABRIC_COMPONENTS: list[SwComponent] = [
     ),
 ]
 
-# Demo + platform-fabric = the full set added by DemoLayer below.
-DEMO_COMPONENTS = DEMO_COMPONENTS + _PLATFORM_FABRIC_COMPONENTS
+# DEMO_BINARIES = just the 3 demo per-process binaries (compute-bound
+# AAs). Kept separate from _PLATFORM_FABRIC_COMPONENTS so the
+# structured-DSL AAs below can each carry only what belongs to them.
+DEMO_BINARIES = list(DEMO_COMPONENTS)
+
+# DEMO_COMPONENTS (legacy-path-only) = demo binaries + platform fabric.
+# The legacy merge_layers flow collapses everything into one application
+# bag; the structured-DSL flow splits via _ComputeApp / _PlatformAppOverlay
+# below — and uses DEMO_BINARIES / _PLATFORM_FABRIC_COMPONENTS directly,
+# not this combined list.
+DEMO_COMPONENTS = DEMO_BINARIES + _PLATFORM_FABRIC_COMPONENTS
 
 
 def _executable_for(name: str, art_class: str) -> Executable:
@@ -368,6 +377,53 @@ for _sm in DemoRig.service_manifests:
         for _i in _sm.instances
     ]
 
+# ---------------------------------------------------------------------------
+# Pin each Process to its host Machine via ProcessToMachineMapping.
+#
+# AUTOSAR §9.4 PTM is the spec-aligned channel for "this Process runs
+# on this Machine." Used by the supervisor-tree slicer in
+# `artheia.manifest.supervisor.build_supervisor_tree(rig, machine=)` —
+# overrides the AA-host_machine fallback when both signals apply.
+#
+# Today's rig has zero PTM entries (the slicer falls back to AA
+# membership). That's wrong for these three:
+#
+#   shwa       — AA says central (it's in platform_app), reality is
+#                compute (the SHWA daemon reads nvidia-smi there).
+#   supervisor — AA says compute (it's in DEMO_COMPONENTS, which
+#                landed in compute_app), reality is central. Every
+#                TARGET runs its own supervisor binary — the
+#                "supervisor" SwComponent here names the .ipk artifact
+#                only; central is the canonical host of record.
+#   gateway    — same story: .ipk lives in compute_app via
+#                DEMO_COMPONENTS, but the gateway daemon binds to
+#                central's hardware.
+#
+# PTM is **sparse-positive** — it lists only deviations from the AA
+# default. Unmapped Processes fall through to AA host_machine.
+# ---------------------------------------------------------------------------
+
+from artheia.manifest.machine import ProcessToMachineMapping  # noqa: E402
+
+_PROCESS_HOST_OVERRIDES: dict[str, str] = {
+    "shwa":       ComputeHost.name,
+    "supervisor": CentralHost.name,
+    "gateway":    CentralHost.name,
+}
+
+_PTM_ENTRIES = [
+    ProcessToMachineMapping(
+        name=f"ptm_{_proc}",
+        process=_proc,
+        machine=_mach,
+    )
+    for _proc, _mach in _PROCESS_HOST_OVERRIDES.items()
+]
+
+DemoRig.process_to_machine_mappings = list(
+    DemoRig.process_to_machine_mappings
+) + _PTM_ENTRIES
+
 
 # ---------------------------------------------------------------------------
 # Structured-DSL path — DemoSoftware = FcSoftware.squash(DemoSpecLayer).
@@ -405,13 +461,21 @@ for _sm in DemoRig.service_manifests:
 _PlatformAppOverlay = ApplicationManifest(
     name="platform_app",
     host_machine=CentralHost.name,
-    components=[],  # let squash inherit FcSoftware's 18 FC components
+    # The 18 FC components come from FcSoftware (the platform base);
+    # the squash merges them in by same-identity (name="platform_app").
+    # We add the platform-fabric components here — supervisor + gateway
+    # — because they belong on central and platform_app is its AA.
+    components=list(_PLATFORM_FABRIC_COMPONENTS),
 )
 
 _ComputeApp = ApplicationManifest(
     name="compute_app",
     host_machine=ComputeHost.name,
-    components=list(DEMO_COMPONENTS),
+    # Compute hosts only the demo per-process binaries. Platform
+    # fabric (supervisor / gateway) lives in _PlatformAppOverlay
+    # above; FCs (incl. shwa) live in FcSoftware → platform_app, with
+    # a PTM entry pinning shwa to compute (see _PTM_ENTRIES).
+    components=list(DEMO_BINARIES),
 )
 
 DemoSpecLayer = SoftwareSpecification(
@@ -436,6 +500,14 @@ DemoSpecLayer = SoftwareSpecification(
     # set transform so .squash() picks them up.
     service_manifests=cast(set[SetTransformTypes], {
         Append(_sm) for _sm in DemoRig.service_manifests
+    }),
+    # Same trick for ProcessToMachineMapping: the PTM overrides we
+    # appended to DemoRig above drive the supervisor-tree slicer in
+    # `build_supervisor_tree(rig, machine=...)`. Carry them through
+    # to the structured-DSL path so DemoSoftware.to_rig() (the one
+    # CLI consumers prefer via *Software ranking) gets them too.
+    process_to_machine_mappings=cast(set[SetTransformTypes], {
+        Append(_ptm) for _ptm in _PTM_ENTRIES
     }),
 )
 

@@ -1,14 +1,71 @@
-# Per-app supervisor DSL — design
+# Per-app supervisor DSL — design + implementation — DONE 2026-05-23
 
-## Status
+## Status — Phase C delivered
 
-Phase B of the per-app-supervisor work. **Design proposal only — no
-code changes yet.** Companion files in this directory:
+Phase A (rename + reference stash) + B (design) + C (implementation +
+tests). Companion files:
 
-- `README.md` — original task ticket (what the work delivers).
-- `today-executor.yaml` — the executor.yaml shipping today (from
-  `deploy/.staging/<m>/ipk/`, identical for both machines).
-- this file — the Python DSL design.
+- `README.md` — original task ticket.
+- `today-executor.yaml` — pre-slice baseline (now superseded by
+  per-machine `dist/manifest/<m>/execution.yaml`).
+- this file — design + impl log.
+
+### What landed (Phase C)
+
+1. **`SupervisorNode.machine: Optional[str]`** —
+   `artheia/manifest/supervisor.py`.
+2. **`build_supervisor_tree(rig, machine=None)`** — machine kwarg
+   slices the tree: per-supervisor pin honored; Process leaves
+   filtered via PTM→AA-host fallback; empty sub-supervisors pruned;
+   root preserved as empty when machine has no children.
+3. **`artheia executor emit --machine <name>`** — CLI flag.
+4. **`dist_manifest._execution_payload`** — each
+   `<machine>/execution.yaml` now carries `supervisor_tree`.
+5. **PTM overrides for demo rig** —
+   `_PROCESS_HOST_OVERRIDES = {shwa: compute, supervisor: central,
+   gateway: central}`. Applied to both legacy DemoRig and structured
+   DemoSoftware (via `DemoSpecLayer.process_to_machine_mappings`).
+6. **AA assignment cleanup** — `_PlatformAppOverlay` gets
+   `_PLATFORM_FABRIC_COMPONENTS`; `_ComputeApp` gets only
+   `DEMO_BINARIES`. Legacy `DemoLayer` still uses the combined list
+   (single-bag world).
+7. **5 regression tests** —
+   `artheia/tests/test_supervisor_slice.py` asserts the per-machine
+   slice behavior.
+
+### Final shape
+
+```
+central_host:
+  root
+    ar_sup
+      core_sup
+        exec, core, crypto, sm
+        network_sup    [nm, com, osi, idsm, diag, tsync]
+        host_svc_sup   [per, rds]
+        pltf_sup       [phm, ucm, vucm, fw]    # shwa gone ✓
+      app_sup
+        supervisor, gateway                    # platform fabric here ✓
+
+compute_host:
+  root
+    ar_sup
+      core_sup
+        pltf_sup       [shwa]                  # only compute-pinned FC ✓
+      app_sup
+        demo_p1, demo_p2, demo_p3              # demos here ✓
+
+admin_host:
+  root                                          # empty ✓
+```
+
+Tests: 111 pass / 4 pre-existing failures (unchanged).
+
+---
+
+## Original design notes follow
+
+
 
 ## What stays vs what changes
 

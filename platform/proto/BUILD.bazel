@@ -13,11 +13,19 @@ cc_library(
     name = "platform_protos",
     srcs = [
         "//platform/proto/gateway/system:status_pb_c",
+        "//platform/proto/system/services/com:com_pb_c",
+        "//platform/proto/system/services/exec:exec_pb_c",
+        "//platform/proto/system/services/per:per_pb_c",
         "//platform/proto/system/services/sm:sm_pb_c",
+        "//platform/proto/system/services/ucm:ucm_pb_c",
     ],
     hdrs = [
         "//platform/proto/gateway/system:status_pb_h",
+        "//platform/proto/system/services/com:com_pb_h",
+        "//platform/proto/system/services/exec:exec_pb_h",
+        "//platform/proto/system/services/per:per_pb_h",
         "//platform/proto/system/services/sm:sm_pb_h",
+        "//platform/proto/system/services/ucm:ucm_pb_h",
     ],
     # platform/proto is the include root: callers write
     # #include "gateway/system/status.pb.h"

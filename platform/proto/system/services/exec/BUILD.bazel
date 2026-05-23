@@ -1,0 +1,20 @@
+# Generated nanopb sources for the system.services.exec package.
+# Layout mirrors platform/proto/gateway/system/ — filegroups consumed
+# by platform/proto/BUILD.bazel's :platform_protos cc_library.
+
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "exec_pb_c",
+    srcs = ["exec.pb.c"],
+)
+
+filegroup(
+    name = "exec_pb_h",
+    srcs = ["exec.pb.h"],
+)
+
+filegroup(
+    name = "exec_proto",
+    srcs = ["exec.proto"],
+)

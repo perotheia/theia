@@ -25,15 +25,24 @@ enum FgState {
     STOPPING  = 3
 }
 
-// SM → EM "trigger". Names the function group + target state. Caller
-// is SM, server is the supervisor / EM. R24-11 ARA-EXEC names the
-// FG by string id (matches Adaptive's "FunctionGroup.shortName").
-message FunctionGroupRequest {
+message ExecEmpty { }
+
+// SM → EM "trigger" requests. Each op gets its own request type so
+// the GenServer dispatcher routes by message type cleanly (one
+// handle_call per req shape — the C++ overload set wouldn't
+// distinguish two ops sharing the same req struct).
+//
+// Names the function group + target state. R24-11 ARA-EXEC names
+// the FG by string id (matches Adaptive's "FunctionGroup.shortName").
+
+message StartGroupRequest {
     string  function_group
     FgState target
 }
 
-message ExecEmpty { }
+message StopGroupRequest {
+    string  function_group
+}
 
 // SM → EM control surface (Adaptive's "Trigger" + "Notifier").
 // Caller (SM) issues StartGroup / StopGroup; the supervisor enacts
@@ -43,8 +52,8 @@ message ExecEmpty { }
 // land on the connection. This shape will gain progress notifiers
 // once SM cares about granular reporting.
 interface clientServer ExecCtl {
-    operation StartGroup(in r:FunctionGroupRequest) returns ExecEmpty
-    operation StopGroup(in r:FunctionGroupRequest)  returns ExecEmpty
+    operation StartGroup(in r:StartGroupRequest) returns ExecEmpty
+    operation StopGroup(in r:StopGroupRequest)   returns ExecEmpty
 }
 
 node atomic ExecDaemon {

@@ -1,0 +1,20 @@
+# Generated nanopb sources for the system.services.per package.
+# Layout mirrors platform/proto/gateway/system/ — filegroups consumed
+# by platform/proto/BUILD.bazel's :platform_protos cc_library.
+
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "per_pb_c",
+    srcs = ["per.pb.c"],
+)
+
+filegroup(
+    name = "per_pb_h",
+    srcs = ["per.pb.h"],
+)
+
+filegroup(
+    name = "per_proto",
+    srcs = ["per.proto"],
+)

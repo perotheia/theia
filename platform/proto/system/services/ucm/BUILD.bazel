@@ -1,0 +1,20 @@
+# Generated nanopb sources for the system.services.ucm package.
+# Layout mirrors platform/proto/gateway/system/ — filegroups consumed
+# by platform/proto/BUILD.bazel's :platform_protos cc_library.
+
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "ucm_pb_c",
+    srcs = ["ucm.pb.c"],
+)
+
+filegroup(
+    name = "ucm_pb_h",
+    srcs = ["ucm.pb.h"],
+)
+
+filegroup(
+    name = "ucm_proto",
+    srcs = ["ucm.proto"],
+)

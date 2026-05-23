@@ -1,4 +1,41 @@
-# Puppet two-phase deploy scripts (provisioning + orchestration)
+# Puppet two-phase deploy scripts (provisioning + orchestration) — DONE 2026-05-23
+
+## Resolution — stub level, ready for production fill-in
+
+Five files landed under `deploy/puppet/`:
+
+- `provisioning.pp` — site entry, resolves `$THEIA_MACHINE` and calls
+  `theia::provisioning`.
+- `orchestration.pp` — site entry, same shape, calls
+  `theia::orchestration`.
+- `modules/theia/manifests/provisioning.pp` — Phase 1 module class.
+  Three intended steps (os_packages / opkg_artifacts / services-db
+  migrate); each is `notice(...)` + commented production-shape code
+  ready to uncomment when the underlying pieces land.
+- `modules/theia/manifests/orchestration.pp` — Phase 2 module class.
+  App `.ipk` replacement + supervisor reload, same stub shape.
+- `README.md` — explains the two-phase model, source-of-truth YAML
+  paths, invocation examples, and what's STUB vs production-ready.
+
+Site-level `.pp` files resolve the target machine from
+`$facts['theia_machine']` (env: `$THEIA_MACHINE`) with hostname
+fallback.
+
+## What still must land before this graduates from stub → real
+
+1. `bazel build //platform/{supervisor,gateway}:ipk` producing real
+   `.ipk` files (today: bash-stub placeholders).
+2. Distribution tarball drops `dist/manifest/<machine>/` into
+   `/etc/theia/manifest/` on the target.
+3. `services/db` exists with a `--check` mode for migration
+   detection.
+
+Each `STUB` block in the module classes points at the production
+code to uncomment once the prerequisite lands.
+
+---
+
+## Original ticket follows below
 
 `Machine.os_packages` + `Machine.opkg_artifacts` already land in
 `dist/manifest/<machine>/machine.yaml`. Per-app `.ipk`s land in

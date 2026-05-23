@@ -118,6 +118,27 @@ ComputeHost = MachineManifest(
     ),
 )
 
+# Admin console — runs supervisor-gui + supdbg, no supervisor of
+# its own. Packaged as a .deb (rules/rig.bzl will branch on
+# kind="host"). Its manifest carries the operator's view of the
+# rig: every TARGET machine's com_endpoint + etcd_endpoint, plus
+# the host's own arch (always x86_64 today — operator laptops are
+# all amd64).
+#
+# At install time the .deb's /etc/theia/machines.yaml is generated
+# from this Machine + the rig's TARGET machines so the GUI knows
+# what to connect to without further config.
+AdminHost = MachineManifest(
+    name="admin_host",
+    kind="host",   # MachineKind.HOST.value — string-typed; "target" default elsewhere
+    hardware=HardwareResource(
+        cpu=CpuResource(architecture=CpuArchitecture.X86_64),
+    ),
+    # No com_endpoint of its own; the GUI talks to TARGET machines.
+    # Leave the default — downstream tooling treats a HOST machine's
+    # com_endpoint as "n/a".
+)
+
 # Legacy alias for any caller that still references DemoHost (the
 # original single-host name). Points at central by default — the
 # services+gateway side is what most existing tests assert against.
@@ -287,6 +308,7 @@ DemoSpecLayer = SoftwareSpecification(
     machines=cast(set[SetTransformTypes], {
         Append(CentralHost),
         Append(ComputeHost),
+        Append(AdminHost),
     }),
     applications=cast(set[SetTransformTypes], {
         Append(_PlatformAppOverlay),

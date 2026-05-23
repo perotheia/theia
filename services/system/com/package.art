@@ -25,14 +25,34 @@ interface clientServer ComBridge {
     operation Ping(in p:ComEmpty) returns ComEmpty
 }
 
+// SM (or a power-mgmt policy) requests COM to enable / disable a
+// named network binding — typically a VLAN or a service-discovery
+// scope. `name` matches the ara::com SD service offer name; the
+// well-known set lives in machine.yaml. `enabled = false` ⇒ tear
+// down advertisements + stop forwarding; `true` ⇒ resume.
+message NetworkBindingRequest {
+    string binding_name
+    bool   enabled
+}
+
+// SM → COM control surface. Mirrors the §3.B "network gating"
+// arrow in sm.md: on entering UPDATE / DEGRADED, SM tells COM which
+// scopes to stop offering. On RUNNING, COM is told to resume.
+interface clientServer ComCtl {
+    operation EnableBindings(in r:NetworkBindingRequest) returns ComEmpty
+}
+
 // Cooperation surface: COM SUBSCRIBES to `SmStateStream` to enable /
 // disable service discovery + VLANs when SM enters / leaves RUNNING.
 // Real implementation: ucm-like — receive SmStateMsg, switch network
-// bindings accordingly. The receiver port captures the contract.
+// bindings accordingly. The `from_sm` receiver port captures the
+// passive subscription; `ctl` is the active control surface SM (or
+// any other policy actor) uses to request bindings explicitly.
 node atomic ComDaemon {
     tipc type=0x80010008 instance=0
     ports {
         server   external provides ComBridge
+        server   ctl      provides ComCtl
         receiver from_sm  requires SmStateStream
         client   to_per   requires PersistencyIf
         sender   to_log   provides LogStream  best_effort

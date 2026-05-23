@@ -21,6 +21,23 @@ interface clientServer   PersistencyIf { }  // from system.services.per
 message UcmRequest { string package_id    string version }
 message UcmReply   { uint32 status }
 
+// UCM → SM "ask for UPDATE mode" (per sm.md §3.B: "UCM must ask SM
+// to enter Update Mode to stop non-essential apps before flashing").
+// Reverses the direction of most cooperation arrows — UCM is a
+// client of SM's StateMgmtCtl, not the other way around. The .art
+// captures the contract by way of UCM's outbound client port to SM.
+message UpdateModeRequest {
+    string  package_id
+    bool    enter            // true = "enter UPDATE", false = "leave"
+}
+
+// Forward decl of SM's mode control. The actual interface lives in
+// system.services.sm; this re-declares the type so UCM's `to_sm`
+// client port can `requires` it without depending on the loader
+// resolving cross-package interfaces (artheia handles cross-package
+// refs but the per-FC codegen is happier with local decls).
+interface clientServer StateMgmtCtl { }
+
 interface clientServer UpdateCtl {
     operation RequestUpdate(in r:UcmRequest) returns UcmReply
 }
@@ -30,6 +47,7 @@ node atomic UcmDaemon {
     ports {
         server   ctl     provides UpdateCtl
         receiver from_sm requires SmStateStream
+        client   to_sm   requires StateMgmtCtl
         client   to_per  requires PersistencyIf
         sender   to_log  provides LogStream  best_effort
     }

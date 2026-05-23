@@ -13,9 +13,44 @@ package system.services.exec
 
 interface senderReceiver SmStateStream { }  // from system.services.sm
 
+// Function-group state — what's controlled by SM's transitions:
+//   IDLE        the FG is not started
+//   STARTING    processes are spawning, waiting for OnExecute
+//   RUNNING     all processes alive + reporting kRunning
+//   STOPPING    SIGTERM dispatched, draining
+enum FgState {
+    IDLE      = 0
+    STARTING  = 1
+    RUNNING   = 2
+    STOPPING  = 3
+}
+
+// SM → EM "trigger". Names the function group + target state. Caller
+// is SM, server is the supervisor / EM. R24-11 ARA-EXEC names the
+// FG by string id (matches Adaptive's "FunctionGroup.shortName").
+message FunctionGroupRequest {
+    string  function_group
+    FgState target
+}
+
+message ExecEmpty { }
+
+// SM → EM control surface (Adaptive's "Trigger" + "Notifier").
+// Caller (SM) issues StartGroup / StopGroup; the supervisor enacts
+// the transition and replies once the group reaches the target
+// state (or fails). The reply shape is intentionally minimal: the
+// "did it work" status is in the reply field of the RPC, errors
+// land on the connection. This shape will gain progress notifiers
+// once SM cares about granular reporting.
+interface clientServer ExecCtl {
+    operation StartGroup(in r:FunctionGroupRequest) returns ExecEmpty
+    operation StopGroup(in r:FunctionGroupRequest)  returns ExecEmpty
+}
+
 node atomic ExecDaemon {
     tipc type=0x80010005 instance=0
     ports {
         receiver from_sm requires SmStateStream
+        server   ctl     provides ExecCtl
     }
 }

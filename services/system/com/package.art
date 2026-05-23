@@ -14,6 +14,7 @@ package system.services.com
 
 interface senderReceiver LogStream     { }  // from system.services.log
 interface clientServer   PersistencyIf { }  // from system.services.per
+interface senderReceiver SmStateStream { }  // from system.services.sm
 
 message ComEmpty { }
 
@@ -24,11 +25,16 @@ interface clientServer ComBridge {
     operation Ping(in p:ComEmpty) returns ComEmpty
 }
 
+// Cooperation surface: COM SUBSCRIBES to `SmStateStream` to enable /
+// disable service discovery + VLANs when SM enters / leaves RUNNING.
+// Real implementation: ucm-like — receive SmStateMsg, switch network
+// bindings accordingly. The receiver port captures the contract.
 node atomic ComDaemon {
     tipc type=0x80010008 instance=0
     ports {
-        server external provides ComBridge
-        client to_per   requires PersistencyIf
-        sender to_log   provides LogStream  best_effort
+        server   external provides ComBridge
+        receiver from_sm  requires SmStateStream
+        client   to_per   requires PersistencyIf
+        sender   to_log   provides LogStream  best_effort
     }
 }

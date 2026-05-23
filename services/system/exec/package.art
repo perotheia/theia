@@ -1,9 +1,21 @@
 // Exec (EXEC) — Adaptive Platform Functional Cluster.
 //
 // NOT IMPLEMENTED here. Implemented by platform/supervisor. See README.md.
+//
+// Cooperation surface: EXEC SUBSCRIBES to `SmStateStream` so the
+// supervisor can switch Function Group state in response to SM
+// transitions (RUNNING enables apps, UPDATE stops them, SHUTDOWN
+// terminates the cluster). The .art declaration captures the
+// interface; the actual subscription wiring lives in
+// platform/supervisor/src/.
 
 package system.services.exec
 
+interface senderReceiver SmStateStream { }  // from system.services.sm
+
 node atomic ExecDaemon {
     tipc type=0x80010005 instance=0
+    ports {
+        receiver from_sm requires SmStateStream
+    }
 }

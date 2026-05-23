@@ -34,18 +34,37 @@ public:
         // friendlier under `theia-supervisor-gui &` in a shell.
         delete wxLog::SetActiveTarget(new wxLogStderr());
 
+        // Endpoint resolution order:
+        //   1. --machines-yaml    (legacy flat file)
+        //   2. --manifest-dir     (current per-machine layout)
+        //   3. autodiscover       (well-known locations of either)
+        //   4. localhost:7700     (last-resort fallback)
         std::vector<sup_gui::MachineEndpoint> machines;
         if (!machines_yaml_.empty()) {
             machines = sup_gui::load_machines_yaml(
                 std::string(machines_yaml_.utf8_str()));
             if (machines.empty()) {
                 std::fprintf(stderr,
-                    "supervisor-gui: '%s' produced no machines; "
-                    "falling back to localhost:7700\n",
+                    "supervisor-gui: '%s' produced no machines\n",
                     machines_yaml_.utf8_str().data());
             }
         }
-        if (machines.empty()) machines = sup_gui::default_machines();
+        if (machines.empty() && !manifest_dir_.empty()) {
+            machines = sup_gui::load_manifest_dir(
+                std::string(manifest_dir_.utf8_str()));
+            if (machines.empty()) {
+                std::fprintf(stderr,
+                    "supervisor-gui: '%s' produced no machines\n",
+                    manifest_dir_.utf8_str().data());
+            }
+        }
+        if (machines.empty()) machines = sup_gui::autodiscover_machines();
+        if (machines.empty()) {
+            std::fprintf(stderr,
+                "supervisor-gui: no machines.yaml or manifest dir found; "
+                "falling back to localhost:7700\n");
+            machines = sup_gui::default_machines();
+        }
 
         auto* frame = new sup_gui::MainFrame(std::move(machines));
         frame->Show(true);
@@ -60,7 +79,13 @@ public:
     void OnInitCmdLine(wxCmdLineParser& parser) override {
         static const wxCmdLineEntryDesc desc[] = {
             { wxCMD_LINE_OPTION, "m", "machines-yaml",
-              "Path to machines.yaml (from `artheia gui emit`)",
+              "Path to flat machines.yaml (from `artheia gui emit`). "
+              "Legacy; --manifest-dir is preferred for new rigs.",
+              wxCMD_LINE_VAL_STRING, wxCMD_LINE_PARAM_OPTIONAL },
+            { wxCMD_LINE_OPTION, "d", "manifest-dir",
+              "Path to dist/manifest/ (output of "
+              "`artheia generate-manifest`). Reads index.yaml + each "
+              "<machine>/machine.yaml. Skips kind=host machines.",
               wxCMD_LINE_VAL_STRING, wxCMD_LINE_PARAM_OPTIONAL },
             { wxCMD_LINE_NONE }
         };
@@ -69,11 +94,13 @@ public:
 
     bool OnCmdLineParsed(wxCmdLineParser& parser) override {
         parser.Found("machines-yaml", &machines_yaml_);
+        parser.Found("manifest-dir",  &manifest_dir_);
         return true;
     }
 
 private:
     wxString machines_yaml_;
+    wxString manifest_dir_;
 };
 
 }  // namespace

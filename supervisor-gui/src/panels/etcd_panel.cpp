@@ -44,6 +44,9 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdarg>
+#include <cstdio>
+#include <ctime>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -100,6 +103,31 @@ bool looks_like_text(const std::string& s) {
         else return false;
     }
     return cont == 0;
+}
+
+// Lightweight logger bypassing all wx-side state. Goes straight to
+// stderr — same place main.cpp's wxLogStderr would put it, but with
+// no walk through wxLog::CallDoLogNow / wxLogGui dispatch which has
+// proven crash-prone when called from a panel's event handler before
+// the active log target is fully wired. Format compatible with
+// printf, includes a millisecond timestamp.
+void log_line(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
+void log_line(const char* fmt, ...) {
+    char tsbuf[32] = {};
+    struct timespec ts{};
+    clock_gettime(CLOCK_REALTIME, &ts);
+    struct tm tm{};
+    localtime_r(&ts.tv_sec, &tm);
+    int n = std::snprintf(tsbuf, sizeof(tsbuf), "%02d:%02d:%02d.%03ld ",
+        tm.tm_hour, tm.tm_min, tm.tm_sec, ts.tv_nsec / 1'000'000);
+    (void)n;
+    std::fputs(tsbuf,        stderr);
+    std::fputs("etcd_panel: ", stderr);
+    va_list ap;
+    va_start(ap, fmt);
+    std::vfprintf(stderr, fmt, ap);
+    va_end(ap);
+    std::fputc('\n', stderr);
 }
 
 // hex dump 16 bytes per line; mirrors `xxd`.
@@ -262,7 +290,7 @@ private:
             client_ = std::make_unique<etcd::SyncClient>(last_endpoint_);
         } catch (const std::exception& e) {
             client_.reset();
-            wxLogMessage("etcd connect failed: %s", e.what());
+            log_line("etcd connect failed: %s", e.what());
             return;
         }
         // Force one Range — proves the channel works AND populates initial
@@ -271,11 +299,11 @@ private:
         try {
             auto r = client_->ls(prefix_->GetValue().ToStdString());
             if (!r.is_ok() && r.error_code() != 0) {
-                wxLogMessage("etcd ls error: %d %s",
+                log_line("etcd ls error: %d %s",
                             r.error_code(), r.error_message().c_str());
             }
         } catch (const std::exception& e) {
-            wxLogMessage("etcd ls exception: %s", e.what());
+            log_line("etcd ls exception: %s", e.what());
         }
     }
 
@@ -297,7 +325,7 @@ private:
                 },
                 /*recursive=*/true);
         } catch (const std::exception& e) {
-            wxLogMessage("etcd watch failed: %s", e.what());
+            log_line("etcd watch failed: %s", e.what());
             watch_->SetValue(false);
         }
     }
@@ -312,38 +340,70 @@ private:
     // ----------- view refresh ---------------------------------------
 
     void refresh_keys() {
-        if (!client_) {
-            list_->DeleteAllItems();
-            return;
-        }
+        if (!client_ || !list_) return;
+
+        // Freeze the list during repopulation. Without Freeze, every
+        // InsertItem fires a wxEVT_LIST_*  side-event that flushes
+        // through the wx event loop; with the previous (now-removed)
+        // wxLogStatus-on-window path that was a crash route. Freeze
+        // also reduces flicker.
+        list_->Freeze();
+        list_->DeleteAllItems();
+        last_keys_.clear();
+        detail_meta_->ChangeValue(wxString());   // ChangeValue avoids EVT_TEXT
+        value_text_->ChangeValue(wxString());
+        set_buttons_enabled(false);
+
         std::string prefix = prefix_->GetValue().ToStdString();
         etcd::Response resp;
         try {
             resp = client_->ls(prefix);
         } catch (const std::exception& e) {
-            wxLogMessage("etcd ls exception: %s", e.what());
+            log_line("ls exception (prefix='%s'): %s", prefix.c_str(), e.what());
+            list_->Thaw();
             return;
         }
         if (!resp.is_ok() && resp.error_code() != 0) {
-            wxLogMessage("etcd ls error: %d %s",
-                        resp.error_code(), resp.error_message().c_str());
+            log_line("ls error (prefix='%s'): rc=%d msg=%s",
+                     prefix.c_str(),
+                     resp.error_code(),
+                     resp.error_message().c_str());
+            list_->Thaw();
             return;
         }
 
-        list_->DeleteAllItems();
-        last_keys_.clear();
-        for (size_t i = 0; i < resp.keys().size(); ++i) {
-            const auto& k = resp.key(i);
-            const auto& v = resp.value(i);
+        // resp.keys().size() is also the size of resp.values(); but to
+        // be defensive against a partial response, use min().
+        const size_t n_keys = resp.keys().size();
+        const size_t n_vals = resp.values().size();
+        const size_t n     = (n_keys < n_vals ? n_keys : n_vals);
+        for (size_t i = 0; i < n; ++i) {
+            const std::string& k_str = resp.key(i);
+            const auto&        v     = resp.value(i);
+
+            // Explicit UTF-8 wxString conversion. The implicit ctor
+            // is locale-dependent and can produce a wxString with
+            // embedded NULs for some etcd-stored binary values, which
+            // then crashes downstream rendering.
+            wxString k = wxString::FromUTF8(k_str.data(), k_str.size());
+            if (k.IsEmpty() && !k_str.empty()) {
+                // Non-UTF-8 key — show it as hex-ish so the row still
+                // renders. Should be vanishingly rare for /theia/.
+                k = wxString::FromAscii("<non-utf8 key>");
+            }
+
             long row = list_->InsertItem(list_->GetItemCount(), k);
-            list_->SetItem(row, 1,
-                wxString::Format("%lld", static_cast<long long>(v.modified_index())));
-            list_->SetItem(row, 2,
-                wxString::Format("%zu", v.as_string().size()));
-            last_keys_.push_back(k);
+            if (row < 0) continue;            // wx refused; skip safely
+            list_->SetItem(row, 1, wxString::Format("%lld",
+                static_cast<long long>(v.modified_index())));
+            list_->SetItem(row, 2, wxString::Format("%llu",
+                static_cast<unsigned long long>(v.as_string().size())));
+            last_keys_.push_back(k_str);
         }
-        wxLogMessage("etcd: %zu keys under '%s'",
-                    last_keys_.size(), prefix.c_str());
+        list_->Thaw();
+        log_line("ls: %llu keys under '%s'",
+                 static_cast<unsigned long long>(n),
+                 prefix.c_str());
     }
 
     void show_value_for(const std::string& key) {
@@ -352,7 +412,7 @@ private:
         try {
             resp = client_->get(key);
         } catch (const std::exception& e) {
-            wxLogMessage("etcd get exception: %s", e.what());
+            log_line("etcd get exception: %s", e.what());
             return;
         }
         if (!resp.is_ok()) {
@@ -364,29 +424,49 @@ private:
         }
         const auto& v = resp.value();
 
+        // All wxString assembly uses explicit, UTF-8-safe builders.
+        // Implicit `wxString s = std::string;` goes through a
+        // locale-dependent conversion that produces garbage / NULs
+        // for non-ASCII binary keys/values and is a known crash
+        // path. Stick with FromUTF8 + Format everywhere.
+        const std::string& key_str = v.key();
         wxString meta;
-        meta << "key:         " << v.key() << "\n";
-        meta << "mod-rev:     " << static_cast<long long>(v.modified_index()) << "\n";
-        meta << "create-rev:  " << static_cast<long long>(v.created_index()) << "\n";
-        meta << "version:     " << static_cast<long long>(v.version()) << "\n";
-        meta << "lease:       "
-             << (v.lease() == 0 ? wxString("(none)")
-                                : wxString::Format("%lld", static_cast<long long>(v.lease())))
-             << "\n";
-        meta << "size:        " << v.as_string().size() << " bytes";
-        detail_meta_->SetValue(meta);
+        meta << wxString::FromAscii("key:         ")
+             << wxString::FromUTF8(key_str.data(), key_str.size())
+             << wxString::FromAscii("\n");
+        meta << wxString::Format("mod-rev:     %lld\n",
+            static_cast<long long>(v.modified_index()));
+        meta << wxString::Format("create-rev:  %lld\n",
+            static_cast<long long>(v.created_index()));
+        meta << wxString::Format("version:     %lld\n",
+            static_cast<long long>(v.version()));
+        if (v.lease() == 0) {
+            meta << wxString::FromAscii("lease:       (none)\n");
+        } else {
+            meta << wxString::Format("lease:       %lld\n",
+                static_cast<long long>(v.lease()));
+        }
+        meta << wxString::Format("size:        %llu bytes",
+            static_cast<unsigned long long>(v.as_string().size()));
+        detail_meta_->ChangeValue(meta);   // ChangeValue, not SetValue —
+                                            // doesn't fire EVT_TEXT events
+                                            // that might re-enter handlers.
 
         const std::string& body = v.as_string();
+        const bool is_textual = looks_like_json(body) || looks_like_text(body);
         wxString rendered;
-        if (looks_like_json(body) || looks_like_text(body)) {
-            rendered = wxString::FromUTF8(body.c_str(), body.size());
+        if (is_textual) {
+            rendered = wxString::FromUTF8(body.data(), body.size());
+            if (rendered.IsEmpty() && !body.empty()) {
+                // FromUTF8 returned empty → body looked text-ish but
+                // wasn't valid UTF-8. Fall back to hex.
+                rendered = render_hex(body);
+            }
         } else {
             rendered = render_hex(body);
         }
-        value_text_->SetValue(rendered);
-        // Only enable Save when content looks like editable text.
-        bool editable = (looks_like_json(body) || looks_like_text(body));
-        value_text_->SetEditable(editable);
+        value_text_->ChangeValue(rendered);
+        value_text_->SetEditable(is_textual);
         set_buttons_enabled(true);
     }
 
@@ -447,15 +527,15 @@ private:
         try {
             resp = client_->put(key, value);
         } catch (const std::exception& e) {
-            wxLogMessage("etcd put exception: %s", e.what());
+            log_line("etcd put exception: %s", e.what());
             return;
         }
         if (!resp.is_ok()) {
-            wxLogMessage("etcd put error: %d %s",
+            log_line("etcd put error: %d %s",
                         resp.error_code(), resp.error_message().c_str());
             return;
         }
-        wxLogMessage("saved %s (rev=%lld)",
+        log_line("saved %s (rev=%lld)",
                     key.c_str(), static_cast<long long>(resp.index()));
         // Refresh the row's metadata.
         show_value_for(key);
@@ -473,15 +553,15 @@ private:
         try {
             auto r = client_->rm(key);
             if (!r.is_ok()) {
-                wxLogMessage("etcd rm error: %d %s",
+                log_line("etcd rm error: %d %s",
                             r.error_code(), r.error_message().c_str());
                 return;
             }
         } catch (const std::exception& e) {
-            wxLogMessage("etcd rm exception: %s", e.what());
+            log_line("etcd rm exception: %s", e.what());
             return;
         }
-        wxLogMessage("deleted %s", key.c_str());
+        log_line("deleted %s", key.c_str());
         refresh_keys();
         value_text_->Clear();
         detail_meta_->Clear();
@@ -495,7 +575,7 @@ private:
         if (wxTheClipboard->Open()) {
             wxTheClipboard->SetData(new wxTextDataObject(k));
             wxTheClipboard->Close();
-            wxLogMessage("copied: %s", k.c_str().AsChar());
+            log_line("copied: %s", k.c_str().AsChar());
         }
     }
 };

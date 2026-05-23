@@ -242,8 +242,11 @@ private:
     std::unique_ptr<EtcdPanelImpl> impl_;
 };
 
-// "Trace" — scrolling SupervisionEvent log. Tombstone events surface
-// here too (OTP observer doesn't have a dedicated tombstones tab).
+// "Trace" — Wireshark-style: virtual list of events on top, lazy
+// tree-decode of the selected row on the bottom. Tombstone events
+// (kind=3 with tombstone_path set) surface here too — the Tombstone
+// detail group reads the file's tail.
+class TracePanelImpl;  // defined in trace_panel.cpp
 class TracePanel : public PanelBase {
 public:
     explicit TracePanel(wxWindow* parent);
@@ -251,7 +254,10 @@ public:
                   const std::string& payload) override;
 
 private:
+    // Held for back-compat with code that references the old single-
+    // list shape; points at the new virtual list inside impl_.
     ::wxListCtrl* list_{nullptr};
+    TracePanelImpl* impl_{nullptr};
 };
 
 }  // namespace sup_gui

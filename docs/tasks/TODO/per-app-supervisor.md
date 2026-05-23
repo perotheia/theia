@@ -1,3 +1,6 @@
+[tag:blocked-by:Erlang-style-supervisor-spec]
+
+
 # Per-app supervisor (in-process actor supervision)
 
 The OS-level supervisor (`docs/supervision.md`) manages daemon

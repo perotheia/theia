@@ -31,11 +31,17 @@ class theia::install {
         path    => '/usr/bin:/bin',
     }
 
-    # opkg-install only when the .ipk has actual content. Zero-byte
+    # Install only when the .ipk has actual content. Zero-byte
     # files mean "no buildable components for this machine"; skip
     # gracefully so central can come up even with no FC binaries yet.
-    exec { 'theia::install::opkg':
-        command   => "/usr/bin/opkg install --force-overwrite --force-reinstall ${ipk_path}",
+    #
+    # We invoke `dpkg -i` (not `opkg install`). The pkg_opkg rule emits
+    # an ar+control.tar.gz+data.tar.gz archive that is byte-for-byte
+    # the same as a .deb when arch is `amd64`. On an OpenWrt / Yocto
+    # opkg target, switch this exec to `opkg install` — the archive
+    # is compatible either way.
+    exec { 'theia::install::dpkg':
+        command   => "/usr/bin/dpkg --install --force-overwrite ${ipk_path}",
         onlyif    => "/bin/sh -c '[ -s ${ipk_path} ]'",   # -s: file > 0 bytes
         require   => Exec['theia::install::check-ipk'],
         logoutput => true,
@@ -43,8 +49,10 @@ class theia::install {
 
     # Log "skipped" to stdout when the .ipk is empty. Cheap exec so
     # the operator sees the reason in `docker logs`.
+    # ASCII-only message string — Puppet's exec result handling
+    # rejects non-ASCII bytes when LANG is unset (default in docker).
     exec { "theia::install::${machine}::skip-empty":
-        command => "/bin/sh -c 'echo \"[theia::install] skipping opkg install — ${ipk_path} is empty (no bazel_buildable components for ${machine})\"'",
+        command => "/bin/sh -c 'echo \"[theia::install] skipping dpkg install: ${ipk_path} is empty (no bazel_buildable components for ${machine})\"'",
         onlyif  => "/bin/sh -c '[ -f ${ipk_path} ] && [ ! -s ${ipk_path} ]'",
         path    => '/usr/bin:/bin',
         logoutput => true,

@@ -143,7 +143,11 @@ pkg_opkg(
     name = "image",
     package = "{vehicle}-{machine}",
     version = "1.0.0",
-    arch = "x86_64",
+    # `amd64` is dpkg's name for x86_64. opkg accepts either; we
+    # standardize on the Debian name so the resulting archive is
+    # installable via `dpkg -i` on Ubuntu / Debian hosts too (the
+    # archive format is identical — ar + control.tar.gz + data.tar.gz).
+    arch = "amd64",
     description = "Deploy bundle for {vehicle} on {machine}",
     section = "apps",
     files = {{

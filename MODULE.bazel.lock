@@ -233,7 +233,7 @@
   "moduleExtensions": {
     "//rules:rig.bzl%rig_ext": {
       "general": {
-        "bzlTransitiveDigest": "0m/covI762tusdFsuGrOAR6c7CGBx5zstO/Jr0ehaVc=",
+        "bzlTransitiveDigest": "DKJM48IVPkAW2moquVybSr37Z5SlBKtI+MhCwD9IMsU=",
         "usagesDigest": "WWpPn2mFihcFPKNcM0h9+rzvIHcecHNptTWDJdZw8pk=",
         "recordedInputs": [],
         "generatedRepoSpecs": {

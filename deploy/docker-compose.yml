@@ -60,6 +60,12 @@ services:
       # the .ipk, we bind-mount it directly. Read-only — Puppet doesn't
       # need to write here.
       - ../platform/supervisor/build/supervisor:/usr/bin/theia-supervisor:ro
+      # services/com gRPC bridge binary. Mounted at the path the
+      # supervisor's executor.yaml expects (services/com/daemon.sh
+      # under --root-dir /opt/theia). It's a native ELF, not a shell
+      # script, but the supervisor's start_cmd doesn't care — it just
+      # execvp's whatever's at that path.
+      - ../services/com/build/services-com:/opt/theia/services/com/daemon.sh:ro
       # Logs persist to ./logs/ for inspection after teardown.
       - ./logs/central:/var/log/theia
     environment:
@@ -78,11 +84,15 @@ services:
       theia_net:
         aliases: [compute, compute_host]
     ports:
-      - "7701:7701"
+      # services-com listens on its hardcoded default 0.0.0.0:7700 inside
+      # the container; host-side we map that to 7701 so it doesn't clash
+      # with central's 7700 publish.
+      - "7701:7700"
     volumes:
       - ./.staging/compute_host/ipk:/opt/theia/ipk:ro
       - ./puppet:/etc/puppet:ro
       - ../platform/supervisor/build/supervisor:/usr/bin/theia-supervisor:ro
+      - ../services/com/build/services-com:/opt/theia/services/com/daemon.sh:ro
       - ./logs/compute:/var/log/theia
     environment:
       - HOSTNAME=compute

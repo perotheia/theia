@@ -14,10 +14,24 @@
 #
 # Build: docker build -f deploy/Dockerfile.base -t theia-base:latest deploy/
 
-FROM ubuntu:24.04
+FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
+# Force a UTF-8 locale so Ruby/Puppet doesn't barf on non-ASCII bytes
+# in exec output (default LANG in a vanilla container is C/POSIX).
+ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
 
+# Base distro matched to the workspace host (Ubuntu 22.04 / jammy) so
+# the bind-mounted supervisor binary's shared-lib deps (libyaml-cpp0.7,
+# libprotobuf23, libstdc++) all resolve via the system loader. Switching
+# to 24.04 would require either relinking the supervisor against newer
+# libs (libyaml-cpp0.8, libprotobuf32t64) or shipping libs in the .ipk.
+#
+# Ubuntu's `opkg` package doesn't exist in jammy either, so we use
+# `dpkg` (which handles the same ar+tar.gz archive format) since
+# pkg_opkg now emits `amd64` arch (`rules/rig.bzl`'s `arch = "amd64"`).
+# On a real opkg target (OpenWrt / Yocto), install the `opkg`
+# userspace there instead — the artifact format is identical.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         ca-certificates \
@@ -25,16 +39,24 @@ RUN apt-get update && \
         gnupg \
         bash \
         coreutils \
-        opkg \
-        systemd \
-        systemd-sysv \
-        puppet-agent \
+        dpkg \
+        locales \
+        puppet \
+        libyaml-cpp0.7 \
+        libprotobuf23 \
+        libgrpc++1 \
+        libgrpc10 \
+        libabsl20210324 \
+        libstdc++6 \
         && \
+    locale-gen C.UTF-8 && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# Puppet ships at /opt/puppetlabs/bin — make it discoverable.
-ENV PATH=/opt/puppetlabs/bin:$PATH
+# Jammy's `puppet` package installs to /usr/bin/puppet directly — no
+# /opt/puppetlabs trampoline needed. (Kept for reference: on
+# Puppetlabs' upstream `puppet-agent` package the binary lives at
+# /opt/puppetlabs/bin/puppet and would need PATH adjustment here.)
 
 # Theia per-machine layout:
 #   /opt/theia/         — install root (opkg --offline-root pivot)

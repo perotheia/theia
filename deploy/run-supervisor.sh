@@ -48,9 +48,19 @@ log "applying Puppet manifest $MANIFEST"
 # We treat 0 and 2 as success.
 PUPPET_FLAGS="${PUPPET_FLAGS:---detailed-exitcodes --verbose}"
 
+# Puppet wants writable directories for its `codedir`, `vardir`,
+# and `confdir` working state. The bind-mounted /etc/puppet is
+# read-only (we don't want a Puppet apply to scribble back into
+# the workspace). Point Puppet's writable dirs into /var/lib/puppet
+# inside the container.
+mkdir -p /var/lib/puppet/code /var/lib/puppet/var /var/lib/puppet/conf
+
 set +e
 puppet apply $PUPPET_FLAGS \
-    --modulepath /etc/puppet/modules \
+    --confdir=/var/lib/puppet/conf \
+    --codedir=/var/lib/puppet/code \
+    --vardir=/var/lib/puppet/var \
+    --modulepath=/etc/puppet/modules \
     "$MANIFEST"
 rc=$?
 set -e

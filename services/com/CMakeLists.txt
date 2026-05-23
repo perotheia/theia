@@ -28,7 +28,7 @@ set(SUP_PROTOS
     ChildSelector ChildSpec ChildState ControlReply ControlRequest
     DeleteChildRequest GetChildRequest GetTreeRequest HealthBeacon
     HeartbeatReport SendTimeoutReport StartChildRequest
-    SupervisionEvent TreeSnapshot)
+    SupervisionEvent ThreadSample TreeSnapshot)
 set(SUP_PROTO_SRCS)
 foreach(P ${SUP_PROTOS})
     set(PB_CC ${PROTO_GEN_DIR}/${P}.pb.cc)

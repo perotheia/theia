@@ -117,13 +117,30 @@ that's bare-metal — separate toolchain, no shared object pipeline.
    libgrpc++ / libabsl + their `-dev`.~~ **DONE** — `setup_rpi4.sh`
    bootstraps it; sysroot itself is gitignored. End-to-end smoke
    (cross-link + qemu-aarch64-static run) verified.
-3. Add `cmake/toolchain-rpi4.cmake` and cross-build the supervisor
+3. ~~Add `cmake/toolchain-rpi4.cmake` and cross-build the supervisor
    binary. Manual scp to a Pi 4 and verify it runs (without the .ipk
    pipeline — just `./supervisor --help`). This de-risks the
-   sysroot before touching Bazel.
-4. Cross-build services-com the same way. Verify TIPC connect on the
+   sysroot before touching Bazel.~~ **DONE** (host-side, qemu-tested).
+   Toolchain file lives at `cmake/toolchain-rpi4.cmake`; wrappers
+   `cmake/protoc-rpi4.sh` + `cmake/grpc-cpp-plugin-rpi4.sh` route
+   protoc/grpc_cpp_plugin through qemu so the sysroot's 3.21 protoc
+   (matching libprotobuf 32) regenerates .pb.{h,cc} during the
+   cross-build. supervisor binary verified via `qemu-aarch64-static
+   -L $sysroot ./supervisor --help`.
+
+   Pre-existing latent bug fixed along the way: services/com/CMakeLists.txt
+   was missing `ThreadSample` from SUP_PROTOS (added when ChildState
+   gained ThreadSample in task #225). Host amd64 build masked it
+   because protoc 3.12 reuses the supervisor's already-built .pb.h
+   from a sibling target.
+
+4. ~~Cross-build services-com the same way. Verify TIPC connect on the
    Pi 4 (start supervisor → start services-com → curl/grpcurl from
-   another machine).
+   another machine).~~ **CROSS-BUILD DONE** (host-side, qemu-tested).
+   services-com binary at `services/com/build-rpi4/services-com` (611 KB
+   aarch64 ELF). `--help` runs cleanly under qemu. The TIPC-connect
+   smoke needs a real Pi 4 (qemu-user-static doesn't emulate AF_TIPC
+   sockets reliably); deferred to step 7.
 5. Wire up Bazel `//config:rpi4` platform + arch selection in
    `rules/rig.bzl`.
 6. Test: `bazel build @rig_demo//compute_host:image --platforms=//config:rpi4`

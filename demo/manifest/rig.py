@@ -41,6 +41,7 @@ go away.
 
 from __future__ import annotations
 
+import dataclasses
 from ipaddress import IPv4Address
 from typing import cast
 
@@ -333,6 +334,40 @@ if DemoRig.applications:
         components=DemoRig.applications[0].components,
     )
 
+# ---------------------------------------------------------------------------
+# Pin each FC's ServiceInstance to its host machine.
+#
+# The artheia FC loader synthesises one ServiceInstance per FC with
+# `remote_machine=""`. That empty value triggers the dist_manifest
+# emitter's loose-mode fallback (include-everywhere), which is wrong
+# in a multi-machine rig — e.g. shwa is compute-node-only because the
+# SHWA daemon reads nvidia-smi on the compute box.
+#
+# Pinning rule for the demo:
+#   - shwa → compute_host  (the only compute-pinned FC)
+#   - everything else → central_host  (platform + control-plane FCs)
+#
+# This drives the strict-mode filter in dist_manifest, so
+# central_host/service.yaml no longer includes shwa, and
+# compute_host/service.yaml contains shwa alone.
+# ---------------------------------------------------------------------------
+
+_FC_HOST_MACHINE = {
+    "shwa": ComputeHost.name,
+}
+_DEFAULT_FC_HOST_MACHINE = CentralHost.name
+
+for _sm in DemoRig.service_manifests:
+    _sm.instances = [
+        dataclasses.replace(
+            _i,
+            remote_machine=_FC_HOST_MACHINE.get(
+                _i.name, _DEFAULT_FC_HOST_MACHINE
+            ),
+        )
+        for _i in _sm.instances
+    ]
+
 
 # ---------------------------------------------------------------------------
 # Structured-DSL path — DemoSoftware = FcSoftware.squash(DemoSpecLayer).
@@ -392,6 +427,15 @@ DemoSpecLayer = SoftwareSpecification(
     }),
     execution_manifests=cast(set[SetTransformTypes], {
         Append(p) for p in DEMO_PROCESSES
+    }),
+    # Carry the pinned service_manifests from the legacy DemoRig
+    # (built via merge_layers above) into the structured-DSL output.
+    # The artheia loader synthesises one platform_services ServiceManifest
+    # with 18 FC instances; we already pinned each instance's
+    # remote_machine in the post-merge step above. Append them as a
+    # set transform so .squash() picks them up.
+    service_manifests=cast(set[SetTransformTypes], {
+        Append(_sm) for _sm in DemoRig.service_manifests
     }),
 )
 

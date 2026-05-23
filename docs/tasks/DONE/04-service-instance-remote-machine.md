@@ -1,4 +1,51 @@
-# Populate `ServiceInstance.remote_machine` for strict per-machine service filter
+# Populate `ServiceInstance.remote_machine` for strict per-machine service filter — DONE 2026-05-23
+
+## Resolution
+
+Three changes:
+
+1. **demo/manifest/rig.py** — post-process `DemoRig.service_manifests`
+   after `merge_layers`: each ServiceInstance gets `remote_machine`
+   pinned via `_FC_HOST_MACHINE` table. Default: `central_host`.
+   Override: `shwa → compute_host`.
+
+2. **demo/manifest/rig.py — DemoSpecLayer** — added
+   `service_manifests = {Append(_sm) for _sm in DemoRig.service_manifests}`
+   so the structured-DSL path (`DemoSoftware.to_rig()`) ALSO carries
+   the pinned instances. Without this, the structured DSL has
+   zero service_manifests and emits empty service.yamls.
+
+3. **artheia/generators/dist_manifest.py** — `_service_payload`
+   switched from loose-fallback to strict: only emits instances whose
+   `remote_machine == machine_name`. Empty pin → instance dropped.
+   ServiceManifests with zero matching instances skipped entirely.
+
+## Tests
+
+`artheia/tests/test_dist_manifest.py` — four assertions:
+
+- `shwa` is in `compute_host/service.yaml`, NOT in `central_host` or
+  `admin_host`
+- per/log/sm/ucm/com are in `central_host`, NOT in `compute_host`
+- `admin_host/service.yaml` has zero ServiceInstances
+- every emitted instance's `remote_machine` matches its containing
+  machine (no strict-filter regressions)
+
+## Verification
+
+```
+$ artheia generate-manifest demo.manifest.rig --out /tmp/out
+$ yq '.service_manifests[].instances[] | "\(.name) → \(.remote_machine)"' \
+      /tmp/out/compute_host/service.yaml
+shwa → compute_host
+```
+
+106 tests pass (4 new + 102 prior) — same 4 pre-existing failures
+(unrelated test_gen_rig + test_transform).
+
+---
+
+## Original ticket follows below
 
 Today `dist/manifest/<machine>/service.yaml` uses a **loose** filter:
 

@@ -71,3 +71,10 @@ deploy/logs/
 # supdbg's grpc_tools.protoc output. Regenerate with:
 #   tools/supdbg/gen_protos.sh
 /tools/supdbg/_gen/
+
+# aarch64 sysroots for cross-compilation. The bootstrapped rootfs is
+# ~450 MB of .debs; gitignore the contents but keep the setup scripts.
+#   third_party/sysroot/setup_rpi4.sh   (see docs/tasks/BACKLOG/cross-compile-rpi4.md)
+/third_party/sysroot/*
+!/third_party/sysroot/setup_*.sh
+!/third_party/sysroot/README.md

@@ -35,18 +35,21 @@ that's bare-metal — separate toolchain, no shared object pipeline.
    - Recommend gcc-aarch64-linux-gnu for the first cut — matches what
      the customer's Pi runs, ABI-stable, no extra Bazel deps.
 
-2. **Sysroot for runtime libs**
-   - The supervisor + services-com link against libyaml-cpp, libprotobuf,
-     libgrpc++, libabsl, libstdc++. We need an aarch64 copy of each
-     for link-time, plus matching sonames at runtime on the Pi.
-   - Two options:
-     - **debootstrap a small sysroot** under `third_party/sysroot/rpi4/`,
-       install matching `lib*-dev` packages, point Bazel at it. Local,
-       reproducible, fits the existing manifest model.
-     - **Build deps from source** via `rules_foreign_cc`. More work
-       but eliminates the sysroot-bundling step.
-   - Recommend debootstrap for the first cut; revisit if it grows
-     unwieldy.
+2. **Sysroot for runtime libs** — DONE. `third_party/sysroot/rpi4/`
+   is a 444 MB Debian bookworm aarch64 rootfs (minbase + libyaml-cpp-dev
+   libprotobuf-dev libgrpc++-dev libgrpc-dev libabsl-dev). Created by
+   `third_party/sysroot/setup_rpi4.sh` (gitignored; the script is
+   committed). Sysroot lib versions:
+   - `libyaml-cpp.so.0.7` (same major as host, but bookworm's)
+   - `libprotobuf.so.32` (host has 23; bookworm bumped this)
+   - `libgrpc++.so.1.51` / `libgrpc.so.27`
+   - `libabsl_strings.so.20220623` (host has 20210324)
+   These are the sonames the cross-built binaries will request at
+   runtime on the Pi — fine because Pi 4 + Raspberry Pi OS 12 = same
+   bookworm libs.
+
+   Verified end-to-end with a yaml-cpp smoke (cross-link + qemu-aarch64-static
+   run) — yaml parses correctly under emulation.
 
 3. **Update `pkg_opkg` arch**
    - `rules/rig.bzl` currently hardcodes `arch = "amd64"` (see
@@ -101,11 +104,19 @@ that's bare-metal — separate toolchain, no shared object pipeline.
 
 ## Order of work (suggested)
 
-1. Install `gcc-aarch64-linux-gnu` on the workspace host; verify
-   `aarch64-linux-gnu-gcc --version` works (no Bazel involvement).
-2. Debootstrap a minimal aarch64 sysroot under
+1. ~~Install `gcc-aarch64-linux-gnu` on the workspace host; verify
+   `aarch64-linux-gnu-gcc --version` works (no Bazel involvement).~~
+   **DONE** — `gcc-aarch64-linux-gnu 11.4.0` + `g++-aarch64-linux-gnu`
+   installed via apt. Hello-world cross-compile produces valid
+   `ARM aarch64` ELF for both C and C++. `qemu-user-static` also
+   installed so the binaries run on the workspace host for
+   functional testing without a physical Pi (`qemu-aarch64-static
+   ./binary` works).
+2. ~~Debootstrap a minimal aarch64 sysroot under
    `third_party/sysroot/rpi4/` with libyaml-cpp / libprotobuf /
-   libgrpc++ / libabsl + their `-dev`.
+   libgrpc++ / libabsl + their `-dev`.~~ **DONE** — `setup_rpi4.sh`
+   bootstraps it; sysroot itself is gitignored. End-to-end smoke
+   (cross-link + qemu-aarch64-static run) verified.
 3. Add `cmake/toolchain-rpi4.cmake` and cross-build the supervisor
    binary. Manual scp to a Pi 4 and verify it runs (without the .ipk
    pipeline — just `./supervisor --help`). This de-risks the

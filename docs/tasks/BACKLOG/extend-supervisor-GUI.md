@@ -9,17 +9,17 @@ features.
 
 ## Reference shape (observer)
 
-| Observer tab          | LOC (.erl) | What it shows |
-|---|---|---|
-| System                | 242  | host info, CPU/RAM totals, uptime, version |
-| Load Charts           | 879  | scheduler util, IO util, memory time-series |
-| Memory Allocators     | 328  | per-allocator carrier/block stats |
-| Applications          | 587  | supervisor trees, drawn graphically, per OTP app |
-| Processes             | 806  | sortable table of every process, drill-down |
-| Ports                 | 639  | sortable table of every port, drill-down |
-| Sockets               | 739  | sortable table of every gen_tcp socket |
-| Table Viewer          | 539  | ETS tables — list, browse rows |
-| Trace Overview        | 1263 | live event log with left-side process/node filter |
+| Observer tab | LOC (.erl) | What it shows |
+| --- | --- | --- |
+| System | 242 | host info, CPU/RAM totals, uptime, version |
+| Load Charts | 879 | scheduler util, IO util, memory time-series |
+| Memory Allocators | 328 | per-allocator carrier/block stats |
+| Applications | 587 | supervisor trees, drawn graphically, per OTP app |
+| Processes | 806 | sortable table of every process, drill-down |
+| Ports | 639 | sortable table of every port, drill-down |
+| Sockets | 739 | sortable table of every gen_tcp socket |
+| Table Viewer | 539 | ETS tables — list, browse rows |
+| Trace Overview | 1263 | live event log with left-side process/node filter |
 
 Menus (observer): `File` (Examine Crashdump, Quit) · `Nodes`
 (dynamic node list + Connect Node) · `Log` (Toggle log view) ·
@@ -28,17 +28,17 @@ Menus (observer): `File` (Examine Crashdump, Quit) · `Nodes`
 ## Concept mapping (BEAM → Linux/Theia)
 
 | Observer concept | Our equivalent | Source of truth |
-|---|---|---|
-| node (BEAM VM)         | machine (one supervisor per host)        | `machines.yaml` |
-| process (lightweight)  | OS thread (per-thread sample)            | `ChildState.threads_detail[]` |
-| port (Erlang BIF)      | open file descriptor / TIPC socket       | `/proc/<pid>/fd/`, `lsof` |
-| ETS table              | etcd key/value store                     | etcd v3 gRPC (`Range` / `Watch`) |
-| socket (gen_tcp)       | TCP socket                               | `/proc/<pid>/net/tcp{,6}` |
-| atom table             | n/a — drop                               | — |
-| allocator stats        | per-process RSS/VSZ + system mem         | `/proc/meminfo`, `ChildState.rss_kb` |
-| application (OTP app)  | supervisor branch                        | `TreeSnapshot.children` |
-| crashdump              | tombstone file                           | `/var/log/theia/tombstones/<child>/` |
-| trace                  | `SupervisionEvent` stream (later +trace) | services/com `Subscribe` |
+| --- | --- | --- |
+| node (BEAM VM) | machine (one supervisor per host) | `machines.yaml` |
+| process (lightweight) | OS thread (per-thread sample) | `ChildState.threads_detail[]` |
+| port (Erlang BIF) | open file descriptor / TIPC socket | `/proc/<pid>/fd/`, `lsof` |
+| ETS table | etcd key/value store | etcd v3 gRPC (`Range` / `Watch`) |
+| socket (gen_tcp) | TCP socket | `/proc/<pid>/net/tcp{,6}` |
+| atom table | n/a — drop | — |
+| allocator stats | per-process RSS/VSZ + system mem | `/proc/meminfo`, `ChildState.rss_kb` |
+| application (OTP app) | supervisor branch | `TreeSnapshot.children` |
+| crashdump | tombstone file | `/var/log/theia/tombstones/<child>/` |
+| trace | `SupervisionEvent` stream (later +trace) | services/com `Subscribe` |
 
 **Tabs after the mapping:** System, Load Charts, Memory, Applications,
 Processes, Sockets, Table Viewer (etcd), Tombstones, Trace Overview.
@@ -53,6 +53,7 @@ Each phase is one self-contained, mergeable commit. Tester iterates
 on each before the next ships.
 
 ### Phase 1 — Menu + machines side panel (foundation)
+
 **Why first:** every other phase needs to react to "connect/disconnect
 machine" and "quit"; doing these once at the frame level is cheap and
 unblocks the panels.
@@ -68,6 +69,7 @@ unblocks the panels.
 - `MainFrame::on_machine_state_changed` broadcast — panels subscribe.
 
 ### Phase 2 — System tab
+
 - Per-machine `wxStaticBox` (already half-done). Add every
   HealthBeacon field: uptime, gen, total/active workers, restart
   count, tombstone count.
@@ -77,6 +79,7 @@ unblocks the panels.
 - Refresh button in the panel; auto-refresh checkbox.
 
 ### Phase 3 — Load Charts tab
+
 - 4 rolling time-series strips per machine, ~60s window:
   1. Total CPU%
   2. Active/total workers
@@ -87,11 +90,13 @@ unblocks the panels.
 - Two-panel layout: machine selector at top, charts below.
 
 ### Phase 4 — Memory tab (replaces "Memory Allocation")
+
 - Per-machine breakdown: total RSS, shared, data, by FC.
 - Stacked bar chart of RSS by FC, sortable.
 - Tooltip on hover: pid, threads, exact bytes.
 
 ### Phase 5 — Applications tab polish
+
 - Existing `ApplicationsPanel` renders the supervisor tree; make it
   match `observer_app_wx.erl` exactly:
   - Vertical tree layout (root at top, children flowing down)
@@ -101,6 +106,7 @@ unblocks the panels.
 - Per-machine sub-tabs at the top of the panel.
 
 ### Phase 6 — Processes tab polish
+
 - Existing `wxDataViewCtrl` is htop-style; remap columns to match
   observer_pro_wx.erl exactly:
   Pid, Name, Parent (sup), State, Reds-equivalent (CPU%), Memory,
@@ -111,6 +117,7 @@ unblocks the panels.
   CPU/state.
 
 ### Phase 7 — Sockets tab (new)
+
 - Parse `/proc/<pid>/net/tcp` + `tcp6` server-side (extend
   ChildState .art with a SocketInfo list), one row per open socket.
 - Columns: machine, pid, local addr:port, remote, state (LISTEN /
@@ -119,6 +126,7 @@ unblocks the panels.
   RST via supervisor).
 
 ### Phase 8 — Table Viewer (etcd) — observer's ETS analogue
+
 - Connect to the cluster's etcd v3 endpoint (separate from
   services/com — pulled from machines.yaml's `etcd_endpoints` once
   we add it).
@@ -133,6 +141,7 @@ unblocks the panels.
   to `etcdctl` for v1).
 
 ### Phase 9 — Tombstones tab (replaces observer's nothing — net new)
+
 - List every tombstone under `/var/log/theia/tombstones/<child>/`,
   sortable by mtime, child name, exit code.
 - Double-click: dialog with full tombstone log + last 50 lines of
@@ -140,6 +149,7 @@ unblocks the panels.
 - Right-click: copy path, delete, mark resolved.
 
 ### Phase 10 — Trace Overview rework (#2d from the brief)
+
 - Left side: collapsible tree (machines → children → threads), with
   checkboxes. Filters the trace stream.
 - Center: scrolling event log (existing TracePanel content).
@@ -148,6 +158,7 @@ unblocks the panels.
 - Header buttons: clear, save to file, jump to live.
 
 ### Phase 11 — End-to-end polish
+
 - Status bar: connected machines count, current backend port, build
   timestamp, log dock toggle.
 - Persistent column widths + sort orders (wxConfig).
@@ -184,6 +195,7 @@ as a separate task to schedule before the phase that needs it.
 ## Tester handoff target
 
 After Phase 11:
+
 - One README in `supervisor-gui/` covering build, run, troubleshoot.
 - Screenshot inventory in `docs/supervisor-gui-screenshots/`.
 - Known-issues list in this file; tester appends, we burn down.

@@ -81,3 +81,9 @@ deploy/logs/
 /third_party/sysroot/*
 !/third_party/sysroot/setup_*.sh
 !/third_party/sysroot/README.md
+
+# Vendored third-party source pulled by `repo sync` from the manifest's
+# `github` remote — the source itself is tracked in its own git repo,
+# not in pero_theia. We only ship build artifacts (install/) and our
+# own integration glue.
+/third_party/etcd-cpp-apiv3/

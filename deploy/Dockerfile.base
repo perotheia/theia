@@ -48,6 +48,9 @@ RUN apt-get update && \
         libgrpc10 \
         libabsl20210324 \
         libstdc++6 \
+        libcpprest2.10 \
+        libboost-system1.74.0 \
+        libboost-thread1.74.0 \
         && \
     locale-gen C.UTF-8 && \
     apt-get clean && \

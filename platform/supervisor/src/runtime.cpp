@@ -115,7 +115,10 @@ std::string locate_tombstone(const std::string& dir,
 
 }  // namespace
 
-Supervisor::Supervisor(std::unique_ptr<Node> root, std::string root_dir)
+Supervisor::Supervisor(std::unique_ptr<Node> root,
+                        std::string root_dir,
+                        std::string etcd_endpoints,
+                        std::string machine_name)
     : root_node_(std::move(root)), root_dir_(std::move(root_dir)) {
     if (!root_node_ || !root_node_->is_supervisor()) {
         throw std::runtime_error("root must be a supervisor");
@@ -138,6 +141,29 @@ Supervisor::Supervisor(std::unique_ptr<Node> root, std::string root_dir)
         [this](int fd, uint16_t tag, const std::string& payload) {
             on_inbound_frame(fd, tag, payload);
         });
+
+    // Resolve a machine_name for etcd keying. Priority:
+    //   1. explicit arg (from main.cpp via --machine-name or env)
+    //   2. $HOSTNAME (docker compose sets this; Linux usually has it)
+    //   3. gethostname(2)
+    if (machine_name.empty()) {
+        const char* h = std::getenv("HOSTNAME");
+        if (h && *h) {
+            machine_name = h;
+        } else {
+            char buf[256] = {};
+            if (gethostname(buf, sizeof(buf) - 1) == 0) {
+                machine_name = buf;
+            } else {
+                machine_name = "unknown";
+            }
+        }
+    }
+
+    // Open the etcd publisher. If endpoints is empty, this is a no-op:
+    // every publish_*() call below stays a no-op and we run with TIPC
+    // only — the existing single-machine dev flow.
+    etcd_publisher_.open(etcd_endpoints, machine_name);
 
     // Block SIGCHLD/SIGTERM/SIGINT process-wide; we read them via signalfd.
     sigset_t mask;
@@ -780,6 +806,7 @@ void Supervisor::emit_event(uint32_t kind,
     ev.set_tombstone_path(tombstone_path);
     ev.set_detail(detail);
     publisher_.publish(kTagEvent, ev.SerializeAsString());
+    etcd_publisher_.publish_event(ev);
 }
 
 void Supervisor::emit_health() {
@@ -802,6 +829,7 @@ void Supervisor::emit_health() {
     hb.set_total_restarts(total_restarts_);
     hb.set_total_tombstones(total_tombstones_);
     publisher_.publish(kTagHealth, hb.SerializeAsString());
+    etcd_publisher_.publish_health(hb);
 }
 
 // /proc reader helpers — see header for the design intent.
@@ -1209,6 +1237,15 @@ void Supervisor::emit_snapshot() {
     walk(*root_, "");
 
     publisher_.publish(kTagSnapshot, snap.SerializeAsString());
+    etcd_publisher_.publish_tree(snap);
+
+    // Also publish every child row individually so the GUI can
+    // wxListCtrl on /theia/state/<m>/child/ instead of decoding the
+    // whole TreeSnapshot. Same data, sliced for cheap prefix-Range +
+    // per-child Watch.
+    for (const auto& ch : snap.children()) {
+        etcd_publisher_.publish_child(ch);
+    }
 }
 
 // ---------------------------------------------------------------------------

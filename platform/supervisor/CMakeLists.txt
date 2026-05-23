@@ -16,6 +16,15 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(YAML_CPP REQUIRED yaml-cpp)
 pkg_check_modules(PROTOBUF REQUIRED protobuf)
 
+# etcd-cpp-apiv3 (vendored via repo manifest, built into
+# third_party/etcd-cpp-apiv3/install/). Wires the supervisor's state
+# publisher; see src/etcd_publisher.cpp.
+set(ETCD_CPP_PREFIX
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/etcd-cpp-apiv3/install"
+    CACHE PATH "etcd-cpp-apiv3 install prefix")
+find_package(etcd-cpp-api REQUIRED CONFIG
+    HINTS "${ETCD_CPP_PREFIX}/lib/cmake/etcd-cpp-api")
+
 # .proto files are generated from platform/supervisor/system/package.art
 # by `artheia gen-proto`, then compiled with protoc into
 # build/generated/{ChildState.pb.cc, …}.
@@ -87,6 +96,7 @@ add_executable(supervisor
     src/runtime.cpp
     src/spec.cpp
     src/tipc_publisher.cpp
+    src/etcd_publisher.cpp
     $<TARGET_OBJECTS:supervisor_proto>
 )
 
@@ -95,11 +105,17 @@ target_include_directories(supervisor PRIVATE
     ${YAML_CPP_INCLUDE_DIRS}
     ${PROTOBUF_INCLUDE_DIRS}
     ${PROTO_GEN_DIR}
+    # etcd-cpp-api's exported targets don't carry
+    # INTERFACE_INCLUDE_DIRECTORIES (upstream quirk), so feed the
+    # install prefix's include/ manually. Same workaround as
+    # supervisor-gui's CMakeLists.txt.
+    ${ETCD_CPP_PREFIX}/include
 )
 
 target_link_libraries(supervisor PRIVATE
     ${YAML_CPP_LIBRARIES}
     ${PROTOBUF_LIBRARIES}
+    etcd-cpp-api
     pthread
 )
 

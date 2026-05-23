@@ -66,11 +66,28 @@ services:
       # script, but the supervisor's start_cmd doesn't care — it just
       # execvp's whatever's at that path.
       - ../services/com/build/services-com:/opt/theia/services/com/daemon.sh:ro
+      # etcd-cpp-apiv3 shared lib. The supervisor's etcd_publisher
+      # links against it (rpath = workspace-relative install path,
+      # which doesn't exist inside the container). Mount the entire
+      # install/lib so libetcd-cpp-api.so + libetcd-cpp-api-core.so
+      # both resolve. /usr/local/lib so ld.so finds them via the
+      # default search path.
+      - ../third_party/etcd-cpp-apiv3/install/lib:/usr/local/lib/theia-etcd:ro
       # Logs persist to ./logs/ for inspection after teardown.
       - ./logs/central:/var/log/theia
     environment:
       - HOSTNAME=central
       - TZ=UTC
+      # The supervisor's etcd publisher picks this up via getenv()
+      # and tees TreeSnapshot / HealthBeacon / ChildState into
+      # /theia/state/<HOSTNAME>/* under a 10s lease, plus
+      # SupervisionEvents into /theia/events/<HOSTNAME>/. Reach the
+      # host's theia-etcd via the docker bridge gateway IP.
+      - THEIA_ETCD_ENDPOINTS=http://172.30.0.1:2379
+      # ld.so search path: workspace-relative rpath of the vendored
+      # libetcd-cpp-api{,core}.so resolves to /usr/local/lib/theia-etcd
+      # inside the container (see the bind-mount above).
+      - LD_LIBRARY_PATH=/usr/local/lib/theia-etcd
     restart: unless-stopped
 
   compute:
@@ -93,10 +110,16 @@ services:
       - ./puppet:/etc/puppet:ro
       - ../platform/supervisor/build/supervisor:/usr/bin/theia-supervisor:ro
       - ../services/com/build/services-com:/opt/theia/services/com/daemon.sh:ro
+      - ../third_party/etcd-cpp-apiv3/install/lib:/usr/local/lib/theia-etcd:ro
       - ./logs/compute:/var/log/theia
     environment:
       - HOSTNAME=compute
       - TZ=UTC
+      - THEIA_ETCD_ENDPOINTS=http://172.30.0.1:2379
+      # ld.so search path: workspace-relative rpath of the vendored
+      # libetcd-cpp-api{,core}.so resolves to /usr/local/lib/theia-etcd
+      # inside the container (see the bind-mount above).
+      - LD_LIBRARY_PATH=/usr/local/lib/theia-etcd
     restart: unless-stopped
     # compute can't start until central is up — the gateway lives on
     # central and the demo's TIPC clients dial central via the bridge.

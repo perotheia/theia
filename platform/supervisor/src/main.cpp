@@ -1,5 +1,13 @@
 // supervisor CLI entry point. Usage:
 //   supervisor run <manifest.yaml> [--root-dir DIR]
+//                                  [--etcd-endpoints host:port[,host:port...]]
+//                                  [--machine-name NAME]
+//
+// etcd endpoints / machine name can also come from env vars:
+//   THEIA_ETCD_ENDPOINTS
+//   HOSTNAME (machine name fallback)
+//
+// CLI overrides env. Both empty → etcd publishing disabled (TIPC only).
 
 #include "supervisor/runtime.h"
 #include "supervisor/spec.h"
@@ -22,7 +30,14 @@ void on_signal(int /*signum*/) {
 
 void print_usage(const char* argv0) {
     std::fprintf(stderr,
-        "usage: %s run <manifest.yaml> [--root-dir DIR]\n",
+        "usage: %s run <manifest.yaml>\n"
+        "           [--root-dir DIR]\n"
+        "           [--etcd-endpoints host:port[,host:port...]]\n"
+        "           [--machine-name NAME]\n"
+        "\n"
+        "env:\n"
+        "  THEIA_ETCD_ENDPOINTS  same as --etcd-endpoints if absent\n"
+        "  HOSTNAME              machine-name fallback\n",
         argv0);
 }
 
@@ -36,15 +51,29 @@ int main(int argc, char** argv) {
 
     std::string manifest = argv[2];
     std::string root_dir = ".";
+    std::string etcd_endpoints;
+    std::string machine_name;
 
     for (int i = 3; i < argc; ++i) {
         std::string a = argv[i];
         if (a == "--root-dir" && i + 1 < argc) {
             root_dir = argv[++i];
+        } else if (a == "--etcd-endpoints" && i + 1 < argc) {
+            etcd_endpoints = argv[++i];
+        } else if (a == "--machine-name" && i + 1 < argc) {
+            machine_name = argv[++i];
         } else {
             print_usage(argv[0]);
             return 2;
         }
+    }
+
+    // Fall back to env if the CLI didn't set --etcd-endpoints.
+    // (machine_name's env fallback to $HOSTNAME happens inside the
+    // Supervisor ctor.)
+    if (etcd_endpoints.empty()) {
+        const char* e = std::getenv("THEIA_ETCD_ENDPOINTS");
+        if (e && *e) etcd_endpoints = e;
     }
 
     // Resolve root_dir to an absolute path so children can chdir into it.
@@ -59,7 +88,8 @@ int main(int argc, char** argv) {
 
     try {
         auto root = supervisor::load_manifest(manifest);
-        supervisor::Supervisor sup(std::move(root), root_dir);
+        supervisor::Supervisor sup(std::move(root), root_dir,
+                                    etcd_endpoints, machine_name);
         g_sup = &sup;
 
         // SIGTERM/SIGINT are delivered via signalfd to the runtime, but

@@ -10,6 +10,7 @@
 
 #include "supervisor/spec.h"
 #include "supervisor/tipc_publisher.h"
+#include "supervisor/etcd_publisher.h"
 
 #include <atomic>
 #include <chrono>
@@ -23,7 +24,14 @@ namespace supervisor {
 
 class Supervisor {
 public:
-    Supervisor(std::unique_ptr<Node> root, std::string root_dir);
+    // etcd_endpoints: comma-separated "host:port" list. Empty disables
+    // the etcd-side state publisher (the TIPC publisher always runs).
+    // machine_name: identifies this supervisor's keys under /theia/.
+    //   Defaults to gethostname() if empty.
+    Supervisor(std::unique_ptr<Node> root,
+                std::string root_dir,
+                std::string etcd_endpoints = "",
+                std::string machine_name   = "");
     ~Supervisor();
 
     Supervisor(const Supervisor&)            = delete;
@@ -69,6 +77,13 @@ private:
     // inbound dispatch hook for ControlRequest (phase 3) /
     // HeartbeatReport / SendTimeoutReport (phase 4).
     TipcPublisher                    publisher_;
+
+    // etcd-side state publisher. Tees the same state TIPC carries
+    // into /theia/state/<machine>/* and /theia/events/<machine>/*
+    // for the supervisor-gui Table Viewer + observer-style tabs
+    // that consume etcd. Opt-in via etcd_endpoints; no-op when
+    // disabled. See supervisor/etcd_publisher.h for details.
+    EtcdPublisher                    etcd_publisher_;
 
     std::chrono::steady_clock::time_point start_time_{};
     std::chrono::steady_clock::time_point last_heartbeat_{};

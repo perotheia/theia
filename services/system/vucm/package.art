@@ -1,23 +1,9 @@
 // Vucm (VUCM) — Adaptive Platform Functional Cluster.
 //
-// Provides VehicleUpdateIf; requires: core, ucm.
+// NOT IMPLEMENTED. See README.md.
 
 package system.services.vucm
 
-interface clientServer VehicleUpdateIf {
-    operation GetStatus()
-    operation Configure()
-}
-
-interface clientServer KernelIf { }  // from system.services.core
-
-interface clientServer UpdateIf { }  // from system.services.ucm
-
 node atomic VucmDaemon {
     tipc type=0x8001000F instance=0
-    ports {
-        server vucm_status provides VehicleUpdateIf
-        client requires_core requires KernelIf
-        client requires_ucm requires UpdateIf
-    }
 }

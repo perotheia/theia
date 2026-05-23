@@ -1,26 +1,9 @@
 // Idsm (IDSM) — Adaptive Platform Functional Cluster.
 //
-// Provides IntrusionIf; requires: core, log, crypto.
+// NOT IMPLEMENTED. See README.md.
 
 package system.services.idsm
 
-interface clientServer IntrusionIf {
-    operation GetStatus()
-    operation Configure()
-}
-
-interface clientServer KernelIf { }  // from system.services.core
-
-interface clientServer LogIf { }  // from system.services.log
-
-interface clientServer CryptoIf { }  // from system.services.crypto
-
 node atomic IdsmDaemon {
     tipc type=0x8001000B instance=0
-    ports {
-        server idsm_status provides IntrusionIf
-        client requires_core requires KernelIf
-        client requires_log requires LogIf
-        client requires_crypto requires CryptoIf
-    }
 }

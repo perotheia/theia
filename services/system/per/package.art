@@ -1,26 +1,43 @@
 // Per (PER) — Adaptive Platform Functional Cluster.
 //
-// Provides PersistencyIf; requires: core, osi, log.
+// Implementation:
+//   etcd v3 proxy. Stores Node parameters from component.art and
+//   platform/vehicle/cluster parameters (TBD), always versioned.
+//   On schema migration writes BOTH keys if both exist:
+//       /theia/v1/state/<m>/health
+//       /theia/v2/state/<m>/health
+//   with a mapping between old and new keys when shape changes are
+//   non-1:1. Lazy migration on read.
+//
+// Communication shape:
+//   `PersistencyIf` is clientServer: Get/Put/Watch are typed RPCs.
+//   Every FC and app that needs persistent state is a CLIENT;
+//   PerDaemon is the single SERVER. PerDaemon talks to etcd over
+//   etcd-cli-c++.
+//
+//   PerDaemon is also a SENDER on LogStream (it logs migration and
+//   CAS conflicts).
 
 package system.services.per
 
+// Forward decl of the LogStream interface owned by system.services.log.
+// Cross-package import is by FQN; the body lives in log/package.art.
+interface senderReceiver LogStream { }
+
+message PerKey   { string key }
+message PerValue { bytes  value     uint64 mod_rev }
+message PerPut   { string key       bytes  value }
+message PerEmpty {}
+
 interface clientServer PersistencyIf {
-    operation GetStatus()
-    operation Configure()
+    operation Get(in k:PerKey) returns PerValue
+    operation Put(in p:PerPut) returns PerEmpty
 }
-
-interface clientServer KernelIf { }  // from system.services.core
-
-interface clientServer OsIf { }  // from system.services.osi
-
-interface clientServer LogIf { }  // from system.services.log
 
 node atomic PerDaemon {
     tipc type=0x80010007 instance=0
     ports {
-        server per_status provides PersistencyIf
-        client requires_core requires KernelIf
-        client requires_osi requires OsIf
-        client requires_log requires LogIf
+        server per_state provides PersistencyIf
+        sender to_log    provides LogStream  best_effort
     }
 }

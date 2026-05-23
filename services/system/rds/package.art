@@ -1,23 +1,9 @@
 // Rds (RDS) — Adaptive Platform Functional Cluster.
 //
-// Provides RawDataIf; requires: core, com.
+// NOT IMPLEMENTED. See README.md.
 
 package system.services.rds
 
-interface clientServer RawDataIf {
-    operation GetStatus()
-    operation Configure()
-}
-
-interface clientServer KernelIf { }  // from system.services.core
-
-interface clientServer ComIf { }  // from system.services.com
-
 node atomic RdsDaemon {
     tipc type=0x80010010 instance=0
-    ports {
-        server rds_status provides RawDataIf
-        client requires_core requires KernelIf
-        client requires_com requires ComIf
-    }
 }

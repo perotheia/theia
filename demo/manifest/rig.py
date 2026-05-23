@@ -48,6 +48,8 @@ from artheia.manifest import (
     ApplicationManifest,
     CpuArchitecture,
     HardwareResource,
+    OpkgArtifact,
+    OsPackage,
     Layer,
     MachineManifest,
     Rig,
@@ -90,6 +92,21 @@ from services.manifest.fc import FcSoftware
 # layer. The default below is the multi-host shape.
 # ---------------------------------------------------------------------------
 
+_PLATFORM_OPKG_ARTIFACTS = [
+    OpkgArtifact(
+        name="supervisor",
+        bazel_target="//platform/supervisor:ipk",
+        target_dir="/opt/theia/supervisor/",
+        systemd_unit="/etc/systemd/system/theia-supervisor.service",
+    ),
+    OpkgArtifact(
+        name="gateway",
+        bazel_target="//platform/gateway:ipk",
+        target_dir="/opt/theia/gateway/",
+        systemd_unit="/etc/systemd/system/theia-gateway.service",
+    ),
+]
+
 CentralHost = MachineManifest(
     name="central_host",
     hardware=HardwareResource(
@@ -103,6 +120,15 @@ CentralHost = MachineManifest(
         address=IPv4Address("127.0.0.1"),
         port=7700,
     ),
+    # Provisioning: etcd from Ubuntu apt; supervisor + gateway as
+    # Theia opkgs under /opt/theia/ with systemd units. Application
+    # .ipks (the FCs, the demo binaries) land via the orchestration
+    # phase reading application.yaml — not listed here.
+    os_packages=[
+        OsPackage(name="etcd-server", source="apt"),
+        OsPackage(name="libsystemd0", source="apt"),
+    ],
+    opkg_artifacts=list(_PLATFORM_OPKG_ARTIFACTS),
 )
 
 ComputeHost = MachineManifest(
@@ -116,6 +142,11 @@ ComputeHost = MachineManifest(
         address=IPv4Address("127.0.0.1"),
         port=7701,
     ),
+    os_packages=[
+        OsPackage(name="etcd-server", source="opkg"),
+        OsPackage(name="libsystemd0", source="opkg"),
+    ],
+    opkg_artifacts=list(_PLATFORM_OPKG_ARTIFACTS),
 )
 
 # Admin console — runs supervisor-gui + supdbg, no supervisor of
@@ -137,6 +168,14 @@ AdminHost = MachineManifest(
     # No com_endpoint of its own; the GUI talks to TARGET machines.
     # Leave the default — downstream tooling treats a HOST machine's
     # com_endpoint as "n/a".
+    #
+    # Operator workstation: a Theia .deb is installed via apt, no
+    # opkg, no supervisor/gateway. The .deb itself ships the
+    # supervisor-gui + supdbg binaries and reads
+    # /etc/theia/machines.yaml to find the TARGET endpoints.
+    os_packages=[
+        OsPackage(name="theia-admin", source="apt"),
+    ],
 )
 
 # Legacy alias for any caller that still references DemoHost (the

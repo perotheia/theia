@@ -1,20 +1,35 @@
 // Log (LOG) — Adaptive Platform Functional Cluster.
 //
-// Provides LogIf; requires: core.
+// Implementation:
+//   - log records → syslog (forwarded by LogDaemon)
+//   - trace stream → trace service (existing TIPC trace.proto, owned by log)
+//
+// Communication shape:
+//   `LogStream` is a *senderReceiver* fan-in. Every FC that emits log
+//   records is a SENDER; LogDaemon is the single RECEIVER. We pick
+//   senderReceiver (not clientServer) so log emission is fire-and-
+//   forget and best-effort — losing a log record must never block
+//   application logic.
+//
+//   LogDaemon does NOT call anyone. It is a sink + syslog/trace
+//   forwarder.
 
 package system.services.log
 
-interface clientServer LogIf {
-    operation GetStatus()
-    operation Configure()
+message LogRecord {
+    string context
+    uint32 level     // 0=trace 1=debug 2=info 3=warn 4=error 5=fatal
+    uint64 ts_ns
+    string text
 }
 
-interface clientServer KernelIf { }  // from system.services.core
+interface senderReceiver LogStream {
+    data LogRecord record
+}
 
 node atomic LogDaemon {
     tipc type=0x80010003 instance=0
     ports {
-        server log_status provides LogIf
-        client requires_core requires KernelIf
+        receiver log_in requires LogStream best_effort
     }
 }

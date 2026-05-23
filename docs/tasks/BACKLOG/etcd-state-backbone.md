@@ -84,26 +84,25 @@ Two readers, one writer:
 
 GUI tabs map to prefixes:
 
-| Tab            | Prefix                          | Operation |
-|---|---|---|
-| System         | `/theia/state/<m>/health`       | Get + Watch |
-| Load Charts    | `/theia/state/<m>/health`       | Watch (rolling buffer in GUI) |
-| Memory         | `/theia/state/<m>/child/`       | RangeGet + Watch |
-| Applications   | `/theia/state/<m>/tree/`        | Get (latest gen) + Watch |
-| Processes      | `/theia/state/<m>/child/`       | RangeGet + Watch |
-| Sockets        | `/theia/state/<m>/child/*/sockets` (TBD pre-work) |
-| Table Viewer   | user-typed prefix               | RangeGet + Watch (etcd browse) |
-| Tombstones     | `/theia/tombstones/`            | RangeGet + Watch |
-| Trace Overview | `/theia/events/`                | Watch + bounded history |
+| Tab | Prefix | Operation |
+| --- | --- | --- |
+| System | `/theia/state/<m>/health` | Get + Watch |
+| Load Charts | `/theia/state/<m>/health` | Watch (rolling buffer in GUI) |
+| Memory | `/theia/state/<m>/child/` | RangeGet + Watch |
+| Applications | `/theia/state/<m>/tree/` | Get (latest gen) + Watch |
+| Processes | `/theia/state/<m>/child/` | RangeGet + Watch |
+| Sockets | `/theia/state/<m>/child/*/sockets` (TBD pre-work) |  |
+| Table Viewer | user-typed prefix | RangeGet + Watch (etcd browse) |
+| Tombstones | `/theia/tombstones/` | RangeGet + Watch |
+| Trace Overview | `/theia/events/` | Watch + bounded history |
 
 ## Phases
 
 ### Phase 1 — etcd on the host
+
 - `sudo apt install etcd-server etcd-client` (Ubuntu 22.04 ships
   etcd 3.4; for newer we use the upstream tarball).
-- Configure as a single-node localhost daemon: `--listen-client-urls
-  http://127.0.0.1:2379 --advertise-client-urls http://127.0.0.1:2379
-  --data-dir /var/lib/theia-etcd`. systemd unit lives at
+- Configure as a single-node localhost daemon: `--listen-client-urls http://127.0.0.1:2379 --advertise-client-urls http://127.0.0.1:2379 --data-dir /var/lib/theia-etcd`. systemd unit lives at
   `/etc/systemd/system/theia-etcd.service` (NOT the apt-shipped
   `etcd.service` since that name conflicts).
 - Smoke: `etcdctl put /theia/hello world && etcdctl get /theia/hello`.
@@ -112,6 +111,7 @@ GUI tabs map to prefixes:
   `extra_hosts: ["host.docker.internal:host-gateway"]`).
 
 ### Phase 2 — supervisor writes ChildState + SupervisionEvent
+
 - Add etcd v3 client to platform/supervisor (etcd-cpp-apiv3 via
   CMake `find_package` if available; otherwise vendor a minimal
   gRPC client built off the etcd .proto).
@@ -124,6 +124,7 @@ GUI tabs map to prefixes:
   default off so single-machine runs without etcd still work.
 
 ### Phase 3 — supdbg etcd backend
+
 - supdbg gets `--backend etcd` flag. Same commands (tree, watch,
   wait, restart) but talks to etcd Watch streams instead of
   services/com Subscribe. Validates the schema before any GUI work
@@ -132,6 +133,7 @@ GUI tabs map to prefixes:
   `supdbg watch` against services/com.
 
 ### Phase 4 — Table Viewer tab in supervisor-gui (raw etcd browse)
+
 - New panel reads etcd v3 directly via etcd-cpp-apiv3 (gRPC).
 - Prefix filter input at top; key list below; click a key shows
   value in a side pane (text/JSON/hex auto-detect).
@@ -139,6 +141,7 @@ GUI tabs map to prefixes:
 - This is the observer Table Viewer analogue, modulo ETS → etcd.
 
 ### Phase 5 — Tabs migrate to etcd reads
+
 - System, Load Charts, Memory, Processes, Applications, Tombstones,
   Trace Overview each move to `etcd Watch` on their assigned prefix
   instead of subscribing to services/com.
@@ -146,6 +149,7 @@ GUI tabs map to prefixes:
 - One commit per tab so the tester can iterate.
 
 ### Phase 6 — services/db (state + migration)
+
 **Re-scoped (was "DB migration service" → considered OTA controller
 → back to state-shape gatekeeper).** etcd gives us versioned KV,
 CAS transactions, snapshots, and revision history — so traditional
@@ -161,6 +165,7 @@ for reshuffles that can't be expressed lazily.
 > the version.
 
 #### State-shape API (typed reads / writes)
+
 - `Put(app, schema_v, key, value)` — value is a typed proto.
   Writes to `/theia/app/data/<app>/v<schema_v>/<key>`.
 - `Get(app, schema_v, key)` — returns the typed value. If only an
@@ -176,6 +181,7 @@ for reshuffles that can't be expressed lazily.
   binary. Reuse for both lazy-read and bulk rewrite paths.
 
 #### Snapshot / rollback (operational, not OTA)
+
 etcd's own snapshot machinery is still useful for ops — before a
 risky bulk migration, snapshot the datastore so we can roll back
 the *data* without rolling back the *deploy*:
@@ -192,6 +198,7 @@ the *data* without rolling back the *deploy*:
   - **L3**: full `etcdctl snapshot restore` of a labeled snapshot.
 
 #### Bulk rewrite (Option B from discussion, fallback)
+
 - `MigrateBulk(app, from_v, to_v)` — services/db reads every
   `/theia/app/data/<app>/v<from>/...`, runs the transform, writes
   to `v<to>`. Lease-protected so a crash mid-migration leaves a
@@ -200,6 +207,7 @@ the *data* without rolling back the *deploy*:
   reshuffle, not just value reshape).
 
 #### What it deliberately doesn't do
+
 - **Deploy / install** — Puppet handles that. services/db acts on
   the state already on disk; how the code got there is none of its
   business.
@@ -211,6 +219,7 @@ the *data* without rolling back the *deploy*:
   for now; fleet coordination is a later layer.
 
 #### Smoke / definition of done
+
 1. `services/db` running locally; `RegisterSchema(myapp, 1, …)` +
    `Put + Get` round-trip via gRPC.
 2. Write a v1 key, read with `schema_v=2`, services/db transparently
@@ -222,6 +231,7 @@ the *data* without rolling back the *deploy*:
    trips the entire datastore.
 
 ### Phase 7 — Docs + tester handoff
+
 - `docs/etcd.md` covering layout, lease/TTL semantics, GUI flow,
   services/db schema model.
 - `docs/skills/theia-state/SKILL.md` (or similar) so future agents

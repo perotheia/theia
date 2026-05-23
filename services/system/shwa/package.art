@@ -1,20 +1,39 @@
-// Shwa (SHWA) — Adaptive Platform Functional Cluster.
+// Shwa (SHWA) — Safe Hardware Accelerator.
 //
-// Provides SafeAccelIf; requires: core.
+// Implementation:
+//   On a compute node, ShwaDaemon polls `nvidia-smi` (or the device's
+//   equivalent) and forwards GPU/accelerator telemetry. Records are
+//   PERSISTED via per (history) and published as log records.
+//
+// Communication shape:
+//   `AccelTelemetry` is a senderReceiver fan-out: ShwaDaemon is the
+//   SENDER, the GUI (via services/com) or any other observer
+//   subscribes.
 
 package system.services.shwa
 
-interface clientServer SafeAccelIf {
-    operation GetStatus()
-    operation Configure()
+interface senderReceiver LogStream     { }  // from system.services.log
+interface clientServer   PersistencyIf { }  // from system.services.per
+
+message GpuSample {
+    string device
+    uint32 util_pct
+    uint32 mem_used_mb
+    uint32 mem_total_mb
+    uint32 temp_c
+    uint32 power_w
+    uint64 ts_ns
 }
 
-interface clientServer KernelIf { }  // from system.services.core
+interface senderReceiver AccelTelemetry {
+    data GpuSample sample
+}
 
 node atomic ShwaDaemon {
     tipc type=0x80010012 instance=0
     ports {
-        server shwa_status provides SafeAccelIf
-        client requires_core requires KernelIf
+        sender telemetry provides AccelTelemetry
+        client to_per    requires PersistencyIf
+        sender to_log    provides LogStream  best_effort
     }
 }

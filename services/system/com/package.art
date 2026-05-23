@@ -1,29 +1,34 @@
 // Com (COM) — Adaptive Platform Functional Cluster.
 //
-// Provides ComIf; requires: core, osi, log, tsync.
+// Implementation:
+//   gRPC bridge between the external GUI / admin console and on-host
+//   services. Owns the self-signed certificate (identity management).
+//
+// Communication shape:
+//   `ComBridge` is a clientServer exposed to external gRPC peers (the
+//   `supervisor_bridge.proto` shape already wired in services-com).
+//   Inside the host ComDaemon acts as a CLIENT of the supervisor and
+//   per (to read certificates) and as a SENDER on LogStream.
 
 package system.services.com
 
-interface clientServer ComIf {
-    operation GetStatus()
-    operation Configure()
+interface senderReceiver LogStream     { }  // from system.services.log
+interface clientServer   PersistencyIf { }  // from system.services.per
+
+message ComEmpty { }
+
+// Placeholder shape for external gRPC RPCs — the actual wire schema is
+// supervisor_bridge.proto (see platform/proto/). This .art declaration
+// is just for port wiring.
+interface clientServer ComBridge {
+    operation Ping(in p:ComEmpty) returns ComEmpty
 }
-
-interface clientServer KernelIf { }  // from system.services.core
-
-interface clientServer OsIf { }  // from system.services.osi
-
-interface clientServer LogIf { }  // from system.services.log
-
-interface clientServer TimeSyncIf { }  // from system.services.tsync
 
 node atomic ComDaemon {
     tipc type=0x80010008 instance=0
     ports {
-        server com_status provides ComIf
-        client requires_core requires KernelIf
-        client requires_osi requires OsIf
-        client requires_log requires LogIf
-        client requires_tsync requires TimeSyncIf
+        server external provides ComBridge
+        client to_per   requires PersistencyIf
+        sender to_log   provides LogStream  best_effort
     }
 }

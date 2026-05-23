@@ -1,17 +1,13 @@
 // Core (CORE) — Adaptive Platform Functional Cluster.
 //
-// Provides KernelIf; requires: (none, root).
+// NOT A DAEMON. `ara::core` is a foundational header-only library;
+// there is no Core daemon. See README.md.
+//
+// The atomic node is kept only so the TIPC type stays reserved and
+// the package.art is parseable (artheia requires a node per FC).
 
 package system.services.core
 
-interface clientServer KernelIf {
-    operation GetStatus()
-    operation Configure()
-}
-
 node atomic CoreDaemon {
     tipc type=0x80010001 instance=0
-    ports {
-        server core_status provides KernelIf
-    }
 }

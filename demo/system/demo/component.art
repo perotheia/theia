@@ -1,1 +1,51 @@
+// Wiring + deploy layer for the gen_server demo.
+//
+// The sibling package.art holds the schema layer (messages,
+// interfaces, nodes). Here we declare:
+//
+//   - one composition per process (Demo3WayP1 / P2 / P3) — the
+//     executable boundary in the new abstraction ladder.
+//   - one cluster (Demo3Way) — the distribution/package bundle.
+//
+// composition = process (executable). Inside each composition,
+// prototypes carry `on process P#` as a PER-PROTOTYPE CPU-AFFINITY
+// hint (the artheia analogue of pthread_setaffinity_np / taskset) —
+// NOT a partitioning instruction. The composition itself is the
+// process boundary.
+//
+// cluster = distribution / package bundle. cluster connects are
+// EXTERNAL messages (TIPC across processes); composition connects
+// are INTERNAL messages (actor mailboxes within one process). The
+// same `<proto>.<port>` syntax in both — prototype names are globally
+// unique, so a prototype identifies the node (= one TIPC endpoint).
+
 package system.demo
+
+composition Demo3WayP1 {
+    prototype CounterNode     counter      on process P1
+    prototype DriverNode      driver       on process P1
+    prototype TickerNode      ticker       on process P1
+
+    connect driver.inc_out      to counter.inc_in
+    connect driver.counter_call to counter.srv
+}
+
+composition Demo3WayP2 {
+    prototype ObserverNode    observer     on process P2
+}
+
+composition Demo3WayP3 {
+    prototype IncrementerNode incrementer  on process P3
+}
+
+// `cluster Demo3Way` is the distribution unit. The instance ident on
+// each member is the .ipk basename (p1.ipk / p2.ipk / p3.ipk); the
+// cluster name prefixes the multi-machine tar (Demo3Way_<machine>.tar).
+cluster Demo3Way {
+    composition Demo3WayP1 p1
+    composition Demo3WayP2 p2
+    composition Demo3WayP3 p3
+
+    connect observer.counter_call    to counter.srv
+    connect incrementer.inc_out      to counter.inc_in
+}

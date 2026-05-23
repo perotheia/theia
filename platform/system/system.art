@@ -1,52 +1,51 @@
-// Top-level system composition.
+// Top-level system aggregation.
 //
 // `platform/system/` IS the workspace's virtual root for the `system`
-// package. Through the symlinks here, every component's `.art` source
-// is visible under its directory-path-aligned FQN:
+// package. The directory layout mirrors the package FQN one-to-one:
 //
-//   platform/system/services/<short>/   →  system.services.<short>
-//   platform/system/gateway/             →  system.gateway
-//   platform/system/supervisor/          →  system.supervisor
-//   platform/system/demo/                →  system.demo
+//   platform/system/services/<short>/  →  system.services.<short>
+//   platform/system/gateway/            →  system.gateway
+//   platform/system/supervisor/         →  system.supervisor
+//   platform/system/demo/               →  system.demo
 //   platform/system/autosar/mlbevo_gen2/{kcan,fibex}/
-//                                        →  system.autosar.mlbevo_gen2.{kcan,fibex}
+//                                       →  system.autosar.mlbevo_gen2.{kcan,fibex}
 //
-// This file is the composition-of-compositions: it pulls each
-// sub-composition under one Platform body. Each component contributes
-// one composition declared in its own component.art.
+// This file does NOT declare a top-level composition. In the new
+// abstraction ladder:
 //
-// Until artheia cross-file imports land (see
-// TODO/system-art-aggregation.md), the referenced compositions and
-// nodes are redeclared here as forward-decl stubs so the file parses
-// standalone. LSP go-to-definition jumps from the stub to the real
-// composition.
+//   node         = thread
+//   composition  = process (executable)
+//   cluster      = distribution / package bundle
+//
+// "Composition-of-compositions" was the old shape and is gone. The
+// top-level units are CLUSTERS, and a cluster-of-clusters is not a
+// thing (deploy-time orchestration is rig.py's job).
+//
+// `import` lines drive cross-file resolution: the resolver maps the
+// imported FQN to its directory under the workspace root and parses
+// only those files. Forward-decl stubs (`cluster X { }`,
+// `composition X { }`) get materialized from those imported sources.
 
 package system
 
-// ---- forward-decl: compositions (real ones in their own component.art)
+import system.services.*    // ../../services/system/system.art (FC bundle)
+import system.demo.*        // ../../demo/system/demo/component.art (demo rig)
+import system.supervisor.*  // ../supervisor/system/component.art
+import system.gateway.*     // ../../gateway/system/component.art
 
-composition Services    { }     // system.services/system.art (FC aggregator)
-composition Demo3Way    { }     // system.demo/package.art    (the demo rig)
 
-// ---- forward-decl: nodes used as bare prototypes -------------------------
+// ---- forward-decl: external clusters (real defs in component.art) -------
+cluster Services    { }
+cluster Demo3Way    { }
 
-node atomic Supervisor {
-    tipc type=0x80020001 instance=0
-}
+// ---- forward-decl: compositions referenced by cluster Platform ----------
 
-node atomic Gateway {
-    tipc type=0xa0010001 instance=0
-}
+composition Supervisor     { }
+composition GatewayBridge  { }
 
-// ---- the top-level composition -------------------------------------------
-// Composition-of-compositions: services + the demo rig live under a
-// single Platform composition, alongside the platform-fabric nodes
-// (supervisor, gateway) that aren't FCs themselves.
+// ---- local cluster: the platform-fabric components ----------------------
 
-composition Platform {
-    composition Services svc
-    composition Demo3Way demo
-
-    prototype Supervisor sup
-    prototype Gateway    gw
+cluster Platform {
+    composition Supervisor     sup
+    composition GatewayBridge  gw
 }

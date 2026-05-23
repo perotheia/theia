@@ -1,26 +1,9 @@
 // Nm (NM) — Adaptive Platform Functional Cluster.
 //
-// Provides NetMgmtIf; requires: core, com, log.
+// NOT IMPLEMENTED. See README.md.
 
 package system.services.nm
 
-interface clientServer NetMgmtIf {
-    operation GetStatus()
-    operation Configure()
-}
-
-interface clientServer KernelIf { }  // from system.services.core
-
-interface clientServer ComIf { }  // from system.services.com
-
-interface clientServer LogIf { }  // from system.services.log
-
 node atomic NmDaemon {
     tipc type=0x80010009 instance=0
-    ports {
-        server nm_status provides NetMgmtIf
-        client requires_core requires KernelIf
-        client requires_com requires ComIf
-        client requires_log requires LogIf
-    }
 }

@@ -1,20 +1,9 @@
 // Tsync (TSYNC) — Adaptive Platform Functional Cluster.
 //
-// Provides TimeSyncIf; requires: core.
+// NOT IMPLEMENTED. See README.md.
 
 package system.services.tsync
 
-interface clientServer TimeSyncIf {
-    operation GetStatus()
-    operation Configure()
-}
-
-interface clientServer KernelIf { }  // from system.services.core
-
 node atomic TsyncDaemon {
     tipc type=0x80010004 instance=0
-    ports {
-        server tsync_status provides TimeSyncIf
-        client requires_core requires KernelIf
-    }
 }

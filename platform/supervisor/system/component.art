@@ -1,14 +1,7 @@
 package system.supervisor
 
-// Forward-decl: real node(s) live in this package's package.art.
-// Until artheia cross-file imports land (see
-// TODO/system-art-aggregation.md), composition files redeclare
-// minimal node stubs so the file parses standalone. LSP
-// go-to-definition prefers the non-stub.
-node atomic Supervisor {
-    tipc type=0x80020001 instance=0
-}
 
 composition Supervisor {
     prototype Supervisor supervisor
 }
+

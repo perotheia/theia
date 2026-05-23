@@ -1,14 +1,7 @@
 package system.services.sm
 
-// Forward-decl: real node lives in this package's package.art.
-// Until artheia cross-file imports land (see
-// TODO/system-art-aggregation.md), composition files redeclare a
-// minimal node stub so the file parses standalone. LSP
-// go-to-definition prefers the non-stub.
-node atomic SmDaemon {
-    tipc type=0x8001000D instance=0
-}
 
 composition Sm {
     prototype SmDaemon sm_daemon
 }
+

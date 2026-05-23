@@ -1,26 +1,9 @@
 // Phm (PHM) — Adaptive Platform Functional Cluster.
 //
-// Provides HealthIf; requires: core, log, exec.
+// NOT IMPLEMENTED. See README.md.
 
 package system.services.phm
 
-interface clientServer HealthIf {
-    operation GetStatus()
-    operation Configure()
-}
-
-interface clientServer KernelIf { }  // from system.services.core
-
-interface clientServer LogIf { }  // from system.services.log
-
-interface clientServer ExecIf { }  // from system.services.exec
-
 node atomic PhmDaemon {
     tipc type=0x8001000A instance=0
-    ports {
-        server phm_status provides HealthIf
-        client requires_core requires KernelIf
-        client requires_log requires LogIf
-        client requires_exec requires ExecIf
-    }
 }

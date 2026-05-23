@@ -105,34 +105,6 @@ node atomic IncrementerNode {
     }
 }
 
-// ---- compositions ------------------------------------------------------
-
-// Single-process: everything local (existing demo binary uses this).
-composition Demo {
-    prototype CounterNode counter
-    prototype DriverNode  driver
-    prototype TickerNode  ticker
-
-    connect driver.inc_out      to counter.inc_in
-    connect driver.counter_call to counter.srv
-}
-
-// Three-process: counter+driver+ticker on P1 (the existing process,
-// unchanged), observer on P2, incrementer on P3. The two new processes
-// only ever talk to counter over TIPC; the existing process notices
-// nothing different beyond the inbound traffic on counter's port.
-//
-// Prototype names must be unique across compositions (textX cross-ref
-// scope) — using p1/p2/p3 suffixes.
-composition Demo3Way {
-    prototype CounterNode     counter_p1      on process P1
-    prototype DriverNode      driver_p1       on process P1
-    prototype TickerNode      ticker_p1       on process P1
-    prototype ObserverNode    observer_p2     on process P2
-    prototype IncrementerNode incrementer_p3  on process P3
-
-    connect driver_p1.inc_out         to counter_p1.inc_in
-    connect driver_p1.counter_call    to counter_p1.srv
-    connect observer_p2.counter_call  to counter_p1.srv
-    connect incrementer_p3.inc_out    to counter_p1.inc_in
-}
+// Compositions and the Demo3Way cluster live in the sibling
+// component.art file. The model loader merges package.art (schema)
+// and component.art (wiring/deploy) when parsing either path.

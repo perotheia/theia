@@ -1,24 +1,9 @@
 package system.gateway
 
-// Forward-decl: real node(s) live in this package's package.art.
-// Until artheia cross-file imports land (see
-// TODO/system-art-aggregation.md), composition files redeclare
-// minimal node stubs so the file parses standalone. LSP
-// go-to-definition prefers the non-stub.
-node atomic Gateway {
-    tipc type=0xa0010001 instance=0
-}
-
-node atomic Mlbevo_Gen2_Bus {
-    tipc type=0x9f000000 instance=0
-}
-
-node atomic Kcan_Bus {
-    tipc type=0x9f000001 instance=0
-}
 
 composition GatewayBridge {
     prototype Mlbevo_Gen2_Bus mlbevo_gen2_bus
     prototype Kcan_Bus        kcan_bus
     prototype Gateway         gw
 }
+

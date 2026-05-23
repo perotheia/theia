@@ -1,5 +1,7 @@
-- define logging dst in execution manifes
-- add tags to services for log/trace
+- define logging dst in execution manifes: console/file/syslog
+- add endpoint for syslog: host/remote
+- add default log level for Node in manifest. 
+- add tags to services Node for log/trace
 
 ⟹ SUMMARY: Adaptive AUTOSAR = High performance/multi-core SoC + Automotive Ethernet + POSIX OS(PSE51) + Services-Oriented-Architecture.
 Adaptive Platform Functional Cluster 	SHORTNAME

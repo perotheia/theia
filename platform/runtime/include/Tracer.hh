@@ -52,6 +52,8 @@ enum class TraceEvent : uint8_t {
     CallError    = 0x0a,  // caller-side handle_call_error
     CallWait     = 0x0b,  // sync caller about to block on a future
     CallResume   = 0x0c,  // sync caller unblocked (reply arrived or timeout)
+    StateTransition = 0x0d,  // gen_statem transitioned between states
+    StateTimeout    = 0x0e,  // gen_statem state-timeout fired
 };
 
 inline const char* trace_event_name(TraceEvent e) noexcept {
@@ -68,6 +70,8 @@ inline const char* trace_event_name(TraceEvent e) noexcept {
         case TraceEvent::CallError:    return "call_error";
         case TraceEvent::CallWait:     return "call_wait";
         case TraceEvent::CallResume:   return "call_resume";
+        case TraceEvent::StateTransition: return "state_transition";
+        case TraceEvent::StateTimeout:    return "state_timeout";
     }
     return "?";
 }

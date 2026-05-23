@@ -398,24 +398,33 @@ to UPDATE iff its `target == UPDATE`, not unconditionally).
 
 Total ~5-6 days of focused work; checkpoints between phases.
 
-## Open questions for the next turn
+## Decisions ratified (2026-05-23)
 
-1. **`data` field**: should it be a textX `MessageDecl` (proto-shaped)
-   or a free-form C++ struct name (user-declared)? Proto-shaped is
-   uniform with everything else in artheia but adds serialization
-   overhead on every transition; free-form is faster but requires
-   the user to hand-write the data struct. Proposed default:
-   proto-shaped, user can override via a `data_cpp_type` attribute.
-2. **`halt` semantics**: does halt() trigger the supervisor's
-   restart logic (so the FSM restarts fresh) or does it cleanly
-   exit (process keeps running, FSM just done)? Erlang-faithful is
-   to exit normal (no restart); we'd need a separate `crash()`
-   for abnormal. Proposed: two methods, `halt()` = stop-clean,
-   `fault()` = exit-with-error.
-3. **State-enter callback access**: should `on_enter` be allowed
-   to use `cast()` to send messages? Yes — it's the natural place
-   for the SM's broadcast behaviour. We forbid `transition_to` from
-   on_enter, not message sends.
+1. **`data` field**: declared as a `.art` `MessageDecl`, codegen'd
+   to a POD, used directly by the derived class. No special
+   serialization path on transitions — the field is in-process
+   state, not wire data. Uniform with every other message in
+   artheia.
+2. **`halt` semantics**: two methods, exit-code based.
+   - `halt()` → process exits with code 0 (clean stop).
+   - `halt_with_error("reason")` → process exits with code 1+
+     (faulted stop).
+   Supervisor's existing `on_child_exit`
+   (`platform/supervisor/src/runtime.cpp`) inspects exit codes
+   against `RestartType` — Permanent restarts on either code,
+   Transient restarts only on non-zero, Temporary never restarts.
+   No new supervisor logic needed.
+3. **`on_enter` callback access**:
+   - Returns `void` (compile-time forbids transitions —
+     `EventResult<S>` is producible only from `handle_event`).
+   - May call `cast()`, `call()`, `post_info()`,
+     `TimerService::send_after()`. Message sends and timer arms
+     are explicitly allowed — required for SM's broadcast-on-enter.
+   - "Auto-advance" states (no event, immediate next state) use
+     `transition_to(NewState, /*timeout_ms=*/0)` from the
+     *incoming event's* handler, not from `on_enter`. This keeps
+     traces honest (every transition is a real, observable event)
+     and the state graph statically determined by the `.art`.
 
 ## Out of scope (deferred, post-MVP)
 

@@ -55,6 +55,7 @@ cc_test(
         "test/test_main.cc",
         "test/test_server.hh",
         "test/test_codecs.hh",
+        "test/test_statem.hh",
     ],
     includes = ["test"],
     copts = ["-std=c++17", "-Wall", "-Wextra"],

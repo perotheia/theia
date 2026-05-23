@@ -21,12 +21,14 @@
 //   stop_after_pending_cast — stop waits for queued casts before terminating
 
 #include "GenServer.hh"
+#include "GenStateM.hh"
 #include "Logger.hh"
 #include "NodeRef.hh"
 #include "TimerService.hh"
 #include "TipcMux.hh"
 #include "test_codecs.hh"
 #include "test_server.hh"
+#include "test_statem.hh"
 
 #include <fcntl.h>
 #include <sys/types.h>
@@ -801,6 +803,163 @@ static std::string case_stop_after_pending_cast() {
     return {};
 }
 
+// =======================================================================
+//                              GenStateM CASES
+// =======================================================================
+
+static std::string case_statem_traffic_light() {
+    using namespace test_statem;
+    rt::TimerService timers;
+    TrafficLight tl;
+    tl.start_statem(timers);
+
+    // Wait briefly for init() + first on_enter (Red).
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    EXPECT(tl.state().state == Light::Red, "should init to Red");
+    EXPECT(tl.state().data.history.size() == 1,
+           "on_enter fires once on init");
+
+    // Kick off the cycle.
+    rt::post_event(tl, TLBoot{});
+
+    // Three full cycles: Red→Green→Yellow→Red→Green→Yellow→Red→Green→Yellow.
+    // Each cycle 90ms. Wait 350ms for 3 cycles + slack.
+    std::this_thread::sleep_for(std::chrono::milliseconds(330));
+
+    // ticks counts state-timeout fires (we get one per transition).
+    int ticks = tl.state().data.ticks.load();
+    EXPECT(ticks >= 8,
+           "expected at least 8 state-timeout ticks in 330ms, got " +
+               std::to_string(ticks));
+
+    // History should be [Red, Green, Yellow, Red, Green, Yellow, ...].
+    const auto& hist = tl.state().data.history;
+    EXPECT(hist.size() >= 9, "history has at least 9 entries");
+    EXPECT(hist[0] == Light::Red,    "history[0]=Red");
+    EXPECT(hist[1] == Light::Green,  "history[1]=Green");
+    EXPECT(hist[2] == Light::Yellow, "history[2]=Yellow");
+    EXPECT(hist[3] == Light::Red,    "history[3]=Red");
+
+    tl.stop();
+    return {};
+}
+
+static std::string case_statem_retry_escalate() {
+    using namespace test_statem;
+    rt::TimerService timers;
+    RetryEscalator re;
+    re.start_statem(timers);
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    EXPECT(re.state().state == Retry::Trying, "init to Trying");
+
+    // First two retries — counter advances, state stays Trying.
+    rt::post_event(re, DoRetry{});
+    rt::post_event(re, DoRetry{});
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    EXPECT(re.state().data.retry_count == 2, "two retries logged");
+    EXPECT(re.state().state == Retry::Trying, "still Trying");
+    EXPECT(!re.state().data.escalated, "not yet escalated");
+
+    // Send Resume — handled (resume_count increments).
+    rt::post_event(re, Resume{});
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    EXPECT(re.state().data.resume_count == 1,
+           "Resume handled in Trying");
+
+    // Third retry escalates.
+    rt::post_event(re, DoRetry{});
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    EXPECT(re.state().data.escalated, "escalated on 3rd retry");
+    EXPECT(re.state().state == Retry::Failed, "now in Failed");
+
+    re.stop();
+    return {};
+}
+
+static std::string case_statem_postpone() {
+    // Resume sent in Failed is postponed and replayed when we re-enter
+    // Trying. We have no "go back to Trying" event in the FSM, so this
+    // test contrives one: a second instance where we drive Resume first
+    // (gets postponed), then a custom hook transitions Failed→Trying
+    // and we observe resume_count increments AFTER that.
+    using namespace test_statem;
+    rt::TimerService timers;
+    RetryEscalator re;
+    re.start_statem(timers);
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
+    // Drive to Failed.
+    rt::post_event(re, DoRetry{});
+    rt::post_event(re, DoRetry{});
+    rt::post_event(re, DoRetry{});
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    EXPECT(re.state().state == Retry::Failed, "in Failed");
+
+    // Send Resume — should be postponed (no resume_count yet).
+    rt::post_event(re, Resume{});
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    EXPECT(re.state().data.resume_count == 0,
+           "Resume in Failed is postponed, not handled");
+
+    // Synthesize a manual transition back to Trying by going through
+    // the dispatcher: we can't from outside, so we tap the holder. To
+    // keep the test honest, we use `enqueue` to push a lambda that
+    // does the transition + postpone-replay just like the framework.
+    re.enqueue([](rt::GenServerBase* base) {
+        auto* self = static_cast<RetryEscalator*>(base);
+        auto& h    = self->state();
+        h.expected_cookie++;
+        h.state = Retry::Trying;
+        // Replay postponed events.
+        while (!h.postponed.empty()) {
+            auto fn = std::move(h.postponed.front());
+            h.postponed.pop_front();
+            base->enqueue(std::move(fn));
+        }
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    EXPECT(re.state().state == Retry::Trying, "back to Trying");
+    EXPECT(re.state().data.resume_count == 1,
+           "postponed Resume replayed → resume_count=1");
+
+    re.stop();
+    return {};
+}
+
+static std::string case_statem_door_lock_guards() {
+    using namespace test_statem;
+    rt::TimerService timers;
+    DoorLock dl;
+    dl.start_statem(timers);
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    EXPECT(dl.state().state == Door::Locked, "init Locked");
+
+    // PresentCard without a registered keycard → rejected, stays Locked.
+    rt::post_event(dl, PresentCard{});
+    rt::post_event(dl, PresentCard{});
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    EXPECT(dl.state().data.reject_count == 2, "rejected twice");
+    EXPECT(dl.state().state == Door::Locked, "still Locked");
+
+    // Register a keycard.
+    rt::post_event(dl, InsertKey{true});
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    EXPECT(dl.state().data.has_keycard, "keycard now valid");
+
+    // PresentCard now transitions to Unlocking with a 50ms timeout.
+    rt::post_event(dl, PresentCard{});
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    EXPECT(dl.state().state == Door::Unlocking, "in Unlocking");
+
+    // After the timeout fires → Unlocked.
+    std::this_thread::sleep_for(std::chrono::milliseconds(70));
+    EXPECT(dl.state().state == Door::Unlocked, "now Unlocked");
+    EXPECT(dl.state().data.unlock_count == 1, "unlocked once");
+
+    dl.stop();
+    return {};
+}
+
 // ---- driver ------------------------------------------------------------
 
 int main() {
@@ -827,6 +986,10 @@ int main() {
     CASE(stat, tipc_concurrent_calls)   { return case_tipc_concurrent_calls(); });
     CASE(stat, tipc_trace_correlation)  { return case_tipc_trace_correlation(); });
     CASE(stat, tracer_runtime_toggle)   { return case_tracer_runtime_toggle(); });
+    CASE(stat, statem_traffic_light)    { return case_statem_traffic_light(); });
+    CASE(stat, statem_retry_escalate)   { return case_statem_retry_escalate(); });
+    CASE(stat, statem_postpone)         { return case_statem_postpone(); });
+    CASE(stat, statem_door_lock_guards) { return case_statem_door_lock_guards(); });
 
     std::printf("\n%d/%d passed\n", stat.passed, stat.total);
     if (!stat.failures.empty()) {

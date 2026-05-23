@@ -1,0 +1,40 @@
+# Per-machine deploy manifest set for the demo rig.
+#
+#   bazel build //platform/manifest:rig
+#
+# Writes (under bazel-bin/platform/manifest/manifest/):
+#   index.yaml
+#   <machine>/machine.yaml
+#   <machine>/application.yaml
+#   <machine>/service.yaml
+#   <machine>/execution.yaml
+#
+# Downstream Distribution rules can `srcs = ["//platform/manifest:rig"]`
+# or grab one machine's slice via
+# `//platform/manifest:rig_central_host_manifest`.
+
+load("//rules:manifest.bzl", "rig_manifest")
+
+# Per-machine deploy manifest set for the demo rig.
+#
+# Inputs (rig.py + its transitive .art imports) come in via the
+# `rig_sources` filegroup exported by //demo/manifest. Touching any
+# of those files re-fingerprints this rule and forces a re-run.
+#
+# To depend on this from another rule:
+#
+#   filegroup(srcs = ["//platform/manifest:rig"])              # full set
+#   filegroup(srcs = ["//platform/manifest:rig_central_host_manifest"])  # one machine
+
+rig_manifest(
+    name = "rig",
+    rig_target = "demo.manifest.rig",
+    machines = [
+        "admin_host",
+        "central_host",
+        "compute_host",
+    ],
+    srcs = [
+        "//demo/manifest:rig_sources",
+    ],
+)

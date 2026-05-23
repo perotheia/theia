@@ -1,4 +1,63 @@
-# Bazel `//platform/manifest:rig` rule
+# Bazel `//platform/manifest:rig` rule — DONE 2026-05-23
+
+## Resolution
+
+Five files landed:
+
+- `rules/manifest.bzl` — new `rig_manifest(name, rig_target, machines,
+  srcs)` Starlark macro. Wraps `artheia generate-manifest` in a
+  genrule with static outputs (one per machine × 4 manifest kinds +
+  `index.yaml`). Emits a top-level filegroup plus per-machine
+  filegroups for downstream `srcs = [...]` use.
+
+- `platform/manifest/BUILD.bazel` — calls `rig_manifest` for the
+  demo rig with the three machines (admin/central/compute). Lists
+  `//demo/manifest:rig_sources` as srcs so any change to the rig's
+  inputs forces a re-run.
+
+- `demo/manifest/BUILD.bazel` — exports `rig_sources` (the rig.py
+  itself + transitive `services/manifest` + every `.art` file under
+  `platform/system/`).
+
+- `services/manifest/BUILD.bazel` + `platform/system/BUILD.bazel` —
+  expose `fc_sources` and `art_sources` filegroups for the chain
+  above.
+
+## Verification
+
+```
+$ bazel build //platform/manifest:rig
+Target //platform/manifest:rig up-to-date:
+  bazel-bin/platform/manifest/manifest/index.yaml
+  bazel-bin/platform/manifest/manifest/admin_host/{machine,application,service,execution}.yaml
+  bazel-bin/platform/manifest/manifest/central_host/{machine,application,service,execution}.yaml
+  bazel-bin/platform/manifest/manifest/compute_host/{machine,application,service,execution}.yaml
+INFO: Elapsed time: 0.794s, Critical Path: 0.28s
+```
+
+- No-op re-run: cache-hit only (1 process, internal).
+- Edit `demo/system/demo/component.art` → genrule re-runs (2
+  processes: 1 internal + 1 local). Confirmed invalidation works
+  across the symlink tree under `platform/system/`.
+
+## What's static vs dynamic
+
+Machines are listed explicitly in `platform/manifest/BUILD.bazel`
+because Bazel needs to know outputs at analysis time. Reading the
+rig.py during BUILD evaluation is discouraged; listing machines
+manually is the lighter, hermetic choice. The rig.py is still the
+source of truth for content; the BUILD just enumerates membership.
+
+## Not in scope this turn
+
+- A `.tar.gz` distribution rule wrapping the YAML set. The existing
+  `rules/rig.bzl` module extension already produces per-machine
+  `.ipk`s; pairing that with this rule's YAML set into a single
+  Distribution tarball is a follow-up.
+
+---
+
+## Original ticket follows below
 
 Today `artheia generate-manifest demo.manifest.rig --out dist/manifest`
 runs by hand. Wire it into Bazel so:

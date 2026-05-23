@@ -1,0 +1,9 @@
+# services/manifest — FC layer (PlatformBase + FcLayer).
+#
+# Exposed for downstream manifest builds (//demo/manifest:rig_sources).
+
+filegroup(
+    name = "fc_sources",
+    srcs = glob(["**/*.py"]),
+    visibility = ["//visibility:public"],
+)

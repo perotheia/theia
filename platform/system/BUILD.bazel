@@ -1,0 +1,20 @@
+# platform/system — workspace's virtual root for the `system` package.
+#
+# Re-exports every .art file reachable from here as a single
+# filegroup so downstream manifest builds depend on the full
+# system tree. The directory itself is the namespace anchor for
+# `import system.*` declarations.
+#
+# We do NOT follow_symlinks here. Symlinks in platform/system/
+# point at the real component trees (services/, demo/, etc.); Bazel
+# treats these as opaque inputs to the genrule (artheia chases them
+# at runtime), so they don't need to be re-exposed as Bazel sources.
+
+filegroup(
+    name = "art_sources",
+    srcs = glob(
+        ["**/*.art"],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)

@@ -193,15 +193,20 @@ DemoHost = CentralHost
 # location for the equivalent ``rules_cc`` target.
 
 _DEMO_PROCESSES = [
-    ("demo_p1", "DemoP1Composition",
+    # (process-name, art composition name, bazel target, hosted prototypes)
+    #
+    # The composition names track demo/system/demo/component.art:
+    # `composition Demo3WayP1 { … on process P1 }` materializes into
+    # one binary that runs the prototypes listed here in-process.
+    ("demo_p1", "Demo3WayP1",
      "//demo:p1_main",
-     ["counter_p1", "driver_p1", "ticker_p1"]),
-    ("demo_p2", "DemoP2Composition",
+     ["counter", "driver", "ticker"]),
+    ("demo_p2", "Demo3WayP2",
      "//demo:p2_main",
-     ["observer_p2"]),
-    ("demo_p3", "DemoP3Composition",
+     ["observer"]),
+    ("demo_p3", "Demo3WayP3",
      "//demo:p3_main",
-     ["incrementer_p3"]),
+     ["incrementer"]),
 ]
 
 DEMO_COMPONENTS: list[SwComponent] = [
@@ -221,6 +226,38 @@ DEMO_COMPONENTS: list[SwComponent] = [
     )
     for (name, art_class, target, _) in _DEMO_PROCESSES
 ]
+
+
+# ---------------------------------------------------------------------------
+# Platform-fabric SwComponents — these are the daemons referenced by
+# `cluster Platform { composition Supervisor sup, composition
+# GatewayBridge gw }` in platform/system/system.art. They live alongside
+# the FCs (`cluster Services`) and the demo binaries (`cluster
+# Demo3Way`) but are functionally distinct: they ARE the platform.
+#
+# Matches the opkg artifacts declared on each TARGET machine
+# (CentralHost / ComputeHost) — same bazel_target stems.
+# ---------------------------------------------------------------------------
+
+_PLATFORM_FABRIC_COMPONENTS: list[SwComponent] = [
+    SwComponent(
+        name="supervisor",
+        bazel_target="//platform/supervisor:ipk",
+        owner="platform",
+        art_node="system.supervisor/Supervisor",
+        bazel_buildable=True,
+    ),
+    SwComponent(
+        name="gateway",
+        bazel_target="//platform/gateway:ipk",
+        owner="platform",
+        art_node="system.gateway/GatewayBridge",
+        bazel_buildable=True,
+    ),
+]
+
+# Demo + platform-fabric = the full set added by DemoLayer below.
+DEMO_COMPONENTS = DEMO_COMPONENTS + _PLATFORM_FABRIC_COMPONENTS
 
 
 def _executable_for(name: str, art_class: str) -> Executable:

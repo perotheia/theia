@@ -1,4 +1,40 @@
-# Fix `artheia audit-manifest` gaps in demo.manifest.rig
+# Fix `artheia audit-manifest` gaps in demo.manifest.rig — DONE 2026-05-23
+
+## Resolution
+
+- `_DEMO_PROCESSES`: art-class names updated `DemoP[1-3]Composition`
+  → `Demo3WayP[1-3]` (the new cluster-driven composition names);
+  hosted-prototype lists updated `counter_p1` etc. → bare `counter`,
+  `driver`, `ticker`, `observer`, `incrementer`.
+- Added `_PLATFORM_FABRIC_COMPONENTS`: SwComponents for `supervisor`
+  (`//platform/supervisor:ipk`, art_node
+  `system.supervisor/Supervisor`) and `gateway`
+  (`//platform/gateway:ipk`, art_node
+  `system.gateway/GatewayBridge`). Concatenated onto `DEMO_COMPONENTS`
+  so they merge in via the legacy DemoLayer.
+- New regression test `artheia/tests/test_audit_manifest.py` spawns
+  `artheia audit-manifest …` as a subprocess and asserts exit 0 with
+  "no gaps". Will catch future .art/rig drift.
+
+## Verification
+
+```
+$ artheia audit-manifest platform/system/system.art demo.manifest.rig
+art: platform/system/system.art
+rig: demo.manifest.rig -> 'demo'
+
+clusters: 3  compositions: 11  prototypes-with-process: 5
+rig: applications=2  sw_components=23  processes=21
+
+✓ no gaps — rig is aligned with art
+```
+
+Test suite: 102 pass / 4 pre-existing failures (test_gen_rig +
+test_transform — unrelated to this task).
+
+---
+
+## Original ticket follows below
 
 The Phase 0 audit (committed in `system .art reshape onto cluster
 primitive + Puppet provisioning fields`) surfaced 10 drift gaps

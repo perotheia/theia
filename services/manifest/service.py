@@ -79,12 +79,24 @@ def _executable_for(short: str) -> Executable:
     )
 
 
+# Per-FC start_cmd. One entry per FC that has a built binary; missing
+# entries mean "FC is .art-only" and the supervisor refuses to launch
+# them (artheia.manifest.supervisor._fc_child emits an empty start_cmd
+# + warning). Setting an entry here makes the FC supervised in the
+# dev tree; the install-time .ipk / .deb mapping rewrites these paths
+# to the on-target install location.
+START_CMDS: dict[str, list[str]] = {
+    "sm": ["bazel-bin/services/system/sm/sm"],
+}
+
+
 def _process_for(short: str) -> Process:
     """Execution Manifest Process per FC (§8.2)."""
     return Process(
         name=short,
         executable=short,
         function_cluster_affiliation=short,
+        start_cmd=list(START_CMDS.get(short, [])),
         state_dependent_startup_config=[
             StateDependentStartupConfig(
                 function_group_state=["Default.Running"],

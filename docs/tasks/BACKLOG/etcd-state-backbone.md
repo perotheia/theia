@@ -145,13 +145,20 @@ GUI tabs map to prefixes:
 - services/com stays alive for control RPCs (restart/terminate/etc).
 - One commit per tab so the tester can iterate.
 
-### Phase 6 — services/db = state + OTA controller
-**Re-scoped (was "DB migration service").** etcd already gives us
-versioned KV, CAS transactions, snapshots, and revision history —
-so traditional SQL-style migrations are overkill. Instead
-`services/db` is the **state-shape gatekeeper + OTA controller**:
-it owns the active-version pointer, runs health gating before
-promotions, and exposes snapshot/rollback primitives.
+### Phase 6 — services/db (state + migration)
+**Re-scoped (was "DB migration service" → considered OTA controller
+→ back to state-shape gatekeeper).** etcd gives us versioned KV,
+CAS transactions, snapshots, and revision history — so traditional
+SQL-style migrations are overkill. `services/db` is the
+**state-shape gatekeeper and migration runner**: typed Put/Get with
+schema versioning, lazy migration on read, and bulk-rewrite jobs
+for reshuffles that can't be expressed lazily.
+
+> **Out of scope:** A/B / OTA controller machinery. Deploy stays
+> on Puppet (docker-compose today, Puppet-on-Pi 4 later — see
+> docs/tasks/BACKLOG/cross-compile-rpi4.md). services/db cares
+> about the state inside an installed version, not about installing
+> the version.
 
 #### State-shape API (typed reads / writes)
 - `Put(app, schema_v, key, value)` — value is a typed proto.
@@ -168,45 +175,21 @@ promotions, and exposes snapshot/rollback primitives.
   `migrations/<app>/v<from>_to_v<to>.cc` — compiled into the
   binary. Reuse for both lazy-read and bulk rewrite paths.
 
-#### OTA controller API (slot lifecycle)
-Software A/B (no hardware partitions on Pi 4) — emulated via two
-filesystem slots + an etcd pointer:
+#### Snapshot / rollback (operational, not OTA)
+etcd's own snapshot machinery is still useful for ops — before a
+risky bulk migration, snapshot the datastore so we can roll back
+the *data* without rolling back the *deploy*:
 
-```
-/opt/theia/slots/A/    # binaries + executor.yaml for version A
-/opt/theia/slots/B/    # binaries for version B (staging)
-/opt/theia/current     # symlink → slots/<A|B>
-```
-
-etcd carries the matching pointer:
-```
-/theia/ota/active_slot   = "A"
-/theia/ota/staging_slot  = "B"        # may be empty
-/theia/ota/active_version = "1.4.2"
-```
-
-RPCs:
-- `StageUpdate(bundle_url, schema_v, dest_slot)` — supervisor fetches
-  the bundle into the inactive slot. App + config + schema_v travel
-  together. Verifies signature (sigstore-style detached sig, TBD).
-- `RunHealthGate(slot)` — boots the staged slot in a sandboxed
-  supervisor sub-tree, runs the watchdog checks (CPU sane, IPC
-  functional, etcd reachable, timing budgets met). Returns
-  ControlReply with verdict.
-- `Promote(slot)` — atomically: snapshot etcd, flip
-  `/opt/theia/current`, switch `/theia/ota/active_slot`,
-  reload supervisor's executor.yaml.
-- `Rollback(level)` — three levels per the design doc:
-  - **L1 instant**: flip the pointer back to the previous slot.
-    No etcd restore; whatever state changes the new version made
-    stay (apps see them via lazy-read).
-  - **L2 revision**: `etcdctl move-revision <pre_promote>`;
-    revives the pre-promotion KV view.
-  - **L3 snapshot**: `etcdctl snapshot restore <pre_ota.db>`;
-    full datastore rewind. Reserved for "the new version corrupted
-    state and L1/L2 didn't catch it."
-- `Snapshot(label)` — `etcdctl snapshot save`. Tagged in
-  `/theia/ota/snapshots/<label>`.
+- `Snapshot(label)` → `etcdctl snapshot save` + tag at
+  `/theia/db/snapshots/<label>` with timestamp + caller id.
+- `RestoreSnapshot(label)` → `etcdctl snapshot restore`; supervisor
+  + services/db restart to pick up the restored view.
+- Three rollback levels (data only — deploy is Puppet's job):
+  - **L1**: revert one MigrateBulk by re-running its inverse
+    transform if declared.
+  - **L2**: `etcdctl move-revision <pre_migrate_rev>` — rewind to
+    a specific revision without restoring the full snapshot.
+  - **L3**: full `etcdctl snapshot restore` of a labeled snapshot.
 
 #### Bulk rewrite (Option B from discussion, fallback)
 - `MigrateBulk(app, from_v, to_v)` — services/db reads every
@@ -216,35 +199,27 @@ RPCs:
 - Useful when v→v+1 stops being expressible lazily (e.g. key
   reshuffle, not just value reshape).
 
-#### Watchdog + health gating
-- Reads supervisor's HealthBeacon stream (already published to
-  `/theia/state/<m>/health` in Phase 2).
-- Plus app-specific liveness keys at
-  `/theia/state/<m>/child/<name>/heartbeat` (also Phase 2).
-- Promotion blocks until all watchdog conditions hold for N
-  consecutive seconds (configurable per app).
-
-#### What it deliberately doesn't do (yet)
-- Update bundle signing — flagged as critical-but-out-of-scope here;
-  separate BACKLOG entry. Phase 6 accepts unsigned bundles with a
-  big warning log.
-- Multi-machine coordinated rollout (canary % of fleet, etc.) —
-  single-machine staged + promoted for now.
-- Bundle distribution (HTTPS endpoint, mirror, content addressing) —
-  Phase 6 accepts a file:// or local path; the network layer is
-  separate work.
+#### What it deliberately doesn't do
+- **Deploy / install** — Puppet handles that. services/db acts on
+  the state already on disk; how the code got there is none of its
+  business.
+- A/B slot machinery, StageUpdate, Promote, RunHealthGate — those
+  belong to a separate "OTA over Puppet" story if we ever need
+  one. Today's deploy is `dpkg -i` driven by Puppet inside docker
+  (and eventually on the Pi 4).
+- Multi-machine coordinated migration — single-machine MigrateBulk
+  for now; fleet coordination is a later layer.
 
 #### Smoke / definition of done
 1. `services/db` running locally; `RegisterSchema(myapp, 1, …)` +
-   `Put + Get` round-trip.
-2. Stage a fake v2 of `myapp` into slot B; `RunHealthGate` passes;
-   `Promote` flips `/opt/theia/current`; supervisor reloads; apps
-   come up on v2.
-3. `Rollback(L1)` flips back instantly; supervisor reloads onto A.
-4. Lazy migration: write a v1 key, read with schema_v=2, get back
-   a v2 value with the transform applied.
-5. Bulk migration: 1000 keys at v1 → MigrateBulk → 1000 keys at v2,
-   resumable across kill -9.
+   `Put + Get` round-trip via gRPC.
+2. Write a v1 key, read with `schema_v=2`, services/db transparently
+   runs the v1→v2 transform on the read path.
+3. `MigrateBulk(myapp, 1, 2)` rewrites 1000 keys at v1 to v2;
+   kill -9 mid-migration, restart, resume to completion (lease
+   marker at `/theia/app/migrations/myapp/1_2` survives).
+4. `Snapshot("pre-bulk")` + `RestoreSnapshot("pre-bulk")` round
+   trips the entire datastore.
 
 ### Phase 7 — Docs + tester handoff
 - `docs/etcd.md` covering layout, lease/TTL semantics, GUI flow,

@@ -41,7 +41,7 @@ class SmDaemonStateMBase
     : public demo::runtime::GenStateM<SmDaemon, SmDaemonState, SmStateMsg> {
 public:
     SmDaemonState init(SmStateMsg& /*d*/) {
-        return SmDaemonState::OFF;
+        return SmState_OFF;
     }
 
     // Keep base-class handle_event(StateTimeoutMsg) visible — derived
@@ -53,9 +53,9 @@ public:
     // OFF + SystemBoot → STARTING after 30s
     demo::runtime::EventResult<SmDaemonState> handle_event(
             SmDaemonState s, const SystemBoot& /*e*/, SmStateMsg& /*d*/) {
-        if (s == SmDaemonState::OFF) {
+        if (s == SmState_OFF) {
             return demo::runtime::transition_to<SmDaemonState>(
-                SmDaemonState::STARTING, 30'000);
+                SmState_STARTING, 30'000);
         }
         return demo::runtime::keep_state<SmDaemonState>();
     }
@@ -63,9 +63,9 @@ public:
     // STARTING + StartupComplete → RUNNING
     demo::runtime::EventResult<SmDaemonState> handle_event(
             SmDaemonState s, const StartupComplete& /*e*/, SmStateMsg& /*d*/) {
-        if (s == SmDaemonState::STARTING) {
+        if (s == SmState_STARTING) {
             return demo::runtime::transition_to<SmDaemonState>(
-                SmDaemonState::RUNNING);
+                SmState_RUNNING);
         }
         return demo::runtime::keep_state<SmDaemonState>();
     }
@@ -73,9 +73,9 @@ public:
     // RUNNING + ShutdownRequest → SHUTDOWN
     demo::runtime::EventResult<SmDaemonState> handle_event(
             SmDaemonState s, const ShutdownRequest& /*e*/, SmStateMsg& /*d*/) {
-        if (s == SmDaemonState::RUNNING) {
+        if (s == SmState_RUNNING) {
             return demo::runtime::transition_to<SmDaemonState>(
-                SmDaemonState::SHUTDOWN);
+                SmState_SHUTDOWN);
         }
         return demo::runtime::keep_state<SmDaemonState>();
     }
@@ -83,9 +83,9 @@ public:
     // RUNNING + UpdateRequest → UPDATE
     demo::runtime::EventResult<SmDaemonState> handle_event(
             SmDaemonState s, const UpdateRequest& /*e*/, SmStateMsg& /*d*/) {
-        if (s == SmDaemonState::RUNNING) {
+        if (s == SmState_RUNNING) {
             return demo::runtime::transition_to<SmDaemonState>(
-                SmDaemonState::UPDATE);
+                SmState_UPDATE);
         }
         return demo::runtime::keep_state<SmDaemonState>();
     }
@@ -93,9 +93,9 @@ public:
     // UPDATE + UpdateComplete → RUNNING
     demo::runtime::EventResult<SmDaemonState> handle_event(
             SmDaemonState s, const UpdateComplete& /*e*/, SmStateMsg& /*d*/) {
-        if (s == SmDaemonState::UPDATE) {
+        if (s == SmState_UPDATE) {
             return demo::runtime::transition_to<SmDaemonState>(
-                SmDaemonState::RUNNING);
+                SmState_RUNNING);
         }
         return demo::runtime::keep_state<SmDaemonState>();
     }
@@ -103,9 +103,9 @@ public:
     // DEGRADED + RetryStartup → STARTING after 30s
     demo::runtime::EventResult<SmDaemonState> handle_event(
             SmDaemonState s, const RetryStartup& /*e*/, SmStateMsg& /*d*/) {
-        if (s == SmDaemonState::DEGRADED) {
+        if (s == SmState_DEGRADED) {
             return demo::runtime::transition_to<SmDaemonState>(
-                SmDaemonState::STARTING, 30'000);
+                SmState_STARTING, 30'000);
         }
         return demo::runtime::keep_state<SmDaemonState>();
     }
@@ -113,7 +113,7 @@ public:
     // SHUTDOWN + PowerOff → halt (clean exit)
     demo::runtime::EventResult<SmDaemonState> handle_event(
             SmDaemonState s, const PowerOff& /*e*/, SmStateMsg& /*d*/) {
-        if (s == SmDaemonState::SHUTDOWN) {
+        if (s == SmState_SHUTDOWN) {
             return demo::runtime::halt<SmDaemonState>();
         }
         return demo::runtime::keep_state<SmDaemonState>();
@@ -125,9 +125,9 @@ public:
             const demo::runtime::StateTimeoutMsg<SmDaemonState>& /*e*/,
             SmStateMsg& /*d*/) {
         switch (s) {
-        case SmDaemonState::STARTING:
+        case SmState_STARTING:
             return demo::runtime::transition_to<SmDaemonState>(
-                SmDaemonState::DEGRADED);
+                SmState_DEGRADED);
         default:
             return demo::runtime::keep_state<SmDaemonState>();
         }

@@ -88,7 +88,7 @@ static std::string case_init_fires_first_on_enter() {
     pump();
     auto seen = r.snapshot();
     EXPECT(!seen.empty(), "init must fire at least one on_enter");
-    EXPECT(seen[0] == SmState::OFF, "first broadcast should be OFF");
+    EXPECT(seen[0] == SmState_OFF, "first broadcast should be OFF");
     sm.stop();
     return {};
 }
@@ -114,10 +114,10 @@ static std::string case_full_lifecycle_to_shutdown() {
     EXPECT(seen.size() == 4,
            "expected 4 on_enter calls (OFF init, STARTING, RUNNING, "
            "SHUTDOWN); got " + std::to_string(seen.size()));
-    EXPECT(seen[0] == SmState::OFF,       "history[0]=OFF");
-    EXPECT(seen[1] == SmState::STARTING,  "history[1]=STARTING");
-    EXPECT(seen[2] == SmState::RUNNING,   "history[2]=RUNNING");
-    EXPECT(seen[3] == SmState::SHUTDOWN,  "history[3]=SHUTDOWN");
+    EXPECT(seen[0] == SmState_OFF,       "history[0]=OFF");
+    EXPECT(seen[1] == SmState_STARTING,  "history[1]=STARTING");
+    EXPECT(seen[2] == SmState_RUNNING,   "history[2]=RUNNING");
+    EXPECT(seen[3] == SmState_SHUTDOWN,  "history[3]=SHUTDOWN");
     sm.stop();
     return {};
 }
@@ -143,9 +143,9 @@ static std::string case_update_loopback() {
     // OFF (init), STARTING, RUNNING, UPDATE, RUNNING.
     EXPECT(seen.size() == 5, "5 transitions expected, got " +
                                 std::to_string(seen.size()));
-    EXPECT(seen[3] == SmState::UPDATE,
+    EXPECT(seen[3] == SmState_UPDATE,
            "expected UPDATE after UpdateRequest");
-    EXPECT(seen[4] == SmState::RUNNING,
+    EXPECT(seen[4] == SmState_RUNNING,
            "expected RUNNING after UpdateComplete");
     sm.stop();
     return {};
@@ -262,7 +262,7 @@ static std::string case_request_mode_translates_to_event() {
     demo::runtime::post_event(sm, ShutdownRequest{});
     pump();
     auto seen = r.snapshot();
-    EXPECT(seen.back() == SmState::SHUTDOWN,
+    EXPECT(seen.back() == SmState_SHUTDOWN,
            "RequestMode(SHUTDOWN) → expected SHUTDOWN as final state");
     sm.stop();
     return {};

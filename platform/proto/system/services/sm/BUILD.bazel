@@ -1,0 +1,34 @@
+# Generated nanopb sources for the system.services.sm package.
+#
+# The .proto sits at platform/proto/<art-pkg-as-path>/<leaf>.proto.
+# For services/system/sm/package.art (package system.services.sm),
+# that maps to platform/proto/system/services/sm/sm.proto. Apps
+# `#include "system/services/sm/sm.pb.h"` once they put
+# platform/proto/ on their include path.
+#
+# nanopb's emitted struct/enum names are prefixed with the libc-safe
+# proto package (services_services_sm_*). Consumers either use those
+# directly or alias them to shorter C++ names — see
+# services/system/sm/include/sm/sm_messages.hh for the alias pattern.
+#
+# Today the .pb.{h,c} are committed alongside the .proto (one-shot
+# nanopb_generator output). A Bazel-driven regen will replace this
+# with `genrule` / `nanopb_generate` later; the file targets below
+# stay the same so callers don't need to change.
+
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "sm_pb_c",
+    srcs = ["sm.pb.c"],
+)
+
+filegroup(
+    name = "sm_pb_h",
+    srcs = ["sm.pb.h"],
+)
+
+filegroup(
+    name = "sm_proto",
+    srcs = ["sm.proto"],
+)

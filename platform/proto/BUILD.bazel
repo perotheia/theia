@@ -13,12 +13,19 @@ cc_library(
     name = "platform_protos",
     srcs = [
         "//platform/proto/gateway/system:status_pb_c",
+        "//platform/proto/system/services/sm:sm_pb_c",
     ],
     hdrs = [
         "//platform/proto/gateway/system:status_pb_h",
+        "//platform/proto/system/services/sm:sm_pb_h",
     ],
     # platform/proto is the include root: callers write
     # #include "gateway/system/status.pb.h"
+    # #include "system/services/sm/sm.pb.h"
     includes = ["."],
     copts = ["-fPIC"],
+    # Consumers link the system nanopb runtime via -l:libprotobuf-nanopb.a
+    # in their own linkopts (same convention as platform/runtime). Keeping
+    # the cc_library dep-free avoids the Bazel @nanopb module which doesn't
+    # cleanly expose a usable cc_library target on this bazel version.
 )

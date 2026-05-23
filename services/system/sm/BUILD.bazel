@@ -4,18 +4,25 @@ The actual `sm` daemon that the supervisor launches as a child of
 core_sup. Built on the GenStateM template from platform/runtime;
 the FSM transition table lives in package.art (a `statem` block).
 
-Today's layout (in-process FSM, no TIPC publication of the
-broadcast yet):
+Message types come from artheia gen-proto-package:
 
-  include/sm/sm_messages.hh         — POD message types (mirror .art)
+  services/system/sm/package.art
+    → platform/proto/system/services/sm/sm.proto    (gen-proto-package)
+    → platform/proto/system/services/sm/sm.pb.{c,h} (nanopb_generator)
+    → include/sm/sm_messages.hh                     (thin C++ alias layer)
+
+Layout:
+
+  include/sm/sm_messages.hh         — aliases over nanopb C structs
   include/sm/SmDaemonStateMBase.hh  — hand-rolled gen_statem base
+                                       (will be replaced by gen-app
+                                        --kind fc lib slice once that
+                                        lands; the FSM transition table
+                                        stays in package.art's statem
+                                        block either way)
   include/sm/sm_daemon.hh           — SmDaemon (broadcast + handle_call)
   src/main.cc                       — entry point + stderr subscriber
   test/test_sm_daemon.cc            — in-process integration test
-
-Once SM gets a proto schema, sm_messages.hh + SmDaemonStateMBase.hh
-both go away in favour of `artheia gen-cpp-stubs` output via a
-genrule. The header layout is deliberately drop-in-replaceable.
 """
 
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
@@ -36,7 +43,10 @@ cc_library(
         "-Wextra",
         "-fPIC",
     ],
-    deps = ["//platform/runtime:runtime"],
+    deps = [
+        "//platform/runtime:runtime",
+        "//platform/proto:platform_protos",
+    ],
 )
 
 cc_binary(
@@ -48,7 +58,10 @@ cc_binary(
         "-Wextra",
     ],
     deps = [":sm_lib"],
-    linkopts = ["-lpthread"],
+    linkopts = [
+        "-lpthread",
+        "-l:libprotobuf-nanopb.a",
+    ],
 )
 
 cc_test(
@@ -60,4 +73,5 @@ cc_test(
         "-Wextra",
     ],
     deps = [":sm_lib"],
+    linkopts = ["-l:libprotobuf-nanopb.a"],
 )

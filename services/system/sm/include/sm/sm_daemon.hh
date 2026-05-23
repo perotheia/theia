@@ -113,13 +113,13 @@ public:
     using Holder = demo::runtime::GenStateMHolder<SmDaemonState, SmStateMsg>;
     SmEmpty handle_call(const SmRequest& req, Holder& /*h*/) {
         switch (req.target) {
-        case SmState::SHUTDOWN:
+        case SmState_SHUTDOWN:
             demo::runtime::post_event(*this, ShutdownRequest{});
             break;
-        case SmState::UPDATE:
+        case SmState_UPDATE:
             demo::runtime::post_event(*this, UpdateRequest{});
             break;
-        case SmState::RUNNING:
+        case SmState_RUNNING:
             // RUNNING is reached from STARTING via StartupComplete or
             // from UPDATE via UpdateComplete — not via a direct
             // user-driven request. Drop with a log to surface a

@@ -1,57 +1,53 @@
-// SM message types — POD structs (no protobuf wire encoding yet).
+// SM message types — thin C++ alias layer over the nanopb-generated
+// C structs in platform/proto/system/services/sm/sm.pb.h.
 //
-// These mirror the message declarations in
-// services/system/sm/package.art. Once SM gets a proto schema +
-// codegen wired into the Bazel build, this file is replaced by the
-// auto-generated .pb.h. Until then, hand-rolled POD lets us drive
-// the FSM in-process (cast via LocalRef) and integration-test
-// without paying the protobuf+TIPC stack tax.
+// The nanopb generator emits long C-style names prefixed with the
+// libc-safe proto package (services_services_sm_SystemBoot, etc.).
+// This header maps each to a short C++ alias inside the
+// system_services_sm namespace so the daemon code stays readable.
 //
-// The shape MUST stay in lockstep with package.art. The integration
-// test asserts via the .art-declared event names; drift between this
-// file and the .art is the kind of thing artheia audit-manifest will
-// (eventually) catch.
+// Workflow:
+//
+//   .art (services/system/sm/package.art)
+//      ↓  artheia gen-proto-package
+//   .proto (platform/proto/system/services/sm/sm.proto)
+//      ↓  nanopb_generator
+//   .pb.{h,c} (platform/proto/system/services/sm/sm.pb.{h,c})
+//      ↓  THIS HEADER (hand-written aliases)
+//   sm_daemon.hh / SmDaemonStateMBase.hh — use the short names
 
 #pragma once
 
-#include <cstdint>
+#include "system/services/sm/sm.pb.h"
 
 namespace system_services_sm {
 
-// SmState — kept here for the in-process world; identical to the
-// .art enum SmState. The auto-generated SmDaemonStateMBase.hh
-// declares SmDaemonState (one-per-node enum naming convention) and
-// we keep these two in sync via a static_assert in the daemon.
-enum class SmState : uint8_t {
-    OFF       = 0,
-    STARTING  = 1,
-    RUNNING   = 2,
-    DEGRADED  = 3,
-    UPDATE    = 4,
-    SHUTDOWN  = 5,
-};
+// Aliases for the nanopb C types — same memory layout, shorter
+// names. POD throughout, so passing by value / reference is free.
+//
+// SmState is an enum (nanopb emits a C `typedef enum`); the others
+// are `typedef struct`s.
 
-// Data carried through the FSM. Doubles as the broadcast payload on
-// SmStateStream (sender port). `state` mirrors the FSM's current
-// state — on_enter mutates this before cast()ing.
-struct SmStateMsg {
-    SmState  state{SmState::OFF};
-    uint64_t ts_ns{0};
-};
+using SmStateMsg      = services_services_sm_SmStateMsg;
+using SmRequest       = services_services_sm_SmRequest;
+using SmEmpty         = services_services_sm_SmEmpty;
+using SystemBoot      = services_services_sm_SystemBoot;
+using StartupComplete = services_services_sm_StartupComplete;
+using ShutdownRequest = services_services_sm_ShutdownRequest;
+using UpdateRequest   = services_services_sm_UpdateRequest;
+using UpdateComplete  = services_services_sm_UpdateComplete;
+using RetryStartup    = services_services_sm_RetryStartup;
+using PowerOff        = services_services_sm_PowerOff;
 
-// External inbound (StateMgmtCtl) — mode-change request.
-struct SmRequest { SmState target{SmState::OFF}; };
-struct SmEmpty   { };
-
-// FSM-internal events. Posted via post_event() from sibling FCs;
-// SmDaemon's handle_call(SmRequest) translates inbound requests
-// into these as well.
-struct SystemBoot       { };
-struct StartupComplete  { };
-struct ShutdownRequest  { };
-struct UpdateRequest    { };
-struct UpdateComplete   { };
-struct RetryStartup     { };
-struct PowerOff         { };
+// SmState: alias the enum type itself + each value (the C-side
+// enum values are prefixed; the short names below match what was
+// in the original hand-rolled sm_messages.hh).
+using SmState = services_services_sm_SmState;
+constexpr SmState SmState_OFF       = services_services_sm_SmState_OFF;
+constexpr SmState SmState_STARTING  = services_services_sm_SmState_STARTING;
+constexpr SmState SmState_RUNNING   = services_services_sm_SmState_RUNNING;
+constexpr SmState SmState_DEGRADED  = services_services_sm_SmState_DEGRADED;
+constexpr SmState SmState_UPDATE    = services_services_sm_SmState_UPDATE;
+constexpr SmState SmState_SHUTDOWN  = services_services_sm_SmState_SHUTDOWN;
 
 }  // namespace system_services_sm

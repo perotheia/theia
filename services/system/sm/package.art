@@ -34,6 +34,20 @@ message SmStateMsg { SmState state    uint64 ts_ns }
 message SmRequest  { SmState target }
 message SmEmpty    { }
 
+// FSM-internal events. Posted via post_event() from sibling FCs and
+// the SmDaemon's own ctl handle_call (which translates an inbound
+// SmRequest into one of these). Keeping these as distinct types
+// rather than a single tagged message gives the GenStateM template
+// per-event overload dispatch — Erlang's "one clause per event"
+// shape, expressed in C++.
+message SystemBoot       { }   // posted by exec on boot completion
+message StartupComplete  { }   // posted by phm when every component is alive
+message ShutdownRequest  { }   // posted by ctl on RequestMode(SHUTDOWN)
+message UpdateRequest    { }   // posted by ctl on RequestMode(UPDATE)
+message UpdateComplete   { }   // posted by ucm when update flashing finished
+message RetryStartup     { }   // posted by phm in DEGRADED for retry
+message PowerOff         { }   // posted by exec to finalise the SM lifecycle
+
 interface senderReceiver SmStateStream {
     data SmStateMsg state
 }
@@ -49,5 +63,37 @@ node atomic SmDaemon {
         server ctl       provides StateMgmtCtl
         client to_per    requires PersistencyIf
         sender to_log    provides LogStream  best_effort
+    }
+
+    // The FSM — generated codegen emits SmDaemonStateMBase.hh deriving
+    // from demo::runtime::GenStateM<SmDaemon, SmDaemonState, SmStateMsg>.
+    //
+    // SmStateMsg doubles as both the broadcast payload (sender port)
+    // AND the FSM's persistent data — on_enter mutates the data's
+    // `state`+`ts_ns` and then `cast`s it on `broadcast`.
+    statem {
+        states  [OFF, STARTING, RUNNING, DEGRADED, UPDATE, SHUTDOWN]
+        initial OFF
+        data    SmStateMsg
+
+        on OFF:
+            event SystemBoot       → STARTING after 30s
+
+        on STARTING:
+            event StartupComplete  → RUNNING
+            timeout                → DEGRADED
+
+        on RUNNING:
+            event ShutdownRequest  → SHUTDOWN
+            event UpdateRequest    → UPDATE
+
+        on UPDATE:
+            event UpdateComplete   → RUNNING
+
+        on DEGRADED:
+            event RetryStartup     → STARTING after 30s
+
+        on SHUTDOWN:
+            event PowerOff         → halt
     }
 }

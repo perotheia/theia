@@ -3,7 +3,10 @@
 `platform/runtime/` needs FSM implementation to be used in applications
 and services.
 
-**Status**: design landed (`design.md`). Implementation in flight.
+**Status**: DONE 2026-05-23. All five phases shipped — runtime,
+grammar, codegen, and the .art declaration on `services/system/sm/`.
+The `sm` binary itself is not built yet; see `sm-daemon-example.md`
+for the shape the eventual consumer should take.
 
 ## Proposal (locked)
 
@@ -33,11 +36,18 @@ and services.
 ## Phases
 
 1. ✅ Design — locked in `design.md`.
-2. C++ `GenStateM.hh` + 3 unit tests.
-3. artheia grammar `statem { ... }` + AST plumbing + LSP keywords.
-4. `gen-cpp-stubs` lowering: emit `<Name>StateMBase.hpp`.
-5. `sm` migration (follow-up commit).
+2. ✅ C++ `GenStateM.hh` + 4 unit tests (traffic-light, retry-escalate,
+   postpone, door-lock-guards). Lands in theia `f711517`.
+3. ✅ artheia grammar `statem { ... }` + AST plumbing + LSP keywords.
+   Lands in artheia `852d84d` (and theia `a0bb968` design-doc update).
+4. ✅ `gen-cpp-stubs` lowering: emit `<Name>StateMBase.hh`. Lands in
+   artheia `aba18fa`.
+5. ✅ `sm` migration — `statem` block declared on `SmDaemon` in
+   `services/system/sm/package.art`; `sm-daemon-example.md` shows
+   the consumer skeleton for when the binary actually gets built.
 6. (deferred) supdbg `statem` subcommand for live state introspection.
 
 See `design.md` for the full API surface, grammar, lowering rules,
-SM walkthrough, and test plan.
+SM walkthrough, and test plan. See `sm-daemon-example.md` for the
+example C++ consumer that the eventual `services/system/sm/` binary
+should follow.

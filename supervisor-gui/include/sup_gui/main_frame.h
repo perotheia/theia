@@ -24,6 +24,7 @@ class SystemPanel;
 class LoadChartsPanel;
 class ApplicationsPanel;
 class ProcessesPanel;
+class EtcdPanel;
 class TracePanel;
 
 // Custom wx event posted from any GrpcClient thread when a frame
@@ -49,6 +50,7 @@ private:
     LoadChartsPanel*         load_charts_{nullptr};
     ApplicationsPanel*       applications_{nullptr};
     ProcessesPanel*          processes_{nullptr};
+    EtcdPanel*               etcd_panel_{nullptr};
     TracePanel*              trace_{nullptr};
 
     std::vector<std::unique_ptr<GrpcClient>> clients_;

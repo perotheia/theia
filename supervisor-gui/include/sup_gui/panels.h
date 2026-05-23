@@ -163,6 +163,26 @@ private:
     std::unique_ptr<ProcessSampler> sampler_;
 };
 
+// "Table Viewer (etcd)" — observer's ETS-tab analogue, but the
+// backing store is etcd. Browse any key under a user-typed prefix;
+// optionally Watch the prefix for live updates. Operator tool only:
+// applications go through services/db (typed Put/Get with schema
+// versioning), never poke etcd directly. The GUI's role here is
+// the supervisor-gui equivalent of `etcdctl` with a mouse.
+//
+// Does NOT inherit PanelBase — etcd is an independent data source,
+// not driven by the supervisor's gRPC frames. Owns its etcd client
+// + watcher; the rest of the GUI ignores it.
+class EtcdPanelImpl;  // pimpl — keeps etcd-cpp-apiv3 headers out of panels.h
+class EtcdPanel : public wxPanel {
+public:
+    explicit EtcdPanel(wxWindow* parent);
+    ~EtcdPanel() override;
+
+private:
+    std::unique_ptr<EtcdPanelImpl> impl_;
+};
+
 // "Trace" — scrolling SupervisionEvent log. Tombstone events surface
 // here too (OTP observer doesn't have a dedicated tombstones tab).
 class TracePanel : public PanelBase {

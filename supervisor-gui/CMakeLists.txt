@@ -20,6 +20,17 @@ pkg_check_modules(YAMLCPP  REQUIRED yaml-cpp)
 find_package(wxWidgets REQUIRED COMPONENTS core base aui)
 include(${wxWidgets_USE_FILE})
 
+# etcd-cpp-apiv3 — vendored under third_party/ via repo manifest, built
+# + installed to third_party/etcd-cpp-apiv3/install/ (see that dir's
+# README). Pick it up via the CMake config exported there. If a future
+# system-wide install ever ships, CMAKE_PREFIX_PATH on the cmdline can
+# override.
+set(ETCD_CPP_PREFIX
+    "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/etcd-cpp-apiv3/install"
+    CACHE PATH "etcd-cpp-apiv3 install prefix")
+find_package(etcd-cpp-api REQUIRED CONFIG
+    HINTS "${ETCD_CPP_PREFIX}/lib/cmake/etcd-cpp-api")
+
 find_program(PROTOC_EXECUTABLE protoc           REQUIRED)
 find_program(GRPC_CPP_PLUGIN   grpc_cpp_plugin  REQUIRED)
 
@@ -92,6 +103,7 @@ add_executable(supervisor-gui
     src/panels/load_charts_panel.cpp
     src/panels/applications_panel.cpp
     src/panels/processes_panel.cpp
+    src/panels/etcd_panel.cpp
     src/panels/trace_panel.cpp
     $<TARGET_OBJECTS:supervisor_gui_proto>
 )
@@ -102,6 +114,12 @@ target_include_directories(supervisor-gui PRIVATE
     ${GRPCPP_INCLUDE_DIRS}
     ${YAMLCPP_INCLUDE_DIRS}
     ${PROTO_GEN_DIR}
+    # etcd-cpp-api's exported targets don't carry
+    # INTERFACE_INCLUDE_DIRECTORIES (upstream config issue), so we feed
+    # the install prefix's include/ manually. Drop this when upstream
+    # fixes the target export, or when we switch to a CMake-superbuild
+    # that has full propagation.
+    ${ETCD_CPP_PREFIX}/include
 )
 
 target_link_libraries(supervisor-gui PRIVATE
@@ -110,6 +128,10 @@ target_link_libraries(supervisor-gui PRIVATE
     ${GRPCPP_LIBRARIES}
     ${YAMLCPP_LIBRARIES}
     -lgrpc -lgpr
+    # etcd-cpp-apiv3's CMake config exports targets like etcd-cpp-api;
+    # those bring along their own transitive cpprestsdk / boost / openssl
+    # link dependencies via INTERFACE_LINK_LIBRARIES.
+    etcd-cpp-api
     pthread
 )
 

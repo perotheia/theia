@@ -37,11 +37,13 @@ MainFrame::MainFrame(std::vector<MachineEndpoint> machines)
     load_charts_   = new LoadChartsPanel   (notebook_);
     applications_  = new ApplicationsPanel (notebook_);
     processes_     = new ProcessesPanel    (notebook_);
+    etcd_panel_    = new EtcdPanel         (notebook_);
     trace_         = new TracePanel        (notebook_);
     notebook_->AddPage(system_panel_, "System");
     notebook_->AddPage(load_charts_,  "Load Charts");
     notebook_->AddPage(applications_, "Applications");
     notebook_->AddPage(processes_,    "Processes");
+    notebook_->AddPage(etcd_panel_,   "Table Viewer");
     notebook_->AddPage(trace_,        "Trace");
 
     auto* sizer = new wxBoxSizer(wxVERTICAL);

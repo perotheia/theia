@@ -1,0 +1,81 @@
+# Fix `artheia audit-manifest` gaps in demo.manifest.rig
+
+The Phase 0 audit (committed in `system .art reshape onto cluster
+primitive + Puppet provisioning fields`) surfaced 10 drift gaps
+between `platform/system/system.art` and `demo/manifest/rig.py`:
+
+```
+artheia audit-manifest platform/system/system.art demo.manifest.rig
+```
+
+returns exit 1 with:
+
+```
+cluster_member_without_application_or_swcomponent:
+  - cluster Demo3Way.p1  (composition Demo3WayP1)
+  - cluster Demo3Way.p2  (composition Demo3WayP2)
+  - cluster Demo3Way.p3  (composition Demo3WayP3)
+  - cluster Platform.sup  (composition Supervisor)
+  - cluster Platform.gw  (composition GatewayBridge)
+
+composition_without_swcomponent:
+  - composition Demo3WayP1
+  - composition Demo3WayP2
+  - composition Demo3WayP3
+  - composition GatewayBridge
+  - composition Supervisor
+```
+
+## Two root causes
+
+### 1. SwComponent `art_node` drift
+
+`demo/manifest/rig.py` declares:
+
+```python
+SwComponent(name="demo_p1", art_node="system.demo/DemoP1Composition", …)
+```
+
+But the .art (after the cluster reshape) now defines the composition
+as `Demo3WayP1` (not `DemoP1Composition`). Update each SwComponent's
+`art_node`:
+
+```python
+art_node="system.demo/Demo3WayP1"   # was DemoP1Composition
+art_node="system.demo/Demo3WayP2"   # was DemoP2Composition
+art_node="system.demo/Demo3WayP3"   # was DemoP3Composition
+```
+
+### 2. No SwComponent for platform-fabric compositions
+
+`cluster Platform` references `composition Supervisor` and
+`composition GatewayBridge`, but the rig has no SwComponent that
+points at either. Add them — owner=`platform`, bazel_target = the
+respective opkg target (matches what the new `Machine.opkg_artifacts`
+already declare):
+
+```python
+SwComponent(
+    name="supervisor",
+    bazel_target="//platform/supervisor:ipk",
+    owner="platform",
+    art_node="system.supervisor/Supervisor",   # composition name
+    bazel_buildable=True,
+),
+SwComponent(
+    name="gateway",
+    bazel_target="//platform/gateway:ipk",
+    owner="platform",
+    art_node="system.gateway/GatewayBridge",
+    bazel_buildable=True,
+),
+```
+
+## Definition of done
+
+`artheia audit-manifest platform/system/system.art demo.manifest.rig`
+exits 0 with `✓ no gaps — rig is aligned with art`.
+
+Add a CI smoke step (in `artheia/tests/test_audit_manifest.py` or
+similar) that runs the audit against `demo.manifest.rig` and asserts
+exit 0, so future .art drifts get caught early.

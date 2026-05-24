@@ -18,6 +18,6 @@ cc_library(
         "-fPIC",
     ],
     deps = [
-        "//services/system/com/lib:com_lib",
+        "//services/com/lib:com_lib",
     ],
 )

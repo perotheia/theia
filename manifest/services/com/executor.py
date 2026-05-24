@@ -23,7 +23,7 @@ PROCESS = Process(
     name="com",
     executable="com",
     function_cluster_affiliation="com",
-    start_cmd=["bazel-bin/services/system/com/main/com"],
+    start_cmd=["bazel-bin/services/com/main/com"],
     state_dependent_startup_config=[
         StateDependentStartupConfig(
             function_group_state=["Default.Running"],

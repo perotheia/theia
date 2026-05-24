@@ -86,17 +86,21 @@ def _executable_for(short: str) -> Executable:
 # dev tree; the install-time .ipk / .deb mapping rewrites these paths
 # to the on-target install location.
 START_CMDS: dict[str, list[str]] = {
-    # sm — gen-app statem-emitted binary; lives at main/sm now (was
-    # bazel-bin/services/system/sm/sm in the hand-rolled era).
-    "sm":   ["bazel-bin/services/system/sm/main/sm"],
-    # The four sm.md §3.B cooperation partners are gen-app-emitted; each
-    # is laid out as services/system/<fc>/{lib,main,impl}/ with the
-    # cc_binary in main/. Path matches the executor.py emitted by
-    # `artheia gen-app --kind fc`.
-    "exec": ["bazel-bin/services/system/exec/main/exec"],
-    "com":  ["bazel-bin/services/system/com/main/com"],
-    "ucm":  ["bazel-bin/services/system/ucm/main/ucm"],
-    "per":  ["bazel-bin/services/system/per/main/per"],
+    # FC impl layout: services/<fc>/{lib,main,impl}/ — spec stays
+    # under services/system/<fc>/{package.art, component.art}.
+    # Path matches the executor.py emitted by `artheia gen-app
+    # --kind fc --out services/<fc>/`.
+    #
+    # No `exec` entry: the exec FC is implemented by
+    # platform/supervisor itself (see services/system/exec/README.md).
+    # exec stays in the supervision tree as a logical FC; with no
+    # start_cmd the supervisor's child entry refuses to launch —
+    # the documented "no binary built" signal in
+    # artheia/manifest/execution.py.
+    "sm":   ["bazel-bin/services/sm/main/sm"],
+    "com":  ["bazel-bin/services/com/main/com"],
+    "ucm":  ["bazel-bin/services/ucm/main/ucm"],
+    "per":  ["bazel-bin/services/per/main/per"],
 }
 
 

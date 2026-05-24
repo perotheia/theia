@@ -23,7 +23,7 @@ PROCESS = Process(
     name="log",
     executable="log",
     function_cluster_affiliation="log",
-    start_cmd=["bazel-bin/services/system/log/main/log"],
+    start_cmd=["bazel-bin/services/log/main/log"],
     state_dependent_startup_config=[
         StateDependentStartupConfig(
             function_group_state=["Default.Running"],

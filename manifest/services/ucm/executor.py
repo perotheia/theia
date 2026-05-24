@@ -23,7 +23,7 @@ PROCESS = Process(
     name="ucm",
     executable="ucm",
     function_cluster_affiliation="ucm",
-    start_cmd=["bazel-bin/services/system/ucm/main/ucm"],
+    start_cmd=["bazel-bin/services/ucm/main/ucm"],
     state_dependent_startup_config=[
         StateDependentStartupConfig(
             function_group_state=["Default.Running"],

@@ -15,8 +15,7 @@ children:
     max_seconds: 5
     children:
     - name: exec
-      start_cmd:
-      - bazel-bin/services/system/exec/main/exec
+      start_cmd: []
       restart: permanent
       shutdown: 5000
       type: worker
@@ -53,7 +52,7 @@ children:
         tipc_instance: '0'
     - name: sm
       start_cmd:
-      - bazel-bin/services/system/sm/main/sm
+      - bazel-bin/services/sm/main/sm
       restart: permanent
       shutdown: 5000
       type: worker
@@ -83,7 +82,7 @@ children:
           tipc_instance: '0'
       - name: com
         start_cmd:
-        - bazel-bin/services/system/com/main/com
+        - bazel-bin/services/com/main/com
         restart: permanent
         shutdown: 5000
         type: worker
@@ -149,7 +148,7 @@ children:
       children:
       - name: per
         start_cmd:
-        - bazel-bin/services/system/per/main/per
+        - bazel-bin/services/per/main/per
         restart: permanent
         shutdown: 5000
         type: worker
@@ -191,7 +190,7 @@ children:
           tipc_instance: '0'
       - name: ucm
         start_cmd:
-        - bazel-bin/services/system/ucm/main/ucm
+        - bazel-bin/services/ucm/main/ucm
         restart: permanent
         shutdown: 5000
         type: worker

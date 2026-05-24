@@ -1,4 +1,4 @@
-# FIRST-TIME-ONLY (regenerated with --force). source: services/system/ucm/package.art
+# FIRST-TIME-ONLY (regenerated with --force). source: services/system/sm/package.art
 #
 # Impl slice — handler bodies. The user owns this BUILD.bazel after
 # first emit (you may want to add per-FC test_*.cc files; gen-app
@@ -9,8 +9,8 @@ load("@rules_cc//cc:defs.bzl", "cc_library")
 package(default_visibility = ["//visibility:public"])
 
 cc_library(
-    name = "ucm_impl",
-    srcs = ["UcmDaemon_handlers.cc"],
+    name = "sm_impl",
+    srcs = ["SmDaemon_handlers.cc"],
     copts = [
         "-std=c++17",
         "-Wall",
@@ -18,6 +18,6 @@ cc_library(
         "-fPIC",
     ],
     deps = [
-        "//services/system/ucm/lib:ucm_lib",
+        "//services/sm/lib:sm_lib",
     ],
 )

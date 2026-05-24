@@ -1,0 +1,363 @@
+{
+  "vehicle": {
+    "name": "demo",
+    "make": "theia",
+    "model": "gen_server-demo"
+  },
+  "machines": [
+    {
+      "name": "admin_host",
+      "kind": "host",
+      "arch": "amd64",
+      "applications": []
+    },
+    {
+      "name": "central_host",
+      "kind": "target",
+      "arch": "amd64",
+      "applications": [
+        {
+          "name": "platform_app",
+          "components": [
+            {
+              "name": "core",
+              "bazel_target": "//services/core",
+              "owner": "platform",
+              "art_node": "services.core/CoreDaemon",
+              "bazel_buildable": false
+            },
+            {
+              "name": "com",
+              "bazel_target": "//services/com",
+              "owner": "platform",
+              "art_node": "services.com/ComDaemon",
+              "bazel_buildable": false
+            },
+            {
+              "name": "crypto",
+              "bazel_target": "//services/crypto",
+              "owner": "platform",
+              "art_node": "services.crypto/CryptoDaemon",
+              "bazel_buildable": false
+            },
+            {
+              "name": "diag",
+              "bazel_target": "//services/diag",
+              "owner": "platform",
+              "art_node": "services.diag/DiagDaemon",
+              "bazel_buildable": false
+            },
+            {
+              "name": "exec",
+              "bazel_target": "//services/exec",
+              "owner": "platform",
+              "art_node": "services.exec/ExecDaemon",
+              "bazel_buildable": false
+            },
+            {
+              "name": "fw",
+              "bazel_target": "//services/fw",
+              "owner": "platform",
+              "art_node": "services.fw/FwDaemon",
+              "bazel_buildable": false
+            },
+            {
+              "name": "idsm",
+              "bazel_target": "//services/idsm",
+              "owner": "platform",
+              "art_node": "services.idsm/IdsmDaemon",
+              "bazel_buildable": false
+            },
+            {
+              "name": "log",
+              "bazel_target": "//services/log",
+              "owner": "platform",
+              "art_node": "services.log/LogDaemon",
+              "bazel_buildable": false
+            },
+            {
+              "name": "nm",
+              "bazel_target": "//services/nm",
+              "owner": "platform",
+              "art_node": "services.nm/NmDaemon",
+              "bazel_buildable": false
+            },
+            {
+              "name": "osi",
+              "bazel_target": "//services/osi",
+              "owner": "platform",
+              "art_node": "services.osi/OsiDaemon",
+              "bazel_buildable": false
+            },
+            {
+              "name": "per",
+              "bazel_target": "//services/per",
+              "owner": "platform",
+              "art_node": "services.per/PerDaemon",
+              "bazel_buildable": false
+            },
+            {
+              "name": "phm",
+              "bazel_target": "//services/phm",
+              "owner": "platform",
+              "art_node": "services.phm/PhmDaemon",
+              "bazel_buildable": false
+            },
+            {
+              "name": "rds",
+              "bazel_target": "//services/rds",
+              "owner": "platform",
+              "art_node": "services.rds/RdsDaemon",
+              "bazel_buildable": false
+            },
+            {
+              "name": "sm",
+              "bazel_target": "//services/sm",
+              "owner": "platform",
+              "art_node": "services.sm/SmDaemon",
+              "bazel_buildable": false
+            },
+            {
+              "name": "tsync",
+              "bazel_target": "//services/tsync",
+              "owner": "platform",
+              "art_node": "services.tsync/TsyncDaemon",
+              "bazel_buildable": false
+            },
+            {
+              "name": "ucm",
+              "bazel_target": "//services/ucm",
+              "owner": "platform",
+              "art_node": "services.ucm/UcmDaemon",
+              "bazel_buildable": false
+            },
+            {
+              "name": "vucm",
+              "bazel_target": "//services/vucm",
+              "owner": "platform",
+              "art_node": "services.vucm/VucmDaemon",
+              "bazel_buildable": false
+            },
+            {
+              "name": "shwa",
+              "bazel_target": "//services/shwa",
+              "owner": "platform",
+              "art_node": "services.shwa/ShwaDaemon",
+              "bazel_buildable": false
+            },
+            {
+              "name": "supervisor",
+              "bazel_target": "//platform/supervisor:ipk",
+              "owner": "platform",
+              "art_node": "system.supervisor/Supervisor",
+              "bazel_buildable": true
+            },
+            {
+              "name": "gateway",
+              "bazel_target": "//platform/gateway:ipk",
+              "owner": "platform",
+              "art_node": "system.gateway/GatewayBridge",
+              "bazel_buildable": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "compute_host",
+      "kind": "target",
+      "arch": "arm64",
+      "applications": [
+        {
+          "name": "compute_app",
+          "components": [
+            {
+              "name": "demo_p1",
+              "bazel_target": "//demo:p1_main",
+              "owner": "platform",
+              "art_node": "system.demo/Demo3WayP1",
+              "bazel_buildable": true
+            },
+            {
+              "name": "demo_p2",
+              "bazel_target": "//demo:p2_main",
+              "owner": "platform",
+              "art_node": "system.demo/Demo3WayP2",
+              "bazel_buildable": true
+            },
+            {
+              "name": "demo_p3",
+              "bazel_target": "//demo:p3_main",
+              "owner": "platform",
+              "art_node": "system.demo/Demo3WayP3",
+              "bazel_buildable": true
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "flat_components": [
+    {
+      "name": "core",
+      "bazel_target": "//services/core",
+      "machine": "central_host",
+      "owner": "platform",
+      "bazel_buildable": false
+    },
+    {
+      "name": "com",
+      "bazel_target": "//services/com",
+      "machine": "central_host",
+      "owner": "platform",
+      "bazel_buildable": false
+    },
+    {
+      "name": "crypto",
+      "bazel_target": "//services/crypto",
+      "machine": "central_host",
+      "owner": "platform",
+      "bazel_buildable": false
+    },
+    {
+      "name": "diag",
+      "bazel_target": "//services/diag",
+      "machine": "central_host",
+      "owner": "platform",
+      "bazel_buildable": false
+    },
+    {
+      "name": "exec",
+      "bazel_target": "//services/exec",
+      "machine": "central_host",
+      "owner": "platform",
+      "bazel_buildable": false
+    },
+    {
+      "name": "fw",
+      "bazel_target": "//services/fw",
+      "machine": "central_host",
+      "owner": "platform",
+      "bazel_buildable": false
+    },
+    {
+      "name": "idsm",
+      "bazel_target": "//services/idsm",
+      "machine": "central_host",
+      "owner": "platform",
+      "bazel_buildable": false
+    },
+    {
+      "name": "log",
+      "bazel_target": "//services/log",
+      "machine": "central_host",
+      "owner": "platform",
+      "bazel_buildable": false
+    },
+    {
+      "name": "nm",
+      "bazel_target": "//services/nm",
+      "machine": "central_host",
+      "owner": "platform",
+      "bazel_buildable": false
+    },
+    {
+      "name": "osi",
+      "bazel_target": "//services/osi",
+      "machine": "central_host",
+      "owner": "platform",
+      "bazel_buildable": false
+    },
+    {
+      "name": "per",
+      "bazel_target": "//services/per",
+      "machine": "central_host",
+      "owner": "platform",
+      "bazel_buildable": false
+    },
+    {
+      "name": "phm",
+      "bazel_target": "//services/phm",
+      "machine": "central_host",
+      "owner": "platform",
+      "bazel_buildable": false
+    },
+    {
+      "name": "rds",
+      "bazel_target": "//services/rds",
+      "machine": "central_host",
+      "owner": "platform",
+      "bazel_buildable": false
+    },
+    {
+      "name": "sm",
+      "bazel_target": "//services/sm",
+      "machine": "central_host",
+      "owner": "platform",
+      "bazel_buildable": false
+    },
+    {
+      "name": "tsync",
+      "bazel_target": "//services/tsync",
+      "machine": "central_host",
+      "owner": "platform",
+      "bazel_buildable": false
+    },
+    {
+      "name": "ucm",
+      "bazel_target": "//services/ucm",
+      "machine": "central_host",
+      "owner": "platform",
+      "bazel_buildable": false
+    },
+    {
+      "name": "vucm",
+      "bazel_target": "//services/vucm",
+      "machine": "central_host",
+      "owner": "platform",
+      "bazel_buildable": false
+    },
+    {
+      "name": "shwa",
+      "bazel_target": "//services/shwa",
+      "machine": "central_host",
+      "owner": "platform",
+      "bazel_buildable": false
+    },
+    {
+      "name": "supervisor",
+      "bazel_target": "//platform/supervisor:ipk",
+      "machine": "central_host",
+      "owner": "platform",
+      "bazel_buildable": true
+    },
+    {
+      "name": "gateway",
+      "bazel_target": "//platform/gateway:ipk",
+      "machine": "central_host",
+      "owner": "platform",
+      "bazel_buildable": true
+    },
+    {
+      "name": "demo_p1",
+      "bazel_target": "//demo:p1_main",
+      "machine": "compute_host",
+      "owner": "platform",
+      "bazel_buildable": true
+    },
+    {
+      "name": "demo_p2",
+      "bazel_target": "//demo:p2_main",
+      "machine": "compute_host",
+      "owner": "platform",
+      "bazel_buildable": true
+    },
+    {
+      "name": "demo_p3",
+      "bazel_target": "//demo:p3_main",
+      "machine": "compute_host",
+      "owner": "platform",
+      "bazel_buildable": true
+    }
+  ]
+}

@@ -2,6 +2,7 @@ robotframework>=7.0
 grpcio>=1.60
 grpcio-tools>=1.60
 protobuf>=4.25
+pydantic>=2.0
 numpy
 pandas
 asteval

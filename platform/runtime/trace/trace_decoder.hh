@@ -52,4 +52,42 @@ class Decoder {
         prototypes_;
 };
 
+// Register a prototype on the process-global Decoder that backs the
+// C ABI (`trace_decode()`). The trace_decoder_protos.cc shim calls
+// this at static-init for every proto type the .so was linked with.
+void register_global(std::string_view msg_type_name,
+                     const google::protobuf::Message* prototype);
+
 }  // namespace artheia::trace
+
+
+// ---------------------------------------------------------------------------
+// C ABI — for ctypes consumers (rf-theia adapter, supdbg Python plugin).
+//
+// Wraps a process-global Decoder pre-populated by static init with every
+// message type the library was built against. Callers don't manage
+// prototypes; they only call `trace_decode()`.
+// ---------------------------------------------------------------------------
+
+extern "C" {
+
+// Decode `payload` (raw proto-wire-v3 bytes) against the message type
+// named `msg_type_name`. JSON written to `out_json` (NUL-terminated)
+// up to `out_cap-1` bytes.
+//
+// Returns:
+//   >0 = JSON length in bytes (excluding NUL)
+//    0 = unknown type / parse failure / output too small. On 0 return,
+//        `out_json` carries a NUL-terminated error message.
+int trace_decode(const char*    msg_type_name,
+                 const uint8_t* payload,
+                 unsigned long  payload_len,
+                 char*          out_json,
+                 unsigned long  out_cap);
+
+// Convenience accessor: how many message types are registered. Useful
+// for sanity-checking the library was built with the protos you
+// expected.
+unsigned long trace_decoder_size(void);
+
+}  // extern "C"

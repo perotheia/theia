@@ -15,7 +15,7 @@
 
 package(default_visibility = ["//visibility:public"])
 
-load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
 
 
 cc_library(
@@ -30,6 +30,45 @@ cc_library(
         "-fPIC",
     ],
     deps = ["//third_party:system_protobuf"],
+)
+
+
+# Proto registration shim — pulled into libtrace_decoder.so via
+# `alwayslink = True` so its static-init `Registrar` ctor actually
+# runs even though no symbol from this TU is referenced. Without
+# this flag the linker drops the .o entirely.
+cc_library(
+    name = "trace_decoder_protos",
+    srcs = ["trace_decoder_protos.cc"],
+    copts = [
+        "-Wall",
+        "-Wextra",
+        "-std=c++17",
+        "-fPIC",
+    ],
+    deps = [
+        ":trace_decoder",
+        "//platform/proto/system/services/sm:sm_pb_cpp",
+    ],
+    alwayslink = True,
+)
+
+
+# The shippable .so for ctypes consumers (rf-theia, supdbg). Combines
+# the decoder lib with its proto registrar — the .so a Python caller
+# dlopen()s already knows about every type at the moment of the first
+# call.
+#
+# Output is `libtrace_decoder_ctypes.so` to avoid colliding with the
+# `libtrace_decoder.so` that `:trace_decoder` (a cc_library) emits
+# alongside its .a. Python opens this via its full name anyway.
+cc_binary(
+    name = "libtrace_decoder_ctypes.so",
+    linkshared = True,
+    deps = [
+        ":trace_decoder",
+        ":trace_decoder_protos",
+    ],
 )
 
 

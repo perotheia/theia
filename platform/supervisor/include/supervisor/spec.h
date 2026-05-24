@@ -52,6 +52,27 @@ struct Shutdown {
 // Forward decl so SupervisorNode can hold children of mixed kind.
 struct Node;
 
+// Per-art-node metadata for a worker process (#366, #364).
+//
+// Each `node atomic <Name>` in the FC's .art becomes a runtime thread
+// inside the worker process. The executor.yaml `nodes:` block lists
+// them; the supervisor uses the list two ways:
+//
+//   (1) Watchdog: HeartbeatReport.node_name is matched against this
+//       list so a missing heartbeat from a specific thread can be
+//       attributed to a specific .art node.
+//   (2) Snapshot synthesis: a worker with ≥1 reporting=true node
+//       gets a synthetic `<worker>_sup [one_for_all]` row inserted
+//       into TreeSnapshot between the worker and its parent
+//       (#364). The GUI right-clicks node rows under this _sup row
+//       to drive ConfigureTrace (#365).
+struct NodeInfo {
+    std::string name;
+    bool        reporting{true};
+    std::string tipc_type;      // hex string like "0x80010001"
+    std::string tipc_instance;  // decimal string like "0"
+};
+
 struct WorkerNode {
     std::string                          name;
     std::vector<std::string>             start_cmd;
@@ -60,6 +81,7 @@ struct WorkerNode {
     std::vector<std::string>             modules;
     std::map<std::string, std::string>   env;
     std::string                          working_dir;
+    std::vector<NodeInfo>                nodes;  // per-art-node metadata
 
     // CPU affinity, AUTOSAR-flavoured (ProcessToMachineMapping in §9.4).
     // Mutually exclusive: either shall_run_on or shall_not_run_on, not

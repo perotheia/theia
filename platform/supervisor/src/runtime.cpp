@@ -1214,9 +1214,39 @@ void Supervisor::emit_snapshot() {
                     }
                     uint32_t state = (c->worker.pid > 0) ? 2 : 0;
                     if (c->worker.terminating) state = 3;
+
+                    // #364 — synthesize a `<worker>_sup [one_for_all]` row
+                    // between the worker and its parent when the worker
+                    // has ≥1 reporting=true node. The GUI hangs the
+                    // per-node tracing UI (#365) off this synthetic row
+                    // — a node-thread death triggering one_for_all means
+                    // the whole worker process is killed, matching the
+                    // architectural contract from #366.
+                    bool has_reporting = false;
+                    for (const auto& ni : c->worker.nodes) {
+                        if (ni.reporting) { has_reporting = true; break; }
+                    }
+                    std::string worker_parent = sup.name;
+                    if (has_reporting) {
+                        auto* synth = snap.add_children();
+                        synth->set_name(c->worker.name + "_sup");
+                        synth->set_parent_name(sup.name);
+                        synth->set_kind(1);  // supervisor
+                        synth->set_pid(-1);
+                        synth->set_state(2);  // running
+                        synth->set_restart_count(0);
+                        synth->set_strategy("one_for_all");
+                        // max_restarts/max_seconds default 0 — the synthetic
+                        // row is a UI bracket, not a restart-budget owner;
+                        // the parent's strategy still drives the actual
+                        // cascade when the worker dies. GUI may display
+                        // these as blanks.
+                        worker_parent = synth->name();
+                    }
+
                     auto* row = snap.add_children();
                     row->set_name(c->worker.name);
-                    row->set_parent_name(sup.name);
+                    row->set_parent_name(worker_parent);
                     row->set_kind(0);
                     row->set_pid(c->worker.pid);
                     row->set_state(state);

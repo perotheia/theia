@@ -142,3 +142,26 @@ target_link_libraries(crasher PRIVATE tombstone)
 install(TARGETS supervisor RUNTIME DESTINATION bin)
 install(TARGETS crasher RUNTIME DESTINATION bin)
 install(TARGETS tombstone ARCHIVE DESTINATION lib)
+
+
+# ---------------------------------------------------------------------------
+# #364 — hermetic snapshot-synthesis test.
+#
+# Builds a small in-memory supervision tree, runs the same node_sup
+# synthesis logic emit_snapshot() does, and asserts the row shape.
+# No yaml-cpp, no etcd, no live runtime — just spec.h + the
+# supervisor_proto OBJECT lib for ChildState/TreeSnapshot.
+# ---------------------------------------------------------------------------
+add_executable(test_node_sup_synth
+    test/test_node_sup_synth.cpp
+    $<TARGET_OBJECTS:supervisor_proto>
+)
+target_include_directories(test_node_sup_synth PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${PROTOBUF_INCLUDE_DIRS}
+    ${PROTO_GEN_DIR}
+)
+target_link_libraries(test_node_sup_synth PRIVATE
+    ${PROTOBUF_LIBRARIES}
+    pthread
+)

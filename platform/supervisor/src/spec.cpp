@@ -117,6 +117,20 @@ std::unique_ptr<Node> load_worker(const YAML::Node& y) {
         throw std::runtime_error(
             "child '" + w.name + "': shall_run_on and shall_not_run_on are mutually exclusive");
     }
+    // Per-art-node metadata (#366) — one entry per `node atomic ...`
+    // in the FC's .art. Empty list = no reporting (placeholder FC);
+    // the synthesis path in emit_snapshot() (#364) skips workers
+    // with no reporting nodes.
+    if (y["nodes"]) {
+        for (const auto& n : y["nodes"]) {
+            NodeInfo ni;
+            ni.name = n["name"].as<std::string>();
+            ni.reporting = n["reporting"].as<bool>(true);
+            ni.tipc_type = n["tipc_type"].as<std::string>("");
+            ni.tipc_instance = n["tipc_instance"].as<std::string>("");
+            w.nodes.push_back(std::move(ni));
+        }
+    }
     return Node::make_worker(std::move(w));
 }
 

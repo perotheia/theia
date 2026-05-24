@@ -775,6 +775,101 @@ static std::string case_tracer_runtime_toggle() {
     return {};
 }
 
+// #355 — per-message-type filter on Tracer.
+//
+// Direct unit test of Tracer::emit's filter check. Bypasses GenServer:
+// we drive Tracer::emit() with known msg_type strings and verify that
+// emit drops events whose msg type isn't in the filter. This is the
+// runtime hook the supervisor's NodeTraceCtl push (#361) will drive
+// on each child via the daemon's trace_enable() method.
+//
+// Three subcases:
+//   (1) filter empty + enabled → emit fires (back-compat).
+//   (2) filter set to {Foo} + enabled → emit("Foo", ...) fires, emit("Bar", ...) drops.
+//   (3) trace_clear_all → returns to subcase (1) behavior.
+static std::string case_tracer_msg_type_filter() {
+    namespace rt = demo::runtime;
+
+    int pipefd[2];
+    if (::pipe(pipefd) < 0) return "pipe()";
+    int saved = ::dup(STDERR_FILENO);
+    ::dup2(pipefd[1], STDERR_FILENO);
+    ::close(pipefd[1]);
+    ::fcntl(pipefd[0], F_SETFL, O_NONBLOCK);
+
+    // Fresh per-test tracer (different name → singleton not shared
+    // with other cases). enable + start clean.
+    auto& tracer = rt::tracer_for("FilterTestNode");
+    tracer.enable(true);
+    tracer.trace_clear_all();
+
+    // (1) filter empty: everything passes.
+    tracer.emit(rt::TraceEvent::Send, "Foo", 0, nullptr, 0);
+    tracer.emit(rt::TraceEvent::Send, "Bar", 0, nullptr, 0);
+
+    // (2) filter set: only Foo passes.
+    tracer.trace_enable("Foo", true);
+    tracer.emit(rt::TraceEvent::Send, "Foo", 1, nullptr, 0);  // pass
+    tracer.emit(rt::TraceEvent::Send, "Bar", 2, nullptr, 0);  // drop
+    tracer.emit(rt::TraceEvent::Send, "Baz", 3, nullptr, 0);  // drop
+
+    // (3) clear filter: back to all-pass.
+    tracer.trace_clear_all();
+    tracer.emit(rt::TraceEvent::Send, "Bar", 4, nullptr, 0);  // pass
+    tracer.emit(rt::TraceEvent::Send, "Baz", 5, nullptr, 0);  // pass
+
+    // Drain.
+    std::fflush(stderr);
+    std::string captured;
+    char buf[4096];
+    ssize_t n;
+    while ((n = ::read(pipefd[0], buf, sizeof(buf))) > 0) {
+        captured.append(buf, n);
+    }
+    ::dup2(saved, STDERR_FILENO);
+    ::close(saved);
+    ::close(pipefd[0]);
+
+    // Cleanup.
+    tracer.enable(false);
+
+    // Per-subcase: count occurrences of each (msg, corr) pair.
+    auto count = [&](const std::string& needle) {
+        int n = 0;
+        size_t pos = 0;
+        while ((pos = captured.find(needle, pos)) != std::string::npos) {
+            ++n; ++pos;
+        }
+        return n;
+    };
+
+    // (1) two unfiltered records:
+    if (count("msg=Foo corr=0") != 1)
+        return "(1) expected Foo corr=0 — captured: '" + captured + "'";
+    if (count("msg=Bar corr=0") != 1)
+        return "(1) expected Bar corr=0 — captured: '" + captured + "'";
+
+    // (2) only Foo passes; Bar and Baz drop:
+    if (count("msg=Foo corr=1") != 1)
+        return "(2) Foo corr=1 should pass — captured: '" + captured + "'";
+    if (count("msg=Bar corr=2") != 0)
+        return "(2) Bar corr=2 should drop (filter restricted) — captured: '"
+               + captured + "'";
+    if (count("msg=Baz corr=3") != 0)
+        return "(2) Baz corr=3 should drop (filter restricted) — captured: '"
+               + captured + "'";
+
+    // (3) cleared filter, all pass again:
+    if (count("msg=Bar corr=4") != 1)
+        return "(3) Bar corr=4 should pass after clear — captured: '"
+               + captured + "'";
+    if (count("msg=Baz corr=5") != 1)
+        return "(3) Baz corr=5 should pass after clear — captured: '"
+               + captured + "'";
+
+    return {};
+}
+
 // Handwritten p* binaries.
 static std::string case_tipc_3process() {
     return run_3process_("demo_p1", "demo_p2", "demo_p3");
@@ -986,6 +1081,7 @@ int main() {
     CASE(stat, tipc_concurrent_calls)   { return case_tipc_concurrent_calls(); });
     CASE(stat, tipc_trace_correlation)  { return case_tipc_trace_correlation(); });
     CASE(stat, tracer_runtime_toggle)   { return case_tracer_runtime_toggle(); });
+    CASE(stat, tracer_msg_type_filter)  { return case_tracer_msg_type_filter(); });
     CASE(stat, statem_traffic_light)    { return case_statem_traffic_light(); });
     CASE(stat, statem_retry_escalate)   { return case_statem_retry_escalate(); });
     CASE(stat, statem_postpone)         { return case_statem_postpone(); });

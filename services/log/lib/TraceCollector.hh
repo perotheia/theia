@@ -64,28 +64,21 @@ public:
 
     // ---- Trace config (reporting=true only) -----------------------
     //
-    // The supervisor (#361) pushes (msg_type, enabled) pairs into
-    // this filter map on (re)start AND on every supdbg-driven
-    // Configure. emit-side: Tracer consults the map; when off
-    // (default), the event is dropped. See platform/runtime/
-    // Tracer.hh for the actual filter check (#355).
-    //
-    // These methods are the in-process API; the wire-side binding
-    // (NodeTraceCtl TIPC server) lands as a follow-up that calls
-    // trace_enable() on receipt of an ApplyConfig RPC.
-    //
-    // Thread-safety: writes acquire an internal mutex; reads on the
-    // emit path are lock-free (see Tracer.hh's atomic flag pattern).
-    void trace_enable(const char* msg_type, bool enabled);
-    bool trace_enabled(const char* msg_type) const;
-    void trace_clear_all();
-
-private:
-    std::mutex trace_filter_mu_;
-    // msg_type → enabled. Missing key = "not configured" → off.
-    std::map<std::string, bool> trace_filter_;
-
-public:
+    // Per #355, the per-message-type filter lives in the process-wide
+    // Tracer (see platform/runtime/Tracer.hh). These methods are thin
+    // delegations so the supervisor / NodeTraceCtl wire path has a
+    // stable in-class API while the actual storage stays in one place.
+    void trace_enable(const char* msg_type, bool enabled) {
+        ::demo::runtime::tracer_for(kNodeName).trace_enable(
+            msg_type, enabled);
+    }
+    bool trace_enabled(const char* msg_type) const {
+        return ::demo::runtime::tracer_for(kNodeName)
+            .trace_filter_passes(msg_type);
+    }
+    void trace_clear_all() {
+        ::demo::runtime::tracer_for(kNodeName).trace_clear_all();
+    }
 
 
     // ---- Subscriber registration ----------------------------------
@@ -174,35 +167,8 @@ inline void TraceCollector::broadcast_stream_out_rec(const TraceRecord& msg) {
 
 
 
-// ---- Trace config inline impls (reporting=true) -----------------
-//
-// Map operations under trace_filter_mu_. The emit-side filter check
-// is in platform/runtime/Tracer.hh (#355), which reads the same
-// map without locking (atomic shadow flag updated alongside).
-inline void TraceCollector::trace_enable(const char* msg_type, bool enabled) {
-    if (msg_type == nullptr) return;
-    std::lock_guard<std::mutex> lk(trace_filter_mu_);
-    if (enabled) {
-        trace_filter_[msg_type] = true;
-    } else {
-        trace_filter_.erase(msg_type);
-    }
-}
-
-inline bool TraceCollector::trace_enabled(const char* msg_type) const {
-    if (msg_type == nullptr) return false;
-    // const_cast to acquire the mutex; the map mutation itself is
-    // not const but the LOOKUP is — guaranteed by the API contract.
-    std::lock_guard<std::mutex> lk(
-        const_cast<std::mutex&>(trace_filter_mu_));
-    auto it = trace_filter_.find(msg_type);
-    return it != trace_filter_.end() && it->second;
-}
-
-inline void TraceCollector::trace_clear_all() {
-    std::lock_guard<std::mutex> lk(trace_filter_mu_);
-    trace_filter_.clear();
-}
+// Trace-config impls are inline in the class body (delegate to
+// tracer_for(kNodeName)) — no out-of-class definitions needed.
 
 
 

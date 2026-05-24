@@ -89,15 +89,59 @@ public:
         enabled_.store(on, std::memory_order_relaxed);
     }
 
+    // Per-msg-type filter (#355). Two-tier gate:
+    //
+    //   enabled_ == false  → emit nothing (master off).
+    //   enabled_ == true + filter empty → emit everything (master on,
+    //                                     no filter set; back-compat).
+    //   enabled_ == true + filter set   → emit ONLY msg types listed
+    //                                     in the filter.
+    //
+    // Used by the supervisor's ConfigureTrace path: supdbg picks the
+    // msg types it wants and pushes them via TIPC to the node, the
+    // node's `trace_enable("SmStateMsg", true)` delegates to
+    // Tracer::trace_enable, and subsequent emit()s for that type land
+    // on the wire while everything else stays silent.
+    //
+    // Filter ops take a short lock; emit's filter check uses the same
+    // lock. The cost is ~30 ns per check — only paid when enabled_ is
+    // already true, so it's invisible to the disabled fast path.
+    void trace_enable(const char* msg_type, bool on) noexcept {
+        std::lock_guard<std::mutex> lk(filter_mu_);
+        if (on) {
+            filter_[msg_type] = true;
+        } else {
+            filter_.erase(msg_type);
+        }
+    }
+    void trace_clear_all() noexcept {
+        std::lock_guard<std::mutex> lk(filter_mu_);
+        filter_.clear();
+    }
+    bool trace_filter_passes(const char* msg_type) const noexcept {
+        std::lock_guard<std::mutex> lk(
+            const_cast<std::mutex&>(filter_mu_));
+        if (filter_.empty()) return true;  // back-compat: no filter = all
+        if (msg_type == nullptr) return true;  // events w/o a type (rare)
+        auto it = filter_.find(msg_type);
+        return it != filter_.end() && it->second;
+    }
+
     // Hot path. Caller MUST have already checked enabled() — we don't
     // re-check, to make the cost model explicit at call sites.
     // payload may be nullptr / 0-len for events without typed data.
     // corr_id pairs Send/Recv across processes (for RPCs) or pairs
     // CallWait/CallResume locally; 0 means "no correlation".
+    //
+    // Filter check happens here (inside emit, not at the call site) so
+    // that all existing call sites — Tracer::emit(...) called from
+    // dozens of dispatch points across GenServer/TipcMux/RemoteRef —
+    // pick up filtering automatically without an audit.
     void emit(TraceEvent kind,
               const char* msg_type_name,
               uint32_t       corr_id,
               const uint8_t* payload, uint16_t payload_len) noexcept {
+        if (!trace_filter_passes(msg_type_name)) return;
         auto now = std::chrono::steady_clock::now();
         auto ts_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                           now - start_tp_).count();
@@ -135,6 +179,12 @@ private:
     const char*                                    name_;
     std::atomic<bool>                              enabled_{false};
     std::chrono::steady_clock::time_point          start_tp_;
+
+    // Per-msg-type filter (#355). Keys are stable string literals
+    // emitted by RemoteCodec::msg_type_name() — std::string holds
+    // a copy so the filter map doesn't outlive the literal's TU.
+    mutable std::mutex                             filter_mu_;
+    std::unordered_map<std::string, bool>          filter_;
 };
 
 // encode_for_trace + msg_type_name are defined in RemoteCodec.hh and

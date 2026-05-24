@@ -15,7 +15,7 @@ Documentation    Pair-1 e2e: drive the RestartChild flow against the
 ...                hybrid-automata  exercises Pair 1
 Library          rf_theia.TheiaTestLibrary
 
-Suite Setup       Load Rig    %{RIG_JSON=${CURDIR}/../fixtures/demo_rig.json}
+Suite Setup       Load Rig    %{RIG_JSON=${CURDIR}/../../fixtures/demo_rig.json}
 Suite Teardown    Tear Down Rig
 
 

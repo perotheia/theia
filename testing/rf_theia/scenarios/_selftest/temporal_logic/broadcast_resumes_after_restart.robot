@@ -12,7 +12,7 @@ Documentation    Pair-2 e2e: after sm_daemon restart, the broadcast to
 Library          rf_theia.TheiaTestLibrary
 
 Suite Setup       Run Keywords
-...                   Load Rig    %{RIG_JSON=${CURDIR}/../fixtures/demo_rig.json}
+...                   Load Rig    %{RIG_JSON=${CURDIR}/../../fixtures/demo_rig.json}
 ...                   AND   Open Trace    %{TRACE_FILE=/tmp/theia/sm.log}
 Suite Teardown    Tear Down Rig
 

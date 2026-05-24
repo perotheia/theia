@@ -13,7 +13,7 @@ Documentation    Hermetic selftest of the Pair-4 distributed-component
 Library          rf_theia.TheiaTestLibrary
 
 
-Suite Setup       Load Rig    ${CURDIR}/../fixtures/demo_rig.json
+Suite Setup       Load Rig    ${CURDIR}/../../fixtures/demo_rig.json
 Suite Teardown    Tear Down Rig
 
 

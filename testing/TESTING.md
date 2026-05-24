@@ -26,15 +26,15 @@ install needed — keeps rf-theia hermetic from the artheia venv.
 ```bash
 cd testing
 
-# Hermetic selftest — no live theia needed.
+# Hermetic — rf-theia self-tests (proves the framework works).
 PYTHONPATH=. ./.venv/bin/robot \
   --outputdir /tmp/rf_theia_output \
-  rf_theia/scenarios/selftest/
+  rf_theia/scenarios/_selftest/
 
-# Live e2e — supervisor must be running + trace file must exist.
+# Real SUT regression — platform layer.
 PYTHONPATH=. ./.venv/bin/robot \
   --outputdir /tmp/rf_theia_output \
-  rf_theia/scenarios/supervision/
+  rf_theia/scenarios/platform/
 
 # Dryrun (parse + resolve keywords, don't execute) — catches typos in
 # any scenario whether or not the live stack is up.
@@ -52,10 +52,11 @@ Filter by tag:
 
 Tag conventions:
 
-- `hermetic`  — no live processes required (selftest, generator regression).
-- `live`      — needs supervisor + cluster + trace file.
-- `supervision`, `signal-flow`, `artheia-gen`, `provisioning`, `orchestration`
-  — one per DSL surface.
+- `hermetic`  — no live processes required (most _selftest cases).
+- `live`      — needs the SUT running (supervisor, trace stream, ...).
+- Category tags by DSL family: `supervision`, `signal-flow`,
+  `hybrid-automata`, `temporal-logic`, `components`, `topology`,
+  `platform-executor`, ...
 
 
 ## MCP integration
@@ -105,12 +106,21 @@ testing/
     ├── space/                  # vendored, parked (SPT primitives)
     ├── assessment/             # vendored, pandas-style analysis
     └── scenarios/
-        ├── selftest/           # hermetic
-        ├── supervision/        # T Sup
-        ├── signal_flow/        # T Sig
-        ├── artheia_gen/        # T Art (phase 2)
-        ├── provisioning/       # T Prov (phase 3)
-        └── orchestration/      # T Orch (phase 3)
+        ├── _selftest/          # rf-theia's OWN tests (hidden by underscore)
+        │   ├── keywords_load/
+        │   ├── hybrid_automata/
+        │   ├── temporal_logic/
+        │   ├── supervision/
+        │   ├── components/
+        │   └── topology/
+        ├── platform/           # SUT regression: supervisor, runtime, gateway
+        │   ├── executor/
+        │   ├── runtime/
+        │   └── gateway/
+        ├── services/           # per-FC functional tests (sm, com, exec, …)
+        ├── applications/       # vehicle apps (demo, vendor)
+        ├── integration/        # cross-machine, end-to-end
+        └── fixtures/           # captured artheia outputs for hermetic tests
 ```
 
 

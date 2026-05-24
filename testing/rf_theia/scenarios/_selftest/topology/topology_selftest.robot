@@ -12,8 +12,8 @@ Library          rf_theia.TheiaTestLibrary
 
 
 Suite Setup       Run Keywords
-...                   Load Rig         ${CURDIR}/../fixtures/demo_only_rig.json
-...                   AND   Load Topology    ${CURDIR}/../fixtures/demo_netgraph.json
+...                   Load Rig         ${CURDIR}/../../fixtures/demo_only_rig.json
+...                   AND   Load Topology    ${CURDIR}/../../fixtures/demo_netgraph.json
 Suite Teardown    Tear Down Rig
 
 

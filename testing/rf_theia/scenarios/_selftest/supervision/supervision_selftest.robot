@@ -15,8 +15,8 @@ Library          rf_theia.testkit.event_publisher.SupervisorEventPublisher
 
 
 Suite Setup       Run Keywords
-...                   Load Rig             ${CURDIR}/../fixtures/demo_rig.json
-...                   AND   Load Supervision    ${CURDIR}/../fixtures/central_host_executor.yaml
+...                   Load Rig             ${CURDIR}/../../fixtures/demo_rig.json
+...                   AND   Load Supervision    ${CURDIR}/../../fixtures/central_host_executor.yaml
 Suite Teardown    Tear Down Rig
 
 

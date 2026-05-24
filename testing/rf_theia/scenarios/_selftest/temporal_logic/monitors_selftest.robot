@@ -31,7 +31,7 @@ Set Up Hermetic Trace
     ...                only exercise the temporal-monitor pipeline).
     Remove File    ${TRACE_PATH}
     Create File    ${TRACE_PATH}
-    Load Rig       ${CURDIR}/../fixtures/demo_rig.json
+    Load Rig       ${CURDIR}/../../fixtures/demo_rig.json
     Open Trace     ${TRACE_PATH}
 
 Inject Trace Record

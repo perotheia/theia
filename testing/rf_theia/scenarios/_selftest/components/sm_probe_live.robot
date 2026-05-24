@@ -10,7 +10,7 @@ Documentation    Pair-4 live scenario: co-located SmProber on
 ...              against a live theia stack with sm running.
 Library          rf_theia.TheiaTestLibrary
 
-Suite Setup       Load Rig    %{RIG_JSON=${CURDIR}/../fixtures/demo_rig.json}
+Suite Setup       Load Rig    %{RIG_JSON=${CURDIR}/../../fixtures/demo_rig.json}
 Suite Teardown    Tear Down Rig
 
 

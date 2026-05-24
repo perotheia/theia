@@ -14,8 +14,8 @@ Documentation    Pair-3 e2e: validate the rest_for_one cascade on
 Library          rf_theia.TheiaTestLibrary
 
 Suite Setup       Run Keywords
-...                   Load Rig             %{RIG_JSON=${CURDIR}/../fixtures/demo_rig.json}
-...                   AND   Load Supervision    %{EXECUTOR_YAML=${CURDIR}/../fixtures/central_host_executor.yaml}
+...                   Load Rig             %{RIG_JSON=${CURDIR}/../../fixtures/demo_rig.json}
+...                   AND   Load Supervision    %{EXECUTOR_YAML=${CURDIR}/../../fixtures/central_host_executor.yaml}
 Suite Teardown    Tear Down Rig
 
 

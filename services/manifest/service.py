@@ -85,32 +85,37 @@ def _executable_for(short: str) -> Executable:
 # + warning). Setting an entry here makes the FC supervised in the
 # dev tree; the install-time .ipk / .deb mapping rewrites these paths
 # to the on-target install location.
-START_CMDS: dict[str, list[str]] = {
-    # FC impl layout: services/<fc>/{lib,main,impl}/ — spec stays
-    # under services/system/<fc>/{package.art, component.art}.
-    # Path matches the executor.py emitted by `artheia gen-app
-    # --kind fc --out services/<fc>/`.
-    #
-    # No `exec` entry: the exec FC is implemented by
-    # platform/supervisor itself (see services/system/exec/README.md).
-    # exec stays in the supervision tree as a logical FC; with no
-    # start_cmd the supervisor's child entry refuses to launch —
-    # the documented "no binary built" signal in
-    # artheia/manifest/execution.py.
-    "sm":   ["bazel-bin/services/sm/main/sm"],
-    "com":  ["bazel-bin/services/com/main/com"],
-    "ucm":  ["bazel-bin/services/ucm/main/ucm"],
-    "per":  ["bazel-bin/services/per/main/per"],
-}
-
-
 def _process_for(short: str) -> Process:
-    """Execution Manifest Process per FC (§8.2)."""
+    """Execution Manifest Process per FC (§8.2).
+
+    Tries to import ``PROCESS`` from ``manifest.services.<short>.executor``
+    — that file is HAND-EDITED and survives every ``artheia gen-app``
+    run. Living near the SwComponent + Executable metadata it's the
+    rig integrator's single source of truth for start_cmd, scheduling,
+    and supervision policy.
+
+    For FCs without an executor.py (the .art-only placeholders), we
+    fall back to a Process with an empty start_cmd — the documented
+    "no binary built" signal in artheia/manifest/execution.py. The
+    supervisor's child entry refuses to launch them; that's correct
+    for FCs that don't yet have an implementation (and for `exec`,
+    which is implemented by platform/supervisor itself).
+    """
+    import importlib
+
+    try:
+        mod = importlib.import_module(f"manifest.services.{short}.executor")
+    except ImportError:
+        mod = None
+
+    if mod is not None and hasattr(mod, "PROCESS"):
+        return mod.PROCESS
+
     return Process(
         name=short,
         executable=short,
         function_cluster_affiliation=short,
-        start_cmd=list(START_CMDS.get(short, [])),
+        start_cmd=[],
         state_dependent_startup_config=[
             StateDependentStartupConfig(
                 function_group_state=["Default.Running"],

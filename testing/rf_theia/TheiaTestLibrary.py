@@ -48,6 +48,12 @@ from .runtime.expr import ExprEvaluator
 from .runtime.flow_engine import FlowEngine, RuntimeContext
 from .runtime.flows import RestartChild
 from .runtime.monitors import Always, Eventually, Never
+from .runtime.restart_observer import RestartObserver
+from .runtime.supervision import (
+    SupervisorNode,
+    expected_restart_order,
+    load_supervision,
+)
 from .runtime.supervisor_watcher import SupervisorWatcher
 from .runtime.trace_watcher import TraceWatcher
 
@@ -90,6 +96,15 @@ class TheiaTestLibrary:
         self._trace_feed: Any = None
         self._trace_watcher: Optional[TraceWatcher] = None
         self._evaluator: Optional[ExprEvaluator] = None
+        # Pair-3 — supervision tree + restart observer. Tree loaded by
+        # `Load Supervision`; observer subscribes to bus on Load Rig
+        # (so it's ready to record before any crash happens).
+        self._supervision_tree: Optional[SupervisorNode] = None
+        self._restart_observer: Optional[RestartObserver] = None
+        # Crash anchor — set by `Crash Child`, read by
+        # `Assert Restart Order` to scope its query window.
+        self._crash_anchor: float = 0.0
+        self._last_crashed: Optional[str] = None
 
     # ──────────────────────────────────────────────────────────────────
     # Pair-1 lifecycle: Load Rig / Tear Down Rig.
@@ -136,6 +151,10 @@ class TheiaTestLibrary:
 
         self._ctx = ctx
         self._flow_engine = FlowEngine(ctx)
+        # Restart observer subscribes immediately so it captures every
+        # supervisor_child_* event from Pair-1's watcher (when present)
+        # AND from any test-side stub publishers.
+        self._restart_observer = RestartObserver(bus)
         self._verdict = "none"
         logger.info("Load Rig: %s (vehicle=%s, machines=%d, components=%d)",
                     path, rig.vehicle.name, len(rig.machines),
@@ -162,6 +181,12 @@ class TheiaTestLibrary:
         if self._evaluator is not None:
             self._evaluator.close()
             self._evaluator = None
+        if self._restart_observer is not None:
+            self._restart_observer.close()
+            self._restart_observer = None
+        self._supervision_tree = None
+        self._crash_anchor = 0.0
+        self._last_crashed = None
         if self._ctx is not None and self._ctx.supervisor is not None:
             try:
                 self._ctx.supervisor.close()
@@ -355,6 +380,173 @@ class TheiaTestLibrary:
         if result.verdict != "pass":
             raise AssertionError(result.reason)
         logger.info("Assert Never: %s [%s]", expr, result.reason)
+
+    # ──────────────────────────────────────────────────────────────────
+    # Pair-3 keywords: supervision graph.
+    # ──────────────────────────────────────────────────────────────────
+
+    @keyword("Load Supervision")
+    def load_supervision_kw(self, path: str) -> None:
+        """Load artheia's emitted ``executor.yaml`` for the current
+        machine. Strategy + child order become queryable.
+
+        Typical path:
+          ``deploy/.staging/<machine>/ipk/executor.yaml``
+
+        Must follow `Load Rig` — uses the same suite-scope runtime."""
+        self._require_runtime()
+        self._supervision_tree = load_supervision(path)
+        logger.info("Load Supervision: %s (root=%s)",
+                    path, self._supervision_tree.name)
+
+    @keyword("Crash Child")
+    def crash_child(self, name: str) -> None:
+        """Ask the supervisor to terminate ``name``, anchoring the
+        restart-order observation window.
+
+        Subsequent `Assert Restart Order` calls scope their query to
+        events that arrive after this anchor — so prior child churn
+        doesn't contaminate the assertion.
+
+        Without a live supervisor adapter, this is a no-op anchor (just
+        records the time + child name). Test-side publishers can stand
+        in for the supervisor — same observer semantics.
+        """
+        self._require_runtime()
+        import time as _time
+        self._crash_anchor = _time.monotonic()
+        self._last_crashed = name
+        if self._ctx is not None and self._ctx.supervisor is not None:
+            try:
+                self._ctx.supervisor.terminate_child(name)
+                logger.info("Crash Child: terminated %s via supervisor", name)
+            except Exception as e:
+                logger.warning(
+                    "Crash Child: terminate %s failed (%s) — proceeding "
+                    "with anchor only", name, e
+                )
+        else:
+            logger.warning(
+                "Crash Child: no supervisor — anchor set, "
+                "stub-mode (test must publish supervisor_child_* itself)"
+            )
+
+    @keyword("Assert Restart Order")
+    def assert_restart_order(
+        self,
+        *expected: str,
+        crashed: str = "",
+        within: str = "10s",
+    ) -> None:
+        """Assert children restarted in the expected order.
+
+        Two calling forms:
+
+          Assert Restart Order    crypto    sm    network_sup
+              # explicit expected sequence; compared against observer.
+
+          Assert Restart Order
+              # derive expected from the supervision tree + the last
+              # `Crash Child` target. The tree's parent_of(crashed)
+              # determines the strategy; rest_for_one yields children
+              # from the crashed one onward, etc.
+
+        Waits up to ``within`` for enough restart events to land before
+        comparing. The match is a PREFIX check: the observed sequence
+        is allowed to contain trailing children (e.g. unrelated
+        peers) the assertion doesn't name.
+        """
+        self._require_runtime()
+        assert self._restart_observer is not None
+        timeout = _seconds(within)
+
+        # Derive expected sequence from the tree if not given.
+        exp: list[str]
+        if expected:
+            exp = list(expected)
+        else:
+            if self._supervision_tree is None:
+                raise RuntimeError(
+                    "Assert Restart Order: no expected sequence and no "
+                    "supervision tree loaded. Call `Load Supervision` "
+                    "or pass the sequence explicitly."
+                )
+            target = crashed or self._last_crashed
+            if not target:
+                raise RuntimeError(
+                    "Assert Restart Order: no `crashed=` arg and no "
+                    "previous `Crash Child` — can't derive expected order"
+                )
+            exp = expected_restart_order(self._supervision_tree, target)
+
+        # Wait up to `within` for the observed prefix to match.
+        import time as _time
+        deadline = _time.monotonic() + timeout
+        anchor = self._crash_anchor or 0.0
+        last_observed: list[str] = []
+        while _time.monotonic() < deadline:
+            observed = self._restart_observer.restart_order(since=anchor)
+            last_observed = observed
+            if observed[:len(exp)] == exp:
+                logger.info(
+                    "Assert Restart Order: observed prefix %r matches "
+                    "expected %r", observed[:len(exp)], exp,
+                )
+                return
+            _time.sleep(0.05)
+        raise AssertionError(
+            f"Assert Restart Order: expected prefix {exp!r}; "
+            f"observed {last_observed!r} within {within}"
+        )
+
+    @keyword("Assert Healthy")
+    def assert_healthy(self, name: str, within: str = "5s") -> None:
+        """Pass if ``name`` reaches RUNNING within the window.
+
+        Convenience: equivalent to
+        ``Assert Eventually    service.state('X') == 'RUNNING'``
+        but reads better and doesn't require the expression evaluator
+        to be wired."""
+        self._require_runtime()
+        assert self._restart_observer is not None
+        timeout = _seconds(within)
+        import time as _time
+        deadline = _time.monotonic() + timeout
+        anchor = self._crash_anchor or 0.0
+        while _time.monotonic() < deadline:
+            if self._restart_observer.reached_running(name, since=anchor):
+                return
+            _time.sleep(0.05)
+        raise AssertionError(
+            f"Assert Healthy: {name!r} did not reach RUNNING within {within}"
+        )
+
+    @keyword("Assert Restart Within Limit")
+    def assert_restart_within_limit(self, name: str) -> None:
+        """Assert that ``name``'s restart_count <= max_restarts of its
+        owning supervisor. Catches runaway-crash bugs where the limit
+        is breached and escalation should have fired."""
+        self._require_runtime()
+        if self._supervision_tree is None:
+            raise RuntimeError(
+                "Assert Restart Within Limit: no supervision tree "
+                "loaded. Call `Load Supervision` first."
+            )
+        assert self._restart_observer is not None
+        parent = self._supervision_tree.parent_of(name)
+        if parent is None:
+            raise AssertionError(
+                f"Assert Restart Within Limit: {name!r} not in tree"
+            )
+        observed = self._restart_observer.restart_count(name)
+        if observed > parent.max_restarts:
+            raise AssertionError(
+                f"Assert Restart Within Limit: {name!r} restart_count="
+                f"{observed} exceeds parent {parent.name!r} "
+                f"max_restarts={parent.max_restarts}"
+            )
+        logger.info("Assert Restart Within Limit: %s rc=%d <= %d",
+                    name, observed, parent.max_restarts)
 
     # ──────────────────────────────────────────────────────────────────
     # TPT engine passthroughs — kept from Phase 1; declarative-shape.

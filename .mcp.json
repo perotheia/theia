@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "rf-theia": {
+      "command": "${workspaceFolder}/testing/run_mcp.sh",
+      "args": [],
+      "type": "stdio"
+    }
+  }
+}

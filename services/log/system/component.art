@@ -1,0 +1,6 @@
+package system.services.log
+
+
+composition Log {
+    prototype TraceCollector trace_collector
+}

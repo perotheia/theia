@@ -1,0 +1,23 @@
+# FIRST-TIME-ONLY (regenerated with --force). source: services/log/system/package.art
+#
+# Impl slice — handler bodies. The user owns this BUILD.bazel after
+# first emit (you may want to add per-FC test_*.cc files; gen-app
+# won't reach in and squash that).
+
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "log_impl",
+    srcs = ["TraceCollector_handlers.cc"],
+    copts = [
+        "-std=c++17",
+        "-Wall",
+        "-Wextra",
+        "-fPIC",
+    ],
+    deps = [
+        "//services/system/log/lib:log_lib",
+    ],
+)

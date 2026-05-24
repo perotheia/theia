@@ -47,7 +47,14 @@ from .runtime.event_bus import EventBus
 from .runtime.expr import ExprEvaluator
 from .runtime.flow_engine import FlowEngine, RuntimeContext
 from .runtime.flows import RestartChild
+from .runtime.components import (
+    Component,
+    ComponentRuntime,
+    LocalTransport,
+    SSHTransport,
+)
 from .runtime.monitors import Always, Eventually, Never
+from .runtime.probes import Echo, Sink, SmProber, SmStub
 from .runtime.restart_observer import RestartObserver
 from .runtime.supervision import (
     SupervisorNode,
@@ -64,6 +71,15 @@ logger = logging.getLogger("rf_theia")
 # via `Start State Machine <Name>` without touching keyword wiring.
 FLOW_REGISTRY: dict[str, type] = {
     "RestartChild": RestartChild,
+}
+
+# Registry of available components. Same pattern as FLOW_REGISTRY —
+# adding a new probe means adding one line here, no keyword changes.
+COMPONENT_REGISTRY: dict[str, type] = {
+    "Echo":     Echo,
+    "Sink":     Sink,
+    "SmProber": SmProber,
+    "SmStub":   SmStub,
 }
 
 
@@ -105,6 +121,10 @@ class TheiaTestLibrary:
         # `Assert Restart Order` to scope its query window.
         self._crash_anchor: float = 0.0
         self._last_crashed: Optional[str] = None
+        # Pair-4 — distributed components. Runtime is created by
+        # `Load Rig` so `Run Component` can register instances.
+        self._components: Optional[ComponentRuntime] = None
+        self._local_transport: Optional[LocalTransport] = None
 
     # ──────────────────────────────────────────────────────────────────
     # Pair-1 lifecycle: Load Rig / Tear Down Rig.
@@ -155,6 +175,12 @@ class TheiaTestLibrary:
         # supervisor_child_* event from Pair-1's watcher (when present)
         # AND from any test-side stub publishers.
         self._restart_observer = RestartObserver(bus)
+        # Component runtime — LocalTransport is the default. Robot
+        # scenarios pass `on=<machine>` to switch to SSHTransport when
+        # that's implemented; for now both local and same-host targets
+        # use LocalTransport.
+        self._local_transport = LocalTransport()
+        self._components = ComponentRuntime(bus, self._local_transport)
         self._verdict = "none"
         logger.info("Load Rig: %s (vehicle=%s, machines=%d, components=%d)",
                     path, rig.vehicle.name, len(rig.machines),
@@ -163,6 +189,10 @@ class TheiaTestLibrary:
     @keyword("Tear Down Rig")
     def tear_down_rig(self) -> None:
         """Stop flows, close adapters, drop the runtime context."""
+        if self._components is not None:
+            self._components.stop_all()
+            self._components = None
+            self._local_transport = None
         if self._flow_engine is not None:
             self._flow_engine.stop_all()
             self._flow_engine = None
@@ -549,6 +579,79 @@ class TheiaTestLibrary:
                     name, observed, parent.max_restarts)
 
     # ──────────────────────────────────────────────────────────────────
+    # Pair-4 keywords: distributed components.
+    # ──────────────────────────────────────────────────────────────────
+
+    @keyword("Run Component")
+    def run_component(
+        self,
+        component_name: str,
+        on: str = "",
+        as_: str = "",
+    ) -> None:
+        """Instantiate a component from the registry on a target machine.
+
+        Args:
+          component_name: Name in the COMPONENT_REGISTRY (e.g. ``SmProber``).
+          on:             Target machine. Empty or the harness's own
+                          machine → LocalTransport (in-process). Any
+                          other name → SSHTransport (stubbed; raises).
+          as_:            Instance name for Component Call (defaults to
+                          ``component_name``). Use this when running
+                          multiple instances of the same component.
+
+        Example::
+
+            Run Component    SmProber    on=central_host    as_=probe
+        """
+        self._require_runtime()
+        assert self._components is not None
+        comp_cls = COMPONENT_REGISTRY.get(component_name)
+        if comp_cls is None:
+            raise KeyError(
+                f"Run Component: {component_name!r} not in registry "
+                f"(have: {sorted(COMPONENT_REGISTRY)})"
+            )
+        transport = self._pick_transport(on)
+        instance = as_ or component_name
+        self._components.run(comp_cls, instance, transport)
+        logger.info("Run Component: %s on=%s as=%s",
+                    component_name, on or "<local>", instance)
+
+    @keyword("Stop Component")
+    def stop_component(self, instance: str) -> None:
+        self._require_runtime()
+        assert self._components is not None
+        self._components.stop(instance)
+
+    @keyword("Component Call")
+    def component_call(self, instance: str, method: str, **kwargs: Any) -> Any:
+        """Invoke a method on a running component.
+
+        The component's method signature determines the keyword args.
+        Robot passes everything as strings; the method does its own
+        coercion. Method-raised AssertionError surfaces as a Robot
+        keyword failure (test FAIL); other exceptions surface as ERROR.
+
+        Example::
+
+            Component Call    probe    set_state    state=RUN
+        """
+        self._require_runtime()
+        assert self._components is not None
+        return self._components.call(instance, method, **kwargs)
+
+    @keyword("Component Expect")
+    def component_expect(
+        self, instance: str, method: str, **kwargs: Any
+    ) -> Any:
+        """Same as `Component Call`, but reads better when the operation
+        is an assertion. Documents intent: this call is the test's
+        observable check.
+        """
+        return self.component_call(instance, method, **kwargs)
+
+    # ──────────────────────────────────────────────────────────────────
     # TPT engine passthroughs — kept from Phase 1; declarative-shape.
     # ──────────────────────────────────────────────────────────────────
 
@@ -618,6 +721,29 @@ class TheiaTestLibrary:
         self._require_runtime()
         assert self._ctx is not None
         return self._ctx.bus
+
+    def _pick_transport(self, on: str):
+        """Resolve `on=<machine>` to a transport.
+
+        Empty string or the harness machine name → LocalTransport.
+        Any other name → SSHTransport (stubbed; raises on use).
+        """
+        assert self._local_transport is not None
+        if not on:
+            return self._local_transport
+        # The rig knows our machines. If `on` matches one and that
+        # machine looks local (no remote indicators we can use yet),
+        # stay local. Real multi-machine support arrives with the
+        # SSH transport.
+        if self._ctx is not None and self._ctx.rig is not None:
+            try:
+                self._ctx.rig.machine(on)
+            except KeyError:
+                raise ValueError(
+                    f"Run Component: `on={on!r}` not in rig "
+                    f"(machines: {[m.name for m in self._ctx.rig.machines]})"
+                )
+        return SSHTransport(host=on)
 
     def _eval(self) -> ExprEvaluator:
         """Lazily build the ExprEvaluator on first Assert keyword.

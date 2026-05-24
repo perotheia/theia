@@ -47,6 +47,17 @@ public:
     void start();
     void stop();
 
+    // Synchronous one-shot Configure call against TraceStream (#365).
+    // Returns the status from the supervisor's ControlReply (0 = OK).
+    // On RPC failure returns a negative number; on parse failure -2.
+    // The GUI's right-click → Configure Trace dialog (panels/
+    // applications_panel.cpp) calls this from the wx main thread.
+    // Blocking up to 3s is acceptable — the call is synchronous in
+    // user-perception terms.
+    int configure_trace(const std::string& target_node,
+                         const std::string& msg_type,
+                         bool enabled);
+
 private:
     void run();
 

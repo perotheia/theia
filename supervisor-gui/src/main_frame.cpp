@@ -126,6 +126,25 @@ MainFrame::MainFrame(std::vector<MachineEndpoint> machines)
     }
     machines_panel_->set_machines(std::move(rows));
 
+    // #365 — wire the ApplicationsPanel's right-click ConfigureTrace
+    // dialog to the matching machine's GrpcClient.
+    applications_->set_configure_trace_callback(
+        [this](const std::string& machine, const std::string& node,
+               const std::string& msg, bool enabled) {
+            for (auto& c : clients_) {
+                if (c && c->machine_name() == machine) {
+                    int rc = c->configure_trace(node, msg, enabled);
+                    wxString s = wxString::Format(
+                        "trace %s for %s/%s on %s: rc=%d",
+                        enabled ? "enabled" : "disabled",
+                        node.c_str(), msg.c_str(),
+                        machine.c_str(), rc);
+                    SetStatusText(s, 0);
+                    return;
+                }
+            }
+        });
+
     // One GrpcClient per machine.
     for (auto& m : machines) {
         std::string host_port = m.address + ":" + std::to_string(m.port);

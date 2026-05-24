@@ -18,6 +18,7 @@
 #include <wx/panel.h>
 
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -102,6 +103,16 @@ public:
     explicit ApplicationsPanel(wxWindow* parent);
     void on_frame(const std::string& machine_name, uint16_t tag,
                   const std::string& payload) override;
+
+    // #365 — wire a callback the panel calls when the user clicks
+    // Apply in the ConfigureTrace right-click dialog. main_frame
+    // sets this to look up the matching GrpcClient and call
+    // configure_trace(node, msg, enabled). Lifetime: the panel
+    // captures by value, so the closure may safely outlive the call.
+    using ConfigureTraceCallback = std::function<void(
+        const std::string& /*machine*/, const std::string& /*node*/,
+        const std::string& /*msg_type*/, bool /*enabled*/)>;
+    void set_configure_trace_callback(ConfigureTraceCallback cb);
 
 private:
     ApplicationsCanvas* canvas_{nullptr};

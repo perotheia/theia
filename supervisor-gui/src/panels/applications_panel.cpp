@@ -170,6 +170,14 @@ void draw_node(wxDC& dc, const Node* n) {
 
 class ApplicationsCanvas : public wxScrolledWindow {
 public:
+    // configure_cb: called when the user clicks Apply in the
+    // right-click ConfigureTrace dialog. The panel wires this to
+    // GrpcClient::configure_trace on the matching machine. Receives
+    // (machine, node, msg_type, enabled).
+    using ConfigureCallback = std::function<void(
+        const std::string& /*machine*/, const std::string& /*node*/,
+        const std::string& /*msg_type*/, bool /*enabled*/)>;
+
     explicit ApplicationsCanvas(wxWindow* parent)
         : wxScrolledWindow(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize,
                            wxVSCROLL | wxHSCROLL) {
@@ -177,6 +185,7 @@ public:
         SetBackgroundColour(*wxWHITE);
         SetScrollRate(16, 16);
         Bind(wxEVT_PAINT, &ApplicationsCanvas::on_paint, this);
+        Bind(wxEVT_RIGHT_DOWN, &ApplicationsCanvas::on_right_down, this);
     }
 
     void set_snapshot(const std::string& machine,
@@ -184,6 +193,10 @@ public:
         std::lock_guard<std::mutex> lk(mtx_);
         snapshots_[machine] = std::move(snap);
         Refresh(false);
+    }
+
+    void set_configure_callback(ConfigureCallback cb) {
+        configure_cb_ = std::move(cb);
     }
 
 private:
@@ -246,8 +259,102 @@ private:
         SetVirtualSize(max_w + kMargin, y_cursor + kMargin);
     }
 
+    // #365 — Right-click on a node row opens a ConfigureTrace
+    // dialog. The hit-test reuses the layout cache (last on_paint
+    // pass) so the click→node mapping is exact. node_at_point()
+    // returns the box the click landed in, or nullptr.
+    void on_right_down(wxMouseEvent& evt) {
+        wxPoint p = CalcUnscrolledPosition(evt.GetPosition());
+        std::string machine, node_name, node_msg_default;
+        bool is_worker = false;
+        {
+            std::lock_guard<std::mutex> lk(mtx_);
+            // Re-layout in a memory DC to compute hit boxes — cheaper
+            // than caching them across paints since the snapshot map
+            // changes rarely.
+            wxMemoryDC dc;
+            wxBitmap bmp(1, 1);
+            dc.SelectObject(bmp);
+            int y_cursor = kMargin;
+            for (const auto& kv : snapshots_) {
+                const auto& snap = kv.second;
+                std::vector<Node*> roots;
+                auto store = build_tree(snap, roots);
+                if (roots.empty()) continue;
+                wxString cap = wxString::Format("machine: %s",
+                                                 kv.first.c_str());
+                y_cursor += dc.GetTextExtent(cap).GetHeight() + 4;
+                int x_cursor = kMargin;
+                for (auto* r : roots) {
+                    layout_sizes(r, dc);
+                    layout_place(r, x_cursor, y_cursor);
+                    std::vector<Node*> stack{r};
+                    while (!stack.empty()) {
+                        Node* n = stack.back(); stack.pop_back();
+                        wxRect rect(n->x, n->y, n->w, n->h);
+                        if (rect.Contains(p)) {
+                            machine     = kv.first;
+                            node_name   = n->name;
+                            is_worker   = (n->kind == 0);
+                            // For workers we don't know a default
+                            // msg_type — user types it. For sup rows
+                            // a Configure makes no sense; skip.
+                        }
+                        for (auto* c : n->children) stack.push_back(c);
+                        x_cursor = std::max(x_cursor, n->x + n->w);
+                    }
+                    x_cursor += kHGap * 2;
+                    y_cursor = std::max(y_cursor, r->y + r->h);
+                }
+                y_cursor += kMachineGap;
+            }
+        }
+        if (machine.empty() || node_name.empty() || !is_worker) {
+            evt.Skip();
+            return;
+        }
+        show_configure_dialog(machine, node_name);
+    }
+
+    void show_configure_dialog(const std::string& machine,
+                                const std::string& node_name) {
+        wxDialog dlg(this, wxID_ANY, "Configure Trace",
+                     wxDefaultPosition, wxSize(420, 220));
+        auto* outer = new wxBoxSizer(wxVERTICAL);
+        outer->Add(new wxStaticText(&dlg, wxID_ANY,
+            wxString::Format("Node:    %s    (machine: %s)",
+                              node_name.c_str(), machine.c_str())),
+            0, wxALL, 10);
+
+        auto* row = new wxBoxSizer(wxHORIZONTAL);
+        row->Add(new wxStaticText(&dlg, wxID_ANY, "Message type:"),
+                 0, wxALIGN_CENTER_VERTICAL | wxLEFT | wxRIGHT, 10);
+        auto* msg = new wxTextCtrl(&dlg, wxID_ANY, "SmStateMsg",
+                                    wxDefaultPosition, wxSize(220, -1));
+        row->Add(msg, 1, wxRIGHT, 10);
+        outer->Add(row, 0, wxEXPAND);
+
+        auto* enable_box = new wxCheckBox(&dlg, wxID_ANY,
+            "Enabled (uncheck to remove the filter)");
+        enable_box->SetValue(true);
+        outer->Add(enable_box, 0, wxALL, 10);
+
+        auto* buttons = dlg.CreateButtonSizer(wxOK | wxCANCEL);
+        outer->Add(buttons, 0, wxEXPAND | wxALL, 10);
+        dlg.SetSizer(outer);
+        outer->Layout();
+
+        if (dlg.ShowModal() != wxID_OK) return;
+        std::string msg_type = std::string(msg->GetValue().mb_str());
+        bool enabled = enable_box->IsChecked();
+        if (configure_cb_) {
+            configure_cb_(machine, node_name, msg_type, enabled);
+        }
+    }
+
     std::mutex mtx_;
     std::map<std::string, services::supervisor::TreeSnapshot> snapshots_;
+    ConfigureCallback configure_cb_;
 };
 
 ApplicationsPanel::ApplicationsPanel(wxWindow* parent) : PanelBase(parent) {
@@ -264,6 +371,11 @@ void ApplicationsPanel::on_frame(const std::string& machine_name,
     services::supervisor::TreeSnapshot snap;
     if (!snap.ParseFromString(payload)) return;
     canvas_->set_snapshot(machine_name, std::move(snap));
+}
+
+void ApplicationsPanel::set_configure_trace_callback(
+    ConfigureTraceCallback cb) {
+    canvas_->set_configure_callback(std::move(cb));
 }
 
 }  // namespace sup_gui

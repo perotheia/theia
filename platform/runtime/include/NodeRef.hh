@@ -248,12 +248,72 @@ private:
 };
 
 
+// ---- TipcAddr — runtime TIPC address pair --------------------------------
+//
+// The compile-time-templated RemoteRef<NodeType, TT, TI> hardcodes the
+// destination in the type. Netgraph LUTs need the dual: address is a
+// constexpr VALUE that the generated <Node>_netgraph.hh emits per
+// reachable peer, and `cast(Daemon&, Msg, TipcAddr)` looks it up at
+// runtime.
+//
+// This is the user-facing primitive after the netgraph redesign —
+// app code writes `cast(*this, msg, netgraph::exec)` where
+// `netgraph::exec` is a `constexpr TipcAddr` from the gen-app-emitted
+// header. The runtime builds a per-call TipcClient + frame-sends.
+//
+// Cost: each cast opens a fresh TIPC connection. For high-frequency
+// signals a per-peer connection cache could help — not in this round.
+struct TipcAddr {
+    uint32_t type;
+    uint32_t instance;
+};
+
+
 // ---- cast / call / send_request overloads -------------------------------
 
 // Local path: dispatch into the existing mailbox lambda.
 template <typename T, typename Msg>
 void cast(LocalRef<T>& ref, Msg msg) {
     cast(ref.target(), std::move(msg));
+}
+
+// ---- Netgraph LUT path ---------------------------------------------------
+//
+// `cast(daemon, msg, TipcAddr)` — addressed by a runtime constexpr
+// from the netgraph header. The `daemon` arg is only used for the
+// trace tag (`Daemon::kNodeName`) so the trace stream stays
+// consistent with the existing RemoteRef path.
+template <typename Daemon, typename Msg>
+void cast(Daemon& /*self*/, const Msg& msg, TipcAddr addr) {
+    using Codec = RemoteCodec<Msg>;
+    // Ad-hoc client — one fresh connection per cast. Fine for low-
+    // frequency signals (state broadcasts). A per-peer client cache
+    // is the optimization step, kept for a future round.
+    TipcClient client;
+    if (!client.connect(addr.type, addr.instance)) return;
+
+    uint8_t buf[256];
+    pb_ostream_t os = pb_ostream_from_buffer(buf, sizeof(buf));
+    if (!pb_encode(&os, Codec::fields(), &msg)) return;
+
+    auto& tr = ::demo::runtime::tracer_for(Daemon::kNodeName);
+    if (tr.enabled()) {
+        tr.emit(::demo::runtime::TraceEvent::Send,
+                ::demo::runtime::msg_type_name<Msg>(),
+                /*corr_id=*/0,
+                buf, (uint16_t)os.bytes_written);
+    }
+
+    GwMessageHeader hdr{};
+    hdr.bus_type            = GW_BUS_TYPE_RPC;
+    hdr.msg_type            = GW_MSG_GEN_CAST;
+    hdr.proto_len           = (uint16_t)os.bytes_written;
+    hdr.rpc.service_id      = Codec::service_id;
+    hdr.rpc.method_id       = 0;
+    hdr.rpc.correlation_id  = 0;
+    client.send_frame(hdr, buf, (uint16_t)os.bytes_written);
+    // Connection drops on `client` going out of scope. Future
+    // per-peer caching would pin them.
 }
 
 template <typename Reply, typename T, typename Req, typename Act>

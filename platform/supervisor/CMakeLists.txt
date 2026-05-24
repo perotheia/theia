@@ -165,3 +165,10 @@ target_link_libraries(test_node_sup_synth PRIVATE
     ${PROTOBUF_LIBRARIES}
     pthread
 )
+
+
+# #361 — Supervisor's trace-config store (data shape only). Pure
+# function, no protobuf/yaml/etcd needed.
+add_executable(test_trace_config_store
+    test/test_trace_config_store.cpp
+)

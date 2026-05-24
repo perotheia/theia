@@ -189,6 +189,40 @@ private:
     };
     std::map<pid_t, HeartbeatState>  heartbeats_;
     void check_heartbeats();
+
+    // ---- Trace config (#361) -----------------------------------------------
+    //
+    // The supervisor receives ConfigureTrace from supdbg/services-com,
+    // remembers the (target_node, msg_type) → enabled tuple, and pushes
+    // it to the node's NodeTraceCtl TIPC server. The config is keyed by
+    // child NAME (the worker process), not pid, so it survives restart:
+    // the first HeartbeatReport after a gap fires a re-push.
+    //
+    // Storage: configs_by_child[child_name][msg_type] = enabled.
+    // Empty key (no entries) means "no trace for that child" — the
+    // supervisor never sends an ApplyConfig to it.
+    std::map<std::string,
+             std::map<std::string, bool>>      trace_configs_;
+
+    // Tracks last heartbeat time per child NAME (not pid) — so we can
+    // detect a "fresh start after gap" trigger independent of pid.
+    // Updated in the kTagHeartbeat handler alongside heartbeats_[pid].
+    std::map<std::string,
+             std::chrono::steady_clock::time_point>
+                                                 last_heartbeat_by_child_;
+
+    // Apply one TraceConfig: update the in-memory table and push to
+    // the node (best-effort — failure to push is logged, not fatal).
+    void apply_trace_config(const std::string& target_node,
+                            const std::string& msg_type,
+                            bool enabled);
+
+    // Push the WHOLE trace_configs_[child] map to that child's
+    // NodeTraceCtl TIPC server. Called on (re)start of the worker and
+    // on the first heartbeat after a gap. The peer's TIPC address is
+    // looked up from the worker's NodeInfo.tipc_{type,instance}.
+    // No-op when the child has no entries.
+    void push_trace_config_to_child(const std::string& child_name);
 };
 
 }  // namespace supervisor

@@ -175,17 +175,21 @@ private:
 class TraceStreamImpl final
     : public services::com::TraceStream::Service {
 public:
-    explicit TraceStreamImpl(services_com::TipcTraceUplink* uplink)
-        : uplink_(uplink) {}
+    // Two uplinks:
+    //   sup_uplink — ControlRequest → supervisor (for Configure, per #361)
+    //   trace_uplink — log[trace] fanout (for Subscribe records)
+    TraceStreamImpl(services_com::TipcUplink* sup_uplink,
+                    services_com::TipcTraceUplink* trace_uplink)
+        : sup_uplink_(sup_uplink), trace_uplink_(trace_uplink) {}
 
     grpc::Status Subscribe(grpc::ServerContext* ctx,
                            const services::com::TraceSubscribeRequest*,
                            grpc::ServerWriter<services::com::TraceRecord>* writer) override {
-        if (!uplink_->running()) {
+        if (!trace_uplink_->running()) {
             return grpc::Status(grpc::StatusCode::UNAVAILABLE,
                                 "trace uplink not connected to log[trace]");
         }
-        auto sub = uplink_->subscribe();
+        auto sub = trace_uplink_->subscribe();
         std::fprintf(stderr, "com: gRPC trace subscriber attached\n");
         while (!ctx->IsCancelled()) {
             services_com::TraceFrame f;
@@ -210,7 +214,7 @@ public:
             }
             if (!writer->Write(rec)) break;     // client gone
         }
-        uplink_->unsubscribe(sub);
+        trace_uplink_->unsubscribe(sub);
         std::fprintf(stderr, "com: gRPC trace subscriber detached\n");
         return grpc::Status::OK;
     }
@@ -218,27 +222,35 @@ public:
     grpc::Status Configure(grpc::ServerContext*,
                            const services::com::TraceConfigRequest* req,
                            services::supervisor::ControlReply* reply) override {
-        if (!uplink_->running()) {
-            return grpc::Status(grpc::StatusCode::UNAVAILABLE,
-                                "trace uplink not connected to log[trace]");
-        }
-        // Wire format on the TIPC link is the same TraceConfigRequest
-        // proto — TraceCollector parses it and forwards to the
-        // supervisor's NodeTraceCtl push (#361). Fire-and-forget; no
-        // synchronous reply on the TIPC side. ControlReply status=0
-        // means "accepted by bridge", not "applied at FC".
-        bool ok = uplink_->send_config_request(req->SerializeAsString());
+        // Routes through SUPERVISOR (not log[trace]) — the supervisor
+        // owns the trace_config_[child] store and the per-NODE push
+        // (#361). com just packages TraceConfigRequest into a
+        // ControlRequest envelope and forwards.
+        ::services::supervisor::ControlRequest cr;
+        cr.set_op_kind(9);                     // kOpConfigureTrace
+        cr.set_correlation_id(sup_uplink_->next_correlation_id());
+        auto* cfg = cr.mutable_configure_trace()->mutable_config();
+        cfg->set_target_node(req->target_node());
+        cfg->set_msg_type(req->msg_type());
+        cfg->set_enabled(req->enabled());
+
+        std::string reply_payload;
+        bool ok = sup_uplink_->send_control_request(
+            cr.SerializeAsString(), cr.correlation_id(), reply_payload);
         if (!ok) {
             return grpc::Status(grpc::StatusCode::UNAVAILABLE,
-                                "trace uplink send failed");
+                                "supervisor reply timeout");
         }
-        reply->set_status(0);
-        reply->set_message("trace config queued");
+        if (!reply->ParseFromString(reply_payload)) {
+            return grpc::Status(grpc::StatusCode::INTERNAL,
+                                "malformed ControlReply");
+        }
         return grpc::Status::OK;
     }
 
 private:
-    services_com::TipcTraceUplink* uplink_;
+    services_com::TipcUplink*       sup_uplink_;
+    services_com::TipcTraceUplink*  trace_uplink_;
 };
 
 
@@ -281,7 +293,7 @@ int main(int argc, char** argv) {
     }
 
     SupervisorViewImpl  sup_svc(&uplink);
-    TraceStreamImpl     trace_svc(&trace_uplink);
+    TraceStreamImpl     trace_svc(&uplink, &trace_uplink);
     grpc::ServerBuilder b;
     b.AddListeningPort(listen, grpc::InsecureServerCredentials());
     b.RegisterService(&sup_svc);

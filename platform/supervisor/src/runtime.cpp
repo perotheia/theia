@@ -20,6 +20,10 @@
 #include "SendTimeoutReport.pb.h"
 #include "StartChildRequest.pb.h"
 #include "SupervisionEvent.pb.h"
+#include "TraceConfig.pb.h"
+#include "TraceConfigList.pb.h"
+#include "ConfigureTraceRequest.pb.h"
+#include "GetTraceConfigRequest.pb.h"
 #include "TreeSnapshot.pb.h"
 
 #include <algorithm>
@@ -43,6 +47,8 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <signal.h>
+#include <linux/tipc.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
 namespace supervisor {
@@ -661,6 +667,21 @@ constexpr uint32_t kOpRestartChild    = 5;
 constexpr uint32_t kOpTerminateChild  = 6;
 constexpr uint32_t kOpStop            = 7;
 constexpr uint32_t kOpGetSystemInfo   = 8;
+constexpr uint32_t kOpConfigureTrace  = 9;
+constexpr uint32_t kOpGetTraceConfig  = 10;
+
+// Per-node NodeTraceCtl tag — what we send out the wire to a worker
+// when pushing an ApplyConfig. The runtime side (gen-app emitted
+// NodeTraceCtl receiver, #363) decodes a TraceConfig from the
+// payload and applies it via Tracer::trace_enable (#355).
+constexpr uint16_t kTagTraceApplyConfig = 0x0300;
+
+// "Stale heartbeat" gap: if the last heartbeat we saw from a child
+// is older than this, treat the NEXT heartbeat as a (re)start
+// trigger and re-push the saved trace config. Tuned to be
+// comfortably larger than the runtime's default heartbeat period
+// (1s); a 5s gap means "process was almost certainly restarted".
+constexpr auto kHeartbeatGapForRepush = std::chrono::seconds(5);
 }  // namespace
 
 void Supervisor::on_inbound_frame(int client_fd, uint16_t tag,
@@ -757,6 +778,42 @@ void Supervisor::on_inbound_frame(int client_fd, uint16_t tag,
                 break;
             }
 
+            case kOpConfigureTrace: {
+                // #361: store + push. The wire-side handler in
+                // apply_trace_config does both. We do NOT validate
+                // that target_node actually exists — the supervisor
+                // is happy to store config for a child that hasn't
+                // started yet (matches the "config survives restart"
+                // contract).
+                const auto& cfg = req.configure_trace().config();
+                apply_trace_config(cfg.target_node(), cfg.msg_type(),
+                                   cfg.enabled());
+                rep.set_status(0);
+                rep.set_message("trace config applied");
+                break;
+            }
+
+            case kOpGetTraceConfig: {
+                // Reply with TraceConfigList (tag kTagTraceConfig) +
+                // a status=0 ControlReply, matching the GetSystemInfo
+                // two-frame pattern. Flatten the per-child map into
+                // a flat list — the client doesn't care which
+                // supervisor key produced which entry.
+                ::services::supervisor::TraceConfigList list;
+                for (const auto& outer : trace_configs_) {
+                    for (const auto& inner : outer.second) {
+                        auto* c = list.add_configs();
+                        c->set_target_node(outer.first);
+                        c->set_msg_type(inner.first);
+                        c->set_enabled(inner.second);
+                    }
+                }
+                publisher_.reply_to(client_fd, kTagTraceApplyConfig,
+                                     list.SerializeAsString());
+                rep.set_status(0);
+                break;
+            }
+
             default:
                 rep.set_status(4);    // invalid_request
                 rep.set_message("unknown op_kind");
@@ -774,13 +831,29 @@ void Supervisor::on_inbound_frame(int client_fd, uint16_t tag,
             return;
         }
         pid_t pid = hb.pid();
+        auto now = std::chrono::steady_clock::now();
         auto& s   = heartbeats_[pid];
-        s.last_seen = std::chrono::steady_clock::now();
+        s.last_seen = now;
         s.last_seq = hb.seq();
         std::fprintf(stderr,
                      "supervisor: heartbeat node=%s pid=%d seq=%llu\n",
                      hb.node_name().c_str(), pid,
                      static_cast<unsigned long long>(hb.seq()));
+
+        // #361 — "first heartbeat after a gap" is the re-push trigger
+        // for the worker's saved trace config. Per-child tracking
+        // (not per-pid) so the gap detection survives restart: a
+        // freshly-spawned worker has no prior entry → treated as a
+        // gap → push fires. This is also what handles the cold-start
+        // case where ConfigureTrace arrived before the worker booted.
+        const std::string& child = hb.node_name();
+        auto it = last_heartbeat_by_child_.find(child);
+        bool fire_push = (it == last_heartbeat_by_child_.end()) ||
+                         (now - it->second > kHeartbeatGapForRepush);
+        last_heartbeat_by_child_[child] = now;
+        if (fire_push) {
+            push_trace_config_to_child(child);
+        }
         return;
     }
     if (tag == kTagSendTimeout) {
@@ -1559,6 +1632,143 @@ void Supervisor::check_heartbeats() {
             ++it;
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// #361 — Trace config storage + per-NODE push helpers.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Send one [u16 tag BE][payload] frame to a TIPC NAME (type, instance).
+// Opens a fresh SEQPACKET socket, connects, sends, closes. Best-
+// effort: returns false on any error. NOT used on the hot path —
+// only when ConfigureTrace lands or when a child sends its first
+// heartbeat after a gap.
+bool send_frame_to_tipc_name(uint32_t type, uint32_t instance,
+                             uint16_t tag, const std::string& payload) {
+    int fd = ::socket(AF_TIPC, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
+    if (fd < 0) return false;
+    struct sockaddr_tipc addr{};
+    addr.family                  = AF_TIPC;
+    addr.addrtype                = TIPC_ADDR_NAME;
+    addr.addr.name.name.type     = type;
+    addr.addr.name.name.instance = instance;
+    addr.scope                   = TIPC_NODE_SCOPE;
+    if (::connect(fd, reinterpret_cast<struct sockaddr*>(&addr),
+                  sizeof(addr)) < 0) {
+        ::close(fd);
+        return false;
+    }
+    std::string frame(2 + payload.size(), '\0');
+    frame[0] = static_cast<char>((tag >> 8) & 0xff);
+    frame[1] = static_cast<char>(tag & 0xff);
+    if (!payload.empty()) {
+        std::memcpy(&frame[2], payload.data(), payload.size());
+    }
+    ssize_t n = ::send(fd, frame.data(), frame.size(), 0);
+    ::close(fd);
+    return n == static_cast<ssize_t>(frame.size());
+}
+
+}  // namespace
+
+void Supervisor::apply_trace_config(const std::string& target_node,
+                                    const std::string& msg_type,
+                                    bool enabled) {
+    if (target_node.empty()) {
+        log_warn("apply_trace_config: empty target_node — dropping");
+        return;
+    }
+    auto& by_msg = trace_configs_[target_node];
+    if (enabled) {
+        by_msg[msg_type] = true;
+    } else {
+        by_msg.erase(msg_type);
+        // Garbage-collect empty entries so iteration in
+        // push_trace_config_to_child stays cheap.
+        if (by_msg.empty()) trace_configs_.erase(target_node);
+    }
+    std::fprintf(stderr,
+        "supervisor: trace config %s for %s/%s\n",
+        enabled ? "ENABLE" : "DISABLE",
+        target_node.c_str(), msg_type.c_str());
+
+    // Push immediately if the child is alive. Stale entries on dead
+    // children are harmless — the next heartbeat-after-gap will fire
+    // a re-push anyway.
+    push_trace_config_to_child(target_node);
+}
+
+void Supervisor::push_trace_config_to_child(const std::string& child_name) {
+    auto cfg_it = trace_configs_.find(child_name);
+    if (cfg_it == trace_configs_.end()) return;  // nothing to push
+
+    // Find the worker's NodeInfo to learn the NodeTraceCtl TIPC addr.
+    // For Phase 1 of #361 we look up the worker by NAME and use its
+    // first reporting node's tipc_{type,instance}. A future iteration
+    // could route per-msg-type to different node threads, but the
+    // executor.yaml today places one node per worker for FCs that
+    // use trace.
+    WorkerNode* w = find_worker_by_name(child_name);
+    if (!w) {
+        std::fprintf(stderr,
+            "supervisor: trace push: no worker named '%s' yet\n",
+            child_name.c_str());
+        return;
+    }
+    if (w->nodes.empty()) {
+        std::fprintf(stderr,
+            "supervisor: trace push: worker '%s' has no NodeInfo "
+            "(reporting=false?) — skipping push\n",
+            child_name.c_str());
+        return;
+    }
+
+    // Use the first reporting node's TIPC addr. Hex string → u32.
+    const NodeInfo* target = nullptr;
+    for (const auto& ni : w->nodes) {
+        if (ni.reporting) { target = &ni; break; }
+    }
+    if (!target) return;
+
+    uint32_t type, instance;
+    try {
+        type     = std::stoul(target->tipc_type, nullptr, 0);
+        instance = std::stoul(target->tipc_instance, nullptr, 0);
+    } catch (...) {
+        std::fprintf(stderr,
+            "supervisor: trace push: bad tipc addr for '%s'\n",
+            child_name.c_str());
+        return;
+    }
+
+    // One TraceApplyConfig frame per (msg_type, enabled) entry.
+    int pushed = 0;
+    for (const auto& kv : cfg_it->second) {
+        const std::string& msg_type = kv.first;
+        bool enabled = kv.second;
+        ::services::supervisor::TraceConfig tc;
+        tc.set_target_node(child_name);
+        tc.set_msg_type(msg_type);
+        tc.set_enabled(enabled);
+        if (send_frame_to_tipc_name(type, instance,
+                                     kTagTraceApplyConfig,
+                                     tc.SerializeAsString())) {
+            ++pushed;
+        } else {
+            std::fprintf(stderr,
+                "supervisor: trace push: send to '%s' failed "
+                "(type=0x%x inst=%u) — child likely not listening yet\n",
+                child_name.c_str(), type, instance);
+            // Don't keep iterating once a single push fails — they'll
+            // all fail too. The next heartbeat-after-gap retries.
+            return;
+        }
+    }
+    std::fprintf(stderr,
+        "supervisor: pushed %d trace config entries to '%s'\n",
+        pushed, child_name.c_str());
 }
 
 }  // namespace supervisor

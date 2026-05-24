@@ -1,0 +1,65 @@
+{
+  "vehicle": {
+    "name": "demo",
+    "make": "theia",
+    "model": "gen_server-demo"
+  },
+  "machines": [
+    {
+      "name": "compute_host",
+      "kind": "target",
+      "arch": "amd64",
+      "applications": [
+        {
+          "name": "compute_app",
+          "components": [
+            {
+              "name": "demo_p1",
+              "bazel_target": "//demo:p1_main",
+              "owner": "platform",
+              "art_node": "system.demo/Demo3WayP1",
+              "bazel_buildable": true
+            },
+            {
+              "name": "demo_p2",
+              "bazel_target": "//demo:p2_main",
+              "owner": "platform",
+              "art_node": "system.demo/Demo3WayP2",
+              "bazel_buildable": true
+            },
+            {
+              "name": "demo_p3",
+              "bazel_target": "//demo:p3_main",
+              "owner": "platform",
+              "art_node": "system.demo/Demo3WayP3",
+              "bazel_buildable": true
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "flat_components": [
+    {
+      "name": "demo_p1",
+      "bazel_target": "//demo:p1_main",
+      "machine": "compute_host",
+      "owner": "platform",
+      "bazel_buildable": true
+    },
+    {
+      "name": "demo_p2",
+      "bazel_target": "//demo:p2_main",
+      "machine": "compute_host",
+      "owner": "platform",
+      "bazel_buildable": true
+    },
+    {
+      "name": "demo_p3",
+      "bazel_target": "//demo:p3_main",
+      "machine": "compute_host",
+      "owner": "platform",
+      "bazel_buildable": true
+    }
+  ]
+}

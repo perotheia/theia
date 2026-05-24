@@ -1,0 +1,271 @@
+{
+  "package": "system.demo",
+  "nodes": [
+    {
+      "name": "CounterNode",
+      "tipc": {
+        "type": "0xd0010001",
+        "instance": "0"
+      },
+      "ports": [
+        {
+          "name": "srv",
+          "direction": "out",
+          "family": "clientServer",
+          "interface": "CounterSrv",
+          "messages": [
+            "GetReply"
+          ]
+        },
+        {
+          "name": "inc_in",
+          "direction": "in",
+          "family": "senderReceiver",
+          "interface": "IncIface",
+          "messages": [
+            "Inc"
+          ]
+        }
+      ],
+      "signals": {
+        "Inc": {
+          "direction": "in",
+          "destinations": [
+            {
+              "node": "DriverNode",
+              "tipc_type": "0xd0010002",
+              "tipc_instance": "0"
+            },
+            {
+              "node": "IncrementerNode",
+              "tipc_type": "0xd0010005",
+              "tipc_instance": "0"
+            }
+          ]
+        },
+        "GetReply": {
+          "direction": "out",
+          "destinations": [
+            {
+              "node": "DriverNode",
+              "tipc_type": "0xd0010002",
+              "tipc_instance": "0"
+            },
+            {
+              "node": "ObserverNode",
+              "tipc_type": "0xd0010004",
+              "tipc_instance": "0"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "DriverNode",
+      "tipc": {
+        "type": "0xd0010002",
+        "instance": "0"
+      },
+      "ports": [
+        {
+          "name": "inc_out",
+          "direction": "out",
+          "family": "senderReceiver",
+          "interface": "IncIface",
+          "messages": [
+            "Inc"
+          ]
+        },
+        {
+          "name": "counter_call",
+          "direction": "in",
+          "family": "clientServer",
+          "interface": "CounterSrv",
+          "messages": [
+            "GetReply"
+          ]
+        }
+      ],
+      "signals": {
+        "Inc": {
+          "direction": "out",
+          "destinations": [
+            {
+              "node": "CounterNode",
+              "tipc_type": "0xd0010001",
+              "tipc_instance": "0"
+            }
+          ]
+        },
+        "GetReply": {
+          "direction": "in",
+          "destinations": [
+            {
+              "node": "CounterNode",
+              "tipc_type": "0xd0010001",
+              "tipc_instance": "0"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "TickerNode",
+      "tipc": {
+        "type": "0xd0010003",
+        "instance": "0"
+      },
+      "ports": [],
+      "signals": {}
+    },
+    {
+      "name": "ObserverNode",
+      "tipc": {
+        "type": "0xd0010004",
+        "instance": "0"
+      },
+      "ports": [
+        {
+          "name": "counter_call",
+          "direction": "in",
+          "family": "clientServer",
+          "interface": "CounterSrv",
+          "messages": [
+            "GetReply"
+          ]
+        }
+      ],
+      "signals": {
+        "GetReply": {
+          "direction": "in",
+          "destinations": [
+            {
+              "node": "CounterNode",
+              "tipc_type": "0xd0010001",
+              "tipc_instance": "0"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "IncrementerNode",
+      "tipc": {
+        "type": "0xd0010005",
+        "instance": "0"
+      },
+      "ports": [
+        {
+          "name": "inc_out",
+          "direction": "out",
+          "family": "senderReceiver",
+          "interface": "IncIface",
+          "messages": [
+            "Inc"
+          ]
+        }
+      ],
+      "signals": {
+        "Inc": {
+          "direction": "out",
+          "destinations": [
+            {
+              "node": "CounterNode",
+              "tipc_type": "0xd0010001",
+              "tipc_instance": "0"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "compositions": [
+    {
+      "name": "Demo3WayP1",
+      "prototypes": [
+        {
+          "name": "counter",
+          "node": "CounterNode",
+          "tipc": {
+            "type": "0xd0010001",
+            "instance": "0"
+          }
+        },
+        {
+          "name": "driver",
+          "node": "DriverNode",
+          "tipc": {
+            "type": "0xd0010002",
+            "instance": "0"
+          }
+        },
+        {
+          "name": "ticker",
+          "node": "TickerNode",
+          "tipc": {
+            "type": "0xd0010003",
+            "instance": "0"
+          }
+        }
+      ],
+      "connections": [
+        {
+          "source": {
+            "prototype": "driver",
+            "port": "inc_out"
+          },
+          "target": {
+            "prototype": "counter",
+            "port": "inc_in"
+          },
+          "interface": "IncIface",
+          "messages": [
+            "Inc"
+          ]
+        },
+        {
+          "source": {
+            "prototype": "driver",
+            "port": "counter_call"
+          },
+          "target": {
+            "prototype": "counter",
+            "port": "srv"
+          },
+          "interface": "CounterSrv",
+          "messages": [
+            "GetReply"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Demo3WayP2",
+      "prototypes": [
+        {
+          "name": "observer",
+          "node": "ObserverNode",
+          "tipc": {
+            "type": "0xd0010004",
+            "instance": "0"
+          }
+        }
+      ],
+      "connections": []
+    },
+    {
+      "name": "Demo3WayP3",
+      "prototypes": [
+        {
+          "name": "incrementer",
+          "node": "IncrementerNode",
+          "tipc": {
+            "type": "0xd0010005",
+            "instance": "0"
+          }
+        }
+      ],
+      "connections": []
+    }
+  ]
+}

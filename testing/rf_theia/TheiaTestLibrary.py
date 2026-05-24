@@ -62,6 +62,8 @@ from .runtime.supervision import (
     load_supervision,
 )
 from .runtime.supervisor_watcher import SupervisorWatcher
+from .runtime.topology import Topology, load_topology
+from .runtime.topology_check import Issue, validate_against_rig
 from .runtime.trace_watcher import TraceWatcher
 
 logger = logging.getLogger("rf_theia")
@@ -125,6 +127,10 @@ class TheiaTestLibrary:
         # `Load Rig` so `Run Component` can register instances.
         self._components: Optional[ComponentRuntime] = None
         self._local_transport: Optional[LocalTransport] = None
+        # Pair-5 — typed topology graph + cross-check issues from the
+        # last `Assert Netgraph Matches Rig` call (for inspection).
+        self._topology: Optional[Topology] = None
+        self._last_issues: list[Issue] = []
 
     # ──────────────────────────────────────────────────────────────────
     # Pair-1 lifecycle: Load Rig / Tear Down Rig.
@@ -217,6 +223,8 @@ class TheiaTestLibrary:
         self._supervision_tree = None
         self._crash_anchor = 0.0
         self._last_crashed = None
+        self._topology = None
+        self._last_issues = []
         if self._ctx is not None and self._ctx.supervisor is not None:
             try:
                 self._ctx.supervisor.close()
@@ -652,6 +660,120 @@ class TheiaTestLibrary:
         return self.component_call(instance, method, **kwargs)
 
     # ──────────────────────────────────────────────────────────────────
+    # Pair-5 keywords: topology graph.
+    # ──────────────────────────────────────────────────────────────────
+
+    @keyword("Load Topology")
+    def load_topology_kw(self, path: str) -> None:
+        """Load artheia's emitted ``netgraph.json`` for the current
+        package. Static graph queries are then available via the
+        topology assertions.
+
+        Typical path: ``<package>/system/netgraph.json`` (built by
+        ``artheia gen-netgraph``) or a captured fixture under
+        ``scenarios/fixtures/``.
+
+        Must follow `Load Rig` so cross-checks can compare against
+        the deployment.
+        """
+        self._require_runtime()
+        self._topology = load_topology(path)
+        logger.info("Load Topology: %s (nodes=%d, compositions=%d)",
+                    path, len(self._topology.nodes),
+                    len(self._topology.compositions))
+
+    @keyword("Assert Routes To")
+    def assert_routes_to(
+        self,
+        source: str,
+        msg: str,
+        *expected: str,
+    ) -> None:
+        """Assert that ``source`` emits ``msg`` to EXACTLY the given
+        set of destinations (order-insensitive).
+
+        Example::
+
+            Assert Routes To    CounterNode    GetReply    DriverNode    ObserverNode
+        """
+        topo = self._require_topology()
+        actual = sorted(topo.destinations_of(source, msg))
+        wanted = sorted(expected)
+        if actual != wanted:
+            raise AssertionError(
+                f"Assert Routes To: {source}.{msg} routes to {actual!r}, "
+                f"expected {wanted!r}"
+            )
+        logger.info("Assert Routes To: %s.%s = %s", source, msg, actual)
+
+    @keyword("Assert Reachable")
+    def assert_reachable(self, source: str, target: str) -> None:
+        """Assert ``target`` is in the transitive outbound closure of
+        ``source``. Catches "this signal can never reach that consumer"
+        bugs after a refactor."""
+        topo = self._require_topology()
+        reached = topo.reachable_from(source)
+        if target not in reached:
+            raise AssertionError(
+                f"Assert Reachable: {target!r} not reachable from "
+                f"{source!r} (reached: {sorted(reached)})"
+            )
+        logger.info("Assert Reachable: %s → %s", source, target)
+
+    @keyword("Assert Not Reachable")
+    def assert_not_reachable(self, source: str, target: str) -> None:
+        """Assert ``target`` is NOT in ``source``'s transitive closure.
+        Useful for isolation invariants (e.g. "the sandbox node must
+        not reach production services")."""
+        topo = self._require_topology()
+        reached = topo.reachable_from(source)
+        if target in reached:
+            raise AssertionError(
+                f"Assert Not Reachable: {target!r} IS reachable from "
+                f"{source!r} (path through outbound destinations)"
+            )
+
+    @keyword("Assert Netgraph Matches Rig")
+    def assert_netgraph_matches_rig(
+        self, severity: str = "error",
+    ) -> None:
+        """Cross-check the loaded topology against the loaded rig.
+
+        ``severity="error"`` (default): fails the test if any check
+        returns an error. Warnings (e.g. silent_node, orphan_node_type)
+        are surfaced via the log but don't fail.
+
+        ``severity="warning"``: fails on warnings too. Use this when
+        you want stricter hygiene gates.
+
+        Inspect the issue list afterwards via :meth:`Get Topology Issues`.
+        """
+        self._require_runtime()
+        topo = self._require_topology()
+        assert self._ctx is not None
+        rig = self._ctx.rig
+        self._last_issues = validate_against_rig(rig, topo)
+
+        fail_on = {"error"} if severity == "error" else {"error", "warning"}
+        offenders = [i for i in self._last_issues if i.severity in fail_on]
+        for i in self._last_issues:
+            logger.info("Assert Netgraph Matches Rig: %s", i)
+        if offenders:
+            lines = ["Assert Netgraph Matches Rig: cross-check failed:"]
+            lines.extend(f"  {i}" for i in offenders)
+            raise AssertionError("\n".join(lines))
+
+    @keyword("Get Topology Issues")
+    def get_topology_issues(self) -> list[str]:
+        """Return the last cross-check's issue list as formatted strings.
+
+        Use after `Assert Netgraph Matches Rig` to log/inspect findings
+        even when the assertion passed (e.g. for warnings the test
+        chose not to fail on).
+        """
+        return [str(i) for i in self._last_issues]
+
+    # ──────────────────────────────────────────────────────────────────
     # TPT engine passthroughs — kept from Phase 1; declarative-shape.
     # ──────────────────────────────────────────────────────────────────
 
@@ -721,6 +843,14 @@ class TheiaTestLibrary:
         self._require_runtime()
         assert self._ctx is not None
         return self._ctx.bus
+
+    def _require_topology(self) -> Topology:
+        self._require_runtime()
+        if self._topology is None:
+            raise RuntimeError(
+                "rf-theia topology not loaded — call `Load Topology` first"
+            )
+        return self._topology
 
     def _pick_transport(self, on: str):
         """Resolve `on=<machine>` to a transport.

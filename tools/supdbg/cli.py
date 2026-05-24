@@ -127,6 +127,63 @@ def cmd_repl(args: argparse.Namespace) -> int:
     return repl.run(args.target)
 
 
+@_wrap
+def cmd_trace_enable(args: argparse.Namespace) -> int:
+    """Toggle a (node, msg_type) trace filter ON via TraceStream.Configure."""
+    with Client(args.target) as c:
+        r = c.configure_trace(args.node, args.msg_type, enabled=True)
+        if r.status != 0:
+            print(f"trace enable failed: status={r.status} message={r.message!r}")
+            return 1
+        print(f"trace ON: {args.node}/{args.msg_type}")
+        return 0
+
+
+@_wrap
+def cmd_trace_disable(args: argparse.Namespace) -> int:
+    """Toggle a (node, msg_type) trace filter OFF."""
+    with Client(args.target) as c:
+        r = c.configure_trace(args.node, args.msg_type, enabled=False)
+        if r.status != 0:
+            print(f"trace disable failed: status={r.status} message={r.message!r}")
+            return 1
+        print(f"trace OFF: {args.node}/{args.msg_type}")
+        return 0
+
+
+@_wrap
+def cmd_trace_stream(args: argparse.Namespace) -> int:
+    """Subscribe to the TraceStream and print every record.
+
+    With --decode, looks up libtrace_decoder.so via rf_theia and
+    pretty-prints the JSON-decoded payload alongside each record.
+    Without --decode, prints node/msg_type/corr_id/ts_ns and the raw
+    payload byte count.
+    """
+    decoder = None
+    if args.decode:
+        try:
+            # rf_theia ships the ctypes wrapper (#356).
+            from rf_theia.adapters.trace_decoder import open_default
+            decoder = open_default()
+            print(f"# loaded libtrace_decoder.so ({decoder.registered_count()} protos)")
+        except Exception as e:
+            print(f"# WARNING: decoder unavailable ({e}); falling back to raw")
+
+    with Client(args.target) as c:
+        try:
+            for rec, decoded in c.subscribe_traces(decoder=decoder):
+                if decoded is not None:
+                    print(f"[{rec.ts_ns}] {rec.node_name} {rec.msg_type} "
+                          f"corr={rec.corr_id} {decoded}")
+                else:
+                    print(f"[{rec.ts_ns}] {rec.node_name} {rec.msg_type} "
+                          f"corr={rec.corr_id} ({len(rec.payload)}B raw)")
+        except KeyboardInterrupt:
+            return 0
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="supdbg",
@@ -185,6 +242,38 @@ def build_parser() -> argparse.ArgumentParser:
     prepl = sub.add_parser("repl", help="interactive dbg-style REPL")
     _add_target(prepl)
     prepl.set_defaults(func=cmd_repl)
+
+    # ---- trace (#360) ----------------------------------------------------
+    ptrace = sub.add_parser(
+        "trace",
+        help="control TraceStream — enable/disable filters, stream records",
+    )
+    trace_sub = ptrace.add_subparsers(dest="trace_cmd")
+    trace_sub.required = True
+
+    pte = trace_sub.add_parser(
+        "enable", help="enable trace for (node, msg_type)")
+    _add_target(pte)
+    pte.add_argument("node", help="target node name (e.g. SmDaemon)")
+    pte.add_argument("msg_type", help="message type (e.g. SmStateMsg)")
+    pte.set_defaults(func=cmd_trace_enable)
+
+    ptd = trace_sub.add_parser(
+        "disable", help="disable trace for (node, msg_type)")
+    _add_target(ptd)
+    ptd.add_argument("node")
+    ptd.add_argument("msg_type")
+    ptd.set_defaults(func=cmd_trace_disable)
+
+    pts = trace_sub.add_parser(
+        "stream", help="stream trace records (Ctrl-C to stop)")
+    _add_target(pts)
+    pts.add_argument(
+        "--decode", action="store_true",
+        help="decode payload via libtrace_decoder.so (#356); falls back "
+             "to raw bytes if the .so isn't available",
+    )
+    pts.set_defaults(func=cmd_trace_stream)
 
     # default = repl
     p.set_defaults(func=cmd_repl, target="127.0.0.1:7700")

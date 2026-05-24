@@ -146,6 +146,13 @@ class Client:
             self._stub    = _bridge_grpc.SupervisorViewStub(self._channel)
         return self._stub
 
+    def _ensure_trace(self) -> _bridge_grpc.TraceStreamStub:
+        """Lazy TraceStream stub — shares the channel with SupervisorView."""
+        self._ensure()
+        if not hasattr(self, "_trace_stub") or self._trace_stub is None:
+            self._trace_stub = _bridge_grpc.TraceStreamStub(self._channel)
+        return self._trace_stub
+
     def close(self) -> None:
         if self._channel is not None:
             self._channel.close()
@@ -257,3 +264,49 @@ class Client:
             if time.monotonic() > deadline:
                 return None
         return None  # pragma: no cover
+
+    # ----- TraceStream (#360) ---------------------------------------------
+
+    def configure_trace(self, target_node: str, msg_type: str,
+                        enabled: bool) -> _bridge_pb.ControlReply:
+        """Toggle the per-(node, msg_type) filter on the supervisor.
+
+        The supervisor stores the entry and pushes to the worker's
+        NodeTraceCtl TIPC port (#361). Config persists across child
+        restart — the next heartbeat-after-gap re-fires the push.
+        """
+        return self._ensure_trace().Configure(
+            _bridge_pb.TraceConfigRequest(
+                target_node=target_node,
+                msg_type=msg_type,
+                enabled=enabled,
+            ),
+            timeout=self.timeout,
+        )
+
+    def subscribe_traces(
+        self,
+        decoder: t.Optional["TraceDecoder"] = None,
+    ) -> t.Iterator[t.Tuple[_bridge_pb.TraceRecord, t.Optional[dict]]]:
+        """Yield (TraceRecord, decoded_dict-or-None) pairs forever.
+
+        If `decoder` is supplied (typically rf_theia.adapters.trace_
+        _decoder.open_default() — the libtrace_decoder.so loaded via
+        ctypes per #356), the payload bytes are decoded to a Python
+        dict and returned as the second tuple element. Without a
+        decoder, decoded_dict is None and the caller works with the
+        raw record.
+        """
+        stream = self._ensure_trace().Subscribe(
+            _bridge_pb.TraceSubscribeRequest()
+        )
+        for rec in stream:
+            decoded: t.Optional[dict] = None
+            if decoder is not None and rec.payload:
+                try:
+                    decoded = decoder.decode(rec.msg_type, rec.payload)
+                except Exception:
+                    # Unknown type / parse failure → surface the raw
+                    # record and let the caller decide.
+                    decoded = None
+            yield rec, decoded

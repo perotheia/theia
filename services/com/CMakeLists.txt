@@ -26,9 +26,9 @@ file(MAKE_DIRECTORY ${PROTO_GEN_DIR})
 # protoc (no grpc plugin). Same generated_proto layout used elsewhere.
 set(SUP_PROTOS
     ChildSelector ChildSpec ChildState ControlReply ControlRequest
-    DeleteChildRequest GetChildRequest GetTreeRequest HealthBeacon
-    HeartbeatReport SendTimeoutReport StartChildRequest
-    SupervisionEvent ThreadSample TreeSnapshot)
+    DeleteChildRequest GetChildRequest GetSystemInfoRequest GetTreeRequest
+    HealthBeacon HeartbeatReport SendTimeoutReport SocketInfo
+    StartChildRequest SupervisionEvent SystemInfo ThreadSample TreeSnapshot)
 set(SUP_PROTO_SRCS)
 foreach(P ${SUP_PROTOS})
     set(PB_CC ${PROTO_GEN_DIR}/${P}.pb.cc)
@@ -72,6 +72,7 @@ add_custom_command(
 add_executable(services-com
     src/main.cpp
     src/tipc_uplink.cpp
+    src/tipc_trace_uplink.cpp
     ${SUP_PROTO_SRCS}
     ${BRIDGE_PROTO_PB_CC}
     ${BRIDGE_PROTO_GRPC_CC}

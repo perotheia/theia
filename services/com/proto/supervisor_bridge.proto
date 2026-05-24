@@ -58,3 +58,58 @@ service SupervisorView {
     rpc TerminateChild (services.supervisor.ChildSelector)
         returns (services.supervisor.ControlReply);
 }
+
+
+// ---------------------------------------------------------------------------
+// TraceStream (#354) — gRPC bridge for services/log[trace] over TIPC.
+//
+// Wire shape is mirrored from the .art-driven log.proto (nanopb on the
+// node side, plain protobuf here). We re-declare the messages instead
+// of importing log.proto because that file is compiled by nanopb_generator
+// at build time and the .pb.h doesn't carry the C++ libprotobuf symbols
+// services/com's protoc pipeline needs. The byte-level wire format is
+// identical — both stacks read the same field numbers.
+// ---------------------------------------------------------------------------
+
+// One trace record observed at the log[trace] fanout. Mirrors the
+// services_services_log_TraceRecord nanopb struct produced by the FC
+// runtime (platform/runtime/include/Tracer.hh emits it).
+message TraceRecord {
+    string node_name = 1;   // emitting node (e.g. "SmDaemon")
+    string msg_type  = 2;   // proto message type name (e.g. "SmStateMsg")
+    uint32 corr_id   = 3;   // pairs Send/Recv/Dispatch within one cast/call
+    uint64 ts_ns     = 4;   // emitting node's steady_clock ns
+    bytes  payload   = 5;   // proto-wire-v3 bytes — fed to libtrace_decoder
+}
+
+// (target_node, msg_type) filter toggle. Routed via the supervisor's
+// NodeTraceCtl push path (#361): supdbg/GUI → com → supervisor → node.
+// `enabled=true`  installs the filter and starts flow; the supervisor
+//                 remembers it so it survives child restarts (#353).
+// `enabled=false` removes the filter; records stop flowing for that
+//                 (node, msg_type) pair.
+message TraceConfigRequest {
+    string target_node = 1;
+    string msg_type    = 2;
+    bool   enabled     = 3;
+}
+
+// gRPC carrier for the per-stream subscribe call. Currently empty —
+// subscription is "all trace records flowing through the collector"
+// and per-(node, msg_type) selection is via Configure, not the
+// subscription itself. This matches the dbg-style flow from the
+// Robot spec (services/log/trace_collection.robot).
+message TraceSubscribeRequest {}
+
+service TraceStream {
+    // Server-streaming firehose of TraceRecord wired from the log[trace]
+    // collector's TIPC fanout. Clients open one of these per machine and
+    // read until they Configure(enabled=false) or close the stream.
+    rpc Subscribe(TraceSubscribeRequest) returns (stream TraceRecord);
+
+    // Configure (node, msg_type) filter. Routes through the supervisor
+    // so the config persists across child restart — see #361 for the
+    // server side.
+    rpc Configure(TraceConfigRequest)
+        returns (services.supervisor.ControlReply);
+}

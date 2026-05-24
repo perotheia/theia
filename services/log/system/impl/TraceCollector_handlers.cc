@@ -19,28 +19,26 @@ namespace ara::log {
 
 void TraceCollector::handle_cast(const TraceRecord& /*msg*/,
                                  TraceCollectorState& /*s*/) {
-    // TODO: react to in_records.rec (TraceRecordSubmit).
-    std::fprintf(stderr, "[%s] received TraceRecordSubmit::rec\n",
+    // TODO: react to TraceRecord (dispatched by message type; one
+    // or more receiver ports may deliver it).
+    std::fprintf(stderr, "[%s] received TraceRecord\n",
                  kNodeName);
 }
+
+
 
 TraceEmpty TraceCollector::handle_call(
         const TraceConfigRequest& /*req*/,
         TraceCollectorState& /*s*/) {
-    // TODO: implement TraceControl::Configure.
-    std::fprintf(stderr, "[%s] TraceControl::Configure called\n",
+    // TODO: implement Configure (TraceConfigRequest →
+    //                                 TraceEmpty).
+    // Dispatched by request type; one or more server ports may
+    // expose this operation.
+    std::fprintf(stderr, "[%s] Configure called\n",
                  kNodeName);
     return TraceEmpty{};
 }
 
-TraceEmpty TraceCollector::handle_call(
-        const TraceConfigRequest& /*req*/,
-        TraceCollectorState& /*s*/) {
-    // TODO: implement TraceControl::Configure.
-    std::fprintf(stderr, "[%s] TraceControl::Configure called\n",
-                 kNodeName);
-    return TraceEmpty{};
-}
 
 
 }  // namespace ara::log

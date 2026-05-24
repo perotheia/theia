@@ -71,14 +71,18 @@ public:
     void terminate(const char* /*reason*/, TraceCollectorState& /*s*/) noexcept {}
 
     // ---- handle_cast / handle_call — declared here, body in impl
-
-    TraceEmpty handle_call(const TraceConfigRequest& req,
-                                            TraceCollectorState& s);
-
-    TraceEmpty handle_call(const TraceConfigRequest& req,
-                                            TraceCollectorState& s);
+    //
+    // Deduplicated by message type: if two ports share the same
+    // interface (e.g. ctl_supdbg + ctl_com both providing
+    // TraceControl) the handler signature is identical and only
+    // gets emitted once. handle_call/handle_cast dispatch by
+    // request type, not by port.
 
     void handle_cast(const TraceRecord& msg, TraceCollectorState& s);
+
+
+    TraceEmpty handle_call(const TraceConfigRequest& req,
+                                            TraceCollectorState& s);
 
 
     // ---- send helpers — bodies in impl (the broadcast fan-out)

@@ -13,7 +13,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <functional>
+#include <map>
 #include <mutex>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -52,6 +54,39 @@ public:
     static constexpr const char* kNodeName = "trace_collector";
     static constexpr uint32_t kTipcType     = 0x80010013u;
     static constexpr uint32_t kTipcInstance = 0u;
+
+    // AUTOSAR Reporting / Non-Reporting flag (per .art `reporting`
+    // field). When true, this node sends HeartbeatReport, the
+    // supervisor watchdogs it, and the supervisor can push trace
+    // config to it via the methods below.
+    static constexpr bool kReporting = true;
+
+
+    // ---- Trace config (reporting=true only) -----------------------
+    //
+    // The supervisor (#361) pushes (msg_type, enabled) pairs into
+    // this filter map on (re)start AND on every supdbg-driven
+    // Configure. emit-side: Tracer consults the map; when off
+    // (default), the event is dropped. See platform/runtime/
+    // Tracer.hh for the actual filter check (#355).
+    //
+    // These methods are the in-process API; the wire-side binding
+    // (NodeTraceCtl TIPC server) lands as a follow-up that calls
+    // trace_enable() on receipt of an ApplyConfig RPC.
+    //
+    // Thread-safety: writes acquire an internal mutex; reads on the
+    // emit path are lock-free (see Tracer.hh's atomic flag pattern).
+    void trace_enable(const char* msg_type, bool enabled);
+    bool trace_enabled(const char* msg_type) const;
+    void trace_clear_all();
+
+private:
+    std::mutex trace_filter_mu_;
+    // msg_type → enabled. Missing key = "not configured" → off.
+    std::map<std::string, bool> trace_filter_;
+
+public:
+
 
     // ---- Subscriber registration ----------------------------------
 
@@ -135,6 +170,38 @@ inline void TraceCollector::broadcast_stream_out_rec(const TraceRecord& msg) {
                 kNodeName, e.id);
         }
     }
+}
+
+
+
+// ---- Trace config inline impls (reporting=true) -----------------
+//
+// Map operations under trace_filter_mu_. The emit-side filter check
+// is in platform/runtime/Tracer.hh (#355), which reads the same
+// map without locking (atomic shadow flag updated alongside).
+inline void TraceCollector::trace_enable(const char* msg_type, bool enabled) {
+    if (msg_type == nullptr) return;
+    std::lock_guard<std::mutex> lk(trace_filter_mu_);
+    if (enabled) {
+        trace_filter_[msg_type] = true;
+    } else {
+        trace_filter_.erase(msg_type);
+    }
+}
+
+inline bool TraceCollector::trace_enabled(const char* msg_type) const {
+    if (msg_type == nullptr) return false;
+    // const_cast to acquire the mutex; the map mutation itself is
+    // not const but the LOOKUP is — guaranteed by the API contract.
+    std::lock_guard<std::mutex> lk(
+        const_cast<std::mutex&>(trace_filter_mu_));
+    auto it = trace_filter_.find(msg_type);
+    return it != trace_filter_.end() && it->second;
+}
+
+inline void TraceCollector::trace_clear_all() {
+    std::lock_guard<std::mutex> lk(trace_filter_mu_);
+    trace_filter_.clear();
 }
 
 

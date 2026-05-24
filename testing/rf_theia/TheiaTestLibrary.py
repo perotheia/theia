@@ -437,6 +437,42 @@ class TheiaTestLibrary:
         logger.info("Load Supervision: %s (root=%s)",
                     path, self._supervision_tree.name)
 
+    @keyword("Get Supervisor Tree")
+    def get_supervisor_tree(self) -> dict:
+        """Return the supervisor's current TreeSnapshot as a flat
+        dict keyed by child/node name. Each value is itself a dict
+        with at least ``parent`` (parent name), ``state`` (string),
+        ``restart_count`` (int), ``uptime_ms`` (int), and — for
+        supervisor rows — ``strategy`` (one_for_one / rest_for_one /
+        one_for_all).
+
+        Synthetic node_sup + node rows (from the per-node supervision
+        feature, #364) appear here once #364 lands; scenarios written
+        against the eventual shape can assert on them today and fail
+        in spec-shape until then.
+
+        Reads via the existing supervisor gRPC adapter (Pair 1's
+        supervisor_watcher topology snapshot).
+        """
+        self._require_runtime()
+        assert self._ctx is not None
+        if self._ctx.supervisor is None:
+            raise AssertionError(
+                "Get Supervisor Tree: no live supervisor reachable "
+                "(Load Rig couldn't connect on localhost:5051)"
+            )
+        topo = self._ctx.supervisor.get_topology()
+        # topo from supervisor_grpc adapter is shaped:
+        #   {"machine": "...", "supervisors": [...], "children": [...]}
+        # Flatten supervisors + children into one name-keyed dict so
+        # scenarios can do `${row}=  Get From Dictionary  ${tree}  sm`.
+        flat: dict[str, dict] = {}
+        for s in topo.get("supervisors", []):
+            flat[s["name"]] = {**s, "kind": "supervisor"}
+        for c in topo.get("children", []):
+            flat[c["name"]] = {**c, "kind": "worker"}
+        return flat
+
     @keyword("Crash Child")
     def crash_child(self, name: str) -> None:
         """Ask the supervisor to terminate ``name``, anchoring the

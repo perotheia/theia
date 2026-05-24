@@ -16,89 +16,132 @@ children:
     children:
     - name: exec
       start_cmd:
-      - services/exec/daemon.sh
+      - bazel-bin/services/system/exec/main/exec
       restart: permanent
       shutdown: 5000
       type: worker
       modules:
       - services/exec
+      nodes:
+      - name: ExecDaemon
+        reporting: true
+        tipc_type: '0x80010005'
+        tipc_instance: '0'
     - name: core
-      start_cmd:
-      - services/core/daemon.sh
+      start_cmd: []
       restart: permanent
       shutdown: 5000
       type: worker
       modules:
       - services/core
+      nodes:
+      - name: CoreDaemon
+        reporting: true
+        tipc_type: '0x80010001'
+        tipc_instance: '0'
     - name: crypto
-      start_cmd:
-      - services/crypto/daemon.sh
+      start_cmd: []
       restart: permanent
       shutdown: 5000
       type: worker
       modules:
       - services/crypto
+      nodes:
+      - name: CryptoDaemon
+        reporting: true
+        tipc_type: '0x80010006'
+        tipc_instance: '0'
     - name: sm
       start_cmd:
-      - services/sm/daemon.sh
+      - bazel-bin/services/system/sm/main/sm
       restart: permanent
       shutdown: 5000
       type: worker
       modules:
       - services/sm
+      nodes:
+      - name: SmDaemon
+        reporting: true
+        tipc_type: '0x8001000D'
+        tipc_instance: '0'
     - name: network_sup
       strategy: one_for_one
       max_restarts: 3
       max_seconds: 5
       children:
       - name: nm
-        start_cmd:
-        - services/nm/daemon.sh
+        start_cmd: []
         restart: permanent
         shutdown: 5000
         type: worker
         modules:
         - services/nm
+        nodes:
+        - name: NmDaemon
+          reporting: true
+          tipc_type: '0x80010009'
+          tipc_instance: '0'
       - name: com
         start_cmd:
-        - services/com/daemon.sh
+        - bazel-bin/services/system/com/main/com
         restart: permanent
         shutdown: 5000
         type: worker
         modules:
         - services/com
+        nodes:
+        - name: ComDaemon
+          reporting: true
+          tipc_type: '0x80010008'
+          tipc_instance: '0'
       - name: osi
-        start_cmd:
-        - services/osi/daemon.sh
+        start_cmd: []
         restart: permanent
         shutdown: 5000
         type: worker
         modules:
         - services/osi
+        nodes:
+        - name: OsiDaemon
+          reporting: true
+          tipc_type: '0x80010002'
+          tipc_instance: '0'
       - name: idsm
-        start_cmd:
-        - services/idsm/daemon.sh
+        start_cmd: []
         restart: permanent
         shutdown: 5000
         type: worker
         modules:
         - services/idsm
+        nodes:
+        - name: IdsmDaemon
+          reporting: true
+          tipc_type: '0x8001000B'
+          tipc_instance: '0'
       - name: diag
-        start_cmd:
-        - services/diag/daemon.sh
+        start_cmd: []
         restart: permanent
         shutdown: 5000
         type: worker
         modules:
         - services/diag
+        nodes:
+        - name: DiagDaemon
+          reporting: true
+          tipc_type: '0x8001000C'
+          tipc_instance: '0'
       - name: tsync
-        start_cmd:
-        - services/tsync/daemon.sh
+        start_cmd: []
         restart: permanent
         shutdown: 5000
         type: worker
         modules:
         - services/tsync
+        nodes:
+        - name: TsyncDaemon
+          reporting: true
+          tipc_type: '0x80010004'
+          tipc_instance: '0'
     - name: host_svc_sup
       strategy: one_for_one
       max_restarts: 3
@@ -106,91 +149,101 @@ children:
       children:
       - name: per
         start_cmd:
-        - services/per/daemon.sh
+        - bazel-bin/services/system/per/main/per
         restart: permanent
         shutdown: 5000
         type: worker
         modules:
         - services/per
+        nodes:
+        - name: PerDaemon
+          reporting: true
+          tipc_type: '0x80010007'
+          tipc_instance: '0'
       - name: rds
-        start_cmd:
-        - services/rds/daemon.sh
+        start_cmd: []
         restart: permanent
         shutdown: 5000
         type: worker
         modules:
         - services/rds
+        nodes:
+        - name: RdsDaemon
+          reporting: true
+          tipc_type: '0x80010010'
+          tipc_instance: '0'
     - name: pltf_sup
       strategy: one_for_one
       max_restarts: 3
       max_seconds: 5
       children:
       - name: phm
-        start_cmd:
-        - services/phm/daemon.sh
+        start_cmd: []
         restart: permanent
         shutdown: 5000
         type: worker
         modules:
         - services/phm
+        nodes:
+        - name: PhmDaemon
+          reporting: true
+          tipc_type: '0x8001000A'
+          tipc_instance: '0'
       - name: ucm
         start_cmd:
-        - services/ucm/daemon.sh
+        - bazel-bin/services/system/ucm/main/ucm
         restart: permanent
         shutdown: 5000
         type: worker
         modules:
         - services/ucm
+        nodes:
+        - name: UcmDaemon
+          reporting: true
+          tipc_type: '0x8001000E'
+          tipc_instance: '0'
       - name: vucm
-        start_cmd:
-        - services/vucm/daemon.sh
+        start_cmd: []
         restart: permanent
         shutdown: 5000
         type: worker
         modules:
         - services/vucm
-      - name: shwa
-        start_cmd:
-        - services/shwa/daemon.sh
-        restart: permanent
-        shutdown: 5000
-        type: worker
-        modules:
-        - services/shwa
+        nodes:
+        - name: VucmDaemon
+          reporting: true
+          tipc_type: '0x8001000F'
+          tipc_instance: '0'
       - name: fw
-        start_cmd:
-        - services/fw/daemon.sh
+        start_cmd: []
         restart: permanent
         shutdown: 5000
         type: worker
         modules:
         - services/fw
+        nodes:
+        - name: FwDaemon
+          reporting: true
+          tipc_type: '0x80010011'
+          tipc_instance: '0'
   - name: app_sup
     strategy: one_for_one
     max_restarts: 3
     max_seconds: 5
     children:
-    - name: demo_p1
+    - name: supervisor
       start_cmd:
-      - vendor/apps/demo_p1/daemon.sh
+      - vendor/apps/supervisor/daemon.sh
       restart: permanent
       shutdown: 5000
       type: worker
       modules:
-      - //demo:p1_main
-    - name: demo_p2
+      - //platform/supervisor:ipk
+    - name: gateway
       start_cmd:
-      - vendor/apps/demo_p2/daemon.sh
+      - vendor/apps/gateway/daemon.sh
       restart: permanent
       shutdown: 5000
       type: worker
       modules:
-      - //demo:p2_main
-    - name: demo_p3
-      start_cmd:
-      - vendor/apps/demo_p3/daemon.sh
-      restart: permanent
-      shutdown: 5000
-      type: worker
-      modules:
-      - //demo:p3_main
+      - //platform/gateway:ipk

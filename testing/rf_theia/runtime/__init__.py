@@ -13,4 +13,6 @@ The library is routing — every keyword forwards to a runtime method.
 
 from .rig import Component, Machine, Rig, Vehicle, load_rig
 
-__all__ = ["Component", "Machine", "Rig", "Vehicle", "load_rig"]
+__all__ = [
+    "Component", "Machine", "Rig", "Vehicle", "load_rig",
+]

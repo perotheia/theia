@@ -44,9 +44,12 @@ from .tpt_engine import (
 # Pair-1 runtime — typed Rig, event bus, flow engine, supervisor watcher.
 from .runtime import load_rig
 from .runtime.event_bus import EventBus
+from .runtime.expr import ExprEvaluator
 from .runtime.flow_engine import FlowEngine, RuntimeContext
 from .runtime.flows import RestartChild
+from .runtime.monitors import Always, Eventually, Never
 from .runtime.supervisor_watcher import SupervisorWatcher
+from .runtime.trace_watcher import TraceWatcher
 
 logger = logging.getLogger("rf_theia")
 
@@ -81,6 +84,12 @@ class TheiaTestLibrary:
         self._flow_engine: Optional[FlowEngine] = None
         self._sup_watcher: Optional[SupervisorWatcher] = None
         self._verdict: str = "none"
+        # Pair-2 — trace feed + watcher + expression evaluator. Trace
+        # feed is opened by `Open Trace` (lazy), evaluator constructed
+        # on first Assert call.
+        self._trace_feed: Any = None
+        self._trace_watcher: Optional[TraceWatcher] = None
+        self._evaluator: Optional[ExprEvaluator] = None
 
     # ──────────────────────────────────────────────────────────────────
     # Pair-1 lifecycle: Load Rig / Tear Down Rig.
@@ -141,6 +150,18 @@ class TheiaTestLibrary:
         if self._sup_watcher is not None:
             self._sup_watcher.stop()
             self._sup_watcher = None
+        if self._trace_watcher is not None:
+            self._trace_watcher.stop()
+            self._trace_watcher = None
+        if self._trace_feed is not None:
+            try:
+                self._trace_feed.close()
+            except Exception:
+                pass
+            self._trace_feed = None
+        if self._evaluator is not None:
+            self._evaluator.close()
+            self._evaluator = None
         if self._ctx is not None and self._ctx.supervisor is not None:
             try:
                 self._ctx.supervisor.close()
@@ -256,6 +277,86 @@ class TheiaTestLibrary:
         logger.info("Verdict: %s (suite verdict now %s)", new, self._verdict)
 
     # ──────────────────────────────────────────────────────────────────
+    # Pair-2 keywords: temporal logic + trace lifecycle.
+    # ──────────────────────────────────────────────────────────────────
+
+    @keyword("Open Trace")
+    def open_trace(self, source: str) -> None:
+        """Open a trace feed and start forwarding records to the bus.
+
+        ``source`` is a file path (or ``file://...``). The watcher tails
+        the file and republishes each TRC v1 record as a
+        ``trace_record`` event for monitors + ExprEvaluator to consume.
+
+        Once a feed is open, ``trace.event(...)`` / ``trace.count(...)``
+        expressions in Assert keywords see live data.
+        """
+        self._require_runtime()
+        from .adapters.tracer_jsonl import TraceFeed
+        assert self._ctx is not None
+        feed = TraceFeed(source)
+        feed.open()
+        watcher = TraceWatcher(self._ctx.bus, feed)
+        watcher.start()
+        self._trace_feed = feed
+        self._trace_watcher = watcher
+        logger.info("Open Trace: tailing %s", source)
+
+    @keyword("Close Trace")
+    def close_trace(self) -> None:
+        if self._trace_watcher is not None:
+            self._trace_watcher.stop()
+            self._trace_watcher = None
+        if self._trace_feed is not None:
+            self._trace_feed.close()
+            self._trace_feed = None
+
+    @keyword("Assert Eventually")
+    def assert_eventually(self, expr: str, within: str = "5s") -> None:
+        """Block until ``expr`` evaluates True at least once, or fail.
+
+        The expression sees the current world via bindings:
+          - ``trace.event(name, on=node)``,  ``trace.count(name)``
+          - ``service.state(name)``,  ``service.restart_count(name)``
+          - ``flow(name).active``, ``flow(name).state``
+
+        Example::
+
+            Assert Eventually    trace.event('send', on='sm_daemon')    within=5s
+        """
+        result = Eventually(
+            self._ctx_bus(), self._eval(),
+            expr=expr, timeout=_seconds(within),
+        ).run()
+        if result.verdict != "pass":
+            raise AssertionError(result.reason)
+        logger.info("Assert Eventually: %s [%s]", expr, result.reason)
+
+    @keyword("Assert Always")
+    def assert_always(self, expr: str, during: str = "1s") -> None:
+        """Pass if ``expr`` stays True throughout the window, else fail
+        on the first False."""
+        result = Always(
+            self._ctx_bus(), self._eval(),
+            expr=expr, timeout=_seconds(during),
+        ).run()
+        if result.verdict != "pass":
+            raise AssertionError(result.reason)
+        logger.info("Assert Always: %s [%s]", expr, result.reason)
+
+    @keyword("Assert Never")
+    def assert_never(self, expr: str, during: str = "1s") -> None:
+        """Pass if ``expr`` stays False throughout the window, else fail
+        on the first True."""
+        result = Never(
+            self._ctx_bus(), self._eval(),
+            expr=expr, timeout=_seconds(during),
+        ).run()
+        if result.verdict != "pass":
+            raise AssertionError(result.reason)
+        logger.info("Assert Never: %s [%s]", expr, result.reason)
+
+    # ──────────────────────────────────────────────────────────────────
     # TPT engine passthroughs — kept from Phase 1; declarative-shape.
     # ──────────────────────────────────────────────────────────────────
 
@@ -320,6 +421,29 @@ class TheiaTestLibrary:
             raise RuntimeError(
                 "rf-theia runtime not loaded — call `Load Rig` first"
             )
+
+    def _ctx_bus(self) -> EventBus:
+        self._require_runtime()
+        assert self._ctx is not None
+        return self._ctx.bus
+
+    def _eval(self) -> ExprEvaluator:
+        """Lazily build the ExprEvaluator on first Assert keyword.
+
+        We don't construct it in Load Rig because creating it
+        subscribes a permanent trace_record listener; the test may
+        never use Assert keywords, in which case the listener and its
+        record buffer are wasted.
+        """
+        self._require_runtime()
+        if self._evaluator is None:
+            assert self._ctx is not None
+            self._evaluator = ExprEvaluator(
+                bus=self._ctx.bus,
+                supervisor_watcher=self._sup_watcher,
+                flow_engine=self._flow_engine,
+            )
+        return self._evaluator
 
 
 def _seconds(spec: str | float | int) -> float:

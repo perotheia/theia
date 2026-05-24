@@ -94,8 +94,13 @@ class TraceFeed:
     def open(self) -> None:
         path = self._resolve_file_source()
         # If the file doesn't exist yet, create it — supervisor stderr
-        # may not have started writing. tail-style semantics.
+        # may not have started writing. tail-style semantics. mkdir the
+        # parent so a "well-known but not yet present" path
+        # (/tmp/theia/sm.log) works on first run.
         if not os.path.exists(path):
+            parent = os.path.dirname(path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
             open(path, "a").close()
         self._fh = open(path, "r")
         # Seek to end so we only see records emitted from now on.

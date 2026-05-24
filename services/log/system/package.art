@@ -5,7 +5,7 @@
 // (the dispatcher-level `[header][proto-wire]` records emitted by FCs
 // when selectively enabled).
 //
-// Three observability lanes (only this one is implemented here):
+// Four observability lanes (only this one is implemented here):
 //
 //   Logger        — structured operational events  →  syslog
 //   Tracer        — runtime execution records      →  services/log[trace]  (THIS FC)
@@ -14,52 +14,71 @@
 //
 // Communication shape:
 //
-//   Two consumer paths — both speak the SAME TIPC protocol:
+//   Two consumer paths — both speak the SAME TIPC protocol; both
+//   route config changes THROUGH THE SUPERVISOR so that trace config
+//   survives child restart (the supervisor remembers the trace config
+//   per child and re-applies it on every (re)start, just like it
+//   does for the child's regular config + keepalive).
 //
 //   Path 1 — supdbg (local-machine debugging tool):
 //     supdbg ──TIPC──► TraceCollector
-//                                │
-//                                │  TraceConfigRequest         (enable trace
-//                                ▼                              for node/type)
-//                          target FC (Tracer-equipped)
-//                                │
-//                                │  TraceRecord stream        (each dispatched
-//                                ▼                              message wrapped)
-//                          TraceCollector
-//                                │
-//                                ▼
-//                              supdbg
+//                            │
+//                            │ ConfigureTrace(child, node, msg_type, on)
+//                            ▼
+//                       Supervisor
+//                            │
+//                            │  pushes config to the child via its
+//                            │  existing config/keepalive channel.
+//                            │  Saved in supervisor memory →
+//                            │  re-applied on every restart.
+//                            ▼
+//                    target FC (Tracer-equipped)
+//                            │
+//                            │ TraceRecord stream   ──TIPC──►
+//                            ▼
+//                       TraceCollector
+//                            │
+//                            ▼
+//                       supdbg (subscribed on TraceRecordStream)
 //
 //   Path 2 — external consumers (supervisor-gui, robot tests):
 //     external ──gRPC──► services/com ──TIPC──► TraceCollector
-//                                                    │
-//                                                    ▼
-//                                              (same loop as Path 1)
-//                                                    │
-//     external ◄──gRPC stream── services/com ◄──TIPC────┘
+//                                                   │
+//                                                   ▼
+//                                             (same supervisor-mediated
+//                                              loop as Path 1)
+//                                                   │
+//     external ◄──gRPC stream── services/com ◄──TIPC─┘
 //
-// FCs themselves don't talk to the trace collector directly when idle.
-// TraceCollector PUSHES configuration to a target FC via
-// `TraceConfigPush` — that's the FC-side hook that enables selective
-// emit per (node, msg_type). Once configured, the FC sends records
-// to TraceCollector over `TraceRecordStream`.
+// Why through the supervisor?
+//   - the supervisor owns config + keepalive to every supervised app
+//     already; trace becomes a third request kind on the same channel
+//   - trace config SURVIVES RESTART for free — supervisor pushes the
+//     saved config to the freshly-started child on every (re)start
+//   - a single source of truth (supervisor.trace_config[child]) for
+//     "what's being traced right now"
 //
-// Erlang reference: this is `dbg:tracer(port, ...)` shape — same
+// Erlang reference: this is the `dbg:tracer(port, ...)` shape — same
 // selective enable + record fan-out pattern, with TIPC instead of
-// Erlang ports.
+// Erlang ports, and the supervisor playing the role of the always-on
+// dbg server that re-applies trace settings to restarted processes.
 
 package system.services.log
 
 // ─── Foreign interface forward decls ─────────────────────────────────
 //
-// LogStream is the syslog-side fanout EVERY FC uses; TraceCollector is
-// no exception (we want operational events about the trace service to
-// go to syslog too — separate from the trace fanout it carries).
+// LogStream — every FC has a `sender to_log` (self-reference;
+// declared here because we ARE the log package). We declare an
+// empty senderReceiver matching the declaration in every FC's .art.
+//
+// SupervisorControlIf — owned by `system.supervisor`. TraceCollector
+// is a CLIENT (it calls ConfigureTrace / GetTraceConfig). The full
+// shape lives in platform/supervisor/system/package.art; we only
+// need a forward-decl to wire the port.
 
-interface senderReceiver LogStream     { }  // from system.services.log
-                                            // (self-reference; FCs
-                                            // declare a `sender to_log`
-                                            // best_effort port)
+interface senderReceiver LogStream           { }  // self-reference for `to_log`
+interface clientServer   SupervisorControlIf { }  // from system.supervisor
+
 
 // ─── Wire types ──────────────────────────────────────────────────────
 
@@ -81,21 +100,21 @@ message TraceRecord {
 }
 
 // Configuration request from a consumer (supdbg or com-on-behalf-of-
-// external). Asks the collector to enable / disable trace recording
-// for one (node, msg_type) tuple.
+// external) into TraceCollector. The collector translates this into a
+// `ConfigureTrace` RPC on the supervisor — the supervisor is where the
+// config actually lives, so it can push it to the target child both
+// now AND on every future restart.
 //
-// `msg_type` empty ⇒ all message types on that node.
-// `enabled = false` ⇒ stop recording (reset the FC-side filter).
+// `child_name`    — supervisor child the trace targets (e.g. "sm").
+//                   This is the supervisor's key, NOT the
+//                   `target_node` (one child can host many nodes).
+// `target_node`   — artheia node-type-name inside that child
+//                   ("SmDaemon"). Disambiguates within a composition.
+// `msg_type`      — wire-type name. Empty = "all message types".
+// `enabled`       — true = recording on, false = clear this filter.
 message TraceConfigRequest {
-    string node_name
-    string msg_type
-    bool   enabled
-}
-
-// Reply / push payload. The collector pushes one of these to the
-// target FC's TraceConfigPush handler to enable/disable.
-message TraceConfigDecision {
-    string node_name
+    string child_name
+    string target_node
     string msg_type
     bool   enabled
 }
@@ -106,7 +125,8 @@ message TraceEmpty { }
 // ─── Interfaces ──────────────────────────────────────────────────────
 
 // Control surface — consumers (supdbg directly, com on behalf of
-// external) request trace configuration changes here.
+// external) request trace configuration changes here. TraceCollector
+// then RELAYS the change to the supervisor's ConfigureTrace operation.
 interface clientServer TraceControl {
     operation Configure(in r:TraceConfigRequest) returns TraceEmpty
 }
@@ -118,17 +138,14 @@ interface senderReceiver TraceRecordStream {
     data TraceRecord rec
 }
 
-// Push surface — TraceCollector → FC. Tells the FC to start (or stop)
-// emitting trace records for one (node, msg_type) tuple. The FC
-// implements this; TraceCollector is the CLIENT.
-interface clientServer TraceConfigPush {
-    operation ApplyConfig(in r:TraceConfigDecision) returns TraceEmpty
-}
-
 // FC → TraceCollector record submission. Every FC with tracing
 // configured-on becomes a SENDER on this interface; TraceCollector is
 // the RECEIVER. (The FC-side wiring is added when the per-FC selective
-// emit hook lands — see [[FC-side: selective trace emit hooks]].)
+// emit hook lands — see [[FC-side: selective trace emit hooks]].
+//
+// Note: FC-side trace ENABLE/DISABLE comes from the supervisor's
+// config push, NOT from TraceCollector. TraceCollector only receives
+// records.
 interface senderReceiver TraceRecordSubmit {
     data TraceRecord rec
 }
@@ -141,6 +158,7 @@ node atomic TraceCollector {
 
     // Tracing-related ports use intent-suffixed names to keep the
     // role clear:
+    //
     //   ctl_supdbg / ctl_com   the two `TraceControl` server handles
     //                          (supdbg connects directly; com bridges
     //                          for external clients)
@@ -148,21 +166,19 @@ node atomic TraceCollector {
     //                          to all subscribers
     //   in_records             inbound senderReceiver where every
     //                          Tracer-equipped FC submits its records
-    //   to_fc_config           outbound client for pushing
-    //                          TraceConfigDecision to a specific FC's
-    //                          `TraceConfigPush` server (one client
-    //                          per FC at wire time; the model uses one
-    //                          declaration and the netgraph fan-out
-    //                          handles the multiplexing)
+    //   to_supervisor          outbound client for ConfigureTrace /
+    //                          GetTraceConfig on the supervisor's
+    //                          control surface — THIS is where trace
+    //                          config flows so it survives restart
     //   to_log                 ad-hoc operational events from the
     //                          collector to syslog (e.g. "subscriber
     //                          attached")
     ports {
-        server   ctl_supdbg    provides TraceControl
-        server   ctl_com       provides TraceControl
-        sender   stream_out    provides TraceRecordStream
-        receiver in_records    requires TraceRecordSubmit
-        client   to_fc_config  requires TraceConfigPush
-        sender   to_log        provides LogStream  best_effort
+        server   ctl_supdbg     provides TraceControl
+        server   ctl_com        provides TraceControl
+        sender   stream_out     provides TraceRecordStream
+        receiver in_records     requires TraceRecordSubmit
+        client   to_supervisor  requires SupervisorControlIf
+        sender   to_log         provides LogStream  best_effort
     }
 }

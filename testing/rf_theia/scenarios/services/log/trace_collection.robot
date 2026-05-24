@@ -29,7 +29,7 @@ Documentation    services/log[trace] — verify the trace fanout service.
 ...                  flush_trace_records()
 ...
 ...                In rf-theia (target shape):
-...                  Open Trace Stream    target=SmDaemon    msg_type=SmStateMsg
+...                  Open Trace Stream    child=sm    target_node=SmDaemon    msg_type=SmStateMsg
 ...                  Drive Workload       <whatever>
 ...                  ${recs}=             Drain Trace Records
 ...                  Should Contain Record    ${recs}    msg_type=SmStateMsg
@@ -81,7 +81,7 @@ Configure Trace For SM Daemon Then Drain Records
     ...                keyword doesn't exist yet (lands with #356).
     [Tags]    services-log    spec    live    priority-high
 
-    Open Trace Stream    target=SmDaemon    msg_type=SmStateMsg
+    Open Trace Stream    child=sm    target_node=SmDaemon    msg_type=SmStateMsg
     Start State Machine    RestartChild    target=sm
     Emit Event             crash    on=sm
     Wait For State         Restarted    within=10s
@@ -103,7 +103,7 @@ Selective Filtering Is Per Node Per Message Type
     ...                stream.
     [Tags]    services-log    spec    live    selective-filtering
 
-    Open Trace Stream    target=SmDaemon    msg_type=SmStateMsg
+    Open Trace Stream    child=sm    target_node=SmDaemon    msg_type=SmStateMsg
 
     # Drive activity on multiple FCs (sm + com both produce wire
     # traffic during a restart cascade).
@@ -130,8 +130,8 @@ Disable Stops Records From Flowing
     ...                (node, msg_type) pair — even if traffic continues.
     [Tags]    services-log    spec    live
 
-    Open Trace Stream                target=SmDaemon    msg_type=SmStateMsg
-    Configure Trace                  target=SmDaemon    msg_type=SmStateMsg    enabled=False
+    Open Trace Stream      child=sm    target_node=SmDaemon    msg_type=SmStateMsg
+    Configure Trace        child=sm    target_node=SmDaemon    msg_type=SmStateMsg    enabled=False
 
     Start State Machine    RestartChild    target=sm
     Emit Event             crash    on=sm
@@ -139,6 +139,49 @@ Disable Stops Records From Flowing
 
     ${records}=          Drain Trace Records    within=2s
     Should Be Empty      ${records}
+
+    Close Trace Stream
+
+    Verdict    pass
+
+
+Trace Config Survives Child Restart
+    [Documentation]    The defining property of the supervisor-mediated
+    ...                push: trace config persists across child restart
+    ...                without the originator (us) having to re-issue
+    ...                Configure.
+    ...
+    ...                Flow:
+    ...                  1. Open stream + configure trace for sm.
+    ...                  2. Drive a restart cycle and drain records.
+    ...                  3. Crash sm AGAIN (no re-Configure).
+    ...                  4. Supervisor pushes saved trace_config[] to
+    ...                     the freshly-spawned sm on (re)start.
+    ...                  5. Records keep flowing.
+    ...
+    ...                This is what differentiates "trace via supervisor"
+    ...                from the naive "trace pushed directly to the FC"
+    ...                model — the latter loses config on restart.
+    [Tags]    services-log    spec    live    survives-restart    priority-high
+
+    Open Trace Stream      child=sm    target_node=SmDaemon    msg_type=SmStateMsg
+    Configure Trace        child=sm    target_node=SmDaemon    msg_type=SmStateMsg    enabled=True
+
+    # First batch — verify trace is on BEFORE the restart.
+    Start State Machine    RestartChild    target=sm
+    Emit Event             crash    on=sm
+    Wait For State         Restarted    within=10s
+
+    ${batch1}=             Drain Trace Records    within=2s
+    Should Not Be Empty    ${batch1}
+
+    # Crash sm AGAIN. Do NOT re-issue Configure. Records must keep
+    # flowing — supervisor re-applies the saved config on (re)start.
+    Crash Child            sm
+    Assert Healthy         sm    within=10s
+
+    ${batch2}=             Drain Trace Records    within=2s
+    Should Not Be Empty    ${batch2}
 
     Close Trace Stream
 

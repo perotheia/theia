@@ -228,6 +228,56 @@ message DeleteChildRequest {
     string  name
 }
 
+// One trace-config entry. The supervisor stores these in memory per
+// child (keyed by ``child_name``) and re-applies the saved list to
+// the freshly-started child on every (re)start. This lets a single
+// `ConfigureTrace` call survive supervisor-driven restarts without
+// the trace originator (supdbg / services/log) having to re-issue
+// after each restart — the supervisor already owns the child's
+// config/keepalive channel, so trace becomes a third request kind
+// on the same surface.
+//
+// Lifetime:
+//   - persisted in supervisor PROCESS memory only (no disk).
+//   - a supervisor crash/reboot clears all trace config; that's
+//     correct, because a supervisor reboot is a full system reset
+//     anyway.
+//   - removing a child's spec (DeleteChild) drops its trace_config[]
+//     too — there's no entity left to apply it to.
+//
+// Fields:
+//   child_name    — supervisor child this trace targets (e.g. "sm").
+//   target_node   — artheia node-type-name running inside that child
+//                   (e.g. "SmDaemon"). One child can host multiple
+//                   nodes (compositions of process scope); the field
+//                   disambiguates.
+//   msg_type      — wire-type name to trace (e.g. "SmStateMsg").
+//                   Empty string means "all message types on this
+//                   node".
+//   enabled       — true = recording on, false = clear this filter.
+//                   `enabled=false` with no matching entry is a
+//                   no-op (idempotent disable). Repeated `enabled=true`
+//                   for the same (child, node, msg_type) collapses
+//                   to one entry — list deduplication is the
+//                   supervisor's job.
+message TraceConfig {
+    string  child_name
+    string  target_node
+    string  msg_type
+    bool    enabled
+}
+
+message ConfigureTraceRequest {
+    TraceConfig config
+}
+
+message GetTraceConfigRequest {
+}
+
+message TraceConfigList {
+    repeated TraceConfig configs
+}
+
 // Generic ack/error payload for action RPCs.
 //   status: 0=ok, 1=not_found, 2=already_running,
 //           3=already_stopped, 4=invalid_request,
@@ -248,31 +298,35 @@ message ControlReply {
 
 // Envelope for inbound RPC calls on the supervisor's TIPC socket.
 // op_kind selects which sub-message is meaningful:
-//   1 = GetTree          (use get_tree)
-//   2 = GetChild         (use get_child)
-//   3 = StartChild       (use start_child)
-//   4 = DeleteChild      (use delete_child)
-//   5 = RestartChild     (use restart_child / ChildSelector)
-//   6 = TerminateChild   (use terminate_child / ChildSelector)
-//   7 = Stop             (no payload needed)
-//   8 = GetSystemInfo    (use get_system_info, empty payload)
+//    1 = GetTree            (use get_tree)
+//    2 = GetChild           (use get_child)
+//    3 = StartChild         (use start_child)
+//    4 = DeleteChild        (use delete_child)
+//    5 = RestartChild       (use restart_child / ChildSelector)
+//    6 = TerminateChild     (use terminate_child / ChildSelector)
+//    7 = Stop               (no payload needed)
+//    8 = GetSystemInfo      (use get_system_info, empty payload)
+//    9 = ConfigureTrace     (use configure_trace)
+//   10 = GetTraceConfig     (use get_trace_config, empty payload)
 //
 // The supervisor decodes ControlRequest, dispatches by op_kind, and
 // emits exactly one ControlReply with the matching correlation_id
-// onto the same fd that delivered the request. GetSystemInfo
-// additionally writes one SystemInfo payload (tag kTagSystemInfo)
-// before the ControlReply.
+// onto the same fd that delivered the request. GetSystemInfo +
+// GetTraceConfig additionally write one typed payload (SystemInfo
+// or TraceConfigList) before the ControlReply.
 message ControlRequest {
-    uint32              op_kind
-    uint64              correlation_id
+    uint32                op_kind
+    uint64                correlation_id
 
-    GetTreeRequest       get_tree
-    GetChildRequest      get_child
-    StartChildRequest    start_child
-    DeleteChildRequest   delete_child
-    ChildSelector        restart_child
-    ChildSelector        terminate_child
-    GetSystemInfoRequest get_system_info
+    GetTreeRequest         get_tree
+    GetChildRequest        get_child
+    StartChildRequest      start_child
+    DeleteChildRequest     delete_child
+    ChildSelector          restart_child
+    ChildSelector          terminate_child
+    GetSystemInfoRequest   get_system_info
+    ConfigureTraceRequest  configure_trace
+    GetTraceConfigRequest  get_trace_config
 }
 
 // ---- node→supervisor reports ---------------------------------------------
@@ -316,6 +370,19 @@ interface clientServer SupervisorControlIf {
     operation TerminateChild(in sel: ChildSelector) returns ControlReply
     operation Stop() returns ControlReply
     operation GetSystemInfo(in req: GetSystemInfoRequest) returns SystemInfo
+
+    // Trace config — supervisor owns the per-child config/keepalive
+    // channel to each supervised app. Extending it with a third
+    // request kind ("trace") means trace config SURVIVES RESTART for
+    // free: on every (re)start the supervisor pushes the saved
+    // trace_config[] to the freshly-spawned child, alongside the
+    // child's regular config + keepalive subscription.
+    //
+    // Typical caller: services/log[trace] (which receives the trace
+    // request from supdbg or from external-via-com), forwards it
+    // here so the supervisor remembers.
+    operation ConfigureTrace(in req: ConfigureTraceRequest) returns ControlReply
+    operation GetTraceConfig(in req: GetTraceConfigRequest) returns TraceConfigList
 }
 
 interface senderReceiver SupervisorEventIf {

@@ -29,7 +29,6 @@ namespace ara::log {
 using TraceConfigRequest = services_services_log_TraceConfigRequest;
 using TraceEmpty = services_services_log_TraceEmpty;
 using TraceRecord = services_services_log_TraceRecord;
-using TraceConfigDecision = services_services_log_TraceConfigDecision;
 
 
 

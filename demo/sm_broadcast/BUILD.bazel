@@ -21,7 +21,10 @@ cc_test(
     ],
     deps = [
         "//platform/runtime:runtime",
-        "//services/system/sm:sm_lib",
+        # SM is now gen-app emitted with the same lib/main/impl shape
+        # as the partners — lib + impl pulled in directly.
+        "//services/system/sm/lib:sm_lib",
+        "//services/system/sm/impl:sm_impl",
         "//services/system/exec/lib:exec_lib",
         "//services/system/com/lib:com_lib",
         "//services/system/ucm/lib:ucm_lib",

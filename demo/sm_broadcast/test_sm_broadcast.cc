@@ -24,7 +24,11 @@
 #include "GenServer.hh"
 #include "TimerService.hh"
 
-#include "sm/sm_daemon.hh"
+// SM is now also gen-app emitted with --ns ara::sm; lib lives at
+// services/system/sm/lib/SmDaemon.hh and the include alias is `lib/`
+// because the cc_library exposes services/system/sm/ via the
+// `includes` attribute.
+#include "lib/SmDaemon.hh"
 #include "lib/ExecDaemon.hh"
 #include "lib/ComDaemon.hh"
 #include "lib/UcmDaemon.hh"
@@ -38,11 +42,20 @@
 #include <vector>
 
 namespace rt   = demo::runtime;
-namespace sm   = system_services_sm;
+namespace sm   = ara::sm;
 namespace exec = ara::exec;
 namespace com  = ara::com;
 namespace ucm  = ara::ucm;
 namespace per_ = ara::per;
+
+// The nanopb-emitted SmState C enum lives at global scope — its
+// values are prefixed services_services_sm_SmState_*. Shorter
+// aliases for the assertions below.
+constexpr int kOff      = services_services_sm_SmState_OFF;
+constexpr int kStarting = services_services_sm_SmState_STARTING;
+constexpr int kRunning  = services_services_sm_SmState_RUNNING;
+constexpr int kUpdate   = services_services_sm_SmState_UPDATE;
+constexpr int kShutdown = services_services_sm_SmState_SHUTDOWN;
 
 namespace {
 
@@ -89,7 +102,7 @@ static std::function<void(const sm::SmStateMsg&)>
 wire(Daemon& d, std::atomic<int>& obs) {
     return [&d, &obs](const sm::SmStateMsg& m) {
         // Snapshot the value into a local + enqueue.
-        sm::SmState s = m.state;
+        services_services_sm_SmState s = m.state;
         d.enqueue([&obs, s](rt::GenServerBase*) {
             obs.store(static_cast<int>(s));
         });
@@ -111,10 +124,13 @@ static std::string case_all_partners_observe_full_lifecycle() {
     std::atomic<int> obs_ucm{-1};
     std::atomic<int> obs_per{-1};
 
-    sm_daemon.subscribe(wire(exec_daemon, obs_exec));
-    sm_daemon.subscribe(wire(com_daemon,  obs_com));
-    sm_daemon.subscribe(wire(ucm_daemon,  obs_ucm));
-    sm_daemon.subscribe(wire(per_daemon,  obs_per));
+    // Subscribe to sm's `broadcast` sender port's `state` data
+    // element — the gen-app-emitted spelling is
+    // subscribe_<port>_<data>().
+    sm_daemon.subscribe_broadcast_state(wire(exec_daemon, obs_exec));
+    sm_daemon.subscribe_broadcast_state(wire(com_daemon,  obs_com));
+    sm_daemon.subscribe_broadcast_state(wire(ucm_daemon,  obs_ucm));
+    sm_daemon.subscribe_broadcast_state(wire(per_daemon,  obs_per));
 
     sm_daemon.start_statem(timers);
     exec_daemon.start();
@@ -124,13 +140,13 @@ static std::string case_all_partners_observe_full_lifecycle() {
     pump();
 
     // After init, every partner should see OFF.
-    EXPECT(obs_exec.load() == static_cast<int>(sm::SmState_OFF),
+    EXPECT(obs_exec.load() == static_cast<int>(kOff),
            "exec must see OFF on init");
-    EXPECT(obs_com.load()  == static_cast<int>(sm::SmState_OFF),
+    EXPECT(obs_com.load()  == static_cast<int>(kOff),
            "com must see OFF on init");
-    EXPECT(obs_ucm.load()  == static_cast<int>(sm::SmState_OFF),
+    EXPECT(obs_ucm.load()  == static_cast<int>(kOff),
            "ucm must see OFF on init");
-    EXPECT(obs_per.load()  == static_cast<int>(sm::SmState_OFF),
+    EXPECT(obs_per.load()  == static_cast<int>(kOff),
            "per must see OFF on init");
 
     // Drive OFF → STARTING → RUNNING.
@@ -139,32 +155,32 @@ static std::string case_all_partners_observe_full_lifecycle() {
     rt::post_event(sm_daemon, sm::StartupComplete{});
     pump();
 
-    EXPECT(obs_exec.load() == static_cast<int>(sm::SmState_RUNNING),
+    EXPECT(obs_exec.load() == static_cast<int>(kRunning),
            "exec must reach RUNNING");
-    EXPECT(obs_com.load()  == static_cast<int>(sm::SmState_RUNNING),
+    EXPECT(obs_com.load()  == static_cast<int>(kRunning),
            "com must reach RUNNING");
-    EXPECT(obs_ucm.load()  == static_cast<int>(sm::SmState_RUNNING),
+    EXPECT(obs_ucm.load()  == static_cast<int>(kRunning),
            "ucm must reach RUNNING");
-    EXPECT(obs_per.load()  == static_cast<int>(sm::SmState_RUNNING),
+    EXPECT(obs_per.load()  == static_cast<int>(kRunning),
            "per must reach RUNNING");
 
     // RUNNING → UPDATE → RUNNING.
     rt::post_event(sm_daemon, sm::UpdateRequest{});
     pump();
-    EXPECT(obs_exec.load() == static_cast<int>(sm::SmState_UPDATE),
+    EXPECT(obs_exec.load() == static_cast<int>(kUpdate),
            "exec must see UPDATE");
-    EXPECT(obs_ucm.load()  == static_cast<int>(sm::SmState_UPDATE),
+    EXPECT(obs_ucm.load()  == static_cast<int>(kUpdate),
            "ucm must see UPDATE (this is the partner who cares most)");
 
     rt::post_event(sm_daemon, sm::UpdateComplete{});
     pump();
-    EXPECT(obs_exec.load() == static_cast<int>(sm::SmState_RUNNING),
+    EXPECT(obs_exec.load() == static_cast<int>(kRunning),
            "exec returns to RUNNING after UpdateComplete");
 
     // RUNNING → SHUTDOWN.
     rt::post_event(sm_daemon, sm::ShutdownRequest{});
     pump();
-    EXPECT(obs_exec.load() == static_cast<int>(sm::SmState_SHUTDOWN),
+    EXPECT(obs_exec.load() == static_cast<int>(kShutdown),
            "exec must see SHUTDOWN");
 
     sm_daemon.stop();

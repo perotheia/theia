@@ -86,8 +86,9 @@ def _executable_for(short: str) -> Executable:
 # dev tree; the install-time .ipk / .deb mapping rewrites these paths
 # to the on-target install location.
 START_CMDS: dict[str, list[str]] = {
-    # sm — hand-rolled binary; the executable lives at the package root.
-    "sm":   ["bazel-bin/services/system/sm/sm"],
+    # sm — gen-app statem-emitted binary; lives at main/sm now (was
+    # bazel-bin/services/system/sm/sm in the hand-rolled era).
+    "sm":   ["bazel-bin/services/system/sm/main/sm"],
     # The four sm.md §3.B cooperation partners are gen-app-emitted; each
     # is laid out as services/system/<fc>/{lib,main,impl}/ with the
     # cc_binary in main/. Path matches the executor.py emitted by

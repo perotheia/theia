@@ -8,6 +8,8 @@
 #
 # Instead we expose specific artifacts via filegroup labels here.
 
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
 package(default_visibility = ["//visibility:public"])
 
 # etcd-cpp-apiv3 — vendored at v0.2.14, built+installed by an
@@ -38,4 +40,26 @@ filegroup(
 alias(
     name = "etcd-cpp-apiv3",
     actual = ":etcd-cpp-apiv3-install",
+)
+
+
+# Host-installed Google libprotobuf (libprotobuf-dev). Distinct from
+# nanopb: this is the REFLECTION-capable C++ library, used by host
+# tools (libtrace_decoder, supdbg) that need MessageToJsonString.
+# Apps + on-target services keep using the much smaller nanopb stack.
+#
+# We link the system library directly rather than vendoring because:
+# (a) every dev box already has libprotobuf-dev for protoc;
+# (b) the reflection library is large (~6 MB stripped) and target
+#     builds for Hercules/RPi4 don't want it.
+#
+# Verify availability with `pkg-config --modversion protobuf` and
+# that /usr/include/google/protobuf/util/json_util.h exists.
+cc_library(
+    name = "system_protobuf",
+    hdrs = [],
+    linkopts = [
+        "-lprotobuf",
+    ],
+    visibility = ["//visibility:public"],
 )

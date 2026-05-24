@@ -1,0 +1,61 @@
+# libtrace_decoder — host-side trace decoder.
+#
+# Pairs with platform/runtime/Tracer.hh (runtime producer using
+# nanopb). Records on the wire are `[header text][hex payload]`,
+# where the payload is the proto-wire-v3 bytes of one nanopb-
+# encoded message. The header already carries `msg=<TypeName>`
+# (see Tracer.hh emit()), so this decoder doesn't introspect:
+# it looks the name up in a registry and uses the libprotobuf
+# REFLECTION binding (cc_proto_library / protoc --cpp_out) to
+# parse + emit JSON.
+#
+# Apps + services on Hercules/RPi4 do NOT depend on this — the
+# reflection lib is ~6 MB and pointless on a microcontroller.
+# Only host tools (supdbg, supervisor-gui) link it.
+
+package(default_visibility = ["//visibility:public"])
+
+load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
+
+
+cc_library(
+    name = "trace_decoder",
+    srcs = ["trace_decoder.cc"],
+    hdrs = ["trace_decoder.hh"],
+    includes = ["."],
+    copts = [
+        "-Wall",
+        "-Wextra",
+        "-std=c++17",
+        "-fPIC",
+    ],
+    deps = ["//third_party:system_protobuf"],
+)
+
+
+# Round-trip test: nanopb-encode SmStateMsg → wire bytes →
+# libprotobuf decode → JSON. The whole point of the libtrace_decoder
+# design is that the two proto stacks agree on the wire format; this
+# test is the smallest possible proof.
+cc_test(
+    name = "trace_decoder_roundtrip_test",
+    srcs = ["trace_decoder_roundtrip_test.cc"],
+    copts = [
+        "-Wall",
+        "-Wextra",
+        "-std=c++17",
+    ],
+    deps = [
+        ":trace_decoder",
+        "//platform/proto/system/services/sm:sm_pb_cpp",
+        # nanopb stack: //platform/proto:platform_protos wraps the
+        # generated `sm_pb_c`/`sm_pb_h` filegroups as a cc_library.
+        # It includes the rest of the FCs' protos too — that's fine,
+        # we only #include the sm one.
+        "//platform/proto:platform_protos",
+    ],
+    linkopts = [
+        # nanopb runtime — same flag platform/runtime uses.
+        "-l:libprotobuf-nanopb.a",
+    ],
+)

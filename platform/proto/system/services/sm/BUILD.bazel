@@ -43,3 +43,43 @@ filegroup(
     name = "sm_proto",
     srcs = ["sm.proto"],
 )
+
+
+# ---------------------------------------------------------------------------
+# Google libprotobuf companion — REFLECTION-capable C++ binding of the
+# same .proto. Host-only (libtrace_decoder, supdbg). Apps + services on
+# Hercules/RPi4 keep using the nanopb `sm_pb_c`/`sm_pb_h` targets above.
+#
+# protoc writes `sm.pb.cc` / `sm.pb.h` — `sm.pb.h` would collide with
+# nanopb's, so we emit into a `cpp/` subdir. Consumers include
+# "system/services/sm/cpp/sm.pb.h".
+# ---------------------------------------------------------------------------
+
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+genrule(
+    name = "sm_pb_cpp_gen",
+    srcs = ["sm.proto"],
+    outs = [
+        "cpp/sm.pb.cc",
+        "cpp/sm.pb.h",
+    ],
+    cmd = "set -e;"
+        + " in_dir=$$(dirname $(location sm.proto));"
+        + " out_dir=$$(dirname $$(dirname $(location cpp/sm.pb.cc)));"
+        + " mkdir -p $$out_dir/cpp;"
+        + " protoc -I $$in_dir --cpp_out=$$out_dir/cpp sm.proto;",
+    local = True,
+)
+
+cc_library(
+    name = "sm_pb_cpp",
+    srcs = ["cpp/sm.pb.cc"],
+    hdrs = ["cpp/sm.pb.h"],
+    # `cpp/` is the include root so callers write
+    # `#include "sm.pb.h"` after taking this dep — matches the file
+    # protoc actually wrote at $out_dir/cpp/.
+    includes = ["cpp"],
+    deps = ["//third_party:system_protobuf"],
+    visibility = ["//visibility:public"],
+)

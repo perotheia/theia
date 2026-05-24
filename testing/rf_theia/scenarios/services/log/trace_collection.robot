@@ -29,7 +29,7 @@ Documentation    services/log[trace] — verify the trace fanout service.
 ...                  flush_trace_records()
 ...
 ...                In rf-theia (target shape):
-...                  Open Trace Stream    child=sm    target_node=SmDaemon    msg_type=SmStateMsg
+...                  Open Trace Stream    target_node=SmDaemon    msg_type=SmStateMsg
 ...                  Drive Workload       <whatever>
 ...                  ${recs}=             Drain Trace Records
 ...                  Should Contain Record    ${recs}    msg_type=SmStateMsg
@@ -81,7 +81,7 @@ Configure Trace For SM Daemon Then Drain Records
     ...                keyword doesn't exist yet (lands with #356).
     [Tags]    services-log    spec    live    priority-high
 
-    Open Trace Stream    child=sm    target_node=SmDaemon    msg_type=SmStateMsg
+    Open Trace Stream    target_node=SmDaemon    msg_type=SmStateMsg
     Start State Machine    RestartChild    target=sm
     Emit Event             crash    on=sm
     Wait For State         Restarted    within=10s
@@ -103,7 +103,7 @@ Selective Filtering Is Per Node Per Message Type
     ...                stream.
     [Tags]    services-log    spec    live    selective-filtering
 
-    Open Trace Stream    child=sm    target_node=SmDaemon    msg_type=SmStateMsg
+    Open Trace Stream    target_node=SmDaemon    msg_type=SmStateMsg
 
     # Drive activity on multiple FCs (sm + com both produce wire
     # traffic during a restart cascade).
@@ -130,8 +130,8 @@ Disable Stops Records From Flowing
     ...                (node, msg_type) pair — even if traffic continues.
     [Tags]    services-log    spec    live
 
-    Open Trace Stream      child=sm    target_node=SmDaemon    msg_type=SmStateMsg
-    Configure Trace        child=sm    target_node=SmDaemon    msg_type=SmStateMsg    enabled=False
+    Open Trace Stream      target_node=SmDaemon    msg_type=SmStateMsg
+    Configure Trace        target_node=SmDaemon    msg_type=SmStateMsg    enabled=False
 
     Start State Machine    RestartChild    target=sm
     Emit Event             crash    on=sm
@@ -164,8 +164,8 @@ Trace Config Survives Child Restart
     ...                model — the latter loses config on restart.
     [Tags]    services-log    spec    live    survives-restart    priority-high
 
-    Open Trace Stream      child=sm    target_node=SmDaemon    msg_type=SmStateMsg
-    Configure Trace        child=sm    target_node=SmDaemon    msg_type=SmStateMsg    enabled=True
+    Open Trace Stream      target_node=SmDaemon    msg_type=SmStateMsg
+    Configure Trace        target_node=SmDaemon    msg_type=SmStateMsg    enabled=True
 
     # First batch — verify trace is on BEFORE the restart.
     Start State Machine    RestartChild    target=sm

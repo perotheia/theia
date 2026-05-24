@@ -102,18 +102,23 @@ message TraceRecord {
 // Configuration request from a consumer (supdbg or com-on-behalf-of-
 // external) into TraceCollector. The collector translates this into a
 // `ConfigureTrace` RPC on the supervisor — the supervisor is where the
-// config actually lives, so it can push it to the target child both
-// now AND on every future restart.
+// config actually lives, so it can push it to the target node both
+// now AND on every future restart (via the node's first-heartbeat
+// trigger).
 //
-// `child_name`    — supervisor child the trace targets (e.g. "sm").
-//                   This is the supervisor's key, NOT the
-//                   `target_node` (one child can host many nodes).
-// `target_node`   — artheia node-type-name inside that child
-//                   ("SmDaemon"). Disambiguates within a composition.
+// `target_node`   — artheia node-type-name to trace ("SmDaemon").
+//                   This is the AUTOSAR-aligned addressing unit
+//                   (one thread per node, one heartbeat stream per
+//                   node, one NodeTraceCtl TIPC server per
+//                   reporting=true node).
 // `msg_type`      — wire-type name. Empty = "all message types".
 // `enabled`       — true = recording on, false = clear this filter.
+//
+// Note: non-reporting nodes (NodeDecl `reporting=false`) cannot be
+// addressed; the supervisor accepts the request but the push will
+// never reach a non-existent NodeTraceCtl port. Use the legacy
+// Tracer.enable() in-process API to opt-in such nodes manually.
 message TraceConfigRequest {
-    string child_name
     string target_node
     string msg_type
     bool   enabled

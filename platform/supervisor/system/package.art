@@ -229,39 +229,46 @@ message DeleteChildRequest {
 }
 
 // One trace-config entry. The supervisor stores these in memory per
-// child (keyed by ``child_name``) and re-applies the saved list to
-// the freshly-started child on every (re)start. This lets a single
-// `ConfigureTrace` call survive supervisor-driven restarts without
-// the trace originator (supdbg / services/log) having to re-issue
-// after each restart — the supervisor already owns the child's
-// config/keepalive channel, so trace becomes a third request kind
-// on the same surface.
+// NODE (matches the AUTOSAR Reporting/Non-Reporting granularity:
+// trace is per-thread-per-node, the same unit HeartbeatReport
+// addresses). The supervisor:
+//
+//   - upserts the entry into trace_config_[target_node] on
+//     ConfigureTrace
+//   - pushes immediately to the node's NodeTraceCtl TIPC server if
+//     last_heartbeat_[target_node] is fresh
+//   - re-pushes the full trace_config_[target_node] to the node on
+//     the FIRST HeartbeatReport after a gap (covers restart and
+//     node-thread relaunch)
+//
+// Survives child restart for free: the node's first heartbeat after
+// a (re)start is the supervisor's re-push trigger. The trace
+// originator (supdbg / services/log) does NOT re-issue after a
+// restart.
 //
 // Lifetime:
 //   - persisted in supervisor PROCESS memory only (no disk).
-//   - a supervisor crash/reboot clears all trace config; that's
-//     correct, because a supervisor reboot is a full system reset
-//     anyway.
-//   - removing a child's spec (DeleteChild) drops its trace_config[]
-//     too — there's no entity left to apply it to.
+//   - a supervisor crash/reboot clears all trace config; correct,
+//     because a supervisor reboot is a full system reset anyway.
+//   - non-reporting nodes (NodeDecl property `reporting=false`)
+//     cannot be addressed — they have no NodeTraceCtl port and no
+//     heartbeat readiness signal. Matches AUTOSAR Non-Reporting
+//     semantics.
 //
 // Fields:
-//   child_name    — supervisor child this trace targets (e.g. "sm").
-//   target_node   — artheia node-type-name running inside that child
-//                   (e.g. "SmDaemon"). One child can host multiple
-//                   nodes (compositions of process scope); the field
-//                   disambiguates.
+//   target_node   — artheia node-type-name to trace ("SmDaemon",
+//                   "ComDaemon", ...). One thread per node; this is
+//                   the AUTOSAR-aligned unit. Use the node's TIPC
+//                   address to route the push.
 //   msg_type      — wire-type name to trace (e.g. "SmStateMsg").
 //                   Empty string means "all message types on this
 //                   node".
-//   enabled       — true = recording on, false = clear this filter.
-//                   `enabled=false` with no matching entry is a
-//                   no-op (idempotent disable). Repeated `enabled=true`
-//                   for the same (child, node, msg_type) collapses
-//                   to one entry — list deduplication is the
-//                   supervisor's job.
+//   enabled       — true = recording on, false = remove this filter.
+//                   enabled=false with no matching entry is a no-op
+//                   (idempotent disable). Repeated enabled=true for
+//                   the same (target_node, msg_type) collapses to
+//                   one entry.
 message TraceConfig {
-    string  child_name
     string  target_node
     string  msg_type
     bool    enabled

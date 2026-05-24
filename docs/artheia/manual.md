@@ -222,6 +222,55 @@ Two invariants are enforced at parse time:
 
 By convention, Artheia hosts pick TIPC types in `0x80010001` and up.
 
+### Prototype inheritance — `extends`
+
+A node may inherit its body from another node, JS-prototype style. The
+common use case is two instances of the same shape with different TIPC
+addresses — without `extends`, that means copy-pasting the ports/params/
+statem block. With `extends`, only the new TIPC is required:
+
+```artheia
+node atomic SmDaemon {
+    tipc type=0x8001000D instance=0
+    ports {
+        sender state provides SmStateStream
+    }
+    statem {
+        states  [OFF, INIT, RUN]
+        initial OFF
+    }
+}
+
+// Same shape, different address.
+node atomic SmDaemonCompute extends SmDaemon {
+    tipc type=0x8001000E instance=0
+}
+```
+
+Inheritance is **field-level, derived-wins-wholesale**:
+
+| Field             | If derived doesn't declare it | If derived declares it          |
+|-------------------|-------------------------------|---------------------------------|
+| `tipc`            | n/a — **always required**     | The derived's own               |
+| `ports`           | Base's list, copied verbatim  | Derived's list **replaces** it  |
+| `params`          | Base's list, copied verbatim  | Derived's list **replaces** it  |
+| `statem`          | Base's block, copied          | Derived's block **replaces** it |
+| `config`          | Base's ref, copied            | Derived's ref **replaces** it   |
+| `kick_off`        | Inherited                     | Derived's flag wins             |
+| `requires_timers` | Inherited                     | Derived's flag wins             |
+
+There is no element-level merging — declaring an empty `ports { }` on
+the derived hides the base's ports entirely. To extend rather than
+replace, copy the base's entries and add to them.
+
+Chains resolve transitively: `A extends B extends C` flattens C → B → A
+in one pass. Cycles (`A extends B extends A`) are rejected at parse
+time with a clear error naming the chain.
+
+The flattening happens after parsing but before any generator sees the
+model, so `gen-app`, `gen-netgraph`, etc. consume a flat NodeDecl —
+they're unaware of the `extends` relationship.
+
 ---
 
 ## 6. Ports — how nodes connect

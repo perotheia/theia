@@ -12,7 +12,10 @@ package(default_visibility = ["//visibility:public"])
 
 cc_library(
     name = "per_lib",
-    hdrs = ["PerDaemon.hh"],
+    hdrs = [
+        "PerDaemon.hh",
+        "PerDaemon_netgraph.hh",
+    ],
     includes = [".."],
     copts = [
         "-std=c++17",

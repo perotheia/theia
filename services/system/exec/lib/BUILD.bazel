@@ -12,7 +12,10 @@ package(default_visibility = ["//visibility:public"])
 
 cc_library(
     name = "exec_lib",
-    hdrs = ["ExecDaemon.hh"],
+    hdrs = [
+        "ExecDaemon.hh",
+        "ExecDaemon_netgraph.hh",
+    ],
     includes = [".."],
     copts = [
         "-std=c++17",

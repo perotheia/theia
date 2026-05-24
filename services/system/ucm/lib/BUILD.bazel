@@ -12,7 +12,10 @@ package(default_visibility = ["//visibility:public"])
 
 cc_library(
     name = "ucm_lib",
-    hdrs = ["UcmDaemon.hh"],
+    hdrs = [
+        "UcmDaemon.hh",
+        "UcmDaemon_netgraph.hh",
+    ],
     includes = [".."],
     copts = [
         "-std=c++17",

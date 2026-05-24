@@ -12,7 +12,10 @@ package(default_visibility = ["//visibility:public"])
 
 cc_library(
     name = "com_lib",
-    hdrs = ["ComDaemon.hh"],
+    hdrs = [
+        "ComDaemon.hh",
+        "ComDaemon_netgraph.hh",
+    ],
     includes = [".."],
     copts = [
         "-std=c++17",

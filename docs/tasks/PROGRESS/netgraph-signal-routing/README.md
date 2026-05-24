@@ -127,14 +127,25 @@ Properties:
 
 Lookup at runtime: `signal_name` → entry. `O(1)` if rendered as `std::unordered_map<std::string_view, Entry>` at construction. For codegen, a switch-statement on hashed signal name is even faster.
 
-## Gateway netgraph (separate from app netgraph)
+## Three netgraphs, three consumers
 
-The gateway daemon needs `(pdu_name, bus_kind) → bus_address` to
-translate between its TIPC inbound/outbound and the actual CAN/FlexRay
-wire. That info is what `netgraph_partition.py` already produces;
-keep it, rename the generator to make the role clear.
+Crisp role split:
 
-Format unchanged from today's PSP netgraphs:
+| Netgraph | Authoritative consumer | Contents | Generator |
+|---|---|---|---|
+| **PSP** | **Supervisor** | Per-node bus-side signal map (CAN ids, FlexRay slots, channel). Whole-machine PSP routing table. | `gateway_netgraph.py` (renamed from `netgraph_partition.py`) — name reflects format, not consumer |
+| **Cluster** | **Gateway daemon** | Per-node TIPC address map for the whole cluster (which tipc_type+instance lives where). Inter-node routing broker. | `netgraph.py` (the per-node `signals → destinations[]` projection from step 1) |
+| **Per-app slice** | **Each FC/app daemon** | Outbound destinations[] for the node's own sender ports + the messages it expects on its receiver ports. A SLICE of the cluster netgraph, just the node's row. | `netgraph.py` filtered to one node, written to `<fc>_netgraph.hh` for gen-app |
+
+Why supervisor owns PSP: the supervisor is the local-machine authority on what runs + what signals each one handles. It needs the full PSP catalog to provision the gateway daemon on its machine + to know which signals to expect.
+
+Why gateway owns cluster: the gateway is the in-cluster broker for TIPC traffic. It needs the cluster-wide TIPC address book to route inter-node casts.
+
+Why per-app slices: each daemon only needs its own row, baked at codegen time. No runtime query of supervisor / gateway needed.
+
+## Bus-side address format (PSP netgraph)
+
+Format unchanged from today's `vendor/autosar/mlbevo_gen2_cmp_psp/.../netgraph.json`:
 
 ```json
 {
@@ -146,9 +157,9 @@ Format unchanged from today's PSP netgraphs:
 }
 ```
 
-Only the gateway daemon consumes these. Apps consume per-node
-netgraphs (above), which name the gateway as the TIPC destination
-and stop there.
+Only the supervisor consumes these. Apps consume per-node slices
+(above), which name the gateway as the TIPC destination and stop
+there.
 
 ## Codegen strategy
 

@@ -1,0 +1,60 @@
+// Duo — 2-node demo FC for gen-app regen-invariant tests.
+//
+// Owned by testing/rf_theia/scenarios/_selftest/gen_app_chain/.
+// The Robot test copies this into services/duo/system/package.art,
+// runs gen-app, exercises the regen invariants, and cleans up.
+//
+// Shape: one plain reporting node + one GenStateM-driven node, with
+// a sender→receiver signal between them. Small enough that the lib +
+// main + impl emit fits on one screen each, large enough to cover
+// statem dispatch, broadcast fan-out, and clientServer ports.
+
+package system.services.duo
+
+message PingMsg  { uint32 count }
+message PongMsg  { uint32 count   uint64 ts_ns }
+message DuoEmpty { }
+
+interface senderReceiver Pings  { data PingMsg msg }
+interface senderReceiver Pongs  { data PongMsg msg }
+
+interface clientServer DuoCtl {
+    operation Reset(in r:DuoEmpty) returns DuoEmpty
+}
+
+enum DuoState {
+    IDLE     = 0
+    RECEIVED = 1
+}
+
+// FSM-internal events. Posted from sibling nodes / handle_call.
+message PongEvent  { }
+message ResetEvent { }
+
+node atomic PingerNode {
+    tipc type=0x80020001 instance=0
+    ports {
+        sender   ping_out provides Pings
+        receiver pongs_in requires Pongs
+    }
+}
+
+node atomic PongerNode {
+    tipc type=0x80020002 instance=0
+    ports {
+        receiver pings_in requires Pings
+        sender   pong_out provides Pongs
+        server   ctl      provides DuoCtl
+    }
+
+    statem {
+        states  [IDLE, RECEIVED]
+        initial IDLE
+        data    PongMsg
+
+        on IDLE:
+            event PongEvent  → RECEIVED
+        on RECEIVED:
+            event ResetEvent → IDLE
+    }
+}

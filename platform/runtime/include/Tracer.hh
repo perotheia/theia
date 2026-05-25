@@ -28,6 +28,7 @@
 #include <atomic>
 #include <cstdio>
 #include <cstdint>
+#include <cstdlib>   // getenv — THEIA_TRACE boot switch
 #include <cstring>
 #include <chrono>
 #include <mutex>
@@ -208,10 +209,20 @@ inline uint32_t next_trace_corr_id() noexcept {
 inline Tracer& tracer_for(const char* node_name) {
     static std::mutex mu;
     static std::unordered_map<std::string, Tracer*> table;
+    // Boot-time master switch: THEIA_TRACE=1 enables every node's tracer
+    // at creation, so a standalone run (no supervisor to push the
+    // ConfigureTrace flip) still emits to stderr. Filter stays empty →
+    // emit everything. Read once, cached. The supervisor path
+    // (#361 trace_enable) still works on top of this when present.
+    static const bool env_trace_on = [] {
+        const char* v = std::getenv("THEIA_TRACE");
+        return v && v[0] != '\0' && v[0] != '0';
+    }();
     std::lock_guard<std::mutex> lk(mu);
     auto it = table.find(node_name);
     if (it == table.end()) {
         auto* t = new Tracer(node_name);
+        if (env_trace_on) t->enable(true);
         table[node_name] = t;
         return *t;
     }

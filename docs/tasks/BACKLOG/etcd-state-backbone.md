@@ -150,6 +150,12 @@ GUI tabs map to prefixes:
 
 ### Phase 6 — services/db (state + migration)
 
+> **Aggregated into [`TODO/services-db-state-gatekeeper.md`](../TODO/services-db-state-gatekeeper.md)
+> on 2026-05-25** — that doc breaks Phase 6 into 8 landable steps and is
+> the active workplan. The sections below stay here as the original
+> design rationale; treat the TODO doc as authoritative for the work
+> definition.
+
 **Re-scoped (was "DB migration service" → considered OTA controller
 → back to state-shape gatekeeper).** etcd gives us versioned KV,
 CAS transactions, snapshots, and revision history — so traditional

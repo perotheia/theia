@@ -38,10 +38,11 @@ composition Demo3WayP3 {
     prototype IncrementerNode incrementer  on process P3
 }
 
-// `cluster Demo3Way` is the distribution unit. The instance ident on
-// each member is the .ipk basename (p1.ipk / p2.ipk / p3.ipk); the
-// cluster name prefixes the multi-machine tar (Demo3Way_<machine>.tar).
-cluster Demo3Way {
+// `cluster Applications` is the distribution unit (AUTOSAR Application
+// Manifest section). The instance ident on each member is the .ipk
+// basename (p1.ipk / p2.ipk / p3.ipk); the cluster name prefixes the
+// multi-machine tar (Applications_<machine>.tar).
+cluster Applications {
     composition Demo3WayP1 p1
     composition Demo3WayP2 p2
     composition Demo3WayP3 p3

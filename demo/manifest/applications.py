@@ -1,9 +1,9 @@
-"""Adaptive Platform manifest — GENERATED from services/system/system.art.
+"""Adaptive Platform manifest — GENERATED from demo/system/demo/component.art.
 
 Do not edit by hand. Edit the ``cluster`` declarations in the source
 ``.art`` and regenerate:
 
-    artheia gen-manifest-proto services/system/system.art <this file>
+    artheia gen-manifest-proto demo/system/demo/component.art <this file>
 
 ARA manifest sections (see docs/autosar/manifest.md):
 
@@ -35,36 +35,33 @@ from artheia.manifest.utils import (
 
 
 # ---------------------------------------------------------------------------
-# Application section — cluster `Services`.
+# Application section — cluster `Applications`.
 # Each member: (ident, composition, [hosted node names]) — all from the .art.
-# Build/deploy paths derive from (base_dir='services', ident) via the
+# Build/deploy paths derive from (base_dir='demo', ident) via the
 # directory convention (artheia.manifest.utils).
 # ---------------------------------------------------------------------------
-SERVICES_MEMBERS: list[tuple[str, str, list[str]]] = [
-    ('com', 'Com', []),
-    ('log', 'Log', []),
-    ('per', 'Per', []),
-    ('sm', 'Sm', []),
-    ('ucm', 'Ucm', []),
-    ('shwa', 'Shwa', [])
+APPLICATIONS_MEMBERS: list[tuple[str, str, list[str]]] = [
+    ('p1', 'Demo3WayP1', ['counter', 'driver', 'ticker']),
+    ('p2', 'Demo3WayP2', ['observer']),
+    ('p3', 'Demo3WayP3', ['incrementer'])
 ]
-SERVICES_SHORTS = [m[0] for m in SERVICES_MEMBERS]
-SERVICES_COMPONENTS = [
-    app_component_for('services', ident, comp)
-    for ident, comp, _ in SERVICES_MEMBERS
+APPLICATIONS_SHORTS = [m[0] for m in APPLICATIONS_MEMBERS]
+APPLICATIONS_COMPONENTS = [
+    app_component_for('demo', ident, comp)
+    for ident, comp, _ in APPLICATIONS_MEMBERS
 ]
-SERVICES_EXECUTABLES = [_executable_for(ident) for ident, _, _ in SERVICES_MEMBERS]
-SERVICES_PROCESSES = [
-    app_process_for('services', ident, nodes)
-    for ident, _, nodes in SERVICES_MEMBERS
+APPLICATIONS_EXECUTABLES = [_executable_for(ident) for ident, _, _ in APPLICATIONS_MEMBERS]
+APPLICATIONS_PROCESSES = [
+    app_process_for('demo', ident, nodes)
+    for ident, _, nodes in APPLICATIONS_MEMBERS
 ]
 
 # ---------------------------------------------------------------------------
 # Aggregate across all clusters (every component / process).
 # ---------------------------------------------------------------------------
-COMPONENTS = SERVICES_COMPONENTS
-EXECUTABLES = SERVICES_EXECUTABLES
-PROCESSES = SERVICES_PROCESSES
+COMPONENTS = APPLICATIONS_COMPONENTS
+EXECUTABLES = APPLICATIONS_EXECUTABLES
+PROCESSES = APPLICATIONS_PROCESSES
 
 # ---------------------------------------------------------------------------
 # Machine section — EMPTY. Machines are a deploy-time concern; rig layers
@@ -101,25 +98,25 @@ from artheia.manifest.layer import Layer  # noqa: E402,F811
 from artheia.manifest.rig import SoftwareSpecification, VehicleIdentity
 from artheia.manifest.transform import Append, SetTransformTypes  # noqa: E402
 
-# cluster `Services` → ServicesLayer / ServicesSoftware.
-ServicesLayer = Layer(
-    name="services",
-    add_components=SERVICES_COMPONENTS,
-    add_executions=SERVICES_PROCESSES,
+# cluster `Applications` → ApplicationsLayer / ApplicationsSoftware.
+ApplicationsLayer = Layer(
+    name="applications",
+    add_components=APPLICATIONS_COMPONENTS,
+    add_executions=APPLICATIONS_PROCESSES,
     add_supervisors=SUPERVISORS,
 )
-_ServicesApp = ApplicationManifest(
-    name="services_app",
+_ApplicationsApp = ApplicationManifest(
+    name="applications_app",
     host_machine="",  # rig layers fill in
-    components=list(SERVICES_COMPONENTS),
+    components=list(APPLICATIONS_COMPONENTS),
 )
-ServicesSoftware: SoftwareSpecification = SoftwareSpecification(
+ApplicationsSoftware: SoftwareSpecification = SoftwareSpecification(
     vehicle=VehicleIdentity(name=""),  # rig layers override
     applications=cast(set[SetTransformTypes], {
-        Append(_ServicesApp),
+        Append(_ApplicationsApp),
     }),
     execution_manifests=cast(set[SetTransformTypes], {
-        Append(p) for p in SERVICES_PROCESSES
+        Append(p) for p in APPLICATIONS_PROCESSES
     }),
     supervisors=cast(set[SetTransformTypes], {
         Append(s) for s in SUPERVISORS
@@ -128,13 +125,13 @@ ServicesSoftware: SoftwareSpecification = SoftwareSpecification(
 
 
 __all__ = [
-    "SERVICES_MEMBERS",
-    "SERVICES_SHORTS",
-    "SERVICES_COMPONENTS",
-    "SERVICES_EXECUTABLES",
-    "SERVICES_PROCESSES",
-    "ServicesLayer",
-    "ServicesSoftware",
+    "APPLICATIONS_MEMBERS",
+    "APPLICATIONS_SHORTS",
+    "APPLICATIONS_COMPONENTS",
+    "APPLICATIONS_EXECUTABLES",
+    "APPLICATIONS_PROCESSES",
+    "ApplicationsLayer",
+    "ApplicationsSoftware",
     "MACHINES",
     "COMPONENTS",
     "EXECUTABLES",

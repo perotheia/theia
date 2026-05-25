@@ -431,34 +431,6 @@ interface senderReceiver NodeReportIf {
     data SendTimeoutReport send_timeout
 }
 
-// ---- node ----------------------------------------------------------------
-
-// TIPC type 0x80020001 — sits above the FC range (0x80010001..0x80010012)
-// in a band reserved for system-level services. Instance 0 because the
-// supervisor is singleton per machine.
-
-node atomic Supervisor {
-    tipc type=0x80020001 instance=0
-    ports {
-        server   control  provides SupervisorControlIf
-        sender   events   provides SupervisorEventIf
-        receiver reports  requires NodeReportIf
-    }
-    params {
-        // Period of the HealthBeacon emission in ms. The GUI uses this
-        // to compute its "stale connection" threshold.
-        heartbeat_period_ms : uint32 = 1000
-        // Period of the periodic TreeSnapshot broadcast. State-change
-        // events fire snapshots ad-hoc; this one is a safety net.
-        snapshot_period_ms  : uint32 = 5000
-        // Watchdog: terminate a node that misses this many consecutive
-        // expected HeartbeatReports. Combined with the node's emit
-        // period this gives the time-to-kill of a wedged daemon.
-        // Default 3 ≈ 3 × node_heartbeat_period (typically 3s).
-        watchdog_max_missed : uint32 = 3
-    }
-}
-
-// ---- composition ---------------------------------------------------------
-// The supervisor stands alone in its own composition; the GUI imports
-// SupervisorControlIf / SupervisorEventIf separately to wire its ports.
+// Node types (Supervisor, SupervisorGui) and the wiring compositions
+// live in the sibling component.art — package.art is the schema layer
+// (messages + interfaces), component.art is the wiring layer.

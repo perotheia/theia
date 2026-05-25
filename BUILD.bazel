@@ -86,6 +86,29 @@ pkg_files(
     prefix = "etc/theia",
 )
 
+# Per-machine supervisor trees → install/central/ and install/compute/.
+# The demo rig splits its software onto two TARGET machines: central runs
+# the platform services (minus shwa) + apps p1/p2; compute runs shwa +
+# app p3 under its own srv_sup/app_sup tree. Each machine installs only
+# its own executor.json.
+pkg_files(
+    name = "install_central",
+    srcs = ["@rig_demo//:executor_json_central"],
+    attributes = pkg_attributes(mode = "0644"),
+    # The genrule names the output central/executor.json; strip that
+    # prefix so it lands at <prefix>/executor.json.
+    strip_prefix = "central",
+    prefix = "central",
+)
+
+pkg_files(
+    name = "install_compute",
+    srcs = ["@rig_demo//:executor_json_compute"],
+    attributes = pkg_attributes(mode = "0644"),
+    strip_prefix = "compute",
+    prefix = "compute",
+)
+
 # Keep the layout's dirs present even when a group is empty.
 pkg_mkdirs(
     name = "install_dirs",
@@ -93,6 +116,8 @@ pkg_mkdirs(
         "theia/bin",
         "theia/lib",
         "etc/theia",
+        "central",
+        "compute",
     ],
 )
 
@@ -103,6 +128,8 @@ pkg_install(
         ":install_bin_scripts",
         ":install_lib",
         ":install_etc",
+        ":install_central",
+        ":install_compute",
         ":install_dirs",
     ],
 )

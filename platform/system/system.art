@@ -35,8 +35,8 @@ import system.gateway.*     // ../../gateway/system/component.art
 
 
 // ---- forward-decl: external clusters (real defs in component.art) -------
-cluster Services    { }
-cluster Demo3Way    { }
+cluster Services     { }
+cluster Applications { }
 
 // ---- forward-decl: compositions referenced by cluster Platform ----------
 

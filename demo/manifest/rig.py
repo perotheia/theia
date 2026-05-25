@@ -77,7 +77,7 @@ from artheia.manifest.machine import CpuResource, IpEndpoint
 from artheia.manifest.platform import PlatformBase
 from artheia.manifest.rig import SoftwareSpecification
 from artheia.manifest.transform import Append, Override, SetTransformTypes
-from services.manifest.service import FcSoftware
+from services.manifest.service import ServicesSoftware
 
 # ---------------------------------------------------------------------------
 # Demo machines.
@@ -187,58 +187,26 @@ AdminHost = MachineManifest(
 DemoHost = CentralHost
 
 # ---------------------------------------------------------------------------
-# Process binaries.
+# Process binaries — DERIVED from the .art, not hand-listed.
 # ---------------------------------------------------------------------------
+#
+# `demo/manifest/applications.py` is GENERATED from `cluster Applications`
+# in demo/system/demo/component.art by `artheia gen-manifest-proto`. It
+# carries one SwComponent / Executable / Process per cluster member, with
+# every path derived from the (base_dir=demo, ident) directory convention
+# (app dir demo/<ident>, bazel //demo/<ident>:<ident>, start_cmd bin/<ident>)
+# and each Process.nodes set from the composition's hosted prototypes.
+#
+# rig.py consumes those directly — the hand-written 5-tuple table is gone.
+# This module keeps only the deploy concerns: machines, host pinning,
+# PTM, and the app_sup override.
 
-# One SwComponent per process binary built from the Demo3Way composition.
-# Today the binaries live at ``demo/build/p{1,2,3}_main`` (see
-# ``artheia gen-app-composition``); the bazel_target is the planned
-# location for the equivalent ``rules_cc`` target.
-
-_DEMO_PROCESSES = [
-    # (process-name, art composition name, bazel target, start_cmd, hosted prototypes)
-    #
-    # The composition names track demo/system/demo/component.art:
-    # `composition Demo3WayP1 { … on process P1 }` materializes into
-    # one binary that runs the prototypes listed here in-process.
-    #
-    # start_cmd is the on-target launch command the supervisor execs for
-    # this Process (its app_sup leaf). It points at the built binary
-    # — like an FC's Process.start_cmd in services/manifest/executor.py.
-    # The install-time .ipk mapping rewrites these to the install path.
-    ("demo_p1", "Demo3WayP1",
-     "//demo:p1_main", ["demo/build/p1_main"],
-     ["counter", "driver", "ticker"]),
-    ("demo_p2", "Demo3WayP2",
-     "//demo:p2_main", ["demo/build/p2_main"],
-     ["observer"]),
-    ("demo_p3", "Demo3WayP3",
-     "//demo:p3_main", ["demo/build/p3_main"],
-     ["incrementer"]),
-]
-
-# process-name → start_cmd, for _process_for below.
-_DEMO_START_CMD: dict[str, list[str]] = {
-    name: start_cmd for (name, _, _, start_cmd, _) in _DEMO_PROCESSES
-}
-
-DEMO_COMPONENTS: list[SwComponent] = [
-    SwComponent(
-        name=name,
-        bazel_target=target,
-        owner="platform",
-        # The art_node points at the top-level composition this process
-        # materializes; the runtime constructs its hosted prototypes
-        # locally and any other prototype as a RemoteRef.
-        art_node=f"system.demo/{art_class}",
-        # Demo binaries are real Bazel targets — see demo/BUILD.bazel.
-        # The 18 FC SwComponents in services/manifest/service.py default to
-        # bazel_buildable=False (they're bash daemons under
-        # theia_runtime/, not yet bridged into Bazel).
-        bazel_buildable=True,
-    )
-    for (name, art_class, target, _, _) in _DEMO_PROCESSES
-]
+from demo.manifest.applications import (  # noqa: E402
+    APPLICATIONS_COMPONENTS as _APP_COMPONENTS,
+    APPLICATIONS_EXECUTABLES as DEMO_EXECUTABLES,
+    APPLICATIONS_PROCESSES as DEMO_PROCESSES,
+    APPLICATIONS_SHORTS as _APP_SHORTS,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -269,10 +237,11 @@ _PLATFORM_FABRIC_COMPONENTS: list[SwComponent] = [
     ),
 ]
 
-# DEMO_BINARIES = just the 3 demo per-process binaries (compute-bound
-# AAs). Kept separate from _PLATFORM_FABRIC_COMPONENTS so the
-# structured-DSL AAs below can each carry only what belongs to them.
-DEMO_BINARIES = list(DEMO_COMPONENTS)
+# DEMO_BINARIES = the demo per-process binaries (compute-bound AAs),
+# straight from the generated applications.py. Kept separate from
+# _PLATFORM_FABRIC_COMPONENTS so the structured-DSL AAs below can each
+# carry only what belongs to them.
+DEMO_BINARIES = list(_APP_COMPONENTS)
 
 # DEMO_COMPONENTS (legacy-path-only) = demo binaries + platform fabric.
 # The legacy merge_layers flow collapses everything into one application
@@ -281,57 +250,8 @@ DEMO_BINARIES = list(DEMO_COMPONENTS)
 # not this combined list.
 DEMO_COMPONENTS = DEMO_BINARIES + _PLATFORM_FABRIC_COMPONENTS
 
-
-def _executable_for(name: str, art_class: str) -> Executable:
-    return Executable(
-        name=name,
-        category="APPLICATION_LEVEL",
-        build_type=BuildTypeEnum.BUILD_TYPE_RELEASE,
-        reporting_behavior=(
-            ExecutionStateReportingBehaviorEnum.REPORTING_BEHAVIOR_INDIVIDUAL
-        ),
-        root_sw_component_prototype=RootSwComponentPrototype(
-            name=f"{name}_root",
-            application_type=art_class,
-        ),
-    )
-
-
-DEMO_EXECUTABLES: list[Executable] = [
-    _executable_for(name, art_class)
-    for (name, art_class, _, _, _) in _DEMO_PROCESSES
-]
-
-
-def _process_for(name: str) -> Process:
-    return Process(
-        name=name,
-        executable=name,
-        # Demo processes are application-level, not part of an FC.
-        function_cluster_affiliation="",
-        # The supervisor execs this when it starts the app_sup leaf —
-        # same role as an FC Process.start_cmd. Empty for any process
-        # not in the start-cmd map (shouldn't happen for the demo set).
-        start_cmd=_DEMO_START_CMD.get(name, []),
-        state_dependent_startup_config=[
-            StateDependentStartupConfig(
-                function_group_state=["Default.Running"],
-                startup_config=StartupConfig(
-                    name=f"{name}_startup",
-                    scheduling_policy=SchedulingPolicy.SCHED_OTHER,
-                    scheduling_priority=0,
-                    termination_behavior=(
-                        TerminationBehaviorEnum.PROCESS_IS_NOT_SELF_TERMINATING
-                    ),
-                ),
-            ),
-        ],
-    )
-
-
-DEMO_PROCESSES: list[Process] = [
-    _process_for(name) for (name, _, _, _, _) in _DEMO_PROCESSES
-]
+# DEMO_EXECUTABLES / DEMO_PROCESSES are imported above from
+# applications.py — no local builders needed.
 
 
 # ---------------------------------------------------------------------------
@@ -343,7 +263,7 @@ DEMO_PROCESSES: list[Process] = [
 # This rig attaches its three demo binaries as app_sup's children —
 # each resolves through its Process (DEMO_PROCESSES, with a real
 # start_cmd) exactly like an FC leaf resolves through its Process.
-_APP_SUP_CHILDREN = [name for (name, _, _, _, _) in _DEMO_PROCESSES]
+_APP_SUP_CHILDREN = list(_APP_SHORTS)
 
 DemoLayer = Layer(
     name="demo",
@@ -453,7 +373,7 @@ DemoRig.process_to_machine_mappings = list(
 
 
 # ---------------------------------------------------------------------------
-# Structured-DSL path — DemoSoftware = FcSoftware.squash(DemoSpecLayer).
+# Structured-DSL path — DemoSoftware = ServicesSoftware.squash(DemoSpecLayer).
 #
 # Mirrors the mosaic raj_syscomp.py pattern:
 #
@@ -461,19 +381,19 @@ DemoRig.process_to_machine_mappings = list(
 #
 # Here the chain is:
 #
-#     DemoSoftware = FcSoftware.squash(DemoSpecLayer)
+#     DemoSoftware = ServicesSoftware.squash(DemoSpecLayer)
 #
 # DemoSpecLayer carries the demo-specific deltas (vehicle identity,
-# the demo_host machine, the three demo process binaries). FcSoftware
+# the demo_host machine, the three demo process binaries). ServicesSoftware
 # is the platform-services base. The result is a fully-merged spec
 # that .to_rig()s to the same shape as the legacy DemoRig above.
 # ---------------------------------------------------------------------------
 
 # Two ApplicationManifests, each bound to its own machine:
 #
-#   platform_app on central — services (18 FCs from FcSoftware) +
+#   platform_app on central — services (18 FCs from ServicesSoftware) +
 #                              gateway. Same-identity Append merges
-#                              into FcSoftware's platform_app: host
+#                              into ServicesSoftware's platform_app: host
 #                              binding overrides "" → central_host,
 #                              components stay as the 18 FCs (the
 #                              demo binaries are routed to compute_app
@@ -488,7 +408,7 @@ DemoRig.process_to_machine_mappings = list(
 _PlatformAppOverlay = ApplicationManifest(
     name="platform_app",
     host_machine=CentralHost.name,
-    # The 18 FC components come from FcSoftware (the platform base);
+    # The 18 FC components come from ServicesSoftware (the platform base);
     # the squash merges them in by same-identity (name="platform_app").
     # We add the platform-fabric components here — supervisor + gateway
     # — because they belong on central and platform_app is its AA.
@@ -500,7 +420,7 @@ _ComputeApp = ApplicationManifest(
     host_machine=ComputeHost.name,
     # Compute hosts only the demo per-process binaries. Platform
     # fabric (supervisor / gateway) lives in _PlatformAppOverlay
-    # above; FCs (incl. shwa) live in FcSoftware → platform_app, with
+    # above; FCs (incl. shwa) live in ServicesSoftware → platform_app, with
     # a PTM entry pinning shwa to compute (see _PTM_ENTRIES).
     components=list(DEMO_BINARIES),
 )
@@ -536,7 +456,7 @@ DemoSpecLayer = SoftwareSpecification(
     process_to_machine_mappings=cast(set[SetTransformTypes], {
         Append(_ptm) for _ptm in _PTM_ENTRIES
     }),
-    # Attach the demo apps to app_sup. FcSoftware ships app_sup with an
+    # Attach the demo apps to app_sup. ServicesSoftware ships app_sup with an
     # empty children list; an Append of the same-identity node unions
     # the demo leaves into it (set-transform list-merge), matching the
     # legacy DemoLayer.override_supervisors above. Each child resolves
@@ -550,4 +470,149 @@ DemoSpecLayer = SoftwareSpecification(
     }),
 )
 
-DemoSoftware: SoftwareSpecification = FcSoftware.squash(DemoSpecLayer)
+DemoSoftware: SoftwareSpecification = ServicesSoftware.squash(DemoSpecLayer)
+
+
+# ---------------------------------------------------------------------------
+# Per-machine split — CentralSoftware + ComputeSoftware.
+#
+# The demo deploys onto two TARGET machines with DIFFERENT software:
+#
+#   central_host — the platform services (minus shwa) + the demo apps p1/p2,
+#                  under the standard platform supervisor tree.
+#   compute_host — shwa (the GPU/accelerator FC) + the demo app p3, under a
+#                  small machine-local tree: root → srv_sup → shwa,
+#                                              root → app_sup → p3.
+#
+# We MOVE shwa + p3 to compute by partitioning the manifest lists in plain
+# Python — fresh per-machine lists, no Remove/Append transform dance. The
+# components/processes are shared dataclasses; we just reference them from
+# the right machine's list. Because each machine's SoftwareSpecification
+# carries ONLY its own components/processes, the "moved" element simply
+# isn't in the other machine's execution tree — the transform semantics
+# fall out of set membership, not an explicit Remove.
+#
+# Two squashes: CentralSoftware = ServicesSoftware.squash(CentralLayer),
+# ComputeSoftware = ServicesSoftware.squash(ComputeLayer). Each .to_rig()s
+# to a single-machine rig the CLI / Bazel emits per host.
+# ---------------------------------------------------------------------------
+
+from services.manifest.service import (  # noqa: E402
+    SERVICES_COMPONENTS as _FC_COMPONENTS,
+    SERVICES_PROCESSES as _FC_PROCESSES,
+    SUPERVISORS as _PLATFORM_SUPERVISORS,
+)
+
+# What moves off central onto compute.
+_COMPUTE_FCS = {"shwa"}      # services moved to compute
+_COMPUTE_APPS = {"p3"}       # demo apps moved to compute
+
+# --- partition the shared element lists by machine (reference-move) --------
+_central_fc_components = [c for c in _FC_COMPONENTS if c.name not in _COMPUTE_FCS]
+_central_fc_processes = [p for p in _FC_PROCESSES if p.name not in _COMPUTE_FCS]
+_compute_fc_components = [c for c in _FC_COMPONENTS if c.name in _COMPUTE_FCS]
+_compute_fc_processes = [p for p in _FC_PROCESSES if p.name in _COMPUTE_FCS]
+
+_central_app_components = [c for c in DEMO_BINARIES if c.name not in _COMPUTE_APPS]
+_central_app_processes = [p for p in DEMO_PROCESSES if p.name not in _COMPUTE_APPS]
+_compute_app_components = [c for c in DEMO_BINARIES if c.name in _COMPUTE_APPS]
+_compute_app_processes = [p for p in DEMO_PROCESSES if p.name in _COMPUTE_APPS]
+
+_central_app_shorts = [c.name for c in _central_app_components]
+
+
+# --- central supervisor tree: platform tree, app_sup = central apps --------
+# Reuse the platform SUPERVISORS as-is (shwa is still *declared* under
+# pltf_sup, but with no shwa Process on central its leaf is sliced out at
+# build_supervisor_tree time — the honest "declared but not running here").
+# Only app_sup needs the central app list.
+_central_supervisors = [
+    dataclasses.replace(s, children=list(_central_app_shorts))
+    if s.name == "app_sup" else s
+    for s in _PLATFORM_SUPERVISORS
+]
+
+
+# --- compute supervisor tree: fresh, machine-local -------------------------
+# root → srv_sup → shwa ; root → app_sup → p3. Small and self-contained;
+# nothing of the platform tree applies on the accelerator box.
+_compute_supervisors = [
+    SupervisorNode(
+        name="root",
+        strategy=RestartStrategy.ONE_FOR_ALL,
+        children=["srv_sup", "app_sup"],
+        tombstone_dir="/tmp/tombstones",
+    ),
+    SupervisorNode(
+        name="srv_sup",
+        strategy=RestartStrategy.ONE_FOR_ONE,
+        children=sorted(_COMPUTE_FCS),
+    ),
+    SupervisorNode(
+        name="app_sup",
+        strategy=RestartStrategy.ONE_FOR_ONE,
+        children=sorted(_COMPUTE_APPS),
+    ),
+]
+
+
+def _mk_app(name: str, host: str, components: list) -> ApplicationManifest:
+    return ApplicationManifest(
+        name=name, host_machine=host, components=list(components)
+    )
+
+
+# Each per-machine spec is built STANDALONE (fresh lists), NOT squashed
+# onto ServicesSoftware — squash unions with the base, which would drag the
+# full 6-FC set + the platform root tree back in and undo the partition.
+# Building fresh means each machine carries exactly its own slice.
+
+# --- CentralSoftware --------------------------------------------------------
+CentralSoftware: SoftwareSpecification = SoftwareSpecification(
+    vehicle=VehicleIdentity(name="demo", make="theia",
+                            model="gen_server-demo"),
+    machines=cast(set[SetTransformTypes], {Append(CentralHost)}),
+    applications=cast(set[SetTransformTypes], {
+        Append(_mk_app("platform_app", CentralHost.name,
+                       _central_fc_components + _PLATFORM_FABRIC_COMPONENTS)),
+        Append(_mk_app("central_app", CentralHost.name,
+                       _central_app_components)),
+    }),
+    execution_manifests=cast(set[SetTransformTypes], {
+        Append(p) for p in (_central_fc_processes + _central_app_processes)
+    }),
+    service_manifests=cast(set[SetTransformTypes], {
+        Append(_sm) for _sm in DemoRig.service_manifests
+    }),
+    supervisors=cast(set[SetTransformTypes], {
+        Append(s) for s in _central_supervisors
+    }),
+)
+
+
+# --- ComputeSoftware --------------------------------------------------------
+ComputeSoftware: SoftwareSpecification = SoftwareSpecification(
+    vehicle=VehicleIdentity(name="demo", make="theia",
+                            model="gen_server-demo"),
+    machines=cast(set[SetTransformTypes], {Append(ComputeHost)}),
+    applications=cast(set[SetTransformTypes], {
+        Append(_mk_app("compute_app", ComputeHost.name,
+                       _compute_fc_components + _compute_app_components)),
+    }),
+    execution_manifests=cast(set[SetTransformTypes], {
+        Append(p) for p in (_compute_fc_processes + _compute_app_processes)
+    }),
+    service_manifests=cast(set[SetTransformTypes], {
+        Append(_sm) for _sm in DemoRig.service_manifests
+    }),
+    supervisors=cast(set[SetTransformTypes], {
+        Append(s) for s in _compute_supervisors
+    }),
+)
+
+
+# Materialized per-machine rigs — what `artheia executor emit
+# demo.manifest.rig --rig CentralRig` (and ComputeRig) consume to write
+# install/central/executor.json and install/compute/executor.json.
+CentralRig: Rig = CentralSoftware.to_rig()
+ComputeRig: Rig = ComputeSoftware.to_rig()

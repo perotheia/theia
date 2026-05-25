@@ -350,6 +350,25 @@ alias(
     actual = ":executor_json",
 )
 
+# Per-machine supervisor trees. The rig module exports CentralRig /
+# ComputeRig (demo.manifest.rig), each a single-machine Rig with its own
+# supervision tree (central: platform tree minus shwa; compute: srv_sup ->
+# shwa, app_sup -> p3). The top-level //:install rule lays these into
+# install/central/executor.json and install/compute/executor.json.
+genrule(
+    name = "executor_json_central",
+    outs = ["central/executor.json"],
+    cmd = "bash $(rootpath @pero_theia//tools:artheia_wrapper.sh) executor emit {rig_module} --rig CentralRig --out $@",
+    tools = ["@pero_theia//tools:artheia_wrapper.sh"],
+)
+
+genrule(
+    name = "executor_json_compute",
+    outs = ["compute/executor.json"],
+    cmd = "bash $(rootpath @pero_theia//tools:artheia_wrapper.sh) executor emit {rig_module} --rig ComputeRig --out $@",
+    tools = ["@pero_theia//tools:artheia_wrapper.sh"],
+)
+
 genrule(
     name = "machines_yaml",
     outs = ["machines.yaml"],

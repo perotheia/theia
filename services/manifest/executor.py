@@ -1,0 +1,98 @@
+"""Hand-authored supervisor tree — sidecar for :mod:`service.py`.
+
+The :data:`SUPERVISORS` list is the OTP-style hierarchical supervisor
+tree (see ~/org/1.org). It is **manually written** — there is no .art
+declaration for the supervisor hierarchy (``system.art`` only carries
+the FC compositions + the Supervisor/GatewayBridge process forward-decls,
+not the restart strategy or the child grouping).
+
+It lives in this separate module so that regenerating ``service.py``
+from ``platform/system/system.art`` (the FC list) does NOT clobber the
+tree. ``service.py`` re-exports it as ``service.SUPERVISORS`` so existing
+consumers (``artheia.manifest.platform``, ``FcLayer``, ``FcSoftware``)
+keep working unchanged — edit the tree HERE.
+
+Children name either another :class:`SupervisorNode` or a
+:class:`Process` from ``service.PROCESSES``. ``AUTO_APPS_CHILDREN``
+expands at build time into the non-FC SwComponents on the rig (vendor /
+demo applications).
+
+Restart-strategy choices match the OTP design:
+
+- ``root`` is the catastrophic-escalation point. ``one_for_all`` so a
+  top-level escalation reboots the entire subtree.
+- ``ar_sup`` is ``rest_for_one`` — if ``core_sup`` fails, ``app_sup``
+  restarts too (apps can't survive without the platform).
+- ``core_sup`` is ``rest_for_one`` — within the platform layer, ``exec``
+  precedes the others. If it crashes, downstream peers restart in
+  declared order.
+- Per-domain sub-supervisors are ``one_for_one`` (peer-independent).
+- ``app_sup`` is ``one_for_one`` — vendor apps are independent.
+"""
+
+from __future__ import annotations
+
+from artheia.manifest.supervisor import (
+    AUTO_APPS_CHILDREN,
+    RestartStrategy,
+    SupervisorNode,
+)
+
+SUPERVISORS: list[SupervisorNode] = [
+    SupervisorNode(
+        name="root",
+        strategy=RestartStrategy.ONE_FOR_ALL,
+        children=["ar_sup"],
+        tombstone_dir="/tmp/tombstones",
+    ),
+    SupervisorNode(
+        name="ar_sup",
+        strategy=RestartStrategy.REST_FOR_ONE,
+        children=["core_sup", "app_sup"],
+    ),
+    SupervisorNode(
+        name="core_sup",
+        strategy=RestartStrategy.REST_FOR_ONE,
+        children=[
+            # Leaves first, in declared order — `exec` is the execution
+            # manager, so it must come up first. core / crypto / sm
+            # follow because the rest_for_one cascade order is meaningful.
+            "exec", "core", "crypto", "sm",
+            # Per-domain sub-supervisors after the leaves.
+            "network_sup", "host_svc_sup", "pltf_sup",
+        ],
+    ),
+    SupervisorNode(
+        name="network_sup",
+        strategy=RestartStrategy.ONE_FOR_ONE,
+        children=["nm", "com", "osi", "idsm", "diag", "tsync"],
+    ),
+    SupervisorNode(
+        name="host_svc_sup",
+        strategy=RestartStrategy.ONE_FOR_ONE,
+        # "log" is in CLUSTERS for AUTOSAR spec-completeness but has no
+        # daemon — logs go to files/console/syslog directly (no FC needed).
+        # The trace service (forthcoming) lives at services/log/ for
+        # convenience, but is a different facility — declared separately.
+        children=["per", "rds"],
+    ),
+    SupervisorNode(
+        name="pltf_sup",
+        strategy=RestartStrategy.ONE_FOR_ONE,
+        # "camera" is listed in ~/org/1.org as an example app — it lands
+        # here if a rig layer adds an FC with that short name; otherwise
+        # quietly skipped. ``shwa`` and ``fw`` aren't in any branch in
+        # ~/org/1.org so they're grouped here as platform-level extras.
+        children=["phm", "camera", "ucm", "vucm", "shwa", "fw"],
+    ),
+    SupervisorNode(
+        name="app_sup",
+        strategy=RestartStrategy.ONE_FOR_ONE,
+        # AUTO_APPS_CHILDREN expands into one leaf per non-FC SwComponent
+        # at supervisor-build time (the vendor apps / demo binaries).
+        children=[AUTO_APPS_CHILDREN],
+    ),
+]
+
+
+__all__ = ["SUPERVISORS"]

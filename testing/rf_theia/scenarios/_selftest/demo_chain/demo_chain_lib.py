@@ -277,6 +277,63 @@ class DemoChainLib:
                 f"saw {[p.name for p in mdir.iterdir()]}"
             )
 
+    @keyword("Manifest Has Json Siblings")
+    def manifest_has_json_siblings(self, root: str, machine: str) -> None:
+        """Every YAML manifest must have a JSON sibling with the same
+        content. Catches future drift between the two encoders (#379)."""
+        import json as _json
+        import yaml as _yaml
+        mdir = Path(root) / machine
+        stems = ["machine", "application", "service", "execution"]
+        for stem in stems:
+            yp = mdir / f"{stem}.yaml"
+            jp = mdir / f"{stem}.json"
+            if not jp.exists():
+                raise AssertionError(f"missing JSON sibling: {jp}")
+            try:
+                jdoc = _json.loads(jp.read_text())
+            except _json.JSONDecodeError as e:
+                raise AssertionError(f"{jp} doesn't parse as JSON: {e}")
+            ydoc = _yaml.safe_load(yp.read_text())
+            if ydoc != jdoc:
+                raise AssertionError(
+                    f"{jp} and {yp} differ — encoders out of sync"
+                )
+
+    @keyword("Json Kind Is")
+    def json_kind_is(self, root: str, machine: str, stem: str,
+                     expected_kind: str) -> None:
+        """Assert dist/manifest/<machine>/<stem>.json's top-level `kind`
+        equals the expected manifest type tag."""
+        import json as _json
+        jp = Path(root) / machine / f"{stem}.json"
+        doc = _json.loads(jp.read_text())
+        kind = doc.get("kind")
+        if kind != expected_kind:
+            raise AssertionError(
+                f"{jp} kind = {kind!r}, expected {expected_kind!r}"
+            )
+
+    @keyword("Index Json Lists Machines")
+    def index_json_lists_machines(self, root: str, *names: str) -> None:
+        """Top-level index.json mirrors index.yaml — Puppet's bootstrap
+        uses it to find each machine's directory."""
+        import json as _json
+        jp = Path(root) / "index.json"
+        if not jp.exists():
+            raise AssertionError(f"missing top-level index.json: {jp}")
+        doc = _json.loads(jp.read_text())
+        if doc.get("kind") != "RigIndex":
+            raise AssertionError(
+                f"{jp} kind = {doc.get('kind')!r}, expected 'RigIndex'"
+            )
+        got = {m["name"] for m in doc.get("machines", [])}
+        missing = [n for n in names if n not in got]
+        if missing:
+            raise AssertionError(
+                f"index.json machines = {got}; missing {missing}"
+            )
+
     @keyword("Execution Yaml Lists Process")
     def execution_lists_process(self, root: str, machine: str,
                                 process: str) -> None:

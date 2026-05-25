@@ -154,6 +154,38 @@ Stage 6 — generate-manifest YAML set
     Execution Yaml Lists Process    ${root}    compute_host    demo_p3
 
 
+Stage 6b — manifest JSON siblings (#379)
+    [Documentation]    Every YAML manifest has a JSON sibling with
+    ...                identical content. JSON is the
+    ...                programmatic-tooling encoding (linters,
+    ...                schema validators, downstream codegen that
+    ...                doesn't pull in a YAML parser). Both encoders
+    ...                feed off the same dict serializer, so this
+    ...                test catches future drift.
+    ...
+    ...                Also asserts each JSON file declares the
+    ...                correct top-level `kind` tag — the only
+    ...                discriminator a generic JSON consumer has to
+    ...                tell the four manifest types apart.
+    [Tags]    demo-chain    hermetic    selftest    stage-6b
+
+    ${root}=    Stage 6 Generate Manifest
+
+    # Content-equality across both encoders, for each machine.
+    Manifest Has Json Siblings    ${root}    central_host
+    Manifest Has Json Siblings    ${root}    compute_host
+    Manifest Has Json Siblings    ${root}    admin_host
+
+    # Top-level kind tags (one consumer-facing identity per file).
+    Json Kind Is    ${root}    central_host    machine        MachineManifest
+    Json Kind Is    ${root}    central_host    application    ApplicationManifest
+    Json Kind Is    ${root}    central_host    service        ServiceManifest
+    Json Kind Is    ${root}    central_host    execution      ExecutionManifest
+
+    # index.json — Puppet's per-host directory lookup.
+    Index Json Lists Machines    ${root}    central_host    compute_host    admin_host
+
+
 Stage 7 — executor emit per-machine tree
     [Documentation]    Per-machine supervisor tree YAML. Root is
     ...                always `one_for_all`; non-matching pinned

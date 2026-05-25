@@ -7,7 +7,7 @@
 #include "Logger.hh"
 #include "TimerService.hh"
 
-#include "demo/system/system.pb.h"
+#include "system/demo/demo.pb.h"
 
 #include <cstdint>
 #include <memory>

@@ -19,7 +19,7 @@ void IncrementerNode<IncOutRef>::handle_info(const char* info,
                                               IncrementerState& s) {
     if (std::strcmp(info, "tick") != 0) return;
 
-    demo_system_Inc msg{};
+    services_demo_Inc msg{};
     msg.n = 2;
     runtime::cast(inc_out_, msg);
     ++s.casts_sent;

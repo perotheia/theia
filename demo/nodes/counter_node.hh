@@ -14,7 +14,7 @@
 #include "GenServer.hh"
 #include "Logger.hh"
 
-#include "demo/system/system.pb.h"
+#include "system/demo/demo.pb.h"
 
 #include <cstdint>
 #include <memory>
@@ -48,10 +48,10 @@ public:
 
     // gen_server callbacks. Names and signatures mirror OTP exactly,
     // modulo State& replacing Erlang's threaded state return.
-    demo_system_GetReply handle_call(const demo_system_Get& req,
+    services_demo_GetReply handle_call(const services_demo_Get& req,
                                        CounterState& s);
 
-    void handle_cast(const demo_system_Inc& msg,
+    void handle_cast(const services_demo_Inc& msg,
                       CounterState& s);
 
     void handle_info(const char* info, CounterState& s);

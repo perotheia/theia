@@ -7,16 +7,16 @@ namespace demo {
 CounterNode::CounterNode(const CounterNodeInputs& in)
     : logger_(in.logger) {}
 
-demo_system_GetReply
-CounterNode::handle_call(const demo_system_Get& /*req*/,
+services_demo_GetReply
+CounterNode::handle_call(const services_demo_Get& /*req*/,
                           CounterState& s) {
     logger_->info("[counter] handle_call(Get) → " + std::to_string(s.counter));
-    demo_system_GetReply reply{};
+    services_demo_GetReply reply{};
     reply.value = s.counter;
     return reply;
 }
 
-void CounterNode::handle_cast(const demo_system_Inc& msg,
+void CounterNode::handle_cast(const services_demo_Inc& msg,
                                CounterState& s) {
     s.counter += msg.n;
     // No log per cast — DriverNode does 10 of these and the noise is

@@ -18,7 +18,7 @@
 #include "Logger.hh"
 #include "TimerService.hh"
 
-#include "demo/system/system.pb.h"
+#include "system/demo/demo.pb.h"
 
 #include <atomic>
 #include <cstdint>
@@ -77,7 +77,7 @@ public:
     void handle_info(const char* info, DriverState& s);
 
     // Caller-side reply handlers.
-    void handle_call_result(const demo_system_GetReply& reply,
+    void handle_call_result(const services_demo_GetReply& reply,
                              const DriverAct& act,
                              DriverState& s);
     void handle_call_error(const std::string& reason,

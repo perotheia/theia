@@ -12,8 +12,8 @@
 
 #include "NodeRef.hh"
 
-#include "demo/system/system.pb.h"
+#include "system/demo/demo.pb.h"
 
-DEMO_DECLARE_REMOTE_CODEC(demo_system_Inc);
-DEMO_DECLARE_REMOTE_CODEC(demo_system_Get);
-DEMO_DECLARE_REMOTE_CODEC(demo_system_GetReply);
+DEMO_DECLARE_REMOTE_CODEC(services_demo_Inc);
+DEMO_DECLARE_REMOTE_CODEC(services_demo_Get);
+DEMO_DECLARE_REMOTE_CODEC(services_demo_GetReply);

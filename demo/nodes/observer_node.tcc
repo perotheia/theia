@@ -22,8 +22,8 @@ void ObserverNode<CounterCallRef>::handle_info(const char* info,
     ObserverAct act{next_req_id_.fetch_add(1)};
     ++s.polls_issued;
 
-    auto r = runtime::call<demo_system_GetReply>(
-        counter_call_, demo_system_Get{}, act, /*timeout_ms=*/500);
+    auto r = runtime::call<services_demo_GetReply>(
+        counter_call_, services_demo_Get{}, act, /*timeout_ms=*/500);
     switch (r.tag) {
         case runtime::CallTag::Reply:
             handle_call_result(r.reply, r.act, s);
@@ -40,7 +40,7 @@ void ObserverNode<CounterCallRef>::handle_info(const char* info,
 
 template <typename CounterCallRef>
 void ObserverNode<CounterCallRef>::handle_call_result(
-    const demo_system_GetReply& reply,
+    const services_demo_GetReply& reply,
     const ObserverAct& act,
     ObserverState& s) {
     s.last_value = reply.value;

@@ -27,7 +27,7 @@ void DriverNode<IncOutRef, CounterCallRef>::handle_info(const char* info,
 
     logger_->info("[driver] starting: 10× cast(Inc{5}), then call(Get)");
     for (int i = 0; i < 10; ++i) {
-        demo_system_Inc msg{};
+        services_demo_Inc msg{};
         msg.n = 5;
         runtime::cast(inc_out_, msg);
     }
@@ -38,17 +38,17 @@ void DriverNode<IncOutRef, CounterCallRef>::handle_info(const char* info,
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
 
     DriverAct act{DriverAct::Kind::GetCounter, /*request_id=*/1};
-    demo_system_Get req{};
-    runtime::call_and_dispatch<demo_system_GetReply>(
+    services_demo_Get req{};
+    runtime::call_and_dispatch<services_demo_GetReply>(
         *this, counter_call_, req, act, /*timeout_ms=*/2000);
 
     // Phase 2: 3× send_request, collect via wait_one. check_response
     // exercises the NoReply branch.
     logger_->info("[driver] phase 2: 3× send_request, collect via wait_one");
-    runtime::RequestIdCollection<demo_system_GetReply, DriverAct> col;
+    runtime::RequestIdCollection<services_demo_GetReply, DriverAct> col;
     DriverAct early_act{DriverAct::Kind::GetCounter, /*request_id=*/2};
-    auto rid_early = runtime::send_request<demo_system_GetReply>(
-        counter_call_, demo_system_Get{}, early_act);
+    auto rid_early = runtime::send_request<services_demo_GetReply>(
+        counter_call_, services_demo_Get{}, early_act);
     {
         auto chk = runtime::check_response(rid_early);
         logger_->info(std::string("[driver] check_response(early) tag=") +
@@ -63,8 +63,8 @@ void DriverNode<IncOutRef, CounterCallRef>::handle_info(const char* info,
     }
     for (uint32_t i = 3; i <= 4; ++i) {
         DriverAct a{DriverAct::Kind::GetCounter, /*request_id=*/i};
-        col.add(runtime::send_request<demo_system_GetReply>(
-            counter_call_, demo_system_Get{}, a));
+        col.add(runtime::send_request<services_demo_GetReply>(
+            counter_call_, services_demo_Get{}, a));
     }
     while (!col.empty()) {
         auto r = col.wait_one(/*timeout_ms=*/2000);
@@ -99,7 +99,7 @@ void DriverNode<IncOutRef, CounterCallRef>::handle_info(const char* info,
 
 template <typename IncOutRef, typename CounterCallRef>
 void DriverNode<IncOutRef, CounterCallRef>::handle_call_result(
-    const demo_system_GetReply& reply,
+    const services_demo_GetReply& reply,
     const DriverAct& act,
     DriverState& s) {
     s.last_value = reply.value;

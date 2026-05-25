@@ -91,5 +91,23 @@ class ConsoleLogger : public Logger {
 // Helper for the runtime to hand each app a sensible default.
 std::shared_ptr<Logger> MakeConsoleLogger() noexcept;
 
+// ---- Process-wide logger handle (#386) ----------------------------------
+//
+// A reporting FC daemon's config service receives a LogLevelPush from
+// the supervisor and applies it with set_level — but the live logger is
+// a local in main.cc, not a member of the daemon. Rather than thread a
+// shared_ptr<Logger> through every generated daemon ctor, main.cc
+// publishes the process logger here once at boot, and the generated
+// handle_cast reaches it via process_logger(). Mirrors the
+// tracer_for(kNodeName) process-wide accessor in Tracer.hh.
+//
+// set_process_logger is called exactly once, on the main thread, before
+// any node starts. process_logger() is then safe to call from any node
+// thread (set_level is atomic). Returns a never-null reference; if the
+// app never published one, a lazily-created ConsoleLogger backs it so
+// the handler can't crash.
+void    set_process_logger(std::shared_ptr<Logger> logger) noexcept;
+Logger& process_logger() noexcept;
+
 }  // namespace runtime
 }  // namespace platform

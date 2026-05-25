@@ -31,6 +31,9 @@
 
 #include "RemoteCodec.hh"        // encode_for_trace + msg_type_name
 #include "Tracer.hh"
+#include "Logger.hh"             // process_logger() — config-push apply (#386)
+
+#include "platform_runtime/runtime.pb.h"  // LogLevelPush control message
 
 #include <atomic>
 #include <chrono>
@@ -46,6 +49,14 @@
 #include <thread>
 #include <utility>
 #include <vector>
+
+// Codec for the supervisor→node control push (#386). Declared at global
+// scope (the macro opens demo::runtime itself) and here — not in an
+// app's _codecs.hh — because GenServer's base config handler below is
+// the universal receiver: every node that binds a config service
+// register_cast<>'s this type, so the codec belongs with the framework.
+// Emits RemoteCodec<platform_runtime_LogLevelPush> + msg_type_name.
+DEMO_DECLARE_REMOTE_CODEC(platform_runtime_LogLevelPush)
 
 namespace demo {
 namespace runtime {
@@ -213,6 +224,27 @@ public:
     // — overload resolution picks Derived's if present, the framework's
     // default otherwise. Same trick we use for handle_info default.
     void terminate(const char* /*reason*/, StateT& /*s*/) noexcept {}
+
+    // ---- Config service: LogLevelPush (#386) ----------------------------
+    //
+    // Framework-provided handle_cast overload for the supervisor's
+    // runtime log-level push. A reporting node's main.cc activates this
+    // by register_cast<platform_runtime_LogLevelPush>(binding, node) on
+    // its config-service binding; the cast then lands here on the node
+    // thread (no per-FC code). The enum is ordinal-aligned with
+    // LogLevel, so applying it is a static_cast + set_level on the
+    // process-wide logger. Lives on the base — not the generated daemon
+    // — so every node gets identical, correct behaviour; the app only
+    // flips the receiver on (the `reporting` conditional in the
+    // template), it never implements the handler.
+    void handle_cast(const platform_runtime_LogLevelPush& push,
+                     StateT& /*s*/) noexcept {
+        auto lvl = static_cast<platform::runtime::LogLevel>(push.level);
+        platform::runtime::process_logger().set_level(lvl);
+        std::fprintf(stderr, "[%s] log level -> %s (supervisor push)\n",
+                     Derived::kNodeName,
+                     platform::runtime::log_level_name(lvl));
+    }
 
 protected:
     void dispatch_info_(const char* info) override {

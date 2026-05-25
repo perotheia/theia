@@ -61,5 +61,33 @@ std::shared_ptr<Logger> MakeConsoleLogger() noexcept {
     return std::make_shared<ConsoleLogger>();
 }
 
+// ---- Process-wide logger handle (#386) ----------------------------------
+
+namespace {
+// Held by shared_ptr so the app's logger outlives any node thread that
+// grabbed it. Published once on the main thread before nodes start, so
+// no lock is needed for the publish/read race in practice; the
+// shared_ptr copy in process_logger() is the only concurrent access and
+// the pointer is set-once.
+std::shared_ptr<Logger>& process_logger_slot() noexcept {
+    static std::shared_ptr<Logger> slot;
+    return slot;
+}
+}  // namespace
+
+void set_process_logger(std::shared_ptr<Logger> logger) noexcept {
+    process_logger_slot() = std::move(logger);
+}
+
+Logger& process_logger() noexcept {
+    auto& slot = process_logger_slot();
+    if (!slot) {
+        // App never published one — back it with a console sink so a
+        // config push (or any caller) can't dereference null.
+        slot = MakeConsoleLogger();
+    }
+    return *slot;
+}
+
 }  // namespace runtime
 }  // namespace platform

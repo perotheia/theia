@@ -1,0 +1,35 @@
+// platform.runtime — control-plane message spec for the runtime.
+//
+// The runtime is the common dependency of BOTH the supervisor (which
+// PUSHES control frames) and every FC app (whose GenServer base
+// RECEIVES + applies them). Declaring the shared message here, in the
+// runtime's own .art package, means one canonical source: gen-proto
+// emits the nanopb codec both ends link, so the djb2 service_id of the
+// C type name and the proto-wire bytes match by construction.
+//
+// Scalar-only by design — see proto/platform_runtime/control.proto:
+// nanopb renders proto3 `string` as pb_callback_t, which GenServer's
+// register_cast path can't capture, so the log level rides as an enum.
+//
+// package platform.runtime → nanopb prefix platform_runtime_ (no
+// `system`→`services` rename applies). C type:
+// platform_runtime_LogLevelPush.
+
+package platform.runtime
+
+// AUTOSAR log levels, ordinal-aligned with platform::runtime::LogLevel
+// (Trace=0 .. Error=4) so the receiver can static_cast straight across.
+enum LogLevelValue {
+    LL_TRACE = 0
+    LL_DEBUG = 1
+    LL_INFO  = 2
+    LL_WARN  = 3
+    LL_ERROR = 4
+}
+
+// Pushed by the supervisor on a runtime log-level change (supdbg
+// log set-level → com → supervisor → here). GenServer's base handle
+// applies it via process_logger().set_level(LogLevel(level)).
+message LogLevelPush {
+    LogLevelValue level
+}

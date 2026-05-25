@@ -19,11 +19,37 @@ PSP loading). That stays in gateway/libs/{pero_cmp_lnx, libgw}.
 
 package(default_visibility = ["//visibility:public"])
 
+# Control-plane nanopb codec (#386), generated from
+# system/package.art (package platform.runtime). Compiled INTO the
+# runtime library so both the supervisor (sender) and every FC app
+# (receiver, via GenServer's register_cast) link the SAME
+# platform_runtime_LogLevelPush type. .pb.{c,h} are BUILT, not
+# committed — regenerate the .proto with:
+#   artheia gen-proto-package platform/runtime/system/package.art \
+#       --out platform/runtime/proto
+genrule(
+    name = "control_pb",
+    srcs = ["proto/platform_runtime/runtime.proto"],
+    outs = [
+        "proto/platform_runtime/runtime.pb.c",
+        "proto/platform_runtime/runtime.pb.h",
+    ],
+    cmd = "set -e;"
+        + " in_dir=$$(dirname $(location proto/platform_runtime/runtime.proto));"
+        + " out_dir=$$(dirname $(location proto/platform_runtime/runtime.pb.c));"
+        + " nanopb_generator -I $$in_dir -D $$out_dir runtime.proto;",
+    tools = [],
+    local = True,  # host-installed nanopb_generator, same as the FC protos
+)
+
 cc_library(
     name = "runtime",
-    srcs = glob(["src/*.cc"]),
-    hdrs = glob(["include/*.hh"]),
-    includes = ["include"],
+    srcs = glob(["src/*.cc"]) + ["proto/platform_runtime/runtime.pb.c"],
+    hdrs = glob(["include/*.hh"]) + ["proto/platform_runtime/runtime.pb.h"],
+    includes = [
+        "include",
+        "proto",   # so callers #include "platform_runtime/runtime.pb.h"
+    ],
     copts = [
         "-Wall",
         "-Wextra",

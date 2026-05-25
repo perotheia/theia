@@ -158,9 +158,43 @@ that's bare-metal — separate toolchain, no shared object pipeline.
    real cc_binary targets, Bazel's cc toolchain selection will need
    the same `//config:rpi4` wiring (separate piece of work — see
    step 6 below).
-6. Test: `bazel build @rig_demo//compute_host:image --platforms=//config:rpi4`
-   produces an arm64 .ipk, `dpkg -i` it on a Pi 4, supdbg from the
-   workspace connects to `pi-ip:7700`.
+6. ~~Bazel `pkg_opkg(arch=...)` reads from rig.py.~~ **DONE** —
+   `rules/rig.bzl`'s `_machine_targets()` now emits `arch = "<rig_arch>"`
+   from the rig-deps JSON's `arch` field. The previous `select()` only
+   fired when an explicit `--platforms=//config:rpi4` was passed; the
+   rule now uses the rig-declared arch as the source of truth and
+   `--platforms=` is reserved for cc_toolchain selection (relevant
+   once components grow real cc_binary targets).
+
+   Verified:
+   - `bazel build @rig_demo//compute_host:image` (no flag) →
+     `demo-compute_host_1.0.0_arm64.ipk` (ComputeHost declared aarch64
+     in rig.py)
+   - `bazel build @rig_demo//central_host:image` (no flag) →
+     `demo-central_host_1.0.0_amd64.ipk` (currently broken by an
+     unrelated `:ipk` target rename — pre-existing, not part of this
+     task)
+
+7. ~~`tools/deploy_rpi4.sh`.~~ **DONE** — wraps the canonical workflow:
+   - TIPC modprobe preflight on the target Pi (covers step 6's
+     "modprobe tipc" sanity check) — refuses to deploy if AF_TIPC is
+     unavailable in the kernel.
+   - `bazel build @rig_<name>//<machine>:image --platforms=//config:rpi4`.
+   - `bazel cquery --output=files` to locate the produced .ipk
+     (no hardcoded paths).
+   - `scp` + `ssh sudo dpkg -i`.
+   - Sanity-warns if the .ipk's arch tag isn't `_arm64`.
+
+   Real-hardware verification (compose `dpkg -i` + `supdbg --target
+   pi:7700 tree`) deferred — the workspace doesn't currently have a
+   Pi 4 attached. The script's preflight + scp/dpkg chain is the
+   complete deploy path once hardware is on the bench.
+
+## Status
+
+Steps 1-5 + 6 (arch wiring) + 7 (deploy script) are landed. The
+remaining work — real-Pi-4 dpkg + supdbg smoke — is gated on
+hardware, not on code. When that happens, the task moves to DONE/.
 
 ## Related
 

@@ -222,26 +222,33 @@ filegroup(
             ),
         )
 
+    # Arch token comes from rig.py — Machine.hardware.cpu.architecture
+    # is emitted as "amd64"/"arm64" in rig.json by `artheia rig-deps`.
+    # The .ipk's metadata arch is independent of which Bazel platform
+    # is doing the build; what matters is what `dpkg` expects on the
+    # *target* machine, which is exactly what rig.py declares.
+    #
+    # That means:
+    #   bazel build @rig_demo//compute_host:image  → arm64 (ComputeHost
+    #                                                declared aarch64)
+    #   bazel build @rig_demo//central_host:image  → amd64
+    #
+    # --platforms=//config:rpi4 is still meaningful — it drives the
+    # underlying cc_toolchain selection (so any cc_binary in the rig
+    # cross-compiles to aarch64). The .ipk metadata tag is fixed by
+    # rig.py because that's a declaration, not a build-time selection.
+    rig_arch = machine.get("arch", "amd64")
     lines.append('''
 pkg_opkg(
     name = "image",
     package = "{vehicle}-{machine}",
     version = "1.0.0",
-    # Arch is selected from the active --platforms. With no flag
-    # we default to amd64 (workspace host + docker compose stack).
-    # Pass --platforms=//config:rpi4 to flip to arm64. Adding a
-    # new target arch: extend //config:BUILD.bazel + the select
-    # below + drop a matching sysroot under third_party/sysroot/.
-    #
-    # `amd64`/`arm64` are dpkg's names. opkg accepts either; we
-    # standardize on Debian names so the archive is `dpkg -i`-able
-    # on Debian/Ubuntu hosts (archive format is identical — ar +
-    # control.tar.gz + data.tar.gz).
-    arch = select({{
-        "@pero_theia//config:is_arm64": "arm64",
-        "@pero_theia//config:is_amd64": "amd64",
-        "//conditions:default":         "amd64",
-    }}),
+    # Architecture comes from rig.py (Machine.hardware.cpu.architecture).
+    # This is a declaration of the target machine's arch — what `dpkg
+    # -i` expects to see on the box. Use --platforms=//config:rpi4 to
+    # drive the underlying cc_toolchain when the rig has cross-built
+    # cc_binary components.
+    arch = "{rig_arch}",
     description = "Deploy bundle for {vehicle} on {machine}",
     section = "apps",
     files = {{
@@ -251,6 +258,7 @@ pkg_opkg(
 '''.format(
         vehicle = vehicle_name,
         machine = machine["name"],
+        rig_arch = rig_arch,
         files = "\n".join(files_entries),
     ))
 

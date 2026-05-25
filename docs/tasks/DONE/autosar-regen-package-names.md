@@ -84,3 +84,79 @@ package — audit when changing the regenerator:
 The directory `autosar/mlbevo_gen2_cmp_psp/` itself is intentionally
 NOT being renamed (the user's direction was "rename it in system —
 generator destination not tracked").
+
+---
+
+## Audit + outcome (2026-05-25)
+
+Audit before doing the work surfaced that several of the doc's
+prescriptions misread the codebase. What actually landed in this
+session:
+
+### Items doc was wrong about
+
+- **Steps 2 + 3** (patch `gen-can-codec` / `gen-fibex-codec` to emit
+  new package decls): **NO-OP**. Those generators emit `.proto` +
+  `.c` codec sources, **not** `.art` files. They have no `--package`
+  flag. The leaf `mlbevo_gen2/{kcan,fibex}/package.art` files are
+  hand-edited under vendor control, not regen output.
+- **Step 1** (patch `gen-autosar-system`): generator is already
+  parameter-driven — `autosar_system.py:93` emits
+  `f"package {package_name}"` verbatim from `--package`. No code
+  change to the generator. The doc's premise that the generator
+  hardcoded the wrong package was incorrect.
+
+### Items that genuinely needed fixing
+
+- **CLI help string** at `artheia/artheia/cli.py:1093` (line moved
+  from the doc's claimed 283): said
+  `"autosar.mlbevo_gen2_cmp_psp.system"`. Updated to
+  `"system.autosar.mlbevo_gen2"` with the path placement note.
+- **CMakeLists template** `cpp_app/CMakeLists.txt.j2:33-34`: hardcoded
+  `${BAZEL_BIN}/autosar/mlbevo_gen2_cmp_psp/psp_nanopb_pb` — wrong
+  even before this task (missed the `vendor/` prefix that landed in
+  #218). Real bazel-bin path is
+  `bazel-bin/vendor/autosar/mlbevo_gen2_cmp_psp/psp_nanopb_pb`.
+  Patched.
+
+### Items deferred to vendor repo (separate `git push`)
+
+The `vendor/autosar/mlbevo_gen2_cmp_psp/` sub-repo (skyway GitLab,
+its own `vendor-tool-up` branch) still has:
+
+- Old top-level `system/system.art` declaring
+  `autosar.mlbevo_gen2_cmp_psp.system` — needs replacement by
+  regenerating to `system/mlbevo_gen2/system.art` with
+  `--package system.autosar.mlbevo_gen2`.
+
+The regen command (verified to work + idempotent in the Robot test):
+
+```
+artheia gen-autosar-system \
+  --catalog vendor/autosar/mlbevo_gen2_cmp_psp/system/mlbevo_gen2/kcan/catalog.json \
+  --catalog vendor/autosar/mlbevo_gen2_cmp_psp/system/mlbevo_gen2/fibex/catalog.json \
+  --out    vendor/autosar/mlbevo_gen2_cmp_psp/system/mlbevo_gen2/system.art \
+  --package system.autosar.mlbevo_gen2
+```
+
+Tracking that in a follow-up file under `docs/tasks/TODO/` is
+overkill — when the next vendor PSP push happens, run the command
+above, FF-merge in the vendor repo, push to skyway.
+
+### CI safety net
+
+Added `testing/rf_theia/scenarios/_selftest/autosar_regen/` (4 Robot
+test cases, all hermetic, no vendor catalogs needed). Catches:
+
+1. `--package` no longer reflected in emitted `package <name>` line.
+2. Generator non-determinism (two runs with identical input differ).
+3. Catalog `messages` not flowing through to `interface
+   senderReceiver <pdu>_Iface` decls.
+
+Runs in `< 1s` via `robot rf_theia/scenarios/_selftest/autosar_regen/`
+from `testing/` with the rf-theia .venv.
+
+Bonus: discovered + fixed pre-existing import-path bug in the
+`trace_decoder` selftest (Robot couldn't find
+`trace_decoder_lib.TraceDecoderLib` under the canonical run command;
+fixed both selftests to use `${CURDIR}/<file>.py` library refs).

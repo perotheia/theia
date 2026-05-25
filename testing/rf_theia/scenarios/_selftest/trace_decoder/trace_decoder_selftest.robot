@@ -20,7 +20,7 @@ Documentation    Hermetic selftest of the rf-theia trace_decoder
 ...
 ...              Prereq: `bazel build
 ...                //platform/runtime/trace:libtrace_decoder_ctypes.so`.
-Library          trace_decoder_lib.TraceDecoderLib
+Library          ${CURDIR}/trace_decoder_lib.py
 
 
 Suite Setup       Open Trace Decoder

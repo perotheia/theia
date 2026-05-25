@@ -1,9 +1,12 @@
 // System aggregator for the Adaptive Platform deployment.
 //
-// Two clusters live here:
+// One cluster lives here:
 //
-//   - cluster Services    — the platform FCs (one .ipk per composition)
-//   - cluster Application — vendor / customer applications layered on top
+//   - cluster Services — the platform FCs (one .ipk per composition)
+//
+// Vendor / customer applications are NOT declared here — they're
+// contributed by upper layers (vendor rigs, demo) in their own
+// component.art (e.g. the demo's Demo3Way cluster).
 //
 // `cluster` is a packaging/distribution primitive (see
 // docs/autosar/manifest.md, the Manifests-and-Serialization diagram).
@@ -39,33 +42,25 @@ import system.services.ucm.*
 import system.services.shwa.*
 
 // ---- forward-decl stubs: FC compositions live in their own component.art
+//
+// Only the FCs with a real daemon are declared here — one per `import`
+// above, and exactly the members of `cluster Services` below. The
+// daemon-less / conceptual FCs (core, crypto, diag, exec, fw, idsm, nm,
+// osi, phm, rds, tsync, vucm — see services/system/<short>/README.md)
+// are NOT declared: they have no composition, aren't imported, and
+// aren't packaged. They live in the source tree only as TIPC-slot
+// placeholders; add a forward-decl + import here when one grows a daemon.
 
 composition Com      { }
-composition Core     { }
-composition Crypto   { }
-composition Diag     { }
-composition Exec     { }
-composition Fw       { }
-composition Idsm     { }
 composition Log      { }
-composition Nm       { }
-composition Osi      { }
 composition Per      { }
-composition Phm      { }
-composition Rds      { }
-composition Shwa     { }
 composition Sm       { }
-composition Tsync    { }
 composition Ucm      { }
-composition Vucm     { }
+composition Shwa     { }
 
 // ---- cluster Services — the Adaptive Platform FCs ------------------------
 //
-// Only the FCs that actually have a daemon are members of this cluster.
-// Empty FCs (crypto/idsm/nm/osi/phm/rds/tsync/vucm + conceptual
-// core/exec/fw/diag — see services/system/<short>/README.md) are not
-// packaged today; they stay in the source tree as TIPC-slot
-// placeholders.
+// Exactly the FCs that have a daemon (one installable package each).
 
 cluster Services {
     composition Com   com
@@ -74,13 +69,4 @@ cluster Services {
     composition Sm    sm
     composition Ucm   ucm
     composition Shwa  shwa
-}
-
-// ---- cluster Application — vendor / customer applications ----------------
-//
-// Empty for now — populated by upper layers (vendor rigs, demo, customer
-// integrations) that contribute their own composition+ident pairs. The
-// demo's Demo3Way composition would land here, for example.
-
-cluster Application {
 }

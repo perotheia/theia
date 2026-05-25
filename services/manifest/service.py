@@ -1,15 +1,21 @@
-"""Explicit Functional Cluster manifest.
+"""Adaptive Platform manifest — GENERATED from services/system/system.art.
 
-One Python expression per FC, replacing the .art-scanning synthesis that
-:data:`artheia.manifest.PlatformBase` used to do. Each FC contributes:
+Do not edit by hand. Edit the ``cluster`` declarations in the source
+``.art`` and regenerate:
 
-- One :class:`SwComponent` — buildable handle (bazel target + .art ref).
-- One :class:`Executable` — Adaptive Application Manifest §3.18 entry.
-- One :class:`Process` (Execution Manifest, §8.2) — POSIX-process binding
-  with a default :class:`StartupConfig` under ``Default.Running``.
+    artheia gen-manifest-proto services/system/system.art <this file>
+
+ARA manifest sections (see docs/autosar/manifest.md):
+
+  * Application — one ``<Cluster>_*`` group per ``cluster`` in the .art
+                  (SwComponent + Executable + Process per member).
+  * Machine     — empty; rig layers (demo/manifest/rig.py) fill it.
+  * Service     — ServiceManifest instances (loader-derived in
+                  platform.py from the same cluster members).
+  * Execution   — Processes (one per cluster member).
 
 Upper layers patch this base by name (:class:`Override`) — see
-``demo/manifest/rig.py`` for an example.
+``demo/manifest/rig.py``.
 """
 
 from __future__ import annotations
@@ -24,7 +30,6 @@ from artheia.manifest.application import (
     RootSwComponentPrototype,
     SwComponent,
 )
-from artheia.manifest.clusters import CLUSTERS
 from artheia.manifest.execution import (
     Process,
     SchedulingPolicy,
@@ -34,23 +39,9 @@ from artheia.manifest.execution import (
 )
 from artheia.manifest.layer import Layer
 
-# The supervisor tree (SUPERVISORS) is sidecared in executor.py and
-# re-exported below — see the "Supervisor tree" section.
-
 
 def _component_for(short: str) -> SwComponent:
-    """One bazel-buildable handle per FC.
-
-    ``bazel_target`` points at where the FC's source/build files would
-    live once they're real. Platform-fabric components like the
-    supervisor and the gateway service live under ``platform/`` (not
-    ``services/``); FCs themselves keep the ``//services/<short>`` label
-    layout for source-tree purposes. The .art declaration lives at
-    ``platform/system/<short>/package.art`` (symlinked from
-    ``services/system/<short>/package.art``). The package path is
-    ``services.<short>`` regardless of the filesystem layout —
-    package paths and source-tree paths are independent.
-    """
+    """One bazel-buildable handle per cluster member."""
     daemon_class = "".join(p.capitalize() for p in short.split("_")) + "Daemon"
     return SwComponent(
         name=short,
@@ -61,7 +52,7 @@ def _component_for(short: str) -> SwComponent:
 
 
 def _executable_for(short: str) -> Executable:
-    """Adaptive Application Manifest Executable entry per FC (§3.18)."""
+    """Adaptive Application Manifest Executable entry (§3.18)."""
     daemon_class = "".join(p.capitalize() for p in short.split("_")) + "Daemon"
     return Executable(
         name=short,
@@ -77,27 +68,13 @@ def _executable_for(short: str) -> Executable:
     )
 
 
-# Per-FC start_cmd. One entry per FC that has a built binary; missing
-# entries mean "FC is .art-only" and the supervisor refuses to launch
-# them (artheia.manifest.supervisor._fc_child emits an empty start_cmd
-# + warning). Setting an entry here makes the FC supervised in the
-# dev tree; the install-time .ipk / .deb mapping rewrites these paths
-# to the on-target install location.
 def _process_for(short: str) -> Process:
-    """Execution Manifest Process per FC (§8.2).
+    """Execution Manifest Process (§8.2).
 
     Tries to import ``PROCESS`` from ``manifest.services.<short>.executor``
-    — that file is HAND-EDITED and survives every ``artheia gen-app``
-    run. Living near the SwComponent + Executable metadata it's the
-    rig integrator's single source of truth for start_cmd, scheduling,
-    and supervision policy.
-
-    For FCs without an executor.py (the .art-only placeholders), we
-    fall back to a Process with an empty start_cmd — the documented
-    "no binary built" signal in artheia/manifest/execution.py. The
-    supervisor's child entry refuses to launch them; that's correct
-    for FCs that don't yet have an implementation (and for `exec`,
-    which is implemented by platform/supervisor itself).
+    (hand-edited, survives ``artheia gen-app``). Falls back to an empty
+    start_cmd for members without an executor.py — the supervisor
+    refuses to launch those.
     """
     import importlib
 
@@ -130,10 +107,26 @@ def _process_for(short: str) -> Process:
     )
 
 
-# Components, executables, processes — one entry per FC, in CLUSTERS order.
-COMPONENTS: list[SwComponent] = [_component_for(fc.short) for fc in CLUSTERS]
-EXECUTABLES: list[Executable] = [_executable_for(fc.short) for fc in CLUSTERS]
-PROCESSES: list[Process] = [_process_for(fc.short) for fc in CLUSTERS]
+# ---------------------------------------------------------------------------
+# Application section — cluster `Services`.
+# ---------------------------------------------------------------------------
+SERVICES_SHORTS: list[str] = ["com", "log", "per", "sm", "ucm", "shwa"]
+SERVICES_COMPONENTS = [_component_for(s) for s in SERVICES_SHORTS]
+SERVICES_EXECUTABLES = [_executable_for(s) for s in SERVICES_SHORTS]
+SERVICES_PROCESSES = [_process_for(s) for s in SERVICES_SHORTS]
+
+# ---------------------------------------------------------------------------
+# Aggregate across all Application clusters (what consumers import).
+# ---------------------------------------------------------------------------
+COMPONENTS = SERVICES_COMPONENTS
+EXECUTABLES = SERVICES_EXECUTABLES
+PROCESSES = SERVICES_PROCESSES
+
+# ---------------------------------------------------------------------------
+# Machine section — EMPTY. Machines are a deploy-time concern; rig layers
+# (demo/manifest/rig.py) add MachineManifests. The spec declares none.
+# ---------------------------------------------------------------------------
+MACHINES: list = []
 
 
 # ---------------------------------------------------------------------------
@@ -141,21 +134,17 @@ PROCESSES: list[Process] = [_process_for(fc.short) for fc in CLUSTERS]
 #
 # The supervisor hierarchy (restart strategies + child grouping) is
 # hand-authored and has NO .art declaration, so it must survive any
-# regeneration of THIS file from system.art (the FC list). It therefore
-# lives in the executor.py sidecar; we re-export it here so existing
-# consumers keep reading ``service.SUPERVISORS`` unchanged. Edit the
-# tree in executor.py, not here.
+# regeneration of THIS file. It lives in the executor.py sidecar; we
+# re-export it here so existing consumers keep reading
+# ``service.SUPERVISORS`` unchanged. Edit the tree in executor.py.
 # ---------------------------------------------------------------------------
 
 from services.manifest.executor import SUPERVISORS  # noqa: E402,F401
 
 
-# The Layer instance upper layers compose against.
-#
-# This layer ADDs all 18 FCs onto an empty base. A rig layer (e.g.
-# ``demo/manifest/rig.py``) wraps it with its own components / process
-# mappings via :func:`merge_layers`. Removals and Overrides reach into
-# this layer's components/executions by short-name identity.
+# The Layer instance upper layers compose against (aggregate of all
+# clusters). A rig layer (demo/manifest/rig.py) wraps it via
+# :func:`merge_layers`; Removals / Overrides reach in by short-name.
 FcLayer = Layer(
     name="services.fc",
     add_components=COMPONENTS,
@@ -165,35 +154,15 @@ FcLayer = Layer(
 
 
 # ---------------------------------------------------------------------------
-# Structured-DSL counterpart — :data:`FcSoftware` (mosaic-style).
-#
-# Same 18 FCs + supervisor tree as ``FcLayer`` above, but in the new
-# :class:`SoftwareSpecification` shape: set-typed fields with
-# :class:`Append` transforms inline. Built INCREMENTALLY today —
-# vehicle layers (e.g. ``DemoSoftware``) compose via
-# ``FcSoftware.squash(DemoLayer)``. The legacy ``FcLayer`` /
-# ``merge_layers`` route stays functional during the migration.
-#
-# Eventually ``FcLayer`` and the parallel ``COMPONENTS`` / ``PROCESSES``
-# / ``SUPERVISORS`` lists go away once every consumer reads
-# ``FcSoftware`` directly. Right now ``artheia.manifest.platform``
-# still imports the lists.
+# Structured-DSL counterpart — :data:`FcSoftware`.
 # ---------------------------------------------------------------------------
 
 from typing import cast
 
-# Import from submodules directly (same pattern as the imports at the
-# top of this file). artheia.manifest.__init__ has a circular dep with
-# this module via platform.py — avoid triggering it.
 from artheia.manifest.application import ApplicationManifest
 from artheia.manifest.rig import SoftwareSpecification, VehicleIdentity
 from artheia.manifest.transform import Append, SetTransformTypes  # noqa: E402
 
-# One ``ApplicationManifest`` bagging every SwComponent. Rig layers
-# refine: typically Append(ApplicationManifest(name="platform_app",
-# host_machine=<rig_host>, components=[...rig_components])) to bind to a
-# specific host AND add per-rig binaries. Identity is the name, so
-# Append-with-same-name merges via Layer.squash.
 _PlatformApplication = ApplicationManifest(
     name="platform_app",
     host_machine="",  # rig layers fill in
@@ -215,6 +184,11 @@ FcSoftware: SoftwareSpecification = SoftwareSpecification(
 
 
 __all__ = [
+    "SERVICES_SHORTS",
+    "SERVICES_COMPONENTS",
+    "SERVICES_EXECUTABLES",
+    "SERVICES_PROCESSES",
+    "MACHINES",
     "COMPONENTS",
     "EXECUTABLES",
     "PROCESSES",

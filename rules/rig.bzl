@@ -335,11 +335,19 @@ def _rig_repo_impl(ctx):
 
 package(default_visibility = ["//visibility:public"])
 
+# executor.json — the supervisor tree (JSON-only since #380; the
+# supervisor binary parses JSON). The `executor_yaml` alias is kept so
+# older callers don't break, but it now points at the JSON output.
 genrule(
-    name = "executor_yaml",
-    outs = ["executor.yaml"],
+    name = "executor_json",
+    outs = ["executor.json"],
     cmd = "bash $(rootpath @pero_theia//tools:artheia_wrapper.sh) executor emit {rig_module} --out $@",
     tools = ["@pero_theia//tools:artheia_wrapper.sh"],
+)
+
+alias(
+    name = "executor_yaml",
+    actual = ":executor_json",
 )
 
 genrule(
@@ -353,7 +361,7 @@ genrule(
 filegroup(
     name = "all",
     srcs = [
-        ":executor_yaml",
+        ":executor_json",
         ":machines_yaml",
 {machine_image_targets}
     ],

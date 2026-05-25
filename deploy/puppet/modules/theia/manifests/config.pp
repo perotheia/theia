@@ -1,21 +1,15 @@
-# theia::config — drop executor.yaml + machines.yaml into /etc/theia/.
+# theia::config — drop executor.json + machines.yaml into /etc/theia/.
 #
-# Each per-machine container gets its OWN executor.yaml (currently
-# the rig has one global executor — see TODO/per-machine-executor.md).
-# For now both machines read the same executor.yaml; the supervisor
-# tree applies the SAME process list on each machine, with the
-# expectation that each machine only runs the processes whose
-# host_machine binding matches it.
+# The supervisor tree is JSON-only since #380 (the supervisor binary
+# parses JSON); $executor_json points at the executor.json emitted by
+# @rig//:executor_json and staged into the image.
 #
-# Future: artheia executor emit should grow a `--machine <name>` flag
-# emitting only the slice of the supervisor tree relevant to that
-# machine. Until then, both machines run the same tree; the redundant
-# entries are harmless (the supervisor just doesn't see start_cmd
-# files for processes not installed locally and either skips them or
-# logs an error).
+# Each per-machine container reads the same executor.json (the rig has
+# one global executor tree); each machine only runs the processes whose
+# host_machine binding matches it — redundant entries are harmless.
 
 class theia::config {
-    $executor_yaml = $theia::executor_yaml
+    $executor_json = $theia::executor_json
     $machines_yaml = $theia::machines_yaml
 
     file { '/etc/theia':
@@ -23,9 +17,9 @@ class theia::config {
         mode   => '0755',
     }
 
-    file { '/etc/theia/executor.yaml':
+    file { '/etc/theia/executor.json':
         ensure  => file,
-        source  => $executor_yaml,  # bind-mounted from host
+        source  => $executor_json,  # bind-mounted from host
         mode    => '0644',
         require => File['/etc/theia'],
     }

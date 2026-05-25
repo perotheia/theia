@@ -77,7 +77,13 @@ esac
 # -----------------------------------------------------------------------------
 
 SUPERVISOR_BIN="/usr/bin/theia-supervisor"
-EXECUTOR_YAML="/etc/theia/executor.yaml"
+# Supervisor tree is JSON-only since #380. Prefer executor.json; fall
+# back to a legacy executor.yaml path only if an old image still ships
+# one (the supervisor parses JSON regardless of extension).
+EXECUTOR_JSON="/etc/theia/executor.json"
+if [[ ! -f "$EXECUTOR_JSON" && -f "/etc/theia/executor.yaml" ]]; then
+    EXECUTOR_JSON="/etc/theia/executor.yaml"
+fi
 
 if [[ ! -x "$SUPERVISOR_BIN" ]]; then
     log "ERROR: supervisor binary not found at $SUPERVISOR_BIN after Puppet apply"
@@ -87,8 +93,8 @@ if [[ ! -x "$SUPERVISOR_BIN" ]]; then
     exit 3
 fi
 
-if [[ ! -f "$EXECUTOR_YAML" ]]; then
-    log "ERROR: no executor.yaml at $EXECUTOR_YAML after Puppet apply"
+if [[ ! -f "$EXECUTOR_JSON" ]]; then
+    log "ERROR: no executor.json at /etc/theia/executor.json after Puppet apply"
     log "       Puppet should have dropped one for this host. Check the"
     log "       theia::config resource in the manifest."
     exit 4
@@ -101,7 +107,7 @@ fi
 # -----------------------------------------------------------------------------
 
 log "supervisor binary ready: $SUPERVISOR_BIN"
-log "executor.yaml ready:    $EXECUTOR_YAML"
+log "executor.json ready:    $EXECUTOR_JSON"
 log "starting supervisor (foreground)"
 
-exec "$SUPERVISOR_BIN" run "$EXECUTOR_YAML" --root-dir /opt/theia
+exec "$SUPERVISOR_BIN" run "$EXECUTOR_JSON" --root-dir /opt/theia

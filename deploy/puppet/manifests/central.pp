@@ -11,6 +11,6 @@
 class { 'theia':
     machine       => 'central_host',
     ipk_path      => '/opt/theia/ipk/central_host.ipk',
-    executor_yaml => '/opt/theia/ipk/executor.yaml',
+    executor_json => '/opt/theia/ipk/executor.json',
     machines_yaml => '/opt/theia/ipk/machines.yaml',
 }

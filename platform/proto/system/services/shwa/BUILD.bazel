@@ -1,0 +1,22 @@
+# Generated nanopb sources for the system.services.shwa package.
+# .pb.{c,h} are produced by the genrule from shwa.proto; not committed.
+
+package(default_visibility = ["//visibility:public"])
+
+genrule(
+    name = "shwa_pb",
+    srcs = ["shwa.proto"],
+    outs = [
+        "shwa.pb.c",
+        "shwa.pb.h",
+    ],
+    cmd = "set -e;"
+        + " in_dir=$$(dirname $(location shwa.proto));"
+        + " out_dir=$$(dirname $(location shwa.pb.c));"
+        + " nanopb_generator -I $$in_dir -D $$out_dir shwa.proto;",
+    local = True,
+)
+
+filegroup(name = "shwa_pb_c", srcs = ["shwa.pb.c"])
+filegroup(name = "shwa_pb_h", srcs = ["shwa.pb.h"])
+filegroup(name = "shwa_proto", srcs = ["shwa.proto"])

@@ -41,10 +41,11 @@ constexpr uint16_t kTagHealth   = 0x0002;
 constexpr uint16_t kTagSnapshot = 0x0003;
 
 // op_kind values shared with platform/supervisor/src/runtime.cpp.
-constexpr uint32_t kOpStartChild     = 3;
-constexpr uint32_t kOpDeleteChild    = 4;
-constexpr uint32_t kOpRestartChild   = 5;
-constexpr uint32_t kOpTerminateChild = 6;
+constexpr uint32_t kOpStartChild       = 3;
+constexpr uint32_t kOpDeleteChild      = 4;
+constexpr uint32_t kOpRestartChild     = 5;
+constexpr uint32_t kOpTerminateChild   = 6;
+constexpr uint32_t kOpConfigureLogLevel = 11;  // #385
 
 std::atomic<bool> g_shutdown{false};
 void on_signal(int) { g_shutdown.store(true); }
@@ -138,6 +139,23 @@ public:
         cr.set_op_kind(kOpTerminateChild);
         cr.set_correlation_id(uplink_->next_correlation_id());
         *cr.mutable_terminate_child() = *sel;
+        return forward(cr, reply);
+    }
+
+    // #385 — set a child's runtime log level. Packages (target_node,
+    // level) into the supervisor's ConfigureLogLevelRequest and forwards
+    // over the same ControlRequest envelope as the child mutators. The
+    // supervisor stores it (survives restart) and pushes it live.
+    grpc::Status ConfigureLogLevel(
+            grpc::ServerContext*,
+            const services::com::LogLevelCall* req,
+            services::supervisor::ControlReply* reply) override {
+        ::services::supervisor::ControlRequest cr;
+        cr.set_op_kind(kOpConfigureLogLevel);
+        cr.set_correlation_id(uplink_->next_correlation_id());
+        auto* cfg = cr.mutable_configure_log_level()->mutable_config();
+        cfg->set_target_node(req->target_node());
+        cfg->set_level(req->level());
         return forward(cr, reply);
     }
 

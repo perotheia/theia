@@ -284,6 +284,26 @@ class Client:
             timeout=self.timeout,
         )
 
+    # ----- log level (#385) -----------------------------------------------
+
+    def configure_log_level(self, target_node: str,
+                            level: str) -> _bridge_pb.ControlReply:
+        """Set a child's runtime log level via the supervisor.
+
+        Routes supdbg → com → supervisor (op_kind=11): the supervisor
+        stores the level keyed by child NAME (overwrites the child's
+        spawn env THEIA_LOG_LEVEL so a restart re-applies) and pushes a
+        live LogLevelConfig frame to the node for no-restart effect.
+        `level` is one of trace|debug|info|warn|error.
+        """
+        return self._ensure().ConfigureLogLevel(
+            _bridge_pb.LogLevelCall(
+                target_node=target_node,
+                level=level,
+            ),
+            timeout=self.timeout,
+        )
+
     def subscribe_traces(
         self,
         decoder: t.Optional["TraceDecoder"] = None,

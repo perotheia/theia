@@ -42,6 +42,17 @@ message SubscribeRequest {}
 message StartChildCall  { services.supervisor.ChildSpec     spec = 1; }
 message DeleteChildCall { string name = 1; }
 
+// (target_node, level) log-level set. Routed via the supervisor (#385):
+// supdbg → com → supervisor → node. The supervisor stores the level
+// keyed by child NAME so it survives restart (overwrites the child's
+// spawn env THEIA_LOG_LEVEL) and pushes a live LogLevelConfig frame to
+// the node for no-restart application. `level` is one of
+// trace|debug|info|warn|error (parse_log_level is lax on unknowns).
+message LogLevelCall {
+    string target_node = 1;
+    string level        = 2;
+}
+
 service SupervisorView {
     // Server-streaming firehose of every observation the supervisor
     // emits over its TIPC events port. Clients open one of these per
@@ -56,6 +67,12 @@ service SupervisorView {
     rpc RestartChild   (services.supervisor.ChildSelector)
         returns (services.supervisor.ControlReply);
     rpc TerminateChild (services.supervisor.ChildSelector)
+        returns (services.supervisor.ControlReply);
+
+    // Set a child's runtime log level (#385). Routes through the
+    // supervisor (op_kind=11) which persists it across restart and
+    // pushes it live to the node. Mirrors TraceStream.Configure.
+    rpc ConfigureLogLevel (LogLevelCall)
         returns (services.supervisor.ControlReply);
 }
 

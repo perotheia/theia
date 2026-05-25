@@ -184,6 +184,23 @@ def cmd_trace_stream(args: argparse.Namespace) -> int:
     return 0
 
 
+@_wrap
+def cmd_log_set_level(args: argparse.Namespace) -> int:
+    """Set a child's runtime log level via the supervisor (#385).
+
+    Routes supdbg → com → supervisor: the level is stored (survives
+    restart via THEIA_LOG_LEVEL) and pushed live to the node.
+    """
+    with Client(args.target) as c:
+        r = c.configure_log_level(args.node, args.level)
+        if r.status != 0:
+            print(f"log set-level failed: status={r.status} "
+                  f"message={r.message!r}")
+            return 1
+        print(f"log level: {args.node} -> {args.level}")
+        return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="supdbg",
@@ -274,6 +291,28 @@ def build_parser() -> argparse.ArgumentParser:
              "to raw bytes if the .so isn't available",
     )
     pts.set_defaults(func=cmd_trace_stream)
+
+    # ---- log (#385) ------------------------------------------------------
+    plog = sub.add_parser(
+        "log",
+        help="control runtime logging — set a child's log level",
+    )
+    log_sub = plog.add_subparsers(dest="log_cmd")
+    log_sub.required = True
+
+    plsl = log_sub.add_parser(
+        "set-level",
+        help="set a child's runtime log level "
+             "(trace|debug|info|warn|error)",
+    )
+    _add_target(plsl)
+    plsl.add_argument("node", help="target child name (e.g. SmDaemon)")
+    plsl.add_argument(
+        "level",
+        choices=["trace", "debug", "info", "warn", "error"],
+        help="log level to apply",
+    )
+    plsl.set_defaults(func=cmd_log_set_level)
 
     # default = repl
     p.set_defaults(func=cmd_repl, target="127.0.0.1:7700")

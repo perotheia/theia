@@ -667,14 +667,22 @@ constexpr uint32_t kOpRestartChild    = 5;
 constexpr uint32_t kOpTerminateChild  = 6;
 constexpr uint32_t kOpStop            = 7;
 constexpr uint32_t kOpGetSystemInfo   = 8;
-constexpr uint32_t kOpConfigureTrace  = 9;
-constexpr uint32_t kOpGetTraceConfig  = 10;
+constexpr uint32_t kOpConfigureTrace    = 9;
+constexpr uint32_t kOpGetTraceConfig    = 10;
+constexpr uint32_t kOpConfigureLogLevel = 11;
 
 // Per-node NodeTraceCtl tag — what we send out the wire to a worker
 // when pushing an ApplyConfig. The runtime side (gen-app emitted
 // NodeTraceCtl receiver, #363) decodes a TraceConfig from the
 // payload and applies it via Tracer::trace_enable (#355).
 constexpr uint16_t kTagTraceApplyConfig = 0x0300;
+
+// Per-node log-level tag (#385). Sibling of kTagTraceApplyConfig in
+// the control band. Carries a serialized LogLevelConfig; the FC
+// daemon's control receiver decodes it and calls
+// logger->set_level(parse_log_level(level)). 0x0400 keeps log
+// control in its own decade, distinct from the 0x03xx trace band.
+constexpr uint16_t kTagLogApplyConfig = 0x0400;
 
 // "Stale heartbeat" gap: if the last heartbeat we saw from a child
 // is older than this, treat the NEXT heartbeat as a (re)start
@@ -814,6 +822,21 @@ void Supervisor::on_inbound_frame(int client_fd, uint16_t tag,
                 break;
             }
 
+            case kOpConfigureLogLevel: {
+                // #385: store + push, same shape as ConfigureTrace.
+                // apply_log_level updates the in-memory table, rewrites
+                // the worker's spawn-env THEIA_LOG_LEVEL (so a restart
+                // re-applies), and pushes a LogLevelConfig frame live.
+                // No target_node existence check — config for a
+                // not-yet-started child is fine (survives-restart
+                // contract).
+                const auto& cfg = req.configure_log_level().config();
+                apply_log_level(cfg.target_node(), cfg.level());
+                rep.set_status(0);
+                rep.set_message("log level applied");
+                break;
+            }
+
             default:
                 rep.set_status(4);    // invalid_request
                 rep.set_message("unknown op_kind");
@@ -853,6 +876,11 @@ void Supervisor::on_inbound_frame(int client_fd, uint16_t tag,
         last_heartbeat_by_child_[child] = now;
         if (fire_push) {
             push_trace_config_to_child(child);
+            // #385 — re-push the saved log level on the same
+            // first-heartbeat-after-gap trigger, so a level set while
+            // the child was down (or before it booted) lands once it
+            // comes up.
+            push_log_level_to_child(child);
         }
         return;
     }
@@ -1769,6 +1797,86 @@ void Supervisor::push_trace_config_to_child(const std::string& child_name) {
     std::fprintf(stderr,
         "supervisor: pushed %d trace config entries to '%s'\n",
         pushed, child_name.c_str());
+}
+
+// ---- #385: per-child log level -------------------------------------------
+
+void Supervisor::apply_log_level(const std::string& target_node,
+                                 const std::string& level) {
+    if (target_node.empty()) {
+        log_warn("apply_log_level: empty target_node — dropping");
+        return;
+    }
+    log_levels_[target_node] = level;
+
+    // Rewrite the worker's spawn env so a (re)start boots at the new
+    // level (main.cc reads THEIA_LOG_LEVEL once at startup). Survives
+    // restart for free — the spawn path setenvs the whole env map.
+    WorkerNode* w = find_worker_by_name(target_node);
+    if (w) {
+        w->env["THEIA_LOG_LEVEL"] = level;
+    }
+
+    std::fprintf(stderr, "supervisor: log level for %s -> %s\n",
+                 target_node.c_str(), level.c_str());
+
+    // Push live so a running child picks it up without restart.
+    push_log_level_to_child(target_node);
+}
+
+void Supervisor::push_log_level_to_child(const std::string& child_name) {
+    auto it = log_levels_.find(child_name);
+    if (it == log_levels_.end() || it->second.empty()) return;  // nothing to push
+
+    WorkerNode* w = find_worker_by_name(child_name);
+    if (!w) {
+        std::fprintf(stderr,
+            "supervisor: log push: no worker named '%s' yet\n",
+            child_name.c_str());
+        return;
+    }
+    if (w->nodes.empty()) {
+        std::fprintf(stderr,
+            "supervisor: log push: worker '%s' has no NodeInfo "
+            "(reporting=false?) — skipping push\n",
+            child_name.c_str());
+        return;
+    }
+
+    // First reporting node's TIPC addr (same convention as trace).
+    const NodeInfo* target = nullptr;
+    for (const auto& ni : w->nodes) {
+        if (ni.reporting) { target = &ni; break; }
+    }
+    if (!target) return;
+
+    uint32_t type, instance;
+    try {
+        type     = std::stoul(target->tipc_type, nullptr, 0);
+        instance = std::stoul(target->tipc_instance, nullptr, 0);
+    } catch (...) {
+        std::fprintf(stderr,
+            "supervisor: log push: bad tipc addr for '%s'\n",
+            child_name.c_str());
+        return;
+    }
+
+    ::services::supervisor::LogLevelConfig lc;
+    lc.set_target_node(child_name);
+    lc.set_level(it->second);
+    if (send_frame_to_tipc_name(type, instance,
+                                 kTagLogApplyConfig,
+                                 lc.SerializeAsString())) {
+        std::fprintf(stderr,
+            "supervisor: pushed log level '%s' to '%s'\n",
+            it->second.c_str(), child_name.c_str());
+    } else {
+        std::fprintf(stderr,
+            "supervisor: log push: send to '%s' failed "
+            "(type=0x%x inst=%u) — child not listening yet; "
+            "env-applied on next restart\n",
+            child_name.c_str(), type, instance);
+    }
 }
 
 }  // namespace supervisor

@@ -223,6 +223,26 @@ private:
     // looked up from the worker's NodeInfo.tipc_{type,instance}.
     // No-op when the child has no entries.
     void push_trace_config_to_child(const std::string& child_name);
+
+    // Per-child log level (#385). supdbg → services/com → here.
+    // Same survives-restart contract as trace: store the level,
+    // overwrite the child's spawn env THEIA_LOG_LEVEL so a (re)start
+    // boots at the new level, and push a LogLevelConfig frame to the
+    // child's node for live (no-restart) application. log_levels_ is
+    // keyed by child NAME so it persists across pid changes; an empty
+    // value means "use the default from the manifest env".
+    std::map<std::string, std::string>           log_levels_;
+
+    // Apply one LogLevelConfig: store it, update the worker's env map
+    // (so a restart re-applies), and push live. Best-effort push.
+    void apply_log_level(const std::string& target_node,
+                         const std::string& level);
+
+    // Push the stored log level to a child's node TIPC server, the
+    // same way push_trace_config_to_child does. Called on apply and
+    // on the first heartbeat after a gap (re-push). No-op when the
+    // child has no stored level.
+    void push_log_level_to_child(const std::string& child_name);
 };
 
 }  // namespace supervisor

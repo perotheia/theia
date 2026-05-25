@@ -197,30 +197,52 @@ Add a quick `_selftest/log_tag_emit/` Robot test that:
   asserts DEBUG dropped),
 - asserts INFO output stream contains `[#SMX]`.
 
-### Step 6 — *(deferred)* live ConfigureLogLevel
+### Step 7 — live ConfigureLogLevel via supdbg — **DONE (#385)**
 
-Track as a follow-up task once steps 1-5 land and the static path is
-proven on docker-compose. Shape:
+Scoped to the **supdbg** path only (GUI dialog deferred — see Out of
+scope). Mirrors the #361 ConfigureTrace machinery end-to-end.
 
-```proto
-rpc ConfigureLogLevel(LogLevelRequest) returns (ControlReply);
-message LogLevelRequest {
-    string target_node = 1;
-    string level = 2;  // "trace"|"debug"|"info"|"warn"|"error"
-}
+Topology (control flows *to the supervisor*, which owns the child):
+
+```
+supdbg log set-level <node> <level>
+  → services/com gRPC  SupervisorView.ConfigureLogLevel(LogLevelCall)
+  → TIPC ControlRequest  op_kind=11  (configure_log_level)
+  → supervisor.apply_log_level(target_node, level)
+       · log_levels_[node] = level
+       · worker.env["THEIA_LOG_LEVEL"] = level   (survives restart)
+       · push_log_level_to_child(node)            (live, no-restart)
+           → send_frame_to_tipc_name(.., kTagLogApplyConfig=0x0400,
+                                     LogLevelConfig{target_node,level})
 ```
 
-Two consumers:
+Re-push on the first heartbeat-after-gap (same trigger as trace),
+so a restarted child re-receives its level even before its env is
+re-read.
 
-- **supdbg `log set-level sm debug`** — sends ConfigureLogLevel via
-  services/com gRPC bridge; supervisor stores it in
-  `log_levels_by_child_` (mirroring `trace_configs_` from #361) and
-  pushes via the existing TIPC config channel. Survives child restart.
-- **supervisor-GUI right-click → "Set log level…"** — same call,
-  triggered from the Applications panel context menu (same pattern
-  as the trace-config dialog #365).
+Wire shape (supervisor `package.art`):
 
-Single follow-up task; not part of this TODO.
+```
+message LogLevelConfig          { string target_node; string level }
+message ConfigureLogLevelRequest { LogLevelConfig config }
+// ControlRequest op_kind 11 → configure_log_level
+operation ConfigureLogLevel(in req: ConfigureLogLevelRequest)
+    returns ControlReply
+```
+
+services/com bridge: `SupervisorView.ConfigureLogLevel(LogLevelCall)`
+packages op_kind=11 and forwards over the same TipcUplink as the
+child mutators. supdbg: `Client.configure_log_level()` +
+`log set-level <node> {trace|debug|info|warn|error}` subcommand.
+
+Files: supervisor `package.art` + `runtime.{h,cpp}`; com
+`supervisor_bridge.proto` + `src/main.cpp` + `CMakeLists.txt`
+(new ConfigureLogLevelRequest/LogLevelConfig protos); supdbg
+`client.py` + `cli.py` (+ regenerated `_gen/` stubs).
+
+The FC-side consumer of the live `kTagLogApplyConfig` frame is the
+same open gap as #361's trace FC side; until that lands, the env
+path guarantees the correct level on the next (re)start.
 
 ## Implementation order (Steps 1-5)
 
@@ -254,8 +276,9 @@ Single follow-up task; not part of this TODO.
 
 ## Status
 
-5 of 6 steps landed. Remaining: step 5 (rig.py log_level field +
-executor.json env emit + main.cc.j2 reads THEIA_LOG_LEVEL at boot).
+All steps landed. Steps 1-4 (#383) + step 5 (#384, rig.py log_level →
+executor.json env + main.cc boot) + step 7 (#385, live
+ConfigureLogLevel via supdbg). Task ready to move to DONE.
 
 ## Out of scope
 
@@ -265,7 +288,13 @@ executor.json env emit + main.cc.j2 reads THEIA_LOG_LEVEL at boot).
   trace records; Logger surface stays coarse-grained per-FC.
 - multi-sink fan-out (console + file simultaneously) — single sink
   per daemon for now.
-- Step 6 (live ConfigureLogLevel) — separate follow-up.
+- **supervisor-GUI right-click → "Set log level…"** — the GUI
+  consumer of ConfigureLogLevel. Deferred per the #385 scoping
+  ("limit to configuring from supdbg"); same call as the supdbg
+  path, triggered from the Applications panel context menu (mirror
+  the trace-config dialog #365). Track as a follow-up.
+- FC-side live consumer of `kTagLogApplyConfig` — shared open gap
+  with #361's trace FC side.
 
 ## Acceptance smoke
 

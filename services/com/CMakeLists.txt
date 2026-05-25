@@ -25,9 +25,11 @@ file(MAKE_DIRECTORY ${PROTO_GEN_DIR})
 # Supervisor protos — only the ones com directly references. Standard
 # protoc (no grpc plugin). Same generated_proto layout used elsewhere.
 set(SUP_PROTOS
-    ChildSelector ChildSpec ChildState ConfigureTraceRequest ControlReply
+    ChildSelector ChildSpec ChildState ConfigureLogLevelRequest
+    ConfigureTraceRequest ControlReply
     ControlRequest DeleteChildRequest GetChildRequest GetSystemInfoRequest
     GetTraceConfigRequest GetTreeRequest HealthBeacon HeartbeatReport
+    LogLevelConfig
     SendTimeoutReport SocketInfo StartChildRequest SupervisionEvent
     SystemInfo ThreadSample TraceConfig TraceConfigList TreeSnapshot)
 set(SUP_PROTO_SRCS)

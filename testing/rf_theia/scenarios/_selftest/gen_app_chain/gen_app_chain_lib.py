@@ -306,23 +306,11 @@ filegroup(name = "duo_pb_h", srcs = ["duo.pb.h"])
     def wire_fc_into_bazel(self) -> None:
         """Run after gen-app: hand-make the proto BUILD.bazel and
         register it in platform_protos so a cc_binary build will link
-        cleanly. Also symlink services/system/duo → services/duo so
-        gen-app's BUILD-file convention (`//services/system/<fc>/lib`
-        per template) resolves. Stored so Unwire FC can restore."""
-        assert self._workspace is not None
-        # Symlink services/system/duo → ../duo so the generated lib/impl
-        # dep labels resolve. The other FCs (sm, com, …) work directly
-        # via `//services/<fc>/lib` because their main/BUILD was
-        # hand-edited post-gen-app; gen-app's template still emits the
-        # `system/<fc>` form, so the test exercises the template's
-        # actual output unmodified.
-        sys_dir = self._workspace / "services" / "system"
-        sys_dir.mkdir(parents=True, exist_ok=True)
-        link = sys_dir / "duo"
-        if link.exists() or link.is_symlink():
-            link.unlink()
-        link.symlink_to(self._workspace / "services" / "duo")
+        cleanly. Stored so Unwire FC can restore.
 
+        Per #382, gen-app's BUILD templates now target
+        `//services/<short>/lib` directly (the canonical layout), so
+        no symlink hack needed."""
         self._emit_proto_build()
         self._platform_protos_original = self._add_proto_to_umbrella()
 
@@ -334,10 +322,6 @@ filegroup(name = "duo_pb_h", srcs = ["duo.pb.h"])
         orig = getattr(self, "_platform_protos_original", None)
         if orig is not None:
             bf.write_text(orig)
-        # services/system/duo symlink
-        link = self._workspace / "services" / "system" / "duo"
-        if link.is_symlink() or link.exists():
-            link.unlink()
 
     @keyword("Bazel Build FC")
     def bazel_build_fc(self) -> None:

@@ -20,7 +20,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <functional>
+#include <map>
 #include <mutex>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -93,6 +95,29 @@ public:
     static constexpr const char* kNodeName = "sm_daemon";
     static constexpr uint32_t kTipcType     = 0x8001000Du;
     static constexpr uint32_t kTipcInstance = 0u;
+
+    // AUTOSAR Reporting / Non-Reporting flag (per .art `reporting`
+    // field). See doc on the non-statem Daemon template for full
+    // semantics. statem-flavour FCs use the same per-(node, msg_type)
+    // filter map as plain GenServer ones.
+    static constexpr bool kReporting = true;
+
+
+    // ---- Trace config (reporting=true only) -----------------------
+    // Delegates to the process-wide Tracer per #355; see the
+    // non-statem Daemon template for full semantics.
+    void trace_enable(const char* msg_type, bool enabled) {
+        ::demo::runtime::tracer_for(kNodeName).trace_enable(
+            msg_type, enabled);
+    }
+    bool trace_enabled(const char* msg_type) const {
+        return ::demo::runtime::tracer_for(kNodeName)
+            .trace_filter_passes(msg_type);
+    }
+    void trace_clear_all() {
+        ::demo::runtime::tracer_for(kNodeName).trace_clear_all();
+    }
+
 
     SmDaemonState init(SmDaemonData& /*d*/) {
         return SmDaemonState::OFF;
@@ -199,7 +224,12 @@ public:
     void     broadcast_broadcast_state(const SmStateMsg& msg);
 
 
-    // ---- Server-port operations (one per declared op) — impl
+    // ---- Server-port operations (one per unique handler signature) — impl
+    //
+    // Deduplicated by (req_msg, rep_msg): when two server ports
+    // share an interface (e.g. ctl_supdbg + ctl_com both providing
+    // TraceControl), the handler signature is identical and only
+    // gets emitted once. Dispatch is by request type, not by port.
 SmEmpty handle_call(const SmRequest& req,
                                             demo::runtime::GenStateMHolder<SmDaemonState, SmDaemonData>& h);
 
@@ -250,6 +280,8 @@ inline void SmDaemon::broadcast_broadcast_state(const SmStateMsg& msg) {
         }
     }
 }
+
+
 
 
 

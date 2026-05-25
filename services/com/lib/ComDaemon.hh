@@ -13,7 +13,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <functional>
+#include <map>
 #include <mutex>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -50,6 +52,37 @@ public:
     static constexpr uint32_t kTipcType     = 0x80010008u;
     static constexpr uint32_t kTipcInstance = 0u;
 
+    // AUTOSAR Reporting / Non-Reporting flag (per .art `reporting`
+    // field). When true, this node sends HeartbeatReport, the
+    // supervisor watchdogs it, and the supervisor can push trace
+    // config to it via the methods below.
+    static constexpr bool kReporting = true;
+
+
+    // ---- Trace config (reporting=true only) -----------------------
+    //
+    // Per #355, the per-message-type filter lives in the process-wide
+    // Tracer (see platform/runtime/Tracer.hh). These methods are thin
+    // delegations so the supervisor / NodeTraceCtl wire path has a
+    // stable in-class API while the actual storage stays in one place.
+    //
+    // The supervisor (#361) pushes (msg_type, enabled) pairs by
+    // calling trace_enable() on receipt of an ApplyConfig RPC. emit()
+    // consults the same filter inside Tracer; non-listed types are
+    // dropped on the disabled fast path.
+    void trace_enable(const char* msg_type, bool enabled) {
+        ::demo::runtime::tracer_for(kNodeName).trace_enable(
+            msg_type, enabled);
+    }
+    bool trace_enabled(const char* msg_type) const {
+        return ::demo::runtime::tracer_for(kNodeName)
+            .trace_filter_passes(msg_type);
+    }
+    void trace_clear_all() {
+        ::demo::runtime::tracer_for(kNodeName).trace_clear_all();
+    }
+
+
     // ---- Subscriber registration ----------------------------------
 
 
@@ -63,6 +96,13 @@ public:
     void terminate(const char* /*reason*/, ComDaemonState& /*s*/) noexcept {}
 
     // ---- handle_cast / handle_call — declared here, body in impl
+    //
+    // Deduplicated by message type: if two ports share the same
+    // interface (e.g. ctl_supdbg + ctl_com both providing
+    // TraceControl) the handler signature is identical and only
+    // gets emitted once. handle_call/handle_cast dispatch by
+    // request type, not by port.
+
 
     ComEmpty handle_call(const ComEmpty& req,
                                             ComDaemonState& s);
@@ -80,6 +120,8 @@ private:
 
 // Subscriber registration — defined in the lib slice (not impl) so
 // it stays auto-generated. The user touches handle_* in impl.
+
+
 
 
 

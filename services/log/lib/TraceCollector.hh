@@ -68,6 +68,11 @@ public:
     // Tracer (see platform/runtime/Tracer.hh). These methods are thin
     // delegations so the supervisor / NodeTraceCtl wire path has a
     // stable in-class API while the actual storage stays in one place.
+    //
+    // The supervisor (#361) pushes (msg_type, enabled) pairs by
+    // calling trace_enable() on receipt of an ApplyConfig RPC. emit()
+    // consults the same filter inside Tracer; non-listed types are
+    // dropped on the disabled fast path.
     void trace_enable(const char* msg_type, bool enabled) {
         ::demo::runtime::tracer_for(kNodeName).trace_enable(
             msg_type, enabled);
@@ -166,9 +171,6 @@ inline void TraceCollector::broadcast_stream_out_rec(const TraceRecord& msg) {
 }
 
 
-
-// Trace-config impls are inline in the class body (delegate to
-// tracer_for(kNodeName)) — no out-of-class definitions needed.
 
 
 

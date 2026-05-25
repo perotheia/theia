@@ -1,0 +1,11 @@
+# deploy/ — host bringup scripts + docker compose pipeline.
+#
+# Exposes run-supervisor.sh so the top-level //:install bundle can lay
+# it into theia/bin/. The actual docker images stage these via
+# deploy/stage.sh (not Bazel); this export is only for the install rule.
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "run-supervisor.sh",
+])

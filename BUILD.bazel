@@ -11,6 +11,9 @@ Quick reference:
   bazel test //gateway/libs/pero_cmp_lnx/... --config=linux
 """
 
+load("@rules_pkg//pkg:install.bzl", "pkg_install")
+load("@rules_pkg//pkg:mappings.bzl", "pkg_attributes", "pkg_files", "pkg_mkdirs")
+
 package(default_visibility = ["//visibility:public"])
 
 # ── Convenience alias groups ───────────────────────────────────────────────
@@ -25,4 +28,81 @@ alias(
 alias(
     name = "firmware_all",
     actual = "//gateway/firmware/pero_cmp_ti:all",
+)
+
+# ── Host install bundle ────────────────────────────────────────────────────
+#
+#   bazel run //:install -- --destdir <abs-dir>
+#
+# lays the host artifacts out in the runtime filesystem shape:
+#
+#   <dir>/theia/bin/   — executables (FC daemons + run-supervisor.sh)
+#   <dir>/theia/lib/   — shared libraries (the trace decoder .so)
+#   <dir>/etc/theia/   — config: executor.json (supervisor tree) +
+#                        machines.yaml (GUI manifest), from the rig
+#
+# Only Bazel-built artifacts are packaged. The CMake-built supervisor +
+# services/com gRPC bridge are bind-mounted in the docker deploy today;
+# packaging them needs a Bazel target for each (follow-up).
+
+# theia/bin — the FC daemon binaries Bazel builds.
+pkg_files(
+    name = "install_bin",
+    srcs = [
+        "//services/com/main:com",
+        "//services/log/main:log",
+        "//services/per/main:per",
+        "//services/sm/main:sm",
+        "//services/ucm/main:ucm",
+    ],
+    attributes = pkg_attributes(mode = "0755"),
+    prefix = "theia/bin",
+)
+
+# theia/bin — the supervisor entrypoint script.
+pkg_files(
+    name = "install_bin_scripts",
+    srcs = ["//deploy:run-supervisor.sh"],
+    attributes = pkg_attributes(mode = "0755"),
+    prefix = "theia/bin",
+)
+
+# theia/lib — shared libraries (trace decoder ctypes .so).
+pkg_files(
+    name = "install_lib",
+    srcs = ["//platform/runtime/trace:libtrace_decoder_ctypes.so"],
+    attributes = pkg_attributes(mode = "0644"),
+    prefix = "theia/lib",
+)
+
+# etc/theia — config emitted by the rig (supervisor tree + GUI manifest).
+pkg_files(
+    name = "install_etc",
+    srcs = [
+        "@rig_demo//:executor_json",
+        "@rig_demo//:machines_yaml",
+    ],
+    attributes = pkg_attributes(mode = "0644"),
+    prefix = "etc/theia",
+)
+
+# Keep the layout's dirs present even when a group is empty.
+pkg_mkdirs(
+    name = "install_dirs",
+    dirs = [
+        "theia/bin",
+        "theia/lib",
+        "etc/theia",
+    ],
+)
+
+pkg_install(
+    name = "install",
+    srcs = [
+        ":install_bin",
+        ":install_bin_scripts",
+        ":install_lib",
+        ":install_etc",
+        ":install_dirs",
+    ],
 )

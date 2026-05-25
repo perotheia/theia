@@ -15,7 +15,12 @@ add_compile_options(-Wall -Wextra)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(PROTOBUF REQUIRED protobuf)
 pkg_check_modules(GRPCPP   REQUIRED grpc++)
-pkg_check_modules(YAMLCPP  REQUIRED yaml-cpp)
+
+# nlohmann/json — header-only, vendored under third_party/ (see #380).
+# Replaces yaml-cpp now that manifests are JSON-only.
+set(NLOHMANN_JSON_INCLUDE_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/nlohmann_json"
+    CACHE PATH "Path containing nlohmann/json.hpp")
 
 find_package(wxWidgets REQUIRED COMPONENTS core base aui)
 include(${wxWidgets_USE_FILE})
@@ -113,7 +118,7 @@ target_include_directories(supervisor-gui PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${PROTOBUF_INCLUDE_DIRS}
     ${GRPCPP_INCLUDE_DIRS}
-    ${YAMLCPP_INCLUDE_DIRS}
+    ${NLOHMANN_JSON_INCLUDE_DIR}
     ${PROTO_GEN_DIR}
     # etcd-cpp-api's exported targets don't carry
     # INTERFACE_INCLUDE_DIRECTORIES (upstream config issue), so we feed
@@ -127,7 +132,6 @@ target_link_libraries(supervisor-gui PRIVATE
     ${wxWidgets_LIBRARIES}
     ${PROTOBUF_LIBRARIES}
     ${GRPCPP_LIBRARIES}
-    ${YAMLCPP_LIBRARIES}
     -lgrpc -lgpr
     # etcd-cpp-apiv3's CMake config exports targets like etcd-cpp-api;
     # those bring along their own transitive cpprestsdk / boost / openssl

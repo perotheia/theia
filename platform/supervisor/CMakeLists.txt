@@ -13,8 +13,14 @@ endif()
 add_compile_options(-Wall -Wextra -Wpedantic)
 
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(YAML_CPP REQUIRED yaml-cpp)
 pkg_check_modules(PROTOBUF REQUIRED protobuf)
+
+# nlohmann/json — header-only, vendored as a single header under
+# third_party/. Picked over yaml-cpp in #380: manifests are now
+# JSON-canonical and we don't want a yaml-cpp link step.
+set(NLOHMANN_JSON_INCLUDE_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/nlohmann_json"
+    CACHE PATH "Path containing nlohmann/json.hpp")
 
 # etcd-cpp-apiv3 (vendored via repo manifest, built into
 # third_party/etcd-cpp-apiv3/install/). Wires the supervisor's state
@@ -102,7 +108,7 @@ add_executable(supervisor
 
 target_include_directories(supervisor PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${YAML_CPP_INCLUDE_DIRS}
+    ${NLOHMANN_JSON_INCLUDE_DIR}
     ${PROTOBUF_INCLUDE_DIRS}
     ${PROTO_GEN_DIR}
     # etcd-cpp-api's exported targets don't carry
@@ -113,13 +119,10 @@ target_include_directories(supervisor PRIVATE
 )
 
 target_link_libraries(supervisor PRIVATE
-    ${YAML_CPP_LIBRARIES}
     ${PROTOBUF_LIBRARIES}
     etcd-cpp-api
     pthread
 )
-
-target_compile_options(supervisor PRIVATE ${YAML_CPP_CFLAGS_OTHER})
 
 # libtombstone — in-process crash forensics, linked by any daemon that
 # wants Android-style tombstones written on fatal signals.

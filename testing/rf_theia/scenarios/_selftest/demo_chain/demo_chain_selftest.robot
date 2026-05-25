@@ -137,44 +137,34 @@ Stage 5 — gen-app-composition CMake projects (KNOWN BROKEN, #378)
     ...    Stage 5 Gen App Composition    Demo3WayP1
 
 
-Stage 6 — generate-manifest YAML set
-    [Documentation]    Per-machine deploy manifest set — 4 YAMLs +
-    ...                index.yaml. The supervisor + Puppet reads
-    ...                from here. Asserts demo_p1/p2/p3 land in
-    ...                compute_host's execution.yaml.
+Stage 6 — generate-manifest JSON set
+    [Documentation]    Per-machine deploy manifest set — 4 JSON files
+    ...                + index.json. The C++ supervisor +
+    ...                supervisor-gui read from here directly via
+    ...                nlohmann/json (no yaml-cpp dep since #380).
+    ...                Asserts demo_p1/p2/p3 land in compute_host's
+    ...                execution.json.
     [Tags]    demo-chain    hermetic    selftest    stage-6
 
     ${root}=    Stage 6 Generate Manifest
-    Manifest Has Machine Yamls    ${root}    central_host
-    Manifest Has Machine Yamls    ${root}    compute_host
-    Manifest Has Machine Yamls    ${root}    admin_host
+    Manifest Has Machine Jsons    ${root}    central_host
+    Manifest Has Machine Jsons    ${root}    compute_host
+    Manifest Has Machine Jsons    ${root}    admin_host
 
-    Execution Yaml Lists Process    ${root}    compute_host    demo_p1
-    Execution Yaml Lists Process    ${root}    compute_host    demo_p2
-    Execution Yaml Lists Process    ${root}    compute_host    demo_p3
+    Execution Json Lists Process    ${root}    compute_host    demo_p1
+    Execution Json Lists Process    ${root}    compute_host    demo_p2
+    Execution Json Lists Process    ${root}    compute_host    demo_p3
 
 
-Stage 6b — manifest JSON siblings (#379)
-    [Documentation]    Every YAML manifest has a JSON sibling with
-    ...                identical content. JSON is the
-    ...                programmatic-tooling encoding (linters,
-    ...                schema validators, downstream codegen that
-    ...                doesn't pull in a YAML parser). Both encoders
-    ...                feed off the same dict serializer, so this
-    ...                test catches future drift.
-    ...
-    ...                Also asserts each JSON file declares the
-    ...                correct top-level `kind` tag — the only
-    ...                discriminator a generic JSON consumer has to
-    ...                tell the four manifest types apart.
+Stage 6b — manifest schema sanity (#379, #380)
+    [Documentation]    Each JSON file declares the correct top-level
+    ...                `kind` tag — the only discriminator a generic
+    ...                JSON consumer has to tell the four manifest
+    ...                types apart. Plus: no YAML emitted (#380
+    ...                migrated the system to JSON-only).
     [Tags]    demo-chain    hermetic    selftest    stage-6b
 
     ${root}=    Stage 6 Generate Manifest
-
-    # Content-equality across both encoders, for each machine.
-    Manifest Has Json Siblings    ${root}    central_host
-    Manifest Has Json Siblings    ${root}    compute_host
-    Manifest Has Json Siblings    ${root}    admin_host
 
     # Top-level kind tags (one consumer-facing identity per file).
     Json Kind Is    ${root}    central_host    machine        MachineManifest
@@ -185,6 +175,9 @@ Stage 6b — manifest JSON siblings (#379)
     # index.json — Puppet's per-host directory lookup.
     Index Json Lists Machines    ${root}    central_host    compute_host    admin_host
 
+    # Hard wall against YAML re-emergence.
+    No Yaml Emitted    ${root}
+
 
 Stage 7 — executor emit per-machine tree
     [Documentation]    Per-machine supervisor tree YAML. Root is
@@ -194,10 +187,10 @@ Stage 7 — executor emit per-machine tree
     [Tags]    demo-chain    hermetic    selftest    stage-7
 
     ${y}=    Stage 7 Executor Emit    central_host
-    Executor Yaml Root Strategy Is    ${y}    one_for_all
+    Executor Json Root Strategy Is    ${y}    one_for_all
 
     ${y2}=    Stage 7 Executor Emit    compute_host
-    Executor Yaml Root Strategy Is    ${y2}    one_for_all
+    Executor Json Root Strategy Is    ${y2}    one_for_all
 
 
 Stage 8 — bazel build .ipk image (arch tag matches rig.py)

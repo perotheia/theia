@@ -263,13 +263,17 @@ class DemoChainLib:
         self._ok(r, "stage 6: artheia generate-manifest")
         return str(out)
 
-    @keyword("Manifest Has Machine Yamls")
-    def manifest_has_machine_yamls(self, root: str, machine: str) -> None:
+    @keyword("Manifest Has Machine Jsons")
+    def manifest_has_machine_jsons(self, root: str, machine: str) -> None:
+        """Every machine dir must have the 4 AUTOSAR-adaptive manifest
+        JSON files. The supervisor and supervisor-gui both consume
+        these — see platform/supervisor/src/spec.cpp and
+        supervisor-gui/src/machines.cpp."""
         mdir = Path(root) / machine
         if not mdir.is_dir():
             raise AssertionError(f"no machine dir at {mdir}")
-        expected = ["machine.yaml", "application.yaml",
-                    "service.yaml", "execution.yaml"]
+        expected = ["machine.json", "application.json",
+                    "service.json", "execution.json"]
         missing = [f for f in expected if not (mdir / f).exists()]
         if missing:
             raise AssertionError(
@@ -277,28 +281,15 @@ class DemoChainLib:
                 f"saw {[p.name for p in mdir.iterdir()]}"
             )
 
-    @keyword("Manifest Has Json Siblings")
-    def manifest_has_json_siblings(self, root: str, machine: str) -> None:
-        """Every YAML manifest must have a JSON sibling with the same
-        content. Catches future drift between the two encoders (#379)."""
-        import json as _json
-        import yaml as _yaml
-        mdir = Path(root) / machine
-        stems = ["machine", "application", "service", "execution"]
-        for stem in stems:
-            yp = mdir / f"{stem}.yaml"
-            jp = mdir / f"{stem}.json"
-            if not jp.exists():
-                raise AssertionError(f"missing JSON sibling: {jp}")
-            try:
-                jdoc = _json.loads(jp.read_text())
-            except _json.JSONDecodeError as e:
-                raise AssertionError(f"{jp} doesn't parse as JSON: {e}")
-            ydoc = _yaml.safe_load(yp.read_text())
-            if ydoc != jdoc:
-                raise AssertionError(
-                    f"{jp} and {yp} differ — encoders out of sync"
-                )
+    @keyword("No Yaml Emitted")
+    def no_yaml_emitted(self, root: str) -> None:
+        """JSON is the single canonical format after #380. Catches
+        regressions where someone re-introduces YAML emit."""
+        yamls = list(Path(root).rglob("*.yaml")) + list(Path(root).rglob("*.yml"))
+        if yamls:
+            raise AssertionError(
+                f"YAML emit re-introduced — saw {[str(p) for p in yamls]}"
+            )
 
     @keyword("Json Kind Is")
     def json_kind_is(self, root: str, machine: str, stem: str,
@@ -334,14 +325,17 @@ class DemoChainLib:
                 f"index.json machines = {got}; missing {missing}"
             )
 
-    @keyword("Execution Yaml Lists Process")
+    @keyword("Execution Json Lists Process")
     def execution_lists_process(self, root: str, machine: str,
                                 process: str) -> None:
-        path = Path(root) / machine / "execution.yaml"
-        text = path.read_text()
-        if f"name: {process}" not in text:
+        import json as _json
+        path = Path(root) / machine / "execution.json"
+        doc = _json.loads(path.read_text())
+        names = {p.get("name") for p in doc.get("processes", [])}
+        if process not in names:
             raise AssertionError(
-                f"{path} doesn't list `name: {process}`"
+                f"{path} doesn't list a process named {process!r}; "
+                f"saw {sorted(names)}"
             )
 
     # ------------------------------------------------------------------
@@ -354,7 +348,7 @@ class DemoChainLib:
         per-machine slice (#287) — pinned SupervisorNodes whose host
         doesn't match are dropped."""
         assert self._workdir is not None
-        out = self._workdir / f"executor_{machine}.yaml"
+        out = self._workdir / f"executor_{machine}.json"
         r = self._artheia(
             "executor", "emit", "demo.manifest.rig",
             "--machine", machine,
@@ -363,14 +357,14 @@ class DemoChainLib:
         self._ok(r, f"stage 7: artheia executor emit --machine {machine}")
         return str(out)
 
-    @keyword("Executor Yaml Root Strategy Is")
+    @keyword("Executor Json Root Strategy Is")
     def executor_root_strategy(self, path: str, expected: str) -> None:
-        # Quick top-of-file check — the root row is on line 1-3.
-        text = Path(path).read_text()
-        if f"strategy: {expected}" not in text.splitlines()[1:5]:
-            head = "\n".join(text.splitlines()[:5])
+        import json as _json
+        doc = _json.loads(Path(path).read_text())
+        got = doc.get("strategy")
+        if got != expected:
             raise AssertionError(
-                f"{path} root strategy != {expected!r}; head:\n{head}"
+                f"{path} root strategy = {got!r}, expected {expected!r}"
             )
 
     # ------------------------------------------------------------------

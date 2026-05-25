@@ -1,39 +1,67 @@
 #include "sup_gui/machines.h"
 
-#include <yaml-cpp/yaml.h>
+#include <nlohmann/json.hpp>
 
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
+
+using nlohmann::json;
 
 namespace sup_gui {
 
 namespace fs = std::filesystem;
 
-std::vector<MachineEndpoint> load_machines_yaml(const std::string& path) {
-    std::vector<MachineEndpoint> out;
-    YAML::Node doc;
+namespace {
+
+bool load_json_file(const std::string& path, json& out) {
+    std::ifstream f(path);
+    if (!f) {
+        std::fprintf(stderr, "machines: failed to open %s\n", path.c_str());
+        return false;
+    }
     try {
-        doc = YAML::LoadFile(path);
+        f >> out;
     } catch (const std::exception& e) {
-        std::fprintf(stderr, "machines: failed to read %s: %s\n",
+        std::fprintf(stderr, "machines: failed to parse %s: %s\n",
                      path.c_str(), e.what());
-        return out;
+        return false;
     }
-    const YAML::Node& rows = doc["machines"];
-    if (!rows || !rows.IsSequence()) {
+    return true;
+}
+
+std::string jstr(const json& j, const char* key, const std::string& dflt = "") {
+    auto it = j.find(key);
+    if (it == j.end() || it->is_null() || !it->is_string()) return dflt;
+    return it->get<std::string>();
+}
+
+int jint(const json& j, const char* key, int dflt) {
+    auto it = j.find(key);
+    if (it == j.end() || it->is_null() || !it->is_number_integer()) return dflt;
+    return it->get<int>();
+}
+
+}  // namespace
+
+std::vector<MachineEndpoint> load_machines_json(const std::string& path) {
+    std::vector<MachineEndpoint> out;
+    json doc;
+    if (!load_json_file(path, doc)) return out;
+    auto rows = doc.find("machines");
+    if (rows == doc.end() || !rows->is_array()) {
         std::fprintf(stderr,
-                     "machines: %s has no 'machines:' sequence\n", path.c_str());
+                     "machines: %s has no 'machines' array\n", path.c_str());
         return out;
     }
-    for (const auto& r : rows) {
+    for (const auto& r : *rows) {
         MachineEndpoint ep;
-        ep.name    = r["name"]    ? r["name"].as<std::string>()    : "";
-        ep.address = r["address"] ? r["address"].as<std::string>() : "127.0.0.1";
-        ep.port    = r["port"]    ? static_cast<uint16_t>(r["port"].as<int>())
-                                  : 7700;
+        ep.name    = jstr(r, "name");
+        ep.address = jstr(r, "address", "127.0.0.1");
+        ep.port    = static_cast<uint16_t>(jint(r, "port", 7700));
         if (ep.name.empty()) continue;
         out.push_back(std::move(ep));
     }
@@ -44,73 +72,62 @@ std::vector<MachineEndpoint> load_manifest_dir(const std::string& dir) {
     // Walk the per-machine manifest layout emitted by
     // `artheia generate-manifest --out <dir>`:
     //
-    //   <dir>/index.yaml                     ← list of machines
-    //   <dir>/<machine>/machine.yaml         ← com_endpoint per machine
+    //   <dir>/index.json                     ← list of machines
+    //   <dir>/<machine>/machine.json         ← com_endpoint per machine
     //
-    // We use index.yaml to find machines (including their `kind`) and
-    // each <machine>/machine.yaml for the real address+port. Skip
-    // kind="host" machines — the GUI runs on those; nothing to connect
-    // to.
+    // Use index.json to find machines (including their `kind`) and
+    // each <machine>/machine.json for the real address+port. Skip
+    // kind="host" machines — the GUI runs on those; nothing to
+    // connect to.
     std::vector<MachineEndpoint> out;
     const fs::path root(dir);
-    const fs::path index = root / "index.yaml";
+    const fs::path index = root / "index.json";
     if (!fs::is_regular_file(index)) {
-        std::fprintf(stderr, "machines: no index.yaml under %s\n", dir.c_str());
+        std::fprintf(stderr, "machines: no index.json under %s\n", dir.c_str());
         return out;
     }
-    YAML::Node idx;
-    try {
-        idx = YAML::LoadFile(index.string());
-    } catch (const std::exception& e) {
-        std::fprintf(stderr, "machines: failed to read %s: %s\n",
-                     index.c_str(), e.what());
-        return out;
-    }
-    const YAML::Node& rows = idx["machines"];
-    if (!rows || !rows.IsSequence()) {
-        std::fprintf(stderr, "machines: %s has no 'machines:' sequence\n",
+    json idx;
+    if (!load_json_file(index.string(), idx)) return out;
+    auto rows = idx.find("machines");
+    if (rows == idx.end() || !rows->is_array()) {
+        std::fprintf(stderr, "machines: %s has no 'machines' array\n",
                      index.c_str());
         return out;
     }
-    for (const auto& r : rows) {
-        const std::string name = r["name"] ? r["name"].as<std::string>() : "";
-        const std::string kind = r["kind"] ? r["kind"].as<std::string>() : "";
-        const std::string sub = r["manifests_dir"]
-            ? r["manifests_dir"].as<std::string>()
-            : name;
+    for (const auto& r : *rows) {
+        const std::string name = jstr(r, "name");
+        const std::string kind = jstr(r, "kind");
+        const std::string sub  = jstr(r, "manifests_dir", name);
         if (name.empty()) continue;
         if (kind == "host") {
             std::fprintf(stderr, "machines: skipping host machine '%s'\n",
                          name.c_str());
             continue;
         }
-        const fs::path mfile = root / sub / "machine.yaml";
+        const fs::path mfile = root / sub / "machine.json";
         if (!fs::is_regular_file(mfile)) {
             std::fprintf(stderr, "machines: %s missing — skipping %s\n",
                          mfile.c_str(), name.c_str());
             continue;
         }
-        YAML::Node mdoc;
-        try {
-            mdoc = YAML::LoadFile(mfile.string());
-        } catch (const std::exception& e) {
-            std::fprintf(stderr, "machines: failed to read %s: %s\n",
-                         mfile.c_str(), e.what());
-            continue;
-        }
-        const YAML::Node m = mdoc["machine"];
-        if (!m) {
-            std::fprintf(stderr, "machines: %s has no 'machine:' key\n",
+        json mdoc;
+        if (!load_json_file(mfile.string(), mdoc)) continue;
+        auto machine = mdoc.find("machine");
+        if (machine == mdoc.end() || !machine->is_object()) {
+            std::fprintf(stderr, "machines: %s has no 'machine' object\n",
                          mfile.c_str());
             continue;
         }
-        const YAML::Node ce = m["com_endpoint"];
+        auto ce = machine->find("com_endpoint");
         MachineEndpoint ep;
-        ep.name    = name;
-        ep.address = (ce && ce["address"])
-                     ? ce["address"].as<std::string>() : "127.0.0.1";
-        ep.port    = (ce && ce["port"])
-                     ? static_cast<uint16_t>(ce["port"].as<int>()) : 7700;
+        ep.name = name;
+        if (ce != machine->end() && ce->is_object()) {
+            ep.address = jstr(*ce, "address", "127.0.0.1");
+            ep.port    = static_cast<uint16_t>(jint(*ce, "port", 7700));
+        } else {
+            ep.address = "127.0.0.1";
+            ep.port    = 7700;
+        }
         out.push_back(std::move(ep));
     }
     return out;
@@ -131,13 +148,13 @@ std::vector<MachineEndpoint> autodiscover_machines() {
         if (!m.empty()) return m;
     }
     const std::vector<std::string> flat_files = {
-        "machines.yaml",                       // cwd
-        "/etc/theia/machines.yaml",            // legacy installed path
+        "machines.json",                       // cwd
+        "/etc/theia/machines.json",            // installed admin .deb location
     };
     for (const auto& f : flat_files) {
         if (!fs::is_regular_file(f)) continue;
         std::fprintf(stderr, "machines: trying %s (flat)\n", f.c_str());
-        auto m = load_machines_yaml(f);
+        auto m = load_machines_json(f);
         if (!m.empty()) return m;
     }
     return {};

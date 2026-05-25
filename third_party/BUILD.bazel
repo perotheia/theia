@@ -43,6 +43,32 @@ alias(
 )
 
 
+# nlohmann/json — single-header JSON library vendored under
+# third_party/nlohmann_json/nlohmann/json.hpp. Single canonical
+# config format across the system (manifests + supervisor reads)
+# since #380; the C++ side parses with this header-only lib (no
+# yaml-cpp link step).
+#
+# Consumers:
+#   - platform/supervisor (CMake build — picks up the header via
+#     NLOHMANN_JSON_INCLUDE_DIR cache var)
+#   - supervisor-gui (rules_foreign_cc cmake() build — needs the
+#     filegroup mounted into the sandbox via `data=`)
+filegroup(
+    name = "nlohmann_json_hdrs",
+    srcs = glob(["nlohmann_json/**/*.hpp"], allow_empty = False),
+)
+
+# Header-only cc_library, in case any pure-Bazel cc_binary picks
+# this up directly (no current consumer, but cheap to expose).
+cc_library(
+    name = "nlohmann_json",
+    hdrs = glob(["nlohmann_json/**/*.hpp"], allow_empty = False),
+    includes = ["nlohmann_json"],
+    visibility = ["//visibility:public"],
+)
+
+
 # Host-installed Google libprotobuf (libprotobuf-dev). Distinct from
 # nanopb: this is the REFLECTION-capable C++ library, used by host
 # tools (libtrace_decoder, supdbg) that need MessageToJsonString.

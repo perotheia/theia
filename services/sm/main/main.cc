@@ -6,7 +6,10 @@
 
 #include "lib/SmDaemon.hh"
 
-#include "Logger.hh"     // parse_log_level
+#include "Logger.hh"     // parse_log_level / process_logger
+
+#include "TipcMux.hh"    // config-service receiver for reporting nodes (#386)
+
 
 #include <atomic>
 #include <chrono>
@@ -32,14 +35,22 @@ int main() {
     // Process-wide logger. Pick up THEIA_LOG_LEVEL from the env
     // (supervisor sets it from executor.json's per-child env map,
     // sourced from Process.log_level on the rig). Defaults to Info
-    // when unset or unparseable.
+    // when unset or unparseable. set_process_logger publishes it so a
+    // reporting node's config service can apply a live ConfigureLogLevel
+    // push (#386) via process_logger().set_level on the node thread.
     auto logger = MakeContextLogger();
     if (const char* lvl = std::getenv("THEIA_LOG_LEVEL")) {
         logger->set_level(::platform::runtime::parse_log_level(lvl));
     }
+    ::platform::runtime::set_process_logger(logger);
     (void)logger;
 
     demo::runtime::TimerService timers;
+
+    // Config-service receiver (#386): reporting nodes register_cast the
+    // supervisor's LogLevelPush, applied by GenServer's base handler.
+    demo::runtime::TipcMux config_mux;
+
 
     SmDaemon sm_daemon;
     sm_daemon.start_statem(timers);
@@ -48,10 +59,28 @@ int main() {
                  "statem initial=OFF\n",
                  SmDaemon::kTipcType, SmDaemon::kTipcInstance);
 
+    if (auto* sm_daemon_cfg = config_mux.bind_node(
+            sm_daemon, SmDaemon::kTipcType,
+            SmDaemon::kTipcInstance)) {
+        config_mux.register_cast<platform_runtime_LogLevelPush>(
+            sm_daemon_cfg, sm_daemon);
+    } else {
+        std::fprintf(stderr,
+                     "[sm_daemon] WARN: config service bind failed; "
+                     "live log-level push disabled\n");
+    }
+
+
+
+    config_mux.start();
+
 
     while (g_running.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
+
+
+    config_mux.stop();
 
 
     sm_daemon.stop("signal");

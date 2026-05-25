@@ -8,7 +8,10 @@
 #include "lib/PerDaemon.hh"
 
 #include "TimerService.hh"
-#include "Logger.hh"     // parse_log_level / MakeConsoleLogger
+#include "Logger.hh"     // parse_log_level / MakeContextLogger / process_logger
+
+#include "TipcMux.hh"    // config-service receiver for reporting nodes (#386)
+
 
 #include <atomic>
 #include <chrono>
@@ -34,26 +37,54 @@ int main() {
     // Process-wide logger. Pick up THEIA_LOG_LEVEL from the env
     // (supervisor sets it from executor.json's per-child env map,
     // sourced from Process.log_level on the rig). Defaults to Info
-    // when unset or unparseable. A future ConfigureLogLevel RPC
-    // (#385) updates this at runtime via logger->set_level.
+    // when unset or unparseable. set_process_logger publishes it so a
+    // reporting node's config service can apply a live ConfigureLogLevel
+    // push (#386) via process_logger().set_level on the node thread.
     auto logger = MakeContextLogger();
     if (const char* lvl = std::getenv("THEIA_LOG_LEVEL")) {
         logger->set_level(::platform::runtime::parse_log_level(lvl));
     }
+    ::platform::runtime::set_process_logger(logger);
     (void)logger;  // available for user handlers via RuntimeContext
 
     demo::runtime::TimerService timers;
     (void)timers;  // wired into the daemon if it needs send_after
+
+    // Config-service receiver (#386). A reporting node binds its TIPC
+    // name and register_cast's the supervisor's control push; the cast
+    // lands in GenServer's base handle_cast(LogLevelPush) on the node
+    // thread. Same standard GwMessageHeader path as any app message —
+    // no bespoke control frame.
+    demo::runtime::TipcMux config_mux;
+
 
     PerDaemon per_daemon;
     per_daemon.start();
     std::fprintf(stderr, "[per_daemon] up — TIPC type=0x%x instance=%u\n",
                  PerDaemon::kTipcType, PerDaemon::kTipcInstance);
 
+    if (auto* per_daemon_cfg = config_mux.bind_node(
+            per_daemon, PerDaemon::kTipcType,
+            PerDaemon::kTipcInstance)) {
+        config_mux.register_cast<platform_runtime_LogLevelPush>(
+            per_daemon_cfg, per_daemon);
+    } else {
+        std::fprintf(stderr,
+                     "[per_daemon] WARN: config service bind failed; "
+                     "live log-level push disabled\n");
+    }
+
+
+
+    config_mux.start();
+
 
     while (g_running.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
+
+
+    config_mux.stop();
 
 
     per_daemon.stop("signal");

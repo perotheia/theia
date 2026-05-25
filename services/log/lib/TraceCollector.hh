@@ -63,6 +63,14 @@ public:
     static constexpr bool kReporting = true;
 
 
+    // Bring the framework's config-service handler
+    // (handle_cast(LogLevelPush)) into scope (#386). A Derived
+    // handle_cast for any port message would otherwise HIDE the base
+    // overload by name, so register_cast<LogLevelPush> wouldn't
+    // resolve. This using-decl keeps both visible; overload resolution
+    // then picks the right one per message type.
+    using demo::runtime::GenServer<TraceCollector, TraceCollectorState>::handle_cast;
+
     // ---- Trace config (reporting=true only) -----------------------
     //
     // Per #355, the per-message-type filter lives in the process-wide

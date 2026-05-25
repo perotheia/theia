@@ -677,12 +677,11 @@ constexpr uint32_t kOpConfigureLogLevel = 11;
 // payload and applies it via Tracer::trace_enable (#355).
 constexpr uint16_t kTagTraceApplyConfig = 0x0300;
 
-// Per-node log-level tag (#385). Sibling of kTagTraceApplyConfig in
-// the control band. Carries a serialized LogLevelConfig; the FC
-// daemon's control receiver decodes it and calls
-// logger->set_level(parse_log_level(level)). 0x0400 keeps log
-// control in its own decade, distinct from the 0x03xx trace band.
-constexpr uint16_t kTagLogApplyConfig = 0x0400;
+// (#385's bespoke kTagLogApplyConfig=0x0400 tag is retired: the log-level
+// push now rides a standard GW_MSG_GEN_CAST frame, decoded by the FC's
+// normal runtime TipcMux. See send_gw_cast_to_tipc_name + #386. Trace
+// (0x0300) still uses the legacy frame until its FC receiver moves to the
+// same path.)
 
 // "Stale heartbeat" gap: if the last heartbeat we saw from a child
 // is older than this, treat the NEXT heartbeat as a (re)start
@@ -1699,6 +1698,104 @@ bool send_frame_to_tipc_name(uint32_t type, uint32_t instance,
     return n == static_cast<ssize_t>(frame.size());
 }
 
+// ---- #386: standard GwMessageHeader-framed cast to a node ----------------
+//
+// The config-service receiver on a reporting FC node is a normal
+// runtime TipcMux (platform/runtime/TipcMux.hh): it reads a packed
+// 24-byte GwMessageHeader then dispatches `proto_len` payload bytes by
+// hdr.rpc.service_id. So the supervisor must speak that wire shape, not
+// the bespoke [u16 tag][payload] frame above — no second control
+// format. We don't link libgw here, so mirror the packed header byte-
+// for-byte (static_assert-guarded over there) and the two enum values
+// we need.
+#pragma pack(push, 1)
+struct GwHdrWire {
+    uint8_t  bus_type;        // GW_BUS_TYPE_RPC
+    uint8_t  msg_type;        // GW_MSG_GEN_CAST
+    uint16_t proto_len;       // payload byte count
+    uint64_t timestamp_ns;    // unused for control; 0
+    // union slot — we use the RPC meta (8 bytes): service_id, method_id,
+    // correlation_id.
+    uint16_t service_id;      // djb2_low16 of the nanopb C type name
+    uint16_t method_id;       // 0
+    uint32_t correlation_id;  // 0 — cast has no reply
+    uint16_t tipc_seq;        // GwTipcMeta.sequence_num
+    uint8_t  tipc_rsvd[2];
+};
+#pragma pack(pop)
+static_assert(sizeof(GwHdrWire) == 24, "GwMessageHeader is 24 bytes");
+
+constexpr uint8_t kGwBusTypeRpc  = 2u;     // GW_BUS_TYPE_RPC
+constexpr uint8_t kGwMsgGenCast  = 0x20u;  // GW_MSG_GEN_CAST
+
+// djb2_low16 — MUST match platform/runtime/RemoteCodec.hh hash_msg_type_
+// so the service_id we stamp equals the one register_cast<T> computed
+// for the C type name on the FC side.
+uint16_t djb2_low16(const char* s) {
+    uint32_t h = 5381;
+    while (*s) { h = (h * 33) + static_cast<unsigned char>(*s++); }
+    return static_cast<uint16_t>(h & 0xFFFFu);
+}
+
+// Send a GW_MSG_GEN_CAST frame [GwHdr][proto bytes] to a TIPC NAME.
+// service_id is djb2(C type name); payload is the proto3-wire body.
+// Same one-shot connect/send/close best-effort contract as above.
+bool send_gw_cast_to_tipc_name(uint32_t type, uint32_t instance,
+                               uint16_t service_id,
+                               const std::string& payload) {
+    int fd = ::socket(AF_TIPC, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
+    if (fd < 0) return false;
+    struct sockaddr_tipc addr{};
+    addr.family                  = AF_TIPC;
+    addr.addrtype                = TIPC_ADDR_NAME;
+    addr.addr.name.name.type     = type;
+    addr.addr.name.name.instance = instance;
+    addr.scope                   = TIPC_NODE_SCOPE;
+    if (::connect(fd, reinterpret_cast<struct sockaddr*>(&addr),
+                  sizeof(addr)) < 0) {
+        ::close(fd);
+        return false;
+    }
+    GwHdrWire hdr{};
+    hdr.bus_type   = kGwBusTypeRpc;
+    hdr.msg_type   = kGwMsgGenCast;
+    hdr.proto_len  = static_cast<uint16_t>(payload.size());
+    hdr.service_id = service_id;
+    std::string frame(sizeof(GwHdrWire) + payload.size(), '\0');
+    std::memcpy(&frame[0], &hdr, sizeof(GwHdrWire));
+    if (!payload.empty()) {
+        std::memcpy(&frame[sizeof(GwHdrWire)], payload.data(), payload.size());
+    }
+    ssize_t n = ::send(fd, frame.data(), frame.size(), 0);
+    ::close(fd);
+    return n == static_cast<ssize_t>(frame.size());
+}
+
+// Encode a platform_runtime.LogLevelPush { LogLevelValue level = 1 }
+// as proto3 wire bytes by hand (one varint field) — avoids dragging
+// nanopb into the supervisor's libprotobuf build. Field 1, wiretype 0
+// (varint) → tag byte 0x08, then the level as a single-byte varint
+// (values 0..4 all fit in one byte). level 0 (LL_TRACE) is the proto3
+// default and would normally be omitted, but we always emit it so the
+// receiver sees an explicit value.
+std::string encode_log_level_push(uint32_t level) {
+    std::string out;
+    out.push_back('\x08');                          // field 1, varint
+    out.push_back(static_cast<char>(level & 0x7f)); // 0..4 → one byte
+    return out;
+}
+
+// Map the operator's level string → LogLevelValue ordinal (matches the
+// platform.runtime LogLevelValue enum + platform::runtime::LogLevel).
+uint32_t log_level_to_value(const std::string& level) {
+    if (level == "trace") return 0;
+    if (level == "debug") return 1;
+    if (level == "info")  return 2;
+    if (level == "warn" || level == "warning") return 3;
+    if (level == "error" || level == "err")    return 4;
+    return 2;  // default Info, same lax policy as parse_log_level
+}
+
 }  // namespace
 
 void Supervisor::apply_trace_config(const std::string& target_node,
@@ -1861,12 +1958,17 @@ void Supervisor::push_log_level_to_child(const std::string& child_name) {
         return;
     }
 
-    ::services::supervisor::LogLevelConfig lc;
-    lc.set_target_node(child_name);
-    lc.set_level(it->second);
-    if (send_frame_to_tipc_name(type, instance,
-                                 kTagLogApplyConfig,
-                                 lc.SerializeAsString())) {
+    // Push as a standard GW_MSG_GEN_CAST of platform_runtime.LogLevelPush
+    // (#386) — the SAME wire shape the FC's runtime TipcMux decodes for
+    // any app message. service_id = djb2 of the nanopb C type name, which
+    // is exactly what register_cast<platform_runtime_LogLevelPush> hashed
+    // on the daemon side; GenServer's base handle_cast then applies it.
+    static const uint16_t kLogLevelPushSvcId =
+        djb2_low16("platform_runtime_LogLevelPush");
+    const std::string payload =
+        encode_log_level_push(log_level_to_value(it->second));
+    if (send_gw_cast_to_tipc_name(type, instance,
+                                  kLogLevelPushSvcId, payload)) {
         std::fprintf(stderr,
             "supervisor: pushed log level '%s' to '%s'\n",
             it->second.c_str(), child_name.c_str());

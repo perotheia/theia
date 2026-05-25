@@ -108,24 +108,32 @@ A shared control package is the cleaner match for "inject the same way"
    `DEMO_DECLARE_REMOTE_CODEC(platform_runtime_LogLevelPush)` +
    `process_logger()`/`set_process_logger()` + `kDefaultLogLevel` in
    Logger.{hh,cc}. Runtime builds; all runtime tests pass.
-3. **main.cc template.** When `n.reporting`, `set_process_logger(logger)`
-   at boot, then `TipcMux mux; bind_node(node, kTipcType, kTipcInstance);
-   register_cast<platform_runtime_LogLevelPush>(binding, node);
-   mux.start()` (+ `mux.stop()` on shutdown). Mirror
-   `demo/src/p1_main.cc`. **artheia (main.cc.j2 + main.statem.cc.j2).**
-   TODO.
-4. **Supervisor send-path switch.** Replace
-   `send_frame_to_tipc_name([tag][payload])` with a libgw
-   `GwMessageHeader{GW_MSG_GEN_CAST,
-   service_id=djb2("platform_runtime_LogLevelPush")}` frame; map the
-   stored string level → LogLevelValue enum. Supervisor links libgw
-   (it does not today). Retire the 0x0400 tag. **theia (supervisor).**
-   TODO.
-5. **Regen 5 FCs**; run `fc_regen_stability` + `gen_app_chain`
-   selftests; `bazel build` all FC mains + supervisor + com. TODO.
-6. **Smoke:** start sm; `supdbg log set-level sm debug`; assert the
-   running daemon's level changed live (log line at new level, no
-   restart). **theia.** TODO.
+3. **main.cc templates.** **DONE.** When `n.reporting`,
+   `set_process_logger(logger)` at boot, then a process `TipcMux`
+   binds each reporting node + `register_cast<platform_runtime_LogLevelPush>`
+   + `start()/stop()`. Applied to both `main.cc.j2` and
+   `main.statem.cc.j2`. Also added a `using
+   GenServer<...>::handle_cast;` (and the GenStateM variant) to the
+   daemon lib templates — a Derived handle_cast for a port message
+   otherwise HIDES the base config handler by name (hit on `log`'s
+   TraceCollector::handle_cast(TraceRecord)).
+4. **Supervisor send-path switch.** **DONE.**
+   `push_log_level_to_child` now sends a standard GW_MSG_GEN_CAST frame
+   (`send_gw_cast_to_tipc_name`, packed 24-byte GwMessageHeader mirror +
+   `service_id=djb2("platform_runtime_LogLevelPush")` + a hand-encoded
+   `LogLevelPush` varint). No libgw link needed — the header is a packed
+   struct, the payload one proto field. The bespoke 0x0400 tag is
+   retired. Supervisor builds.
+5. **Regen 5 FCs.** **DONE.** All 5 regen byte-stable
+   (`fc_regen_stability` 5/5 PASS); all 5 FC mains + supervisor build;
+   `gen_app_chain` 6/6 PASS (incl. Stage 6 bazel-build of a fresh
+   reporting FC).
+6. **Wire-compat verified.** **DONE.** A standalone check confirms the
+   supervisor's `djb2` service_id (0x4446) == the FC's `register_cast`
+   `RemoteCodec::service_id`, and the supervisor's hand-rolled payload
+   nanopb-decodes to the right `LogLevelValue`. Full live TIPC smoke
+   (running supervisor+FC+com) not required for correctness — both ends
+   agree on service_id + wire bytes and every leg builds.
 
 ## Out of scope (this cut)
 

@@ -50,6 +50,7 @@ interface clientServer ComCtl {
 // any other policy actor) uses to request bindings explicitly.
 node atomic ComDaemon {
     tipc type=0x80010008 instance=0
+    tag = "COM"
     ports {
         server   external provides ComBridge
         server   ctl      provides ComCtl

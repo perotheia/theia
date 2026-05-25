@@ -70,6 +70,12 @@ Stage 1 — initial emit writes all three slices
     File Has Autogen Marker    ${lib_h}
     ${lib_n}=    Slice File Exists    lib    PingerNode_netgraph.hh
     File Has Autogen Marker    ${lib_n}
+    # Log.hh (#383) — emitted from `tag = "..."` in the .art, with
+    # node-name fallback when omitted. The duo .art doesn't declare
+    # a tag yet, so we expect the fallback (node name).
+    ${lib_log}=    Slice File Exists    lib    Log.hh
+    File Has Autogen Marker    ${lib_log}
+    File Contains    ${lib_log}    kLogTag
     ${lib_b}=    Slice File Exists    lib    BUILD.bazel
     File Has Autogen Marker    ${lib_b}
 

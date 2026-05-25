@@ -15,6 +15,7 @@ cc_library(
     hdrs = [
         "TraceCollector.hh",
         "TraceCollector_netgraph.hh",
+        "Log.hh",
     ],
     includes = [".."],
     copts = [

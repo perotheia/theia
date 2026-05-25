@@ -44,6 +44,7 @@ interface clientServer UpdateCtl {
 
 node atomic UcmDaemon {
     tipc type=0x8001000E instance=0
+    tag = "UCM"
     ports {
         server   ctl     provides UpdateCtl
         receiver from_sm requires SmStateStream

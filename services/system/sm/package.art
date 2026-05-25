@@ -58,6 +58,7 @@ interface clientServer StateMgmtCtl {
 
 node atomic SmDaemon {
     tipc type=0x8001000D instance=0
+    tag = "SMX"
     ports {
         sender broadcast provides SmStateStream
         server ctl       provides StateMgmtCtl

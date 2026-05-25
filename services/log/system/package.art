@@ -160,6 +160,7 @@ interface senderReceiver TraceRecordSubmit {
 
 node atomic TraceCollector {
     tipc type=0x80010013 instance=0
+    tag = "LOG"
 
     // Tracing-related ports use intent-suffixed names to keep the
     // role clear:

@@ -36,6 +36,7 @@ interface clientServer PersistencyIf {
 
 node atomic PerDaemon {
     tipc type=0x80010007 instance=0
+    tag = "PER"
     ports {
         server per_state provides PersistencyIf
         sender to_log    provides LogStream  best_effort

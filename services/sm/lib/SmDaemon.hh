@@ -14,6 +14,7 @@
 #pragma once
 
 #include "GenStateM.hh"
+#include "Log.hh"      // sibling — per-FC ContextLogger + kLogTag
 #include "system/services/sm/sm.pb.h"
 
 #include <algorithm>

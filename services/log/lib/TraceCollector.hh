@@ -7,6 +7,7 @@
 #pragma once
 
 #include "GenServer.hh"
+#include "Log.hh"      // sibling — per-FC ContextLogger + kLogTag
 #include "system/services/log/log.pb.h"
 
 #include <algorithm>

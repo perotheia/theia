@@ -53,7 +53,9 @@ from artheia.manifest import (
     OsPackage,
     Layer,
     MachineManifest,
+    RestartStrategy,
     Rig,
+    SupervisorNode,
     SwComponent,
     VehicleIdentity,
     merge_layers,
@@ -74,7 +76,7 @@ from artheia.manifest.execution import (
 from artheia.manifest.machine import CpuResource, IpEndpoint
 from artheia.manifest.platform import PlatformBase
 from artheia.manifest.rig import SoftwareSpecification
-from artheia.manifest.transform import Append, SetTransformTypes
+from artheia.manifest.transform import Append, Override, SetTransformTypes
 from services.manifest.service import FcSoftware
 
 # ---------------------------------------------------------------------------
@@ -194,21 +196,31 @@ DemoHost = CentralHost
 # location for the equivalent ``rules_cc`` target.
 
 _DEMO_PROCESSES = [
-    # (process-name, art composition name, bazel target, hosted prototypes)
+    # (process-name, art composition name, bazel target, start_cmd, hosted prototypes)
     #
     # The composition names track demo/system/demo/component.art:
     # `composition Demo3WayP1 { … on process P1 }` materializes into
     # one binary that runs the prototypes listed here in-process.
+    #
+    # start_cmd is the on-target launch command the supervisor execs for
+    # this Process (its app_sup leaf). It points at the built binary
+    # — like an FC's Process.start_cmd in services/manifest/executor.py.
+    # The install-time .ipk mapping rewrites these to the install path.
     ("demo_p1", "Demo3WayP1",
-     "//demo:p1_main",
+     "//demo:p1_main", ["demo/build/p1_main"],
      ["counter", "driver", "ticker"]),
     ("demo_p2", "Demo3WayP2",
-     "//demo:p2_main",
+     "//demo:p2_main", ["demo/build/p2_main"],
      ["observer"]),
     ("demo_p3", "Demo3WayP3",
-     "//demo:p3_main",
+     "//demo:p3_main", ["demo/build/p3_main"],
      ["incrementer"]),
 ]
+
+# process-name → start_cmd, for _process_for below.
+_DEMO_START_CMD: dict[str, list[str]] = {
+    name: start_cmd for (name, _, _, start_cmd, _) in _DEMO_PROCESSES
+}
 
 DEMO_COMPONENTS: list[SwComponent] = [
     SwComponent(
@@ -225,7 +237,7 @@ DEMO_COMPONENTS: list[SwComponent] = [
         # theia_runtime/, not yet bridged into Bazel).
         bazel_buildable=True,
     )
-    for (name, art_class, target, _) in _DEMO_PROCESSES
+    for (name, art_class, target, _, _) in _DEMO_PROCESSES
 ]
 
 
@@ -287,7 +299,7 @@ def _executable_for(name: str, art_class: str) -> Executable:
 
 DEMO_EXECUTABLES: list[Executable] = [
     _executable_for(name, art_class)
-    for (name, art_class, _, _) in _DEMO_PROCESSES
+    for (name, art_class, _, _, _) in _DEMO_PROCESSES
 ]
 
 
@@ -297,6 +309,10 @@ def _process_for(name: str) -> Process:
         executable=name,
         # Demo processes are application-level, not part of an FC.
         function_cluster_affiliation="",
+        # The supervisor execs this when it starts the app_sup leaf —
+        # same role as an FC Process.start_cmd. Empty for any process
+        # not in the start-cmd map (shouldn't happen for the demo set).
+        start_cmd=_DEMO_START_CMD.get(name, []),
         state_dependent_startup_config=[
             StateDependentStartupConfig(
                 function_group_state=["Default.Running"],
@@ -314,7 +330,7 @@ def _process_for(name: str) -> Process:
 
 
 DEMO_PROCESSES: list[Process] = [
-    _process_for(name) for (name, _, _, _) in _DEMO_PROCESSES
+    _process_for(name) for (name, _, _, _, _) in _DEMO_PROCESSES
 ]
 
 
@@ -323,12 +339,23 @@ DEMO_PROCESSES: list[Process] = [
 # Kept until phase 4 swaps the CLI to walk SoftwareSpecification.
 # ---------------------------------------------------------------------------
 
+# app_sup ships empty in the platform base (apps belong to the rig).
+# This rig attaches its three demo binaries as app_sup's children —
+# each resolves through its Process (DEMO_PROCESSES, with a real
+# start_cmd) exactly like an FC leaf resolves through its Process.
+_APP_SUP_CHILDREN = [name for (name, _, _, _, _) in _DEMO_PROCESSES]
+
 DemoLayer = Layer(
     name="demo",
     set_vehicle=VehicleIdentity(name="demo", make="theia", model="gen_server-demo"),
     add_machines=[DemoHost],
     add_components=DEMO_COMPONENTS,
     add_executions=DEMO_PROCESSES,
+    # Override (not Append) so we REPLACE app_sup's empty children list
+    # with the demo apps — Override does replace(base, **patch).
+    override_supervisors=[
+        Override(identity="app_sup", patch={"children": list(_APP_SUP_CHILDREN)}),
+    ],
 )
 
 DemoRig: Rig = merge_layers(PlatformBase, [DemoLayer])
@@ -508,6 +535,18 @@ DemoSpecLayer = SoftwareSpecification(
     # CLI consumers prefer via *Software ranking) gets them too.
     process_to_machine_mappings=cast(set[SetTransformTypes], {
         Append(_ptm) for _ptm in _PTM_ENTRIES
+    }),
+    # Attach the demo apps to app_sup. FcSoftware ships app_sup with an
+    # empty children list; an Append of the same-identity node unions
+    # the demo leaves into it (set-transform list-merge), matching the
+    # legacy DemoLayer.override_supervisors above. Each child resolves
+    # through its DEMO_PROCESSES Process (with a real start_cmd).
+    supervisors=cast(set[SetTransformTypes], {
+        Append(SupervisorNode(
+            name="app_sup",
+            strategy=RestartStrategy.ONE_FOR_ONE,
+            children=list(_APP_SUP_CHILDREN),
+        )),
     }),
 )
 

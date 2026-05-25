@@ -13,9 +13,11 @@ consumers (``artheia.manifest.platform``, ``FcLayer``, ``FcSoftware``)
 keep working unchanged — edit the tree HERE.
 
 Children name either another :class:`SupervisorNode` or a
-:class:`Process` from ``service.PROCESSES``. ``AUTO_APPS_CHILDREN``
-expands at build time into the non-FC SwComponents on the rig (vendor /
-demo applications).
+:class:`Process` from the rig's execution manifests. ``app_sup`` ships
+empty in the platform base — application leaves are added by the rig
+layer (e.g. the demo rig Overrides app_sup with demo_p1/p2/p3), each
+resolving to a Process with its own ``start_cmd``, exactly like an FC
+leaf.
 
 Restart-strategy choices match the OTP design:
 
@@ -33,7 +35,6 @@ Restart-strategy choices match the OTP design:
 from __future__ import annotations
 
 from artheia.manifest.supervisor import (
-    AUTO_APPS_CHILDREN,
     RestartStrategy,
     SupervisorNode,
 )
@@ -88,9 +89,15 @@ SUPERVISORS: list[SupervisorNode] = [
     SupervisorNode(
         name="app_sup",
         strategy=RestartStrategy.ONE_FOR_ONE,
-        # AUTO_APPS_CHILDREN expands into one leaf per non-FC SwComponent
-        # at supervisor-build time (the vendor apps / demo binaries).
-        children=[AUTO_APPS_CHILDREN],
+        # Application leaves. The platform base ships NONE — apps belong
+        # to the rig. A rig layer Overrides app_sup's children with its
+        # own application Process names (e.g. the demo rig adds
+        # demo_p1/p2/p3), each resolving to a Process in the rig's
+        # execution manifests. (Earlier this used an AUTO_APPS_CHILDREN
+        # sentinel that auto-expanded SwComponents with a synthetic
+        # vendor/apps/<name>/daemon.sh start_cmd — dropped; apps now
+        # carry a real start_cmd in their execution manifest, same as FCs.)
+        children=[],
     ),
 ]
 

@@ -8,6 +8,9 @@
 
 #include "com/tipc_uplink.hpp"
 #include "com/tipc_trace_uplink.hpp"
+#ifdef THEIA_ROBOT_NODE
+#include "com/robot_node.hpp"   // test-only signal inject + service call (#387)
+#endif
 
 #include "supervisor_bridge.grpc.pb.h"
 
@@ -158,6 +161,40 @@ public:
         cfg->set_level(req->level());
         return forward(cr, reply);
     }
+
+#ifdef THEIA_ROBOT_NODE
+    // ---- Robot node (#387) — test-only signal inject + service call ----
+    // com opens a direct TIPC client to the target node and speaks the
+    // standard GW_MSG_GEN_CAST / GW_MSG_GEN_CALL wire shape. The test
+    // built `payload` host-side with the std python protobuf lib and
+    // resolved the target's TIPC addr from its rig context.
+    grpc::Status InjectSignal(
+            grpc::ServerContext*,
+            const services::com::InjectSignalCall* req,
+            services::com::InjectSignalAck* ack) override {
+        bool sent = services_com::robot_inject_signal(
+            req->tipc_type(), req->tipc_instance(),
+            req->msg_type(), req->payload());
+        ack->set_sent(sent);
+        ack->set_message(sent ? "cast sent"
+                              : "TIPC connect/send failed (node down?)");
+        return grpc::Status::OK;
+    }
+
+    grpc::Status CallService(
+            grpc::ServerContext*,
+            const services::com::CallServiceCall* req,
+            services::com::CallServiceReply* reply) override {
+        auto r = services_com::robot_call_service(
+            req->tipc_type(), req->tipc_instance(),
+            req->req_msg_type(), req->payload(),
+            static_cast<int>(req->timeout_ms()));
+        reply->set_ok(r.ok);
+        reply->set_message(r.ok ? "reply received" : r.error);
+        if (r.ok) reply->set_payload(r.reply_payload);
+        return grpc::Status::OK;
+    }
+#endif  // THEIA_ROBOT_NODE
 
 private:
     grpc::Status forward(const ::services::supervisor::ControlRequest& cr,

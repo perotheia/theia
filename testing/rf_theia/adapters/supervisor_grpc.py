@@ -140,6 +140,36 @@ class SupervisorClient:
             raise AssertionError("no TreeSnapshot received within 3s")
         return _snapshot_to_dict(snap)
 
+    # ----- robot node: signal inject + service call (#387) ------------
+
+    def inject_signal(self, tipc_type: int, tipc_instance: int,
+                      msg_type: str, payload: bytes,
+                      src: str = "RobotTest") -> None:
+        """Cast a signal AT a component over the com robot node,
+        impersonating ``src``. Raises if com couldn't send the frame."""
+        ack = self._require().inject_signal(
+            int(tipc_type), int(tipc_instance), msg_type, payload, src)
+        if not ack.sent:
+            raise AssertionError(
+                f"InjectSignal({msg_type} → 0x{int(tipc_type):x}/"
+                f"{int(tipc_instance)}) not sent: {ack.message}")
+
+    def call_service(self, tipc_type: int, tipc_instance: int,
+                     req_msg_type: str, payload: bytes,
+                     src: str = "RobotTest",
+                     timeout_ms: int = 0) -> bytes:
+        """Call a service ON a component and return the reply payload
+        bytes (the caller decodes with the matching _pb2 type). Raises
+        on timeout / send failure."""
+        rep = self._require().call_service(
+            int(tipc_type), int(tipc_instance), req_msg_type, payload,
+            src, int(timeout_ms))
+        if not rep.ok:
+            raise AssertionError(
+                f"CallService({req_msg_type} → 0x{int(tipc_type):x}/"
+                f"{int(tipc_instance)}) failed: {rep.message}")
+        return rep.payload
+
     # ----- internals --------------------------------------------------
 
     def _require(self):

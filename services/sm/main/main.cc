@@ -64,10 +64,16 @@ int main() {
             SmDaemon::kTipcInstance)) {
         config_mux.register_cast<platform_runtime_LogLevelPush>(
             sm_daemon_cfg, sm_daemon);
+        // Receiver ports (#387): register the node's declared inbound
+        // types so a real peer — or a robot-test inject via services/com
+        // — lands on the same handle_call / handle_cast path. clientServer
+        // ops → register_call; senderReceiver `in` data → register_cast.
+        config_mux.register_call<SmRequest, SmEmpty>(
+            sm_daemon_cfg, sm_daemon);
     } else {
         std::fprintf(stderr,
                      "[sm_daemon] WARN: config service bind failed; "
-                     "live log-level push disabled\n");
+                     "live log-level push + signal inject disabled\n");
     }
 
 

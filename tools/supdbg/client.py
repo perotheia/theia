@@ -304,6 +304,46 @@ class Client:
             timeout=self.timeout,
         )
 
+    # ----- robot node: signal inject + service call (#387) ----------------
+
+    def inject_signal(self, tipc_type: int, tipc_instance: int,
+                      msg_type: str, payload: bytes,
+                      src: str = "RobotTest") -> _bridge_pb.InjectSignalAck:
+        """Cast a signal AT a component, impersonating a node.
+
+        com connects directly to the target's TIPC (type, instance) and
+        sends a GW_MSG_GEN_CAST. `msg_type` is the nanopb C type name
+        (e.g. "services_services_sm_SmStateMsg"); `payload` is built
+        host-side with the std protobuf lib (msg.SerializeToString()).
+        """
+        return self._ensure().InjectSignal(
+            _bridge_pb.InjectSignalCall(
+                tipc_type=tipc_type, tipc_instance=tipc_instance,
+                msg_type=msg_type, payload=payload, src=src,
+            ),
+            timeout=self.timeout,
+        )
+
+    def call_service(self, tipc_type: int, tipc_instance: int,
+                     req_msg_type: str, payload: bytes,
+                     src: str = "RobotTest",
+                     timeout_ms: int = 0) -> _bridge_pb.CallServiceReply:
+        """Call a service ON a component and return its reply payload.
+
+        com opens a TIPC client to the target, sends GW_MSG_GEN_CALL and
+        awaits the GW_MSG_GEN_CALL_REPLY (by correlation) — same routing
+        as a real node→node call. The reply `.payload` is proto-wire
+        bytes the caller decodes with the matching _pb2 reply type.
+        """
+        return self._ensure().CallService(
+            _bridge_pb.CallServiceCall(
+                tipc_type=tipc_type, tipc_instance=tipc_instance,
+                req_msg_type=req_msg_type, payload=payload, src=src,
+                timeout_ms=timeout_ms,
+            ),
+            timeout=self.timeout,
+        )
+
     def subscribe_traces(
         self,
         decoder: t.Optional["TraceDecoder"] = None,

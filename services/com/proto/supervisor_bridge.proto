@@ -53,6 +53,53 @@ message LogLevelCall {
     string level        = 2;
 }
 
+// ---- Robot node: signal inject + service call (#387) -------------------
+//
+// com IS the robot node: a test impersonates a real node and drives
+// another component over TIPC, speaking the standard GwMessageHeader
+// wire shape every FC's runtime TipcMux already decodes — no bespoke
+// frame. The test resolves the target's TIPC (type, instance) from its
+// rig context and supplies them; com is stateless about topology.
+//
+// Encode is host-side: the test builds `payload` with the standard
+// Python protobuf lib (SmRequest(...).SerializeToString()), wire-
+// identical to nanopb on-target. `msg_type` is the nanopb C type name
+// (e.g. "services_services_sm_SmRequest") so its djb2 service_id
+// matches what the target node's register_cast/register_call computed.
+// `src` is the impersonated sender name (trace attribution only;
+// routing is by the held socket, like real port→node routing).
+
+message InjectSignalCall {
+    uint32 tipc_type     = 1;   // target node TIPC name: type
+    uint32 tipc_instance = 2;   //                        instance
+    string msg_type      = 3;   // nanopb C type name (djb2 → service_id)
+    bytes  payload       = 4;   // proto3-wire bytes (built host-side)
+    string src           = 5;   // impersonated sender (trace only)
+}
+
+// Async cast — fire-and-forget GW_MSG_GEN_CAST. Ack just reports
+// whether com sent the frame (no component-level confirmation).
+message InjectSignalAck {
+    bool   sent    = 1;
+    string message = 2;
+}
+
+message CallServiceCall {
+    uint32 tipc_type     = 1;
+    uint32 tipc_instance = 2;
+    string req_msg_type  = 3;   // request nanopb C type name (→ service_id)
+    bytes  payload       = 4;   // request proto3-wire bytes
+    string src           = 5;
+    uint32 timeout_ms    = 6;   // 0 → com default
+}
+
+// Sync call reply — GW_MSG_GEN_CALL_REPLY payload returned to the test.
+message CallServiceReply {
+    bool   ok      = 1;         // false on timeout / send failure
+    string message = 2;         // error detail when !ok
+    bytes  payload = 3;         // reply proto3-wire bytes (test decodes)
+}
+
 service SupervisorView {
     // Server-streaming firehose of every observation the supervisor
     // emits over its TIPC events port. Clients open one of these per
@@ -74,6 +121,14 @@ service SupervisorView {
     // pushes it live to the node. Mirrors TraceStream.Configure.
     rpc ConfigureLogLevel (LogLevelCall)
         returns (services.supervisor.ControlReply);
+
+    // ---- Robot node (#387) -------------------------------------------
+    // Test-only: inject a signal / call a service ON a component,
+    // impersonating a node. com connects directly to the target's TIPC
+    // name and speaks GW_MSG_GEN_CAST / GW_MSG_GEN_CALL. Compiled out of
+    // release builds via THEIA_ROBOT_NODE (see CMakeLists / BUILD).
+    rpc InjectSignal (InjectSignalCall) returns (InjectSignalAck);
+    rpc CallService  (CallServiceCall)  returns (CallServiceReply);
 }
 
 

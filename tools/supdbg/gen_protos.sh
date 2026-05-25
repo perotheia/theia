@@ -39,6 +39,23 @@ mkdir -p "$OUT_DIR"
     "$PROTO_COM"/supervisor_bridge.proto \
     "$PROTO_SUP"/*.proto
 
+# ---- FC app message stubs (#387) ----------------------------------------
+# Host-side signal encode/decode for robot-node inject/call uses the
+# STANDARD python protobuf lib (not the libtrace_decoder FFI). Generate
+# _pb2 for the per-FC app protos so a test builds payloads with e.g.
+# `sm_pb2.SmRequest(target=...).SerializeToString()`. Wire format is
+# identical to the nanopb the cluster runs (same field numbers / package
+# `services_services_<fc>`), so the C type name the robot node hashes
+# (services_services_sm_SmRequest) matches the bytes the test sends.
+PROTO_FC="$WORKSPACE/platform/proto/system/services"
+FC_OUT="$OUT_DIR/fc"
+mkdir -p "$FC_OUT"
+"$VENV/bin/python" -m grpc_tools.protoc \
+    --proto_path="$PROTO_FC" \
+    --python_out="$FC_OUT" \
+    "$PROTO_FC"/*/*.proto
+touch "$FC_OUT/__init__.py"
+
 # Make the generated package importable as supdbg._gen — drop an
 # __init__.py so `import supdbg._gen.supervisor_bridge_pb2` works.
 touch "$OUT_DIR/__init__.py"

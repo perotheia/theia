@@ -185,3 +185,8 @@ inline void TraceCollector::broadcast_stream_out_rec(const TraceRecord& msg) {
 
 
 }  // namespace ara::log
+
+
+DEMO_DECLARE_REMOTE_CODEC(services_services_log_TraceConfigRequest)
+DEMO_DECLARE_REMOTE_CODEC(services_services_log_TraceEmpty)
+DEMO_DECLARE_REMOTE_CODEC(services_services_log_TraceRecord)

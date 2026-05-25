@@ -133,3 +133,7 @@ private:
 
 
 }  // namespace ara::ucm
+
+
+DEMO_DECLARE_REMOTE_CODEC(services_services_ucm_UcmRequest)
+DEMO_DECLARE_REMOTE_CODEC(services_services_ucm_UcmReply)

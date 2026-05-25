@@ -138,3 +138,9 @@ private:
 
 
 }  // namespace ara::per
+
+
+DEMO_DECLARE_REMOTE_CODEC(services_services_per_PerKey)
+DEMO_DECLARE_REMOTE_CODEC(services_services_per_PerValue)
+DEMO_DECLARE_REMOTE_CODEC(services_services_per_PerPut)
+DEMO_DECLARE_REMOTE_CODEC(services_services_per_PerEmpty)

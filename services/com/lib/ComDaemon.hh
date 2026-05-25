@@ -136,3 +136,7 @@ private:
 
 
 }  // namespace ara::com
+
+
+DEMO_DECLARE_REMOTE_CODEC(services_services_com_ComEmpty)
+DEMO_DECLARE_REMOTE_CODEC(services_services_com_NetworkBindingRequest)

@@ -72,14 +72,31 @@ add_custom_command(
     VERBATIM
 )
 
-add_executable(services-com
+# Robot node (#387) — test-only signal inject + service call. ON for
+# dev/test images; flip OFF (or via the services manifest → -D) for a
+# release build so the inject/call RPCs and their TIPC client are
+# compiled out entirely.
+option(THEIA_ROBOT_NODE "Build the test-only robot signal/call node" ON)
+
+set(COM_SRCS
     src/main.cpp
     src/tipc_uplink.cpp
     src/tipc_trace_uplink.cpp
+)
+if(THEIA_ROBOT_NODE)
+    list(APPEND COM_SRCS src/robot_node.cpp)
+endif()
+
+add_executable(services-com
+    ${COM_SRCS}
     ${SUP_PROTO_SRCS}
     ${BRIDGE_PROTO_PB_CC}
     ${BRIDGE_PROTO_GRPC_CC}
 )
+
+if(THEIA_ROBOT_NODE)
+    target_compile_definitions(services-com PRIVATE THEIA_ROBOT_NODE)
+endif()
 
 target_include_directories(services-com PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include

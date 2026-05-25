@@ -297,3 +297,7 @@ inline void SmDaemon::broadcast_broadcast_state(const SmStateMsg& msg) {
 
 
 }  // namespace ara::sm
+
+
+DEMO_DECLARE_REMOTE_CODEC(services_services_sm_SmRequest)
+DEMO_DECLARE_REMOTE_CODEC(services_services_sm_SmEmpty)

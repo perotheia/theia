@@ -68,10 +68,17 @@ int main() {
             TraceCollector::kTipcInstance)) {
         config_mux.register_cast<platform_runtime_LogLevelPush>(
             trace_collector_cfg, trace_collector);
+        // Receiver ports (#387): register the node's declared inbound
+        // types so a real peer — or a robot-test inject via services/com
+        // — lands on the same handle_call / handle_cast path. clientServer
+        // ops → register_call; senderReceiver `in` data → register_cast.
+        config_mux.register_call<TraceConfigRequest, TraceEmpty>(
+            trace_collector_cfg, trace_collector);
+        config_mux.register_cast<TraceRecord>(trace_collector_cfg, trace_collector);
     } else {
         std::fprintf(stderr,
                      "[trace_collector] WARN: config service bind failed; "
-                     "live log-level push disabled\n");
+                     "live log-level push + signal inject disabled\n");
     }
 
 

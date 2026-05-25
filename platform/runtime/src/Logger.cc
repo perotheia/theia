@@ -36,9 +36,9 @@ LogLevel parse_log_level(const std::string& name) noexcept {
     if (lo == "info")  return LogLevel::Info;
     if (lo == "warn" || lo == "warning") return LogLevel::Warn;
     if (lo == "error" || lo == "err")    return LogLevel::Error;
-    // Unknown — default to Info rather than failing. Operator typos
-    // become quietly-lax, not noisy aborts.
-    return LogLevel::Info;
+    // Unknown — fall back to the single default rather than failing.
+    // Operator typos become quietly-lax, not noisy aborts.
+    return kDefaultLogLevel;
 }
 
 const char* log_level_name(LogLevel l) noexcept {

@@ -32,6 +32,13 @@ enum class LogLevel {
     Error = 4,
 };
 
+// Single source of truth for the level a Logger starts at before the
+// manifest (THEIA_LOG_LEVEL, sourced from the rig's per-process
+// log_level) or a live ConfigureLogLevel push overrides it. Referenced
+// by the Logger member initializer and parse_log_level's
+// unknown-input fallback so the default lives in exactly one place.
+inline constexpr LogLevel kDefaultLogLevel = LogLevel::Info;
+
 // Parse "trace"|"debug"|"info"|"warn"|"error" (case-insensitive).
 // Anything else returns Info — never throws, never aborts. Used by
 // gen-app's main.cc to apply $THEIA_LOG_LEVEL at boot.
@@ -72,7 +79,7 @@ class Logger {
   void error(const std::string& m) noexcept { if (enabled(LogLevel::Error)) log(LogLevel::Error, m); }
 
  private:
-  std::atomic<LogLevel> level_{LogLevel::Info};
+  std::atomic<LogLevel> level_{kDefaultLogLevel};
 };
 
 // Default implementation: writes "[LEVEL] message\n" to stderr.

@@ -3,7 +3,7 @@
 //
 // Main slice — thread executor for the node(s) declared in .art.
 // Regenerated on every gen-app run. User code lives in
-// impl/UcmDaemon_handlers.cc.
+// impl/<Node>_handlers.cc (one per node).
 
 #include "lib/UcmDaemon.hh"
 

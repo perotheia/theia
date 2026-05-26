@@ -59,3 +59,32 @@ node atomic ComDaemon {
         sender   to_log   provides LogStream  best_effort
     }
 }
+
+// ---- Probe (test agent) -------------------------------------------------
+//
+// A SECOND node in the com process whose job is to impersonate ANY
+// other node on the bus and drive a target FC for tests: a Robot test
+// sends a message to the probe's OWN gRPC endpoint (distinct from
+// ComBridge), the probe forwards it on TIPC to the target with a
+// GwMessageHeader — exactly the wire a real node→node cast/call uses.
+//
+// TIPC is network-wide, so the probe carries its OWN distinct address
+// (0x800100FF, well clear of the FC range 0x..01–0x..12). It sends TO
+// the target's address FROM its own; impersonation is attribution only
+// (header `src` / trace), never an address takeover.
+//
+// gen-app gives this node a generated gen_server + handlers; the impl
+// OVERRIDES that dispatch so the probe can send/receive arbitrary
+// messages rather than the fixed port schema. The `probe_ctl` port
+// exists only so gen-app materializes the node + its TIPC bind.
+interface clientServer ProbeCtl {
+    operation Ping(in p:ComEmpty) returns ComEmpty
+}
+
+node atomic ProbeDaemon {
+    tipc type=0x800100FF instance=0
+    tag = "PROBE"
+    ports {
+        server probe_ctl provides ProbeCtl
+    }
+}

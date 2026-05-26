@@ -10,7 +10,9 @@ package(default_visibility = ["//visibility:public"])
 
 cc_library(
     name = "log_impl",
-    srcs = ["TraceCollector_handlers.cc"],
+    srcs = [
+        "TraceCollector_handlers.cc",
+    ],
     copts = [
         "-std=c++17",
         "-Wall",

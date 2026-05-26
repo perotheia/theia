@@ -10,7 +10,10 @@ package(default_visibility = ["//visibility:public"])
 
 cc_library(
     name = "com_impl",
-    srcs = ["ComDaemon_handlers.cc"],
+    srcs = [
+        "ComDaemon_handlers.cc",
+        "ProbeDaemon_handlers.cc",
+    ],
     copts = [
         "-std=c++17",
         "-Wall",

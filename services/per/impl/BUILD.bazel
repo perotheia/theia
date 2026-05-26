@@ -10,7 +10,9 @@ package(default_visibility = ["//visibility:public"])
 
 cc_library(
     name = "per_impl",
-    srcs = ["PerDaemon_handlers.cc"],
+    srcs = [
+        "PerDaemon_handlers.cc",
+    ],
     copts = [
         "-std=c++17",
         "-Wall",

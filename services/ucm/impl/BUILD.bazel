@@ -10,7 +10,9 @@ package(default_visibility = ["//visibility:public"])
 
 cc_library(
     name = "ucm_impl",
-    srcs = ["UcmDaemon_handlers.cc"],
+    srcs = [
+        "UcmDaemon_handlers.cc",
+    ],
     copts = [
         "-std=c++17",
         "-Wall",

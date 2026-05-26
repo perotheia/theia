@@ -17,11 +17,16 @@ namespace ara::per {
 
 
 
+
+
 PerValue PerDaemon::handle_call(
         const PerKey& /*req*/,
         PerDaemonState& /*s*/) {
-    // TODO: implement PersistencyIf::Get.
-    std::fprintf(stderr, "[%s] PersistencyIf::Get called\n",
+    // TODO: implement Get (PerKey →
+    //                                 PerValue).
+    // Dispatched by request type; one or more server ports may
+    // expose this operation.
+    std::fprintf(stderr, "[%s] Get called\n",
                  kNodeName);
     return PerValue{};
 }
@@ -29,8 +34,11 @@ PerValue PerDaemon::handle_call(
 PerEmpty PerDaemon::handle_call(
         const PerPut& /*req*/,
         PerDaemonState& /*s*/) {
-    // TODO: implement PersistencyIf::Put.
-    std::fprintf(stderr, "[%s] PersistencyIf::Put called\n",
+    // TODO: implement Put (PerPut →
+    //                                 PerEmpty).
+    // Dispatched by request type; one or more server ports may
+    // expose this operation.
+    std::fprintf(stderr, "[%s] Put called\n",
                  kNodeName);
     return PerEmpty{};
 }

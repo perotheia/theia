@@ -2,19 +2,20 @@
 // source: services/system/sm/package.art
 //
 // Lib slice (STATEM variant) — message wiring + GenStateM-derived
-// daemon class. Regenerated on every gen-app run. User edits land
-// in impl/SmDaemon_handlers.cc.
+// daemon class for ONE node. Regenerated on every gen-app run. User
+// edits land in impl/SmDaemon_handlers.cc.
 //
 // This template is the statem-aware sibling of Daemon.hh.j2 — it
-// fires when the .art's NodeDecl carries a `statem { ... }` block.
-// The daemon derives from demo::runtime::GenStateM<T,S,D> and the
-// transition table is encoded as switch-on-state per event type
+// fires when this node's .art NodeDecl carries a `statem { ... }`
+// block. The daemon derives from demo::runtime::GenStateM<T,S,D> and
+// the transition table is encoded as switch-on-state per event type
 // (one handle_event overload per declared event type).
 
 #pragma once
 
 #include "GenStateM.hh"
 #include "Log.hh"      // sibling — per-FC ContextLogger + kLogTag
+#include "sm_codecs.hh"   // FC-wide inbound RemoteCodecs (#387)
 #include "system/services/sm/sm.pb.h"
 
 #include <algorithm>
@@ -295,9 +296,6 @@ inline void SmDaemon::broadcast_broadcast_state(const SmStateMsg& msg) {
 
 
 
-
 }  // namespace ara::sm
 
 
-DEMO_DECLARE_REMOTE_CODEC(services_services_sm_SmRequest)
-DEMO_DECLARE_REMOTE_CODEC(services_services_sm_SmEmpty)

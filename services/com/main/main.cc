@@ -3,9 +3,10 @@
 //
 // Main slice — thread executor for the node(s) declared in .art.
 // Regenerated on every gen-app run. User code lives in
-// impl/ComDaemon_handlers.cc.
+// impl/<Node>_handlers.cc (one per node).
 
 #include "lib/ComDaemon.hh"
+#include "lib/ProbeDaemon.hh"
 
 #include "TimerService.hh"
 #include "Logger.hh"     // parse_log_level / MakeContextLogger / process_logger
@@ -83,6 +84,29 @@ int main() {
     }
 
 
+    ProbeDaemon probe_daemon;
+    probe_daemon.start();
+    std::fprintf(stderr, "[probe_daemon] up — TIPC type=0x%x instance=%u\n",
+                 ProbeDaemon::kTipcType, ProbeDaemon::kTipcInstance);
+
+    if (auto* probe_daemon_cfg = config_mux.bind_node(
+            probe_daemon, ProbeDaemon::kTipcType,
+            ProbeDaemon::kTipcInstance)) {
+        config_mux.register_cast<platform_runtime_LogLevelPush>(
+            probe_daemon_cfg, probe_daemon);
+        // Receiver ports (#387): register the node's declared inbound
+        // types so a real peer — or a robot-test inject via services/com
+        // — lands on the same handle_call / handle_cast path. clientServer
+        // ops → register_call; senderReceiver `in` data → register_cast.
+        config_mux.register_call<ComEmpty, ComEmpty>(
+            probe_daemon_cfg, probe_daemon);
+    } else {
+        std::fprintf(stderr,
+                     "[probe_daemon] WARN: config service bind failed; "
+                     "live log-level push + signal inject disabled\n");
+    }
+
+
 
     config_mux.start();
 
@@ -96,6 +120,8 @@ int main() {
 
 
     com_daemon.stop("signal");
+
+    probe_daemon.stop("signal");
 
     return 0;
 }

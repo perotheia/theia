@@ -2,6 +2,7 @@ package system.services.com
 
 
 composition Com {
-    prototype ComDaemon com_daemon
+    prototype ComDaemon    com_daemon
+    prototype ProbeDaemon  probe_daemon
 }
 

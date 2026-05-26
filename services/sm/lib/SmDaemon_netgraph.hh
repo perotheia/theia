@@ -35,6 +35,7 @@
 namespace ara::sm::netgraph {
 
 
+
 // This node has no .art-declared outbound peers (no `connect` arrows
 // from any composition or cluster reach it as a source). The
 // netgraph namespace exists for include-path stability; add

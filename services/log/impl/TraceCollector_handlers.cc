@@ -40,5 +40,4 @@ TraceEmpty TraceCollector::handle_call(
 }
 
 
-
 }  // namespace ara::log

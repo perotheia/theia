@@ -15,6 +15,7 @@ cc_library(
     hdrs = [
         "PerDaemon.hh",
         "PerDaemon_netgraph.hh",
+        "per_codecs.hh",
         "Log.hh",
     ],
     includes = [".."],

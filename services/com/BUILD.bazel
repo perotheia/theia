@@ -43,9 +43,11 @@ filegroup(
         ],
         allow_empty = False,
     ) + [
-        # CMakeLists pulls the supervisor protos via
-        # ../../platform/supervisor/generated/proto — they must be in the
-        # sandbox too (com/proto is covered by the glob above).
+        # CMakeLists still needs the supervisor .proto sources in the
+        # sandbox: supervisor_bridge.proto imports them (the grpc bridge
+        # codegen stays in CMake — there's no Bazel grpc here). The .pb.cc
+        # compilation of those types, though, is Bazel's job now — see the
+        # supervisor_pb_cpp dep below.
         "//platform/supervisor:proto_srcs",
     ],
 )
@@ -54,6 +56,18 @@ cmake(
     name = "services-com",
     lib_source = ":all_srcs",
     out_binaries = ["services-com"],
+    # The hybrid (#proto-as-dep): Bazel runs protoc --cpp_out over the
+    # supervisor protos (//platform/supervisor:supervisor_pb_cpp), and
+    # rules_foreign_cc stages its libsupervisor_pb_cpp.a into
+    # $EXT_BUILD_DEPS/lib + headers into $EXT_BUILD_DEPS/include (both on
+    # CMAKE_PREFIX_PATH). The bool below makes CMake find_library() the
+    # staged .a and skip its own foreach(protoc) loop — Bazel owns that
+    # codegen. (supervisor_bridge's grpc stubs still come from CMake's
+    # protoc; no Bazel grpc in this graph.)
+    deps = ["//platform/supervisor:supervisor_pb_cpp"],
+    cache_entries = {
+        "THEIA_USE_BAZEL_SUP_PB": "ON",
+    },
     # THEIA_ROBOT_NODE defaults ON in CMakeLists (the test-only probe
     # inject/call surface). CMake finds protoc + grpc_cpp_plugin + grpc++ +
     # protobuf as host-apt packages (cmake() doesn't sandbox /usr).

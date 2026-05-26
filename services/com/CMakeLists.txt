@@ -22,8 +22,23 @@ set(COM_PROTO_DIR   ${CMAKE_CURRENT_SOURCE_DIR}/proto)
 set(PROTO_GEN_DIR   ${CMAKE_CURRENT_BINARY_DIR}/generated)
 file(MAKE_DIRECTORY ${PROTO_GEN_DIR})
 
-# Supervisor protos — only the ones com directly references. Standard
-# protoc (no grpc plugin). Same generated_proto layout used elsewhere.
+# Supervisor proto C++ bindings (the .pb.cc/.pb.h for ChildState, ControlRequest,
+# TreeSnapshot, … — the wire types com bridges). Two ways to get them:
+#
+#   * Bazel-driven build (`bazel build //services/com:services-com`): the
+#     hybrid (#proto-as-dep). //platform/supervisor:supervisor_pb_cpp runs
+#     protoc --cpp_out once over every supervisor .proto and hands us the
+#     compiled libsupervisor_pb_cpp.a + headers via the rules_foreign_cc
+#     sandbox ($EXT_BUILD_DEPS/{lib,include}). We link the .a and DON'T run
+#     protoc on these — set -DTHEIA_SUP_PB_LIB=<path-to-.a> to take this path.
+#   * Standalone dev build (`cmake -S . -B build`): no Bazel, no
+#     $EXT_BUILD_DEPS — fall back to running protoc here over SUP_PROTO_DIR.
+#
+# Either way the generated headers are flat (`#include "ChildState.pb.h"`,
+# protos import each other with bare relative paths), so a single include
+# dir — PROTO_GEN_DIR or $EXT_BUILD_DEPS/include — satisfies both the
+# supervisor types AND supervisor_bridge.pb.cc (which #includes them). Keep
+# the list in sync with platform/supervisor/BUILD.bazel _SUP_PROTOS.
 set(SUP_PROTOS
     ChildSelector ChildSpec ChildState ConfigureLogLevelRequest
     ConfigureTraceRequest ControlReply
@@ -32,22 +47,47 @@ set(SUP_PROTOS
     LogLevelConfig
     SendTimeoutReport SocketInfo StartChildRequest SupervisionEvent
     SystemInfo ThreadSample TraceConfig TraceConfigList TreeSnapshot)
+
+# Bazel hybrid flips this ON via -D. Then we DON'T run protoc on the
+# supervisor protos — we find the prebuilt libsupervisor_pb_cpp.a that
+# rules_foreign_cc staged into $EXT_BUILD_DEPS/lib (on CMAKE_PREFIX_PATH).
+# A plain bool, so no $EXT_BUILD_DEPS path-interpolation in the -D value.
+option(THEIA_USE_BAZEL_SUP_PB
+    "Consume Bazel's prebuilt supervisor protos instead of running protoc here" OFF)
+
 set(SUP_PROTO_SRCS)
-foreach(P ${SUP_PROTOS})
-    set(PB_CC ${PROTO_GEN_DIR}/${P}.pb.cc)
-    set(PB_H  ${PROTO_GEN_DIR}/${P}.pb.h)
-    add_custom_command(
-        OUTPUT ${PB_CC} ${PB_H}
-        COMMAND ${PROTOC_EXECUTABLE}
-                --proto_path=${SUP_PROTO_DIR}
-                --cpp_out=${PROTO_GEN_DIR}
-                ${SUP_PROTO_DIR}/${P}.proto
-        DEPENDS ${SUP_PROTO_DIR}/${P}.proto
-        COMMENT "protoc ${P}.proto"
-        VERBATIM
-    )
-    list(APPEND SUP_PROTO_SRCS ${PB_CC})
-endforeach()
+set(SUP_PB_LIB "")
+if(NOT THEIA_USE_BAZEL_SUP_PB)
+    # Standalone CMake: generate + compile the supervisor protos ourselves.
+    foreach(P ${SUP_PROTOS})
+        set(PB_CC ${PROTO_GEN_DIR}/${P}.pb.cc)
+        set(PB_H  ${PROTO_GEN_DIR}/${P}.pb.h)
+        add_custom_command(
+            OUTPUT ${PB_CC} ${PB_H}
+            COMMAND ${PROTOC_EXECUTABLE}
+                    --proto_path=${SUP_PROTO_DIR}
+                    --cpp_out=${PROTO_GEN_DIR}
+                    ${SUP_PROTO_DIR}/${P}.proto
+            DEPENDS ${SUP_PROTO_DIR}/${P}.proto
+            COMMENT "protoc ${P}.proto"
+            VERBATIM
+        )
+        list(APPEND SUP_PROTO_SRCS ${PB_CC})
+    endforeach()
+else()
+    # CMAKE_PREFIX_PATH's first entry is $EXT_BUILD_DEPS (rules_foreign_cc);
+    # the staged static lib is at its lib/ subdir. Reference the .a
+    # explicitly — both .a and .so are staged, and we want the static one
+    # statically linked (no runtime .so dependency in the deployed binary).
+    list(GET CMAKE_PREFIX_PATH 0 _EXT_BUILD_DEPS)
+    set(SUP_PB_LIB "${_EXT_BUILD_DEPS}/lib/libsupervisor_pb_cpp.a")
+    if(NOT EXISTS "${SUP_PB_LIB}")
+        message(FATAL_ERROR
+            "THEIA_USE_BAZEL_SUP_PB=ON but ${SUP_PB_LIB} not found — the \
+//platform/supervisor:supervisor_pb_cpp dep didn't stage into the sandbox.")
+    endif()
+    message(STATUS "services-com: using prebuilt supervisor protos: ${SUP_PB_LIB}")
+endif()
 
 # com's own .proto needs both standard protoc (for the message types)
 # and grpc_cpp_plugin (for the service stubs). Reference the supervisor
@@ -103,6 +143,30 @@ target_include_directories(services-com PRIVATE
     ${GRPCPP_INCLUDE_DIRS}
     ${PROTO_GEN_DIR}
 )
+
+# In the Bazel hybrid the supervisor .pb.h headers live in the dep sandbox
+# (CMAKE_PREFIX_PATH = $EXT_BUILD_DEPS). supervisor_bridge.pb.cc #includes
+# them, so put each prefix's include/ on the path explicitly (find_path
+# isn't enough — these aren't a find_package'd lib).
+if(THEIA_USE_BAZEL_SUP_PB)
+    foreach(P ${CMAKE_PREFIX_PATH})
+        if(EXISTS ${P}/include)
+            target_include_directories(services-com PRIVATE ${P}/include)
+        endif()
+    endforeach()
+endif()
+
+# Bazel hybrid: link the prebuilt supervisor proto bindings instead of the
+# SUP_PROTO_SRCS we'd otherwise compile in-tree. The .a has undefined
+# google::protobuf symbols satisfied by -lprotobuf, and supervisor_bridge's
+# objects (already in the target) reference the .a — wrap both in a
+# --start-group so lld extracts members regardless of order. Must come
+# BEFORE the protobuf/grpc libs below in the PRIVATE link order.
+if(THEIA_USE_BAZEL_SUP_PB)
+    target_link_libraries(services-com PRIVATE
+        -Wl,--start-group ${SUP_PB_LIB} ${PROTOBUF_LIBRARIES} -Wl,--end-group
+    )
+endif()
 
 target_link_libraries(services-com PRIVATE
     ${PROTOBUF_LIBRARIES}

@@ -8,6 +8,8 @@
 # integration goal (driving CMake from Bazel + producing per-machine
 # .ipk / .deb).
 
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
 package(default_visibility = ["//visibility:public"])
 
 # Pre-generated .proto sources (artheia gen-proto output committed
@@ -19,4 +21,50 @@ filegroup(
         ["generated/proto/**/*.proto"],
         allow_empty = False,
     ),
+)
+
+# ---------------------------------------------------------------------------
+# C++ libprotobuf binding of the supervisor protos — Bazel owns the protoc
+# codegen (#proto-as-dep). One protoc invocation over every .proto in
+# generated/proto/ (a shared -I so the inter-imports — ControlRequest →
+# ChildSpec, TreeSnapshot → ChildState, etc. — resolve). The .pb.cc/.pb.h
+# are derived, gitignored (tree-wide *.pb.* rule). services/com's cmake()
+# wrapper takes :supervisor_pb_cpp as a dep instead of re-running protoc in
+# its own foreach loop. Grpc stubs (supervisor_bridge) still come from
+# com's CMake — there's no Bazel grpc in theia's bzlmod graph.
+#
+# proto names listed explicitly (not glob) so the genrule's `outs` are
+# known statically — must stay in sync with generated/proto/*.proto.
+_SUP_PROTOS = [
+    "ChildSelector", "ChildSpec", "ChildState", "ConfigureLogLevelRequest",
+    "ConfigureTraceRequest", "ControlReply", "ControlRequest",
+    "DeleteChildRequest", "GetChildRequest", "GetSystemInfoRequest",
+    "GetTraceConfigRequest", "GetTreeRequest", "HealthBeacon",
+    "HeartbeatReport", "LogLevelConfig", "SendTimeoutReport", "SocketInfo",
+    "StartChildRequest", "SupervisionEvent", "SystemInfo", "ThreadSample",
+    "TraceConfig", "TraceConfigList", "TreeSnapshot",
+]
+
+genrule(
+    name = "supervisor_pb_cpp_gen",
+    srcs = ["generated/proto/{}.proto".format(p) for p in _SUP_PROTOS],
+    outs = (["cpp/{}.pb.cc".format(p) for p in _SUP_PROTOS] +
+            ["cpp/{}.pb.h".format(p) for p in _SUP_PROTOS]),
+    cmd = ("set -e;" +
+           " in_dir=$$(dirname $(location generated/proto/ChildState.proto));" +
+           " out_dir=$$(dirname $(location cpp/ChildState.pb.cc));" +
+           " protoc -I $$in_dir --cpp_out=$$out_dir " +
+           " ".join(["$$in_dir/{}.proto".format(p) for p in _SUP_PROTOS]) +
+           ";"),
+    local = True,  # host-installed protoc, same policy as the nanopb genrules
+)
+
+cc_library(
+    name = "supervisor_pb_cpp",
+    srcs = ["cpp/{}.pb.cc".format(p) for p in _SUP_PROTOS],
+    hdrs = ["cpp/{}.pb.h".format(p) for p in _SUP_PROTOS],
+    # `cpp/` is the include root so callers write `#include "ChildState.pb.h"`
+    # (matches what protoc wrote + what com's sources already #include).
+    includes = ["cpp"],
+    deps = ["//third_party:system_protobuf"],
 )

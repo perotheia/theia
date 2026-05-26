@@ -40,6 +40,10 @@ import HealthBeacon_pb2 as _health_pb  # noqa: E402, F401
 import ChildSelector_pb2 as _sel_pb  # noqa: E402
 import ChildSpec_pb2 as _spec_pb  # noqa: E402
 import ChildState_pb2 as _state_pb  # noqa: E402, F401
+# Trace EGRESS — served by the collector's OWN gRPC (services/log), a
+# separate endpoint from com. TraceRecord still lives in supervisor_bridge.
+import trace_stream_pb2 as _ts_pb  # noqa: E402
+import trace_stream_pb2_grpc as _ts_grpc  # noqa: E402
 
 
 # ---------------------------------------------------------------------
@@ -120,7 +124,8 @@ class Client:
     """
 
     def __init__(self, host_port: str, machine: t.Optional[str] = None,
-                 timeout: float = 15.0) -> None:
+                 timeout: float = 15.0,
+                 collector_endpoint: t.Optional[str] = None) -> None:
         # Default 15s — restart/terminate go through the supervisor's
         # synchronous control path which waits out the child's SIGTERM
         # grace (often 5s). Anything tighter than that would time out
@@ -128,8 +133,13 @@ class Client:
         self.host_port = host_port
         self.machine   = machine or host_port
         self.timeout   = timeout
+        # Trace EGRESS endpoint — the collector's own gRPC (services/log),
+        # default :7710. Separate from com's :7700 control channel.
+        self.collector_endpoint = collector_endpoint or "127.0.0.1:7710"
         self._channel: t.Optional[grpc.Channel] = None
         self._stub:    t.Optional[_bridge_grpc.SupervisorViewStub] = None
+        self._trace_channel: t.Optional[grpc.Channel] = None
+        self._trace_stub: t.Optional[_ts_grpc.TraceStreamStub] = None
 
     # ----- lifecycle --------------------------------------------------
 
@@ -146,17 +156,25 @@ class Client:
             self._stub    = _bridge_grpc.SupervisorViewStub(self._channel)
         return self._stub
 
-    # NOTE: TraceStream moved OFF com. The trace CONTROL path is now
-    # SupervisorView.ConfigureTrace (below, shares the com channel). The
-    # trace EGRESS (subscribe) is served by the collector's OWN gRPC
-    # (services/log) — a separate endpoint, wired once the collector gRPC
-    # lands. There is no longer a TraceStreamStub on the com channel.
+    # Trace CONTROL is SupervisorView.ConfigureTrace (shares the com
+    # channel, below). Trace EGRESS is the collector's OWN TraceStream
+    # gRPC (services/log) on a SEPARATE channel — com is not in the trace
+    # byte path.
+    def _ensure_trace(self) -> _ts_grpc.TraceStreamStub:
+        if self._trace_stub is None:
+            self._trace_channel = grpc.insecure_channel(self.collector_endpoint)
+            self._trace_stub = _ts_grpc.TraceStreamStub(self._trace_channel)
+        return self._trace_stub
 
     def close(self) -> None:
         if self._channel is not None:
             self._channel.close()
             self._channel = None
             self._stub    = None
+        if self._trace_channel is not None:
+            self._trace_channel.close()
+            self._trace_channel = None
+            self._trace_stub    = None
 
     def wait_ready(self, timeout: float = 5.0) -> bool:
         """Block until the channel is READY. Returns True on success,
@@ -349,20 +367,31 @@ class Client:
 
     def subscribe_traces(
         self,
+        kind: int = 0,
+        target_node: str = "",
         decoder: t.Optional["TraceDecoder"] = None,
     ) -> t.Iterator[t.Tuple["_bridge_pb.TraceRecord", t.Optional[dict]]]:
-        """Subscribe to the trace EGRESS stream.
+        """Yield (TraceRecord, decoded_dict-or-None) forever from the
+        collector's OWN TraceStream gRPC (services/log, default :7710).
 
-        MOVED: trace egress is no longer served by com. The collector
-        (services/log) serves its OWN TraceStream gRPC (egress-direct
-        design — com governs the DMZ, not the trace bytes). This method
-        will repoint to the collector's endpoint once that gRPC server
-        lands (step 4 remainder); the client gains a separate
-        collector-channel + trace_stream_pb2 stubs.
+        Egress-direct: com is NOT in the trace byte path — the collector
+        serves records itself, rewriting src/dst to component names. The
+        optional `kind` (TraceKind ordinal; 0 = all) and `target_node`
+        filters are applied collector-side. The trace CONTROL path
+        (turning a node's tracer on) is the separate configure_trace()
+        below, which rides com → supervisor → node.
+
+        If `decoder` is supplied, the payload bytes are decoded to a dict
+        as the second tuple element (best-effort; None on failure).
         """
-        raise NotImplementedError(
-            "trace egress moved off com to the collector's own TraceStream "
-            "gRPC (services/log). subscribe_traces() will target the "
-            "collector endpoint once its gRPC server is built. "
-            "configure_trace() (control path) still works via com."
+        stream = self._ensure_trace().Subscribe(
+            _ts_pb.TraceSubscribeRequest(kind=kind, target_node=target_node)
         )
+        for rec in stream:
+            decoded: t.Optional[dict] = None
+            if decoder is not None and rec.payload:
+                try:
+                    decoded = decoder.decode(rec.msg_type, rec.payload)
+                except Exception:
+                    decoded = None
+            yield rec, decoded

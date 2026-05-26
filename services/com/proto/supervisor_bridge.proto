@@ -21,6 +21,7 @@ import "ChildSelector.proto";
 import "ControlReply.proto";
 import "HealthBeacon.proto";
 import "SupervisionEvent.proto";
+import "TraceConfigList.proto";
 import "TreeSnapshot.proto";
 
 // One streamed observation from the supervisor. Discriminated union
@@ -52,6 +53,14 @@ message LogLevelCall {
     string target_node = 1;
     string level        = 2;
 }
+
+// Read back the supervisor's current trace config (crash-investigation
+// read-back). Empty request — the supervisor returns ALL stored
+// per-child trace entries as a TraceConfigList. The supervisor keeps
+// this across child restarts and re-pushes it to a freshly-restarted
+// child, so the read-back is the operator's view of "what tracing will
+// be active on the next crash/restart".
+message GetTraceConfigCall {}
 
 // ---- Robot node: signal inject + service call (#387) -------------------
 //
@@ -131,6 +140,14 @@ service SupervisorView {
     // path for traces.
     rpc ConfigureTrace (TraceConfigRequest)
         returns (services.supervisor.ControlReply);
+
+    // Read back the supervisor's stored trace config (op_kind=10). The
+    // supervisor carries the TraceConfigList INLINE in
+    // ControlReply.trace_config_list; com unpacks it and returns the
+    // list. This is the crash-investigation read-back: confirm what
+    // trace the supervisor will re-apply to a child after it restarts.
+    rpc GetTraceConfig (GetTraceConfigCall)
+        returns (services.supervisor.TraceConfigList);
 
     // ---- Robot node (#387) -------------------------------------------
     // Test-only: inject a signal / call a service ON a component,

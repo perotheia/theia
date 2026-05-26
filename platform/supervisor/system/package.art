@@ -320,6 +320,13 @@ message ControlReply {
     // client pair the reply with the request that emitted it
     // (multiple in-flight requests on one socket are allowed).
     uint64  correlation_id
+    // GetTraceConfig (op_kind=10) reply: the serialized TraceConfigList
+    // carried INLINE in the single ControlReply, so the com bridge's
+    // correlation-by-id reply path returns it without a separate tagged
+    // frame (the old two-frame 0x0300 scheme leaked into com's subscriber
+    // fan-out). Empty for every other op_kind. Crash-investigation
+    // read-back: rf → com.GetTraceConfig → supervisor → here.
+    bytes   trace_config_list
 }
 
 // Envelope for inbound RPC calls on the supervisor's TIPC socket.
@@ -338,9 +345,11 @@ message ControlReply {
 //
 // The supervisor decodes ControlRequest, dispatches by op_kind, and
 // emits exactly one ControlReply with the matching correlation_id
-// onto the same fd that delivered the request. GetSystemInfo +
-// GetTraceConfig additionally write one typed payload (SystemInfo
-// or TraceConfigList) before the ControlReply.
+// onto the same fd that delivered the request. GetSystemInfo writes one
+// typed SystemInfo payload before the ControlReply (two frames).
+// GetTraceConfig instead carries its TraceConfigList INLINE in
+// ControlReply.trace_config_list (one frame) — the com bridge only
+// correlates the ControlReply, so a separate frame would be lost.
 message ControlRequest {
     uint32                op_kind
     uint64                correlation_id

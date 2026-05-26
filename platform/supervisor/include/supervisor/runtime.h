@@ -212,6 +212,17 @@ private:
              std::chrono::steady_clock::time_point>
                                                  last_heartbeat_by_child_;
 
+    // Deferred config re-apply on (re)start. start_worker() arms a
+    // per-child deadline; once it elapses (child has had a grace window to
+    // bind its config-service TIPC socket) the main loop re-pushes the
+    // stored trace config + log level. This is what makes config survive a
+    // CRASH for FCs that don't send heartbeats (the heartbeat-after-gap
+    // path only fires for reporting nodes that beat). Crash-investigation:
+    // the trace you armed is re-applied to the freshly-restarted child.
+    std::map<std::string,
+             std::chrono::steady_clock::time_point>
+                                                 config_repush_due_;
+
     // Apply one TraceConfig: update the in-memory table and push to
     // the node (best-effort — failure to push is logged, not fatal).
     void apply_trace_config(const std::string& target_node,

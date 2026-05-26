@@ -285,12 +285,15 @@ class Client:
     # ----- TraceStream (#360) ---------------------------------------------
 
     def configure_trace(self, target_node: str, msg_type: str,
-                        enabled: bool) -> _bridge_pb.ControlReply:
-        """Toggle the per-(node, msg_type) filter on the supervisor.
+                        enabled: bool, kind: int = 0) -> _bridge_pb.ControlReply:
+        """Toggle the per-(node, msg_type, kind) filter on the supervisor.
 
         The supervisor stores the entry and pushes to the worker's
         NodeTraceCtl TIPC port (#361). Config persists across child
         restart — the next heartbeat-after-gap re-fires the push.
+
+        `kind` is a TraceKind ordinal (#403): 0 = all kinds, 5 = TK_STATEM
+        (state-machine transitions), etc.
 
         Control path (rf → com → supervisor → node): this is
         SupervisorView.ConfigureTrace on the com channel — NOT the old
@@ -301,9 +304,35 @@ class Client:
                 target_node=target_node,
                 msg_type=msg_type,
                 enabled=enabled,
+                kind=kind,
             ),
             timeout=self.timeout,
         )
+
+    def get_trace_config(self):
+        """Read back the supervisor's stored trace config (op_kind=10).
+
+        The crash-investigation read-back: returns the list of trace
+        entries the supervisor currently holds and WILL re-apply to each
+        child after it restarts. The supervisor carries the list inline
+        in ControlReply.trace_config_list; the com bridge unpacks it and
+        returns a services.supervisor.TraceConfigList.
+
+        Returns a list of dicts: {target_node, msg_type, enabled, kind}.
+        """
+        lst = self._ensure().GetTraceConfig(
+            _bridge_pb.GetTraceConfigCall(),
+            timeout=self.timeout,
+        )
+        return [
+            {
+                "target_node": c.target_node,
+                "msg_type": c.msg_type,
+                "enabled": c.enabled,
+                "kind": c.kind,
+            }
+            for c in lst.configs
+        ]
 
     # ----- log level (#385) -----------------------------------------------
 

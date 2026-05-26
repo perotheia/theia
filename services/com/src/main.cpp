@@ -22,6 +22,8 @@
 #include "HealthBeacon.pb.h"
 #include "StartChildRequest.pb.h"
 #include "SupervisionEvent.pb.h"
+#include "TraceConfig.pb.h"
+#include "TraceConfigList.pb.h"
 #include "TreeSnapshot.pb.h"
 
 #include <grpcpp/server.h>
@@ -48,6 +50,7 @@ constexpr uint32_t kOpDeleteChild      = 4;
 constexpr uint32_t kOpRestartChild     = 5;
 constexpr uint32_t kOpTerminateChild   = 6;
 constexpr uint32_t kOpConfigureTrace   = 9;   // #361 (trace control path)
+constexpr uint32_t kOpGetTraceConfig   = 10;  // crash-investigation read-back
 constexpr uint32_t kOpConfigureLogLevel = 11;  // #385
 
 std::atomic<bool> g_shutdown{false};
@@ -182,6 +185,30 @@ public:
         cfg->set_enabled(req->enabled());
         cfg->set_kind(req->kind());   // #403: trace-kind selector → node
         return forward(cr, reply);
+    }
+
+    // Crash-investigation read-back. op_kind=10; the supervisor carries
+    // its flattened TraceConfigList INLINE in
+    // ControlReply.trace_config_list (single correlated frame — see the
+    // .art note on ControlReply). We forward, then unpack the bytes into
+    // the caller's TraceConfigList.
+    grpc::Status GetTraceConfig(
+            grpc::ServerContext*,
+            const services::com::GetTraceConfigCall*,
+            services::supervisor::TraceConfigList* out) override {
+        ::services::supervisor::ControlRequest cr;
+        cr.set_op_kind(kOpGetTraceConfig);
+        cr.set_correlation_id(uplink_->next_correlation_id());
+        ::services::supervisor::ControlReply reply;
+        grpc::Status st = forward(cr, &reply);
+        if (!st.ok()) return st;
+        // Empty list (no trace configured) is a valid, non-error result.
+        if (!reply.trace_config_list().empty() &&
+            !out->ParseFromString(reply.trace_config_list())) {
+            return grpc::Status(grpc::StatusCode::INTERNAL,
+                                "malformed TraceConfigList in ControlReply");
+        }
+        return grpc::Status::OK;
     }
 
 #ifdef THEIA_ROBOT_NODE

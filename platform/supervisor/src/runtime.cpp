@@ -312,6 +312,17 @@ void Supervisor::start_worker(WorkerNode& w) {
     emit_event(/*kind=child_started*/0, &w, supervisor_of(w),
                /*exit_code=*/0, std::string{}, std::string{});
     emit_snapshot();
+
+    // Config survives the (re)start: if this child has stored trace
+    // config or a stored log level, arm a deferred re-push. The child
+    // needs a grace window to bind its config-service TIPC socket before
+    // a cast can land (same 500ms the SM startup handshake uses). This is
+    // the crash-investigation re-apply for FCs that don't beat — the
+    // heartbeat-after-gap path (#361) only covers reporting nodes.
+    if (trace_configs_.count(w.name) || log_levels_.count(w.name)) {
+        config_repush_due_[w.name] =
+            std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+    }
 }
 
 void Supervisor::start_subtree(SupervisorNode& sup) {
@@ -578,6 +589,25 @@ int Supervisor::run() {
             sm_ready_sent_ = true;
         }
 
+        // Deferred config re-apply on (re)start. A child armed in
+        // start_worker() whose grace window has elapsed gets its stored
+        // trace config + log level re-pushed — this is how the trace you
+        // armed survives a CRASH (the heartbeat-after-gap path only covers
+        // FCs that beat; sm does not). Crash-investigation re-apply.
+        if (!config_repush_due_.empty()) {
+            auto now2 = std::chrono::steady_clock::now();
+            for (auto it = config_repush_due_.begin();
+                 it != config_repush_due_.end(); ) {
+                if (now2 >= it->second) {
+                    push_trace_config_to_child(it->first);
+                    push_log_level_to_child(it->first);
+                    it = config_repush_due_.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+
         // Drain the TIPC socket: accept new clients, deliver inbound
         // ControlRequest / HeartbeatReport / SendTimeoutReport frames
         // to on_inbound_frame() via the installed callback.
@@ -816,11 +846,14 @@ void Supervisor::on_inbound_frame(int client_fd, uint16_t tag,
             }
 
             case kOpGetTraceConfig: {
-                // Reply with TraceConfigList (tag kTagTraceConfig) +
-                // a status=0 ControlReply, matching the GetSystemInfo
-                // two-frame pattern. Flatten the per-child map into
-                // a flat list — the client doesn't care which
-                // supervisor key produced which entry.
+                // Crash-investigation read-back: flatten the per-child
+                // trace_configs_ map into a TraceConfigList and carry it
+                // INLINE in ControlReply.trace_config_list (single frame).
+                // The com bridge only correlates the ControlReply by id;
+                // a separate tagged frame (the old kTagTraceApplyConfig
+                // scheme) would leak into com's subscriber fan-out and
+                // never reach the GetTraceConfig caller. The client
+                // doesn't care which supervisor key produced which entry.
                 ::services::supervisor::TraceConfigList list;
                 for (const auto& outer : trace_configs_) {
                     for (const auto& inner : outer.second) {
@@ -831,8 +864,7 @@ void Supervisor::on_inbound_frame(int client_fd, uint16_t tag,
                         c->set_kind(inner.second);     // value = TraceKind (#403)
                     }
                 }
-                publisher_.reply_to(client_fd, kTagTraceApplyConfig,
-                                     list.SerializeAsString());
+                rep.set_trace_config_list(list.SerializeAsString());
                 rep.set_status(0);
                 break;
             }

@@ -1,5 +1,14 @@
 # Theia app trace → Robot Framework — egress-direct, DMZ-governed by com
 
+STATUS: DONE (steps 1-7). Live e2e proven 2/2 — testing/rf_theia/scenarios/
+services/log/trace_egress. node → TIPC SOCK_DGRAM → collector in_records →
+collector's OWN gRPC TraceStream → rf; control via rf → com.ConfigureTrace
+→ supervisor → TraceControlPush. com is a gRPC↔art proxy only (not in the
+trace byte path). theia branch trace-egress-collector: 992f80f 87bc039
+9d7d9a6 3f2470f 2fb10e7 98ab2df; artheia 27659c9. NOT pushed. Remaining
+small fixes (non-blocking): cli.py stale "TraceStream.Configure" docstrings;
+system.art stale LogDaemon→TraceCollector forward-decl.
+
 Get a node's trace stream out of the cluster into rf-theia. Builds on the
 send-signal probe path (see robot-node-in-svc-com.md) — but the directions
 are NOT symmetric, and that asymmetry drives the design.

@@ -180,6 +180,7 @@ public:
         cfg->set_target_node(req->target_node());
         cfg->set_msg_type(req->msg_type());
         cfg->set_enabled(req->enabled());
+        cfg->set_kind(req->kind());   // #403: trace-kind selector → node
         return forward(cr, reply);
     }
 

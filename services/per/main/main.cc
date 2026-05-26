@@ -68,6 +68,10 @@ int main() {
             PerDaemon::kTipcInstance)) {
         config_mux.register_cast<platform_runtime_LogLevelPush>(
             per_daemon_cfg, per_daemon);
+        // Trace control (#403): supervisor pushes TraceControlPush to flip
+        // this node's Tracer kind filter — same path as LogLevelPush.
+        config_mux.register_cast<platform_runtime_TraceControlPush>(
+            per_daemon_cfg, per_daemon);
         // Receiver ports (#387): register the node's declared inbound
         // types so a real peer — or a robot-test inject via services/com
         // — lands on the same handle_call / handle_cast path. clientServer

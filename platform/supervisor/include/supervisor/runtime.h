@@ -198,11 +198,12 @@ private:
     // child NAME (the worker process), not pid, so it survives restart:
     // the first HeartbeatReport after a gap fires a re-push.
     //
-    // Storage: configs_by_child[child_name][msg_type] = enabled.
-    // Empty key (no entries) means "no trace for that child" — the
-    // supervisor never sends an ApplyConfig to it.
+    // Storage: configs_by_child[child_name][msg_type] = TraceKind ordinal.
+    // Presence of the (child, msg_type) key means "enabled"; the value is
+    // the trace KIND to push (#403; 0 = all kinds). Empty (no entries)
+    // means "no trace for that child" — no push is sent.
     std::map<std::string,
-             std::map<std::string, bool>>      trace_configs_;
+             std::map<std::string, uint32_t>>  trace_configs_;
 
     // Tracks last heartbeat time per child NAME (not pid) — so we can
     // detect a "fresh start after gap" trigger independent of pid.
@@ -215,7 +216,8 @@ private:
     // the node (best-effort — failure to push is logged, not fatal).
     void apply_trace_config(const std::string& target_node,
                             const std::string& msg_type,
-                            bool enabled);
+                            bool enabled,
+                            uint32_t kind = 0);
 
     // Push the WHOLE trace_configs_[child] map to that child's
     // NodeTraceCtl TIPC server. Called on (re)start of the worker and

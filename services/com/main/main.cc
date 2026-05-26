@@ -69,6 +69,10 @@ int main() {
             ComDaemon::kTipcInstance)) {
         config_mux.register_cast<platform_runtime_LogLevelPush>(
             com_daemon_cfg, com_daemon);
+        // Trace control (#403): supervisor pushes TraceControlPush to flip
+        // this node's Tracer kind filter — same path as LogLevelPush.
+        config_mux.register_cast<platform_runtime_TraceControlPush>(
+            com_daemon_cfg, com_daemon);
         // Receiver ports (#387): register the node's declared inbound
         // types so a real peer — or a robot-test inject via services/com
         // — lands on the same handle_call / handle_cast path. clientServer
@@ -93,6 +97,10 @@ int main() {
             probe_daemon, ProbeDaemon::kTipcType,
             ProbeDaemon::kTipcInstance)) {
         config_mux.register_cast<platform_runtime_LogLevelPush>(
+            probe_daemon_cfg, probe_daemon);
+        // Trace control (#403): supervisor pushes TraceControlPush to flip
+        // this node's Tracer kind filter — same path as LogLevelPush.
+        config_mux.register_cast<platform_runtime_TraceControlPush>(
             probe_daemon_cfg, probe_daemon);
         // Receiver ports (#387): register the node's declared inbound
         // types so a real peer — or a robot-test inject via services/com

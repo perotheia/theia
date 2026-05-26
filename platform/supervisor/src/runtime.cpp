@@ -809,7 +809,7 @@ void Supervisor::on_inbound_frame(int client_fd, uint16_t tag,
                 // contract).
                 const auto& cfg = req.configure_trace().config();
                 apply_trace_config(cfg.target_node(), cfg.msg_type(),
-                                   cfg.enabled());
+                                   cfg.enabled(), cfg.kind());
                 rep.set_status(0);
                 rep.set_message("trace config applied");
                 break;
@@ -827,7 +827,8 @@ void Supervisor::on_inbound_frame(int client_fd, uint16_t tag,
                         auto* c = list.add_configs();
                         c->set_target_node(outer.first);
                         c->set_msg_type(inner.first);
-                        c->set_enabled(inner.second);
+                        c->set_enabled(true);          // presence = enabled
+                        c->set_kind(inner.second);     // value = TraceKind (#403)
                     }
                 }
                 publisher_.reply_to(client_fd, kTagTraceApplyConfig,
@@ -1682,36 +1683,10 @@ void Supervisor::check_heartbeats() {
 
 namespace {
 
-// Send one [u16 tag BE][payload] frame to a TIPC NAME (type, instance).
-// Opens a fresh SEQPACKET socket, connects, sends, closes. Best-
-// effort: returns false on any error. NOT used on the hot path —
-// only when ConfigureTrace lands or when a child sends its first
-// heartbeat after a gap.
-bool send_frame_to_tipc_name(uint32_t type, uint32_t instance,
-                             uint16_t tag, const std::string& payload) {
-    int fd = ::socket(AF_TIPC, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
-    if (fd < 0) return false;
-    struct sockaddr_tipc addr{};
-    addr.family                  = AF_TIPC;
-    addr.addrtype                = TIPC_ADDR_NAME;
-    addr.addr.name.name.type     = type;
-    addr.addr.name.name.instance = instance;
-    addr.scope                   = TIPC_NODE_SCOPE;
-    if (::connect(fd, reinterpret_cast<struct sockaddr*>(&addr),
-                  sizeof(addr)) < 0) {
-        ::close(fd);
-        return false;
-    }
-    std::string frame(2 + payload.size(), '\0');
-    frame[0] = static_cast<char>((tag >> 8) & 0xff);
-    frame[1] = static_cast<char>(tag & 0xff);
-    if (!payload.empty()) {
-        std::memcpy(&frame[2], payload.data(), payload.size());
-    }
-    ssize_t n = ::send(fd, frame.data(), frame.size(), 0);
-    ::close(fd);
-    return n == static_cast<ssize_t>(frame.size());
-}
+// (The old [u16 tag][payload] send_frame_to_tipc_name helper was removed
+// with the dead kTagTraceApplyConfig=0x0300 node push — trace config now
+// rides the standard TraceControlPush GW_MSG_GEN_CAST via
+// send_gw_cast_to_tipc_name below, #403.)
 
 // ---- #386: standard GwMessageHeader-framed cast to a node ----------------
 //
@@ -1800,6 +1775,25 @@ std::string encode_log_level_push(uint32_t level) {
     return out;
 }
 
+// Encode a platform_runtime.TraceControlPush { TraceKind kind = 1; bool
+// enabled = 2 } as proto3 wire bytes by hand (two varint fields) — same
+// no-nanopb rationale as encode_log_level_push. proto3 omits default-0
+// fields, but we always emit both so the receiver sees explicit values.
+// kind 0..5 fits one byte; enabled is 0/1.
+std::string encode_trace_control_push(uint32_t kind, bool enabled) {
+    std::string out;
+    out.push_back('\x08');                          // field 1 (kind), varint
+    out.push_back(static_cast<char>(kind & 0x7f));
+    out.push_back('\x10');                          // field 2 (enabled), varint
+    out.push_back(static_cast<char>(enabled ? 1 : 0));
+    return out;
+}
+
+// service_id the FC's config_mux register_cast<platform_runtime_
+// TraceControlPush> computes — djb2_low16 of that C type name. Stamped
+// into the GwMessageHeader so the cast lands on the node's handle_cast.
+const char* kTraceControlPushTypeName = "platform_runtime_TraceControlPush";
+
 // Map the operator's level string → LogLevelValue ordinal (matches the
 // platform.runtime LogLevelValue enum + platform::runtime::LogLevel).
 uint32_t log_level_to_value(const std::string& level) {
@@ -1815,14 +1809,15 @@ uint32_t log_level_to_value(const std::string& level) {
 
 void Supervisor::apply_trace_config(const std::string& target_node,
                                     const std::string& msg_type,
-                                    bool enabled) {
+                                    bool enabled,
+                                    uint32_t kind) {
     if (target_node.empty()) {
         log_warn("apply_trace_config: empty target_node — dropping");
         return;
     }
     auto& by_msg = trace_configs_[target_node];
     if (enabled) {
-        by_msg[msg_type] = true;
+        by_msg[msg_type] = kind;   // value = TraceKind; presence = enabled
     } else {
         by_msg.erase(msg_type);
         // Garbage-collect empty entries so iteration in
@@ -1883,18 +1878,18 @@ void Supervisor::push_trace_config_to_child(const std::string& child_name) {
         return;
     }
 
-    // One TraceApplyConfig frame per (msg_type, enabled) entry.
+    // One TraceControlPush GW_MSG_GEN_CAST per stored (msg_type → kind)
+    // entry — the STANDARD runtime control message, decoded by the node's
+    // config_mux register_cast<platform_runtime_TraceControlPush> →
+    // GenServer base handle_cast → Tracer kind filter (#403). This
+    // replaces the old kTagTraceApplyConfig=0x0300 [u16 tag] frame, which
+    // no FC ever decoded. Entry presence = enabled; value = TraceKind.
+    const uint16_t svc = djb2_low16(kTraceControlPushTypeName);
     int pushed = 0;
     for (const auto& kv : cfg_it->second) {
-        const std::string& msg_type = kv.first;
-        bool enabled = kv.second;
-        ::services::supervisor::TraceConfig tc;
-        tc.set_target_node(child_name);
-        tc.set_msg_type(msg_type);
-        tc.set_enabled(enabled);
-        if (send_frame_to_tipc_name(type, instance,
-                                     kTagTraceApplyConfig,
-                                     tc.SerializeAsString())) {
+        uint32_t kind = kv.second;
+        std::string payload = encode_trace_control_push(kind, /*enabled=*/true);
+        if (send_gw_cast_to_tipc_name(type, instance, svc, payload)) {
             ++pushed;
         } else {
             std::fprintf(stderr,

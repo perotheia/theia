@@ -109,6 +109,13 @@ class FcRegenLib:
                         f"{short}: gen-app emits {slice_}/{tmp_f.name}, "
                         f"but it doesn't exist in tree"
                     )
+                # A HAND-OWNED slice file is deliberately not the gen-app
+                # template (e.g. sm's main.cc wires the two-node FSM via
+                # LocalRef + sm_statem_ref()). Its lib/ + impl/BUILD still
+                # regen byte-stable and ARE checked; only the hand-owned
+                # file itself is exempt. The banner is the contract.
+                if "HAND-OWNED" in in_tree_f.read_text(errors="ignore"):
+                    continue
                 tmp_text = self._strip_source_comment(tmp_f.read_text())
                 in_tree_text = self._strip_source_comment(in_tree_f.read_text())
                 if tmp_text != in_tree_text:

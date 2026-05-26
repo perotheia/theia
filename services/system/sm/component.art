@@ -3,5 +3,6 @@ package system.services.sm
 
 composition Sm {
     prototype SmDaemon sm_daemon
+    prototype SmGate   sm_gate
 }
 

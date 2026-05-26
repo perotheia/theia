@@ -56,6 +56,23 @@ interface clientServer StateMgmtCtl {
     operation RequestMode(in r:SmRequest) returns SmEmpty
 }
 
+// Lifecycle event ingress for the SM gate (see SmGate below). These are
+// the FSM's external triggers — boot/startup/shutdown/update signals
+// that other FCs (exec, phm, ucm, ctl) or the supervisor send. They are
+// senderReceiver `in` data so the gate's generated handle_cast fires;
+// the gate then post_event()s them into the statem IN-PROCESS. The
+// statem node itself takes NO external messages — a state machine must
+// not be driven directly off the wire.
+interface senderReceiver LifecycleIn {
+    data SystemBoot       boot
+    data StartupComplete  startup_complete
+    data ShutdownRequest  shutdown_request
+    data UpdateRequest    update_request
+    data UpdateComplete   update_complete
+    data RetryStartup     retry_startup
+    data PowerOff         power_off
+}
+
 node atomic SmDaemon {
     tipc type=0x8001000D instance=0
     tag = "SMX"
@@ -96,5 +113,21 @@ node atomic SmDaemon {
 
         on SHUTDOWN:
             event PowerOff         → halt
+    }
+}
+
+// SM gate — the FC's external-message front. A separate node (distinct
+// TIPC 0x8001001D) so the wire never touches the statem directly: it
+// receives LifecycleIn data (boot/startup/shutdown/update from exec,
+// phm, ucm, ctl, the supervisor, or a test probe) and post_event()s
+// each into SmDaemon's FSM IN-PROCESS via a LocalRef<SmDaemon> (both
+// nodes are threads in the one sm process). This is the
+// "statem-must-not-handle-external-messages" split — the gate is the
+// only TIPC-reachable surface for FSM events.
+node atomic SmGate {
+    tipc type=0x8001001D instance=0
+    tag = "SMG"
+    ports {
+        receiver lifecycle requires LifecycleIn
     }
 }

@@ -2003,7 +2003,10 @@ void Supervisor::push_log_level_to_child(const std::string& child_name) {
 // exactly what sm's register_cast<...> hashed. Same GW_MSG_GEN_CAST wire
 // shape as the #386 log push. Fired once; sm_ready_sent_ guards re-send.
 void Supervisor::send_sm_ready() {
-    constexpr uint32_t kSmTipcType     = 0x8001000Du;
+    // Target the SM GATE (0x8001001D), not the statem node — the gate is
+    // the FC's only TIPC-reachable surface for FSM events; it post_events
+    // them into SmDaemon in-process (services/system/sm: SmGate node).
+    constexpr uint32_t kSmTipcType     = 0x8001001Du;
     constexpr uint32_t kSmTipcInstance = 0u;
     static const uint16_t kSystemBootSvcId =
         djb2_low16("services_services_sm_SystemBoot");

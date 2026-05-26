@@ -15,6 +15,8 @@ cc_library(
     hdrs = [
         "SmDaemon.hh",
         "SmDaemon_netgraph.hh",
+        "SmGate.hh",
+        "SmGate_netgraph.hh",
         "sm_codecs.hh",
         "Log.hh",
     ],

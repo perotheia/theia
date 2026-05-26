@@ -12,6 +12,7 @@ cc_library(
     name = "sm_impl",
     srcs = [
         "SmDaemon_handlers.cc",
+        "SmGate_handlers.cc",
     ],
     copts = [
         "-std=c++17",

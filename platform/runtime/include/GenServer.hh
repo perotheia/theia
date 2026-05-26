@@ -213,8 +213,10 @@ class GenServer : public GenServerBase {
 public:
     using State = StateT;
 
-    GenServer() = default;
-    explicit GenServer(State initial) : state_(std::move(initial)) {}
+    GenServer() { mark_reporting_(); }
+    explicit GenServer(State initial) : state_(std::move(initial)) {
+        mark_reporting_();
+    }
 
     State& state() { return state_; }
     const State& state() const { return state_; }
@@ -262,6 +264,25 @@ protected:
                     reason, /*corr_id=*/0, nullptr, 0);
         }
         static_cast<Derived*>(this)->terminate(reason, state_);
+    }
+
+    // Reporting gate (#401): tell this node-type's Tracer whether it's a
+    // reporting node, so emit() only submits to the collector bus for
+    // reporting nodes (parallels the reporting-gated NodeTraceCtl config
+    // receiver). Runs from the ctor body — Derived is complete at
+    // instantiation. gen-app daemons all declare `kReporting`; other
+    // GenServer users (test fixtures, ad-hoc nodes) may not, so detect
+    // it and default to false (safe: no bus traffic from an unmarked
+    // node). Idempotent — the per-node-type Tracer is a singleton.
+    template <typename D>
+    static auto reporting_of_(int) -> decltype(D::kReporting, bool{}) {
+        return D::kReporting;
+    }
+    template <typename D>
+    static bool reporting_of_(...) { return false; }
+    void mark_reporting_() {
+        ::demo::runtime::tracer_for(Derived::kNodeName)
+            .set_reporting(reporting_of_<Derived>(0));
     }
 
     State state_{};

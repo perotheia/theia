@@ -118,8 +118,18 @@ service SupervisorView {
 
     // Set a child's runtime log level (#385). Routes through the
     // supervisor (op_kind=11) which persists it across restart and
-    // pushes it live to the node. Mirrors TraceStream.Configure.
+    // pushes it live to the node.
     rpc ConfigureLogLevel (LogLevelCall)
+        returns (services.supervisor.ControlReply);
+
+    // Configure trace for a node (the CONTROL/ingress path). Routes
+    // through the supervisor (op_kind=9) which owns trace_config_[child]
+    // and the per-NODE push (#361), so it survives restart. This is the
+    // half that STAYS on com: rf → com → supervisor → node. The trace
+    // EGRESS (reading records back) is served directly by the collector's
+    // own TraceStream gRPC (services/log) — com is no longer in the byte
+    // path for traces.
+    rpc ConfigureTrace (TraceConfigRequest)
         returns (services.supervisor.ControlReply);
 
     // ---- Robot node (#387) -------------------------------------------
@@ -133,55 +143,56 @@ service SupervisorView {
 
 
 // ---------------------------------------------------------------------------
-// TraceStream (#354) — gRPC bridge for services/log[trace] over TIPC.
+// Trace messages — the wire records + control request.
 //
-// Wire shape is mirrored from the .art-driven log.proto (nanopb on the
-// node side, plain protobuf here). We re-declare the messages instead
-// of importing log.proto because that file is compiled by nanopb_generator
-// at build time and the .pb.h doesn't carry the C++ libprotobuf symbols
-// services/com's protoc pipeline needs. The byte-level wire format is
-// identical — both stacks read the same field numbers.
+// TraceRecord / TraceConfigRequest STAY here (supervisor_bridge owns the
+// record shape; the byte-level wire format mirrors the .art-driven
+// log.proto — same field numbers, both stacks read the same bytes). The
+// trace-egress SERVICE (TraceStream.Subscribe) moved OUT of com to the
+// collector (services/log/proto/trace_stream.proto) — com no longer
+// proxies trace records. ConfigureTrace (control) is on SupervisorView
+// above; it routes through the supervisor and stays on com.
+//
+// We re-declare the messages here rather than import log.proto because
+// that file is compiled by nanopb_generator and its .pb.h doesn't carry
+// the C++ libprotobuf symbols com's protoc pipeline needs.
 // ---------------------------------------------------------------------------
 
 // One trace record observed at the log[trace] fanout. Mirrors the
 // services_services_log_TraceRecord nanopb struct produced by the FC
 // runtime (platform/runtime/include/Tracer.hh emits it).
+//
+// FIELD NUMBERS MUST TRACK log.proto EXACTLY — both stacks read the
+// same bytes (see the boundary note above). Last synced 2026-05-26 with
+// the src/dst/msg_id/kind header extension.
+//
+// `kind` is a plain uint32 here, NOT a redeclared enum: don't duplicate
+// the enum decl across stacks. Proto enums varint-encode identically to
+// uint32, so the wire is byte-compatible; com casts to/from the
+// services_services_log_TraceKind value at the boundary. The .art-derived
+// log.proto holds the single source-of-truth enum.
 message TraceRecord {
-    string node_name = 1;   // emitting node (e.g. "SmDaemon")
-    string msg_type  = 2;   // proto message type name (e.g. "SmStateMsg")
-    uint32 corr_id   = 3;   // pairs Send/Recv/Dispatch within one cast/call
-    uint64 ts_ns     = 4;   // emitting node's steady_clock ns
-    bytes  payload   = 5;   // proto-wire-v3 bytes — fed to libtrace_decoder
+    string node_name = 1;   // emitting node = src (e.g. "SmDaemon")
+    string dst       = 2;   // destination/peer node, "" if none
+    string msg_type  = 3;   // proto message type name (e.g. "SmStateMsg")
+    uint32 corr_id   = 4;   // = msg_id; pairs Send/Recv/Dispatch in a cast/call
+    uint64 ts_ns     = 5;   // emitting node's steady_clock ns
+    uint32 kind      = 6;   // TraceKind value (call/cast × in/out, statem)
+    bytes  payload   = 7;   // proto-wire-v3 bytes — fed to libtrace_decoder
 }
 
-// (target_node, msg_type) filter toggle. Routed via the supervisor's
-// NodeTraceCtl push path (#361): supdbg/GUI → com → supervisor → node.
-// `enabled=true`  installs the filter and starts flow; the supervisor
-//                 remembers it so it survives child restarts (#353).
-// `enabled=false` removes the filter; records stop flowing for that
-//                 (node, msg_type) pair.
+// (target_node, msg_type, kind) filter toggle. Routed via the
+// supervisor's NodeTraceCtl push path (#361): supdbg/GUI → com →
+// supervisor → node. `enabled=true` installs the filter and starts
+// flow; the supervisor remembers it so it survives child restarts
+// (#353). `enabled=false` removes the filter. `kind=0` means all kinds.
 message TraceConfigRequest {
     string target_node = 1;
     string msg_type    = 2;
     bool   enabled     = 3;
+    uint32 kind        = 4;   // TraceKind value; 0 = all kinds
 }
 
-// gRPC carrier for the per-stream subscribe call. Currently empty —
-// subscription is "all trace records flowing through the collector"
-// and per-(node, msg_type) selection is via Configure, not the
-// subscription itself. This matches the dbg-style flow from the
-// Robot spec (services/log/trace_collection.robot).
-message TraceSubscribeRequest {}
-
-service TraceStream {
-    // Server-streaming firehose of TraceRecord wired from the log[trace]
-    // collector's TIPC fanout. Clients open one of these per machine and
-    // read until they Configure(enabled=false) or close the stream.
-    rpc Subscribe(TraceSubscribeRequest) returns (stream TraceRecord);
-
-    // Configure (node, msg_type) filter. Routes through the supervisor
-    // so the config persists across child restart — see #361 for the
-    // server side.
-    rpc Configure(TraceConfigRequest)
-        returns (services.supervisor.ControlReply);
-}
+// NOTE: TraceSubscribeRequest + the TraceStream service now live in
+// services/log/proto/trace_stream.proto (the collector serves egress
+// directly). It imports this file for TraceRecord.

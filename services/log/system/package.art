@@ -82,6 +82,27 @@ interface clientServer   SupervisorControlIf { }  // from system.supervisor
 
 // ─── Wire types ──────────────────────────────────────────────────────
 
+// Trace-item kind (NEW). Classifies the dispatch the record describes
+// so a consumer can request "only calls in", "only statem transitions",
+// etc. Mapped from the runtime's TraceEvent at emit time
+// (platform/runtime/Tracer.hh): the call/cast × in/out matrix plus the
+// statem transitions collapse onto these.
+//
+//   CAST_OUT  — outbound cast being sent          (TraceEvent::Send, cast)
+//   CAST_IN   — inbound cast landed / dispatched   (Recv/Dispatch, cast)
+//   CALL_OUT  — outbound call request / wait / result (Send/CallWait/CallResult)
+//   CALL_IN   — inbound call dispatched / reply sent  (Dispatch/SendReply)
+//   STATEM    — gen_statem state transition / timeout (StateTransition/StateTimeout)
+//   OTHER     — info / terminate / uncategorized
+enum TraceKind {
+    OTHER     = 0
+    CAST_OUT  = 1
+    CAST_IN   = 2
+    CALL_OUT  = 3
+    CALL_IN   = 4
+    STATEM    = 5
+}
+
 // One trace record. Wraps the original dispatched message verbatim
 // in `payload` (which holds [header][proto-wire] as the FC emitted
 // it). Headers below let the consumer route + decode without parsing
@@ -90,13 +111,21 @@ interface clientServer   SupervisorControlIf { }  // from system.supervisor
 // Receivers reconstruct the original message by looking msg_type up
 // in the netgraph (artheia knows every wire type, the receiver picks
 // the matching nanopb descriptor).
+//
+// src/dst/msg_id/kind form the trace header the user spec'd. On the bus
+// src/dst carry the emitting+peer NODE name as the FC knows it; on
+// egress to a gRPC subscriber the collector rewrites them to component
+// names via netgraph.json. `node_name` stays = src (back-compat alias
+// for the many consumers already reading it). `corr_id` IS msg_id.
 message TraceRecord {
-    string node_name      // source FC node ("SmDaemon", "ComDaemon", ...)
-    string msg_type       // wire-type name ("SmStateMsg", ...)
-    uint32 corr_id        // correlation id from the dispatch header,
-                          // 0 if not part of a request/reply pair
-    uint64 ts_ns          // wall time at the dispatcher
-    bytes  payload        // [header][proto-wire] verbatim
+    string   node_name      // source FC node ("SmDaemon", ...) = src
+    string   dst            // destination/peer node, "" if none (e.g. broadcast)
+    string   msg_type       // wire-type name ("SmStateMsg", ...)
+    uint32   corr_id        // correlation id from the dispatch header = msg_id,
+                            // 0 if not part of a request/reply pair
+    uint64   ts_ns          // wall time at the dispatcher
+    TraceKind kind          // call/cast × in/out, statem (NEW)
+    bytes    payload        // [header][proto-wire] verbatim
 }
 
 // Configuration request from a consumer (supdbg or com-on-behalf-of-
@@ -119,9 +148,10 @@ message TraceRecord {
 // never reach a non-existent NodeTraceCtl port. Use the legacy
 // Tracer.enable() in-process API to opt-in such nodes manually.
 message TraceConfigRequest {
-    string target_node
-    string msg_type
-    bool   enabled
+    string    target_node
+    string    msg_type
+    bool      enabled
+    TraceKind kind         // which trace kind to enable; OTHER(0) = all kinds
 }
 
 message TraceEmpty { }

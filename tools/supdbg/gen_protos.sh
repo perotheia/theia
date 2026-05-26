@@ -24,19 +24,28 @@ fi
 
 PROTO_SUP="$WORKSPACE/platform/supervisor/generated/proto"
 PROTO_COM="$WORKSPACE/services/com/proto"
+PROTO_LOG="$WORKSPACE/services/log/proto"
 OUT_DIR="$SCRIPT_DIR/_gen"
 
 mkdir -p "$OUT_DIR"
 
 # grpc_tools.protoc rewrites imports of `Foo.proto` → `import Foo_pb2`
-# *relative to --python_out*. Both proto trees must be on the path so
-# `import "ChildState.proto"` from supervisor_bridge.proto resolves.
+# *relative to --python_out*. All proto trees must be on the path so
+# `import "ChildState.proto"` (supervisor_bridge) and `import
+# "supervisor_bridge.proto"` (trace_stream) resolve.
+#
+# supervisor_bridge.proto carries the trace CONTROL types + the proxy
+# RPCs (com); trace_stream.proto carries the trace EGRESS service the
+# collector serves (services/log) — its Subscribe stubs let rf subscribe
+# to the collector's own gRPC.
 "$VENV/bin/python" -m grpc_tools.protoc \
     --proto_path="$PROTO_SUP" \
     --proto_path="$PROTO_COM" \
+    --proto_path="$PROTO_LOG" \
     --python_out="$OUT_DIR" \
     --grpc_python_out="$OUT_DIR" \
     "$PROTO_COM"/supervisor_bridge.proto \
+    "$PROTO_LOG"/trace_stream.proto \
     "$PROTO_SUP"/*.proto
 
 # ---- FC app message stubs (#387) ----------------------------------------

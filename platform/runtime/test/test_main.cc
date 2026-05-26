@@ -38,6 +38,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -45,6 +46,87 @@
 
 using namespace test;
 namespace rt = demo::runtime;
+
+// ---- trace capture: decode the proto3 TraceRecord the producer submits --
+//
+// As of the egress rework (#400) the Tracer no longer writes "TRC v1 …"
+// to stderr — it frames a proto3 TraceRecord and submits it over TIPC
+// (lossy SOCK_DGRAM) to the log[trace] collector. For unit tests we use
+// TraceSubmitter's test-sink seam to capture the encoded records in
+// process, then decode the handful of fields we assert on. No AF_TIPC
+// needed, deterministic.
+struct CapturedRecord {
+    std::string node_name;   // field 1 (src)
+    std::string dst;         // field 2
+    std::string msg_type;    // field 3
+    uint32_t    corr_id = 0; // field 4 (msg_id)
+    uint64_t    ts_ns   = 0; // field 5
+    uint32_t    kind    = 0; // field 6 (TraceKind)
+    std::string payload;     // field 7
+};
+
+// Minimal proto3 reader — varint + length-delimited, the only wire types
+// TraceRecord uses. Mirrors the hand-encoder in Tracer.hh.
+static CapturedRecord decode_trace_record(const std::string& w) {
+    CapturedRecord r;
+    size_t i = 0;
+    auto rd_varint = [&](uint64_t& out) -> bool {
+        out = 0; int shift = 0;
+        while (i < w.size()) {
+            uint8_t b = static_cast<uint8_t>(w[i++]);
+            out |= (uint64_t)(b & 0x7f) << shift;
+            if (!(b & 0x80)) return true;
+            shift += 7;
+        }
+        return false;
+    };
+    while (i < w.size()) {
+        uint64_t tag;
+        if (!rd_varint(tag)) break;
+        uint32_t field = tag >> 3, wire = tag & 7;
+        if (wire == 0) {                 // varint field
+            uint64_t v;
+            if (!rd_varint(v)) break;
+            if (field == 4) r.corr_id = (uint32_t)v;
+            else if (field == 5) r.ts_ns = v;
+            else if (field == 6) r.kind = (uint32_t)v;
+        } else if (wire == 2) {          // length-delimited
+            uint64_t len;
+            if (!rd_varint(len) || i + len > w.size()) break;
+            std::string s = w.substr(i, len); i += len;
+            if (field == 1) r.node_name = s;
+            else if (field == 2) r.dst = s;
+            else if (field == 3) r.msg_type = s;
+            else if (field == 7) r.payload = s;
+        } else break;                    // unexpected wire type
+    }
+    return r;
+}
+
+// RAII trace capture: installs a TraceSubmitter test sink that collects
+// decoded records; restores (clears) the sink on scope exit. The sink is
+// mutex-guarded inside TraceSubmitter, but we also guard our vector since
+// emit() can fire from node threads.
+class TraceCapture {
+public:
+    TraceCapture() {
+        rt::TraceSubmitter::instance().set_test_sink(
+            [this](const std::string& wire) {
+                std::lock_guard<std::mutex> lk(mu_);
+                recs_.push_back(decode_trace_record(wire));
+            });
+    }
+    ~TraceCapture() {
+        rt::TraceSubmitter::instance().set_test_sink(nullptr);
+    }
+    std::vector<CapturedRecord> records() {
+        std::lock_guard<std::mutex> lk(mu_);
+        return recs_;
+    }
+private:
+    std::mutex mu_;
+    std::vector<CapturedRecord> recs_;
+};
 
 // ---- micro-assertion harness -------------------------------------------
 
@@ -508,12 +590,7 @@ static std::string case_tipc_trace_correlation() {
 
     namespace rt = demo::runtime;
 
-    int pipefd[2];
-    if (::pipe(pipefd) < 0) return "pipe()";
-    int saved = ::dup(STDERR_FILENO);
-    ::dup2(pipefd[1], STDERR_FILENO);
-    ::close(pipefd[1]);
-    ::fcntl(pipefd[0], F_SETFL, O_NONBLOCK);
+    TraceCapture cap;
 
     auto& tr = rt::tracer_for(TipcCounter::kNodeName);
     tr.enable(true);
@@ -528,6 +605,11 @@ static std::string case_tipc_trace_correlation() {
     rt::RemoteRef<TipcCounter, 0xe0010002u, 0u> ref;
     EXPECT(ref.connect(2000), "trace: client connect");
     mux.watch_remote_ref(ref);
+
+    // #401: mark reporting AFTER construction — the GenServer ctor's
+    // mark_reporting_() sets it from kReporting (false for this fixture),
+    // so we assert it here, post-construct, to exercise the bus submit.
+    tr.set_reporting(true);
 
     // Two sequential calls — keeps the trace stream small and the
     // correlation pairs easy to find.
@@ -544,73 +626,40 @@ static std::string case_tipc_trace_correlation() {
     mux.stop();
     server.stop();
     tr.enable(false);
-    std::fflush(stderr);
 
-    std::string captured;
-    char buf[4096];
-    ssize_t n;
-    while ((n = ::read(pipefd[0], buf, sizeof(buf))) > 0) {
-        captured.append(buf, n);
+    // Collect the set of TraceKinds seen per corr_id. The fine-grained
+    // TraceEvent no longer rides the record (binary record carries the
+    // coarse TraceKind only — see #400): send→CastOut, recv→CastIn,
+    // dispatch→CallIn, send_reply/call_result→CallOut. The correlation
+    // claim now is: ONE non-zero corr_id appears on BOTH an outbound
+    // (CastOut) AND an inbound-side (CastIn or CallIn) kind — i.e. the
+    // same wire correlation id stitches the send thread to the receive
+    // thread over real TIPC.
+    std::unordered_map<uint32_t, std::string> kinds_per_corr;
+    for (const auto& r : cap.records()) {
+        kinds_per_corr[r.corr_id] += std::to_string(r.kind) + ",";
     }
-    ::dup2(saved, STDERR_FILENO);
-    ::close(saved);
-    ::close(pipefd[0]);
-
-    // Walk the captured trace; collect (event, corr_id) pairs and
-    // check that for at least one corr_id we see {send, recv, dispatch,
-    // dispatch_done, send_reply, call_result}. That's the full RPC
-    // round-trip captured in the trace stream.
-    auto extract_corr = [](const std::string& line) -> uint32_t {
-        auto p = line.find("corr=");
-        if (p == std::string::npos) return 0;
-        return static_cast<uint32_t>(std::strtoul(line.c_str() + p + 5,
-                                                   nullptr, 10));
+    auto has = [](const std::string& s, rt::TraceKind k) {
+        return s.find(std::to_string((int)k) + ",") != std::string::npos;
     };
-    std::unordered_map<uint32_t, std::string> events_per_corr;
-    size_t pos = 0;
-    while (pos < captured.size()) {
-        size_t eol = captured.find('\n', pos);
-        if (eol == std::string::npos) eol = captured.size();
-        std::string line = captured.substr(pos, eol - pos);
-        if (line.compare(0, 7, "TRC v1 ") == 0) {
-            uint32_t corr = extract_corr(line);
-            // Format: "TRC v1 <event> <node> msg=<type> corr=<id> ts=<ms> hex=<>"
-            // The 3rd whitespace-separated token is the event name —
-            // starts at offset 7 (right after "TRC v1 ") and runs to
-            // the next space.
-            size_t ev_end = line.find(' ', 7);
-            if (ev_end != std::string::npos) {
-                std::string ev = line.substr(7, ev_end - 7);
-                events_per_corr[corr] += ev + ",";
-            }
-        }
-        pos = eol + 1;
-    }
-
-    // Find a corr_id whose event-set covers the full RPC lifecycle.
     bool ok = false;
-    for (const auto& kv : events_per_corr) {
-        if (kv.first == 0) continue;  // synthetic (in-process or non-RPC)
+    for (const auto& kv : kinds_per_corr) {
+        if (kv.first == 0) continue;  // synthetic (in-process / non-RPC)
         const auto& s = kv.second;
-        if (s.find("send,") != std::string::npos &&
-            s.find("recv,") != std::string::npos &&
-            s.find("dispatch,") != std::string::npos &&
-            s.find("dispatch_done,") != std::string::npos &&
-            s.find("send_reply,") != std::string::npos &&
-            s.find("call_result,") != std::string::npos) {
+        if (has(s, rt::TraceKind::CastOut) &&
+            (has(s, rt::TraceKind::CastIn) || has(s, rt::TraceKind::CallIn))) {
             ok = true;
             break;
         }
     }
     if (!ok) {
-        // Compact diagnostic — show what we saw.
         std::string diag;
         int cnt = 0;
-        for (const auto& kv : events_per_corr) {
+        for (const auto& kv : kinds_per_corr) {
             if (cnt++ >= 5) break;
             diag += "corr=" + std::to_string(kv.first) + ":{" + kv.second + "} ";
         }
-        return "no corr_id covers full RPC lifecycle. Seen: " + diag;
+        return "no corr_id correlates send→recv across threads. Seen: " + diag;
     }
     return {};
 }
@@ -693,18 +742,13 @@ static std::string case_tracer_runtime_toggle() {
     using namespace test;
     namespace rt = demo::runtime;
 
-    // Save stderr, redirect to a pipe.
-    int pipefd[2];
-    if (::pipe(pipefd) < 0) return "pipe()";
-    int saved = ::dup(STDERR_FILENO);
-    ::dup2(pipefd[1], STDERR_FILENO);
-    ::close(pipefd[1]);
-    ::fcntl(pipefd[0], F_SETFL, O_NONBLOCK);
+    TraceCapture cap;
 
     TestServer s;
     s.start();
 
     auto& tracer = rt::tracer_for(TestServer::kNodeName);
+    tracer.set_reporting(true);   // #401: only reporting nodes submit to the bus
 
     // Phase 1: tracing disabled. A cast should produce no output.
     tracer.enable(false);
@@ -734,43 +778,19 @@ static std::string case_tracer_runtime_toggle() {
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
     s.stop();
-    // fflush stderr so anything still buffered makes it to the pipe.
-    std::fflush(stderr);
 
-    // Drain the pipe.
-    std::string captured;
-    char buf[4096];
-    ssize_t n;
-    while ((n = ::read(pipefd[0], buf, sizeof(buf))) > 0) {
-        captured.append(buf, n);
-    }
-
-    // Restore stderr.
-    ::dup2(saved, STDERR_FILENO);
-    ::close(saved);
-    ::close(pipefd[0]);
-
-    // Count TRC records tagged with TestServer. Phase 2 ran one cast
-    // (Send + Recv + Dispatch + DispatchDone = 4 events) and one call
-    // (Send + Recv + Dispatch + DispatchDone = 4 more) = 8 events
-    // total. Phase 1 and 3 should produce nothing.
+    // Count submitted records tagged with TestServer. Phase 2 ran one
+    // cast (Send + Recv + Dispatch + DispatchDone = 4 events) and one
+    // call (4 more) = 8 events total. Phases 1 and 3 produce nothing.
     //
-    // We don't pin the exact count (8 events) — the framework can grow
-    // additional trace points later. Sanity bounds: at least 6 (each
-    // op produces >= 3 events), at most ~20 (one ack between op cycles).
+    // We don't pin the exact count — the framework can grow trace points
+    // later. Sanity bounds: at least 6, at most ~20.
     int count = 0;
-    size_t pos = 0;
-    while ((pos = captured.find("TRC v1 ", pos)) != std::string::npos) {
-        size_t eol = captured.find('\n', pos);
-        if (eol == std::string::npos) eol = captured.size();
-        // Count this record only if it's tagged with TestServer.
-        if (captured.find("TestServer", pos) < eol) ++count;
-        pos = eol;
-    }
+    for (const auto& r : cap.records())
+        if (r.node_name == TestServer::kNodeName) ++count;
     if (count < 6 || count > 20) {
         return "expected 6..20 TestServer trace events (one cast + "
-               "one call while enabled), got " + std::to_string(count) +
-               " — captured: '" + captured + "'";
+               "one call while enabled), got " + std::to_string(count);
     }
     return {};
 }
@@ -790,17 +810,13 @@ static std::string case_tracer_runtime_toggle() {
 static std::string case_tracer_msg_type_filter() {
     namespace rt = demo::runtime;
 
-    int pipefd[2];
-    if (::pipe(pipefd) < 0) return "pipe()";
-    int saved = ::dup(STDERR_FILENO);
-    ::dup2(pipefd[1], STDERR_FILENO);
-    ::close(pipefd[1]);
-    ::fcntl(pipefd[0], F_SETFL, O_NONBLOCK);
+    TraceCapture cap;
 
     // Fresh per-test tracer (different name → singleton not shared
     // with other cases). enable + start clean.
     auto& tracer = rt::tracer_for("FilterTestNode");
     tracer.enable(true);
+    tracer.set_reporting(true);   // #401: submit gate — exercise the bus path
     tracer.trace_clear_all();
 
     // (1) filter empty: everything passes.
@@ -818,54 +834,38 @@ static std::string case_tracer_msg_type_filter() {
     tracer.emit(rt::TraceEvent::Send, "Bar", 4, nullptr, 0);  // pass
     tracer.emit(rt::TraceEvent::Send, "Baz", 5, nullptr, 0);  // pass
 
-    // Drain.
-    std::fflush(stderr);
-    std::string captured;
-    char buf[4096];
-    ssize_t n;
-    while ((n = ::read(pipefd[0], buf, sizeof(buf))) > 0) {
-        captured.append(buf, n);
-    }
-    ::dup2(saved, STDERR_FILENO);
-    ::close(saved);
-    ::close(pipefd[0]);
-
     // Cleanup.
     tracer.enable(false);
 
-    // Per-subcase: count occurrences of each (msg, corr) pair.
-    auto count = [&](const std::string& needle) {
+    // Count submitted records matching (msg_type, corr_id). corr=0 means
+    // proto3 omitted the field (default) — decode_trace_record leaves it 0.
+    auto recs = cap.records();
+    auto count = [&](const char* msg, uint32_t corr) {
         int n = 0;
-        size_t pos = 0;
-        while ((pos = captured.find(needle, pos)) != std::string::npos) {
-            ++n; ++pos;
-        }
+        for (const auto& r : recs)
+            if (r.msg_type == msg && r.corr_id == corr) ++n;
         return n;
     };
 
     // (1) two unfiltered records:
-    if (count("msg=Foo corr=0") != 1)
-        return "(1) expected Foo corr=0 — captured: '" + captured + "'";
-    if (count("msg=Bar corr=0") != 1)
-        return "(1) expected Bar corr=0 — captured: '" + captured + "'";
+    if (count("Foo", 0) != 1)
+        return "(1) expected Foo corr=0, records=" + std::to_string(recs.size());
+    if (count("Bar", 0) != 1)
+        return "(1) expected Bar corr=0";
 
     // (2) only Foo passes; Bar and Baz drop:
-    if (count("msg=Foo corr=1") != 1)
-        return "(2) Foo corr=1 should pass — captured: '" + captured + "'";
-    if (count("msg=Bar corr=2") != 0)
-        return "(2) Bar corr=2 should drop (filter restricted) — captured: '"
-               + captured + "'";
-    if (count("msg=Baz corr=3") != 0)
-        return "(2) Baz corr=3 should drop (filter restricted) — captured: '"
-               + captured + "'";
+    if (count("Foo", 1) != 1)
+        return "(2) Foo corr=1 should pass";
+    if (count("Bar", 2) != 0)
+        return "(2) Bar corr=2 should drop (filter restricted)";
+    if (count("Baz", 3) != 0)
+        return "(2) Baz corr=3 should drop (filter restricted)";
 
     // (3) cleared filter, all pass again:
-    if (count("msg=Bar corr=4") != 1)
-        return "(3) Bar corr=4 should pass after clear — captured: '"
-               + captured + "'";
-    if (count("msg=Baz corr=5") != 1)
-        return "(3) Baz corr=5 should pass after clear — captured: '"
-               + captured + "'";
+    if (count("Bar", 4) != 1)
+        return "(3) Bar corr=4 should pass after clear";
+    if (count("Baz", 5) != 1)
+        return "(3) Baz corr=5 should pass after clear";
 
     return {};
 }

@@ -81,7 +81,6 @@ option(THEIA_ROBOT_NODE "Build the test-only robot signal/call node" ON)
 set(COM_SRCS
     src/main.cpp
     src/tipc_uplink.cpp
-    src/tipc_trace_uplink.cpp
 )
 if(THEIA_ROBOT_NODE)
     list(APPEND COM_SRCS src/robot_node.cpp)

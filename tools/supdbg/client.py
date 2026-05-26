@@ -146,12 +146,11 @@ class Client:
             self._stub    = _bridge_grpc.SupervisorViewStub(self._channel)
         return self._stub
 
-    def _ensure_trace(self) -> _bridge_grpc.TraceStreamStub:
-        """Lazy TraceStream stub — shares the channel with SupervisorView."""
-        self._ensure()
-        if not hasattr(self, "_trace_stub") or self._trace_stub is None:
-            self._trace_stub = _bridge_grpc.TraceStreamStub(self._channel)
-        return self._trace_stub
+    # NOTE: TraceStream moved OFF com. The trace CONTROL path is now
+    # SupervisorView.ConfigureTrace (below, shares the com channel). The
+    # trace EGRESS (subscribe) is served by the collector's OWN gRPC
+    # (services/log) — a separate endpoint, wired once the collector gRPC
+    # lands. There is no longer a TraceStreamStub on the com channel.
 
     def close(self) -> None:
         if self._channel is not None:
@@ -274,8 +273,12 @@ class Client:
         The supervisor stores the entry and pushes to the worker's
         NodeTraceCtl TIPC port (#361). Config persists across child
         restart — the next heartbeat-after-gap re-fires the push.
+
+        Control path (rf → com → supervisor → node): this is
+        SupervisorView.ConfigureTrace on the com channel — NOT the old
+        com TraceStream.Configure (TraceStream moved to the collector).
         """
-        return self._ensure_trace().Configure(
+        return self._ensure().ConfigureTrace(
             _bridge_pb.TraceConfigRequest(
                 target_node=target_node,
                 msg_type=msg_type,
@@ -347,26 +350,19 @@ class Client:
     def subscribe_traces(
         self,
         decoder: t.Optional["TraceDecoder"] = None,
-    ) -> t.Iterator[t.Tuple[_bridge_pb.TraceRecord, t.Optional[dict]]]:
-        """Yield (TraceRecord, decoded_dict-or-None) pairs forever.
+    ) -> t.Iterator[t.Tuple["_bridge_pb.TraceRecord", t.Optional[dict]]]:
+        """Subscribe to the trace EGRESS stream.
 
-        If `decoder` is supplied (typically rf_theia.adapters.trace_
-        _decoder.open_default() — the libtrace_decoder.so loaded via
-        ctypes per #356), the payload bytes are decoded to a Python
-        dict and returned as the second tuple element. Without a
-        decoder, decoded_dict is None and the caller works with the
-        raw record.
+        MOVED: trace egress is no longer served by com. The collector
+        (services/log) serves its OWN TraceStream gRPC (egress-direct
+        design — com governs the DMZ, not the trace bytes). This method
+        will repoint to the collector's endpoint once that gRPC server
+        lands (step 4 remainder); the client gains a separate
+        collector-channel + trace_stream_pb2 stubs.
         """
-        stream = self._ensure_trace().Subscribe(
-            _bridge_pb.TraceSubscribeRequest()
+        raise NotImplementedError(
+            "trace egress moved off com to the collector's own TraceStream "
+            "gRPC (services/log). subscribe_traces() will target the "
+            "collector endpoint once its gRPC server is built. "
+            "configure_trace() (control path) still works via com."
         )
-        for rec in stream:
-            decoded: t.Optional[dict] = None
-            if decoder is not None and rec.payload:
-                try:
-                    decoded = decoder.decode(rec.msg_type, rec.payload)
-                except Exception:
-                    # Unknown type / parse failure → surface the raw
-                    # record and let the caller decide.
-                    decoded = None
-            yield rec, decoded

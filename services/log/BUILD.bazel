@@ -1,0 +1,52 @@
+# services/log[trace] — Bazel wrapper around CMakeLists.txt.
+#
+# The collector serves its OWN gRPC TraceStream (egress-direct: com is not
+# in the trace byte path). gRPC links via host pkg-config, which Bazel only
+# reaches through rules_foreign_cc's cmake() rule — same pattern as
+# //supervisor-gui. CMakeLists.txt stays the source of truth (direct
+# `cmake -S . -B build` works for dev); `bazel build //services/log:services-log`
+# produces the same binary into bazel-bin/ for the rig pipeline.
+#
+# The gen-app skeleton (lib/, impl/, main/) is the pure-TIPC FC scaffold —
+# superseded by src/main.cpp (hand-owned: TIPC in_records receiver + gRPC
+# TraceStream + netgraph digest). Kept for the message/codec decls; not the
+# built binary.
+
+load("@rules_foreign_cc//foreign_cc:defs.bzl", "cmake")
+
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "all_srcs",
+    srcs = glob(
+        [
+            "CMakeLists.txt",
+            "src/**",
+            "proto/**",
+        ],
+        allow_empty = False,
+    ) + [
+        # CMakeLists pulls supervisor_bridge.proto (+ supervisor protos) via
+        # ../com/proto and ../../platform/supervisor/generated/proto — they
+        # must live in the sandbox too.
+        "//services/com:proto_srcs",
+        "//platform/supervisor:proto_srcs",
+    ],
+)
+
+cmake(
+    name = "services-log",
+    lib_source = ":all_srcs",
+    out_binaries = ["services-log"],
+    cache_entries = {
+        # Bazel's sandbox doesn't see the repo-relative path the CMakeLists
+        # computes, so pass the vendored single-header dir explicitly.
+        "NLOHMANN_JSON_INCLUDE_DIR": "$$EXT_BUILD_ROOT$$/third_party/nlohmann_json",
+    },
+    data = [
+        "//third_party:nlohmann_json_hdrs",
+    ],
+    # CMake finds protoc + grpc_cpp_plugin + grpc++ + protobuf as host-apt
+    # packages (cmake() doesn't sandbox /usr).
+    targets = ["services-log"],
+)

@@ -4,18 +4,30 @@
 syntax = "proto3";
 package services_services_log;
 
+enum TraceKind {
+    OTHER = 0;
+    CAST_OUT = 1;
+    CAST_IN = 2;
+    CALL_OUT = 3;
+    CALL_IN = 4;
+    STATEM = 5;
+}
+
 message TraceRecord {
     string node_name = 1;
-    string msg_type = 2;
-    uint32 corr_id = 3;
-    uint64 ts_ns = 4;
-    bytes payload = 5;
+    string dst = 2;
+    string msg_type = 3;
+    uint32 corr_id = 4;
+    uint64 ts_ns = 5;
+    TraceKind kind = 6;
+    bytes payload = 7;
 }
 
 message TraceConfigRequest {
     string target_node = 1;
     string msg_type = 2;
     bool enabled = 3;
+    TraceKind kind = 4;
 }
 
 message TraceEmpty {

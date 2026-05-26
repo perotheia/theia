@@ -58,4 +58,20 @@ stage compute ComputeRig \
     "shwa:$BZ/shwa/main/shwa" \
     "p3:$APPS/p3"
 
+# services/log[trace] collector — the trace EGRESS service. NOT a
+# supervised child (it's a gRPC-bearing service, "declared separately"
+# per services/manifest/executor.py, same as services-com); launched
+# AFTER the supervisor by whoever drives the run (e.g. the rf trace
+# scenario). It needs the cluster netgraph.json for the src/dst
+# addr->component-name rewrite. Both staged into install/central/.
+LOG_BIN="$REPO/services/log/build/services-log"
+if [[ -x "$LOG_BIN" ]]; then
+    cp -f "$LOG_BIN" "$REPO/install/central/services-log"
+    artheia gen-netgraph -R platform/system/system.art \
+        --out "$REPO/install/central/netgraph.json"
+    echo "staged install/central/services-log + netgraph.json"
+else
+    echo "WARN: $LOG_BIN not built — skipping collector stage "             "(cmake --build services/log/build)"
+fi
+
 echo "done."

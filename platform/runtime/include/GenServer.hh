@@ -11,8 +11,17 @@
 //     Act> the caller pattern-matches on (or runs through
 //     call_and_dispatch to hit the right handle_call_result overload).
 //   * cast(server, Req) is async fire-and-forget.
-//   * handle_info(const char*, State&) is the C-style catch-all,
-//     matching OTP's handle_info as the "other messages" clause.
+//   * handle_info has TWO clauses, both "other messages" in OTP terms:
+//       - handle_info(const char*, State&) — internal string notes
+//         posted via post_info(). Default is a benign no-op; this is a
+//         deliberate in-process signal, not unrecognized traffic.
+//       - handle_info(const InfoMsg&, State&) — an inbound TIPC frame
+//         whose service_id matched NO register_cast/register_call entry
+//         (TipcMux fall-through). InfoMsg carries the raw bytes + sender
+//         attribution. The framework DEFAULT is a CRITICAL ERROR: for a
+//         normal node an unrouted message means the netgraph and the
+//         running wiring disagree. Only a node that legitimately handles
+//         arbitrary traffic (the test probe) overrides this clause.
 //   * handle_call_result / handle_call_error / handle_call_timeout
 //     are the caller-side counterparts: when a node makes a call,
 //     it writes overloads to consume the result, and the framework
@@ -39,6 +48,8 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <deque>
 #include <functional>
 #include <future>
@@ -93,6 +104,25 @@ struct NotifyHook;  // defined below
 template <typename Reply, typename Server, typename Req, typename Act>
 RequestId<Reply, Act> send_request(
     Server&, Req, Act, std::shared_ptr<NotifyHook> = nullptr);
+
+// ---- InfoMsg -------------------------------------------------------------
+
+// An inbound TIPC frame that matched NO registered codec on the node it
+// was delivered to (TipcMux fall-through, see TipcMux.cc). Carries the
+// raw protobuf bytes plus enough header attribution for a handler to
+// decide what to do — the test probe decodes/forwards arbitrary traffic;
+// a normal node CRITICAL-ERRORs. The bytes point into the mux's recv
+// buffer and are only valid for the duration of the handle_info call, so
+// a handler that needs them later must copy.
+struct InfoMsg {
+    uint16_t       service_id   = 0;  // djb2_low16 of the sender's msg-type name
+    const uint8_t* data         = nullptr;
+    uint16_t       len          = 0;
+    uint32_t       dst_tipc_type = 0;  // the bound node this landed on
+    uint8_t        msg_type     = 0;   // GW_MSG_GEN_CAST | GW_MSG_GEN_CALL
+    uint32_t       corr_id      = 0;   // CALL correlation id (0 for CAST)
+    int            reply_fd     = -1;  // fd to reply on for a CALL; -1 for CAST
+};
 
 // ---- GenServerBase -------------------------------------------------------
 
@@ -158,11 +188,21 @@ public:
     // runs.
     void dispatch_info(const char* info) { dispatch_info_(info); }
 
+    // Public forwarder used by the TipcMux fall-through: an inbound frame
+    // that matched no registered codec is enqueued on this node, then
+    // delivered here on the node thread. Thunks through the virtual
+    // dispatch_unknown_ to Derived::handle_info(const InfoMsg&, State&).
+    void dispatch_unknown(const InfoMsg& m) { dispatch_unknown_(m); }
+
 protected:
     // Override in Derived (via GenServer<Derived, State>) to forward
     // a const-char* "info" message to the typed handle_info(...) on
     // Derived. The mailbox is type-erased so it can't do this directly.
     virtual void dispatch_info_(const char* info) = 0;
+
+    // Override in Derived to forward an unrouted inbound frame to the
+    // typed handle_info(const InfoMsg&, State&) on Derived.
+    virtual void dispatch_unknown_(const InfoMsg& m) = 0;
 
     // Override in Derived to call Derived::terminate(reason, state).
     // Default no-op so apps that don't need cleanup can skip it.
@@ -230,6 +270,34 @@ public:
     // default otherwise. Same trick we use for handle_info default.
     void terminate(const char* /*reason*/, StateT& /*s*/) noexcept {}
 
+    // ---- handle_info defaults -------------------------------------------
+    //
+    // String clause — internal post_info() notes. Benign no-op default;
+    // a deliberate in-process signal is not an error. Derived may shadow
+    // with void handle_info(const char*, State&).
+    void handle_info(const char* /*info*/, StateT& /*s*/) noexcept {}
+
+    // Byte+sender clause — an inbound TIPC frame that matched no
+    // registered codec on this node (TipcMux fall-through). For a normal
+    // node this is a HARD invariant violation: the running wiring received
+    // a message the netgraph says it should never get, so trace
+    // attribution, routing, and the supervision model are all suspect.
+    // We log a CRITICAL and abort — the supervisor observes the crash and
+    // a human reconciles the .art/netgraph. A node that legitimately
+    // accepts arbitrary traffic (the test probe) shadows this overload
+    // with its own handle_info(const InfoMsg&, State&) and never reaches
+    // here.
+    [[noreturn]] void handle_info(const InfoMsg& m, StateT& /*s*/) {
+        std::fprintf(stderr,
+            "[%s] CRITICAL: unrouted inbound frame service_id=0x%04X "
+            "msg_type=0x%02X len=%u on node tipc=0x%08X — netgraph "
+            "consistency compromised (no register_cast/register_call "
+            "claimed this message). Aborting.\n",
+            Derived::kNodeName, m.service_id, m.msg_type, m.len,
+            m.dst_tipc_type);
+        std::abort();
+    }
+
     // ---- Config service: LogLevelPush (#386) ----------------------------
     //
     // Framework-provided handle_cast overload for the supervisor's
@@ -282,6 +350,37 @@ protected:
                     /*corr_id=*/0, nullptr, 0);
         }
         static_cast<Derived*>(this)->handle_info(info, state_);
+    }
+    void dispatch_unknown_(const InfoMsg& m) override {
+        // An unrouted inbound frame. Trace it as an Info event (raw bytes
+        // + corr) for the reporting nodes that have tracing on, then hand
+        // it to Derived's handle_info(const InfoMsg&, State&) IF Derived
+        // overrides it (the probe), else the framework CRITICAL default.
+        //
+        // We pick the target by SFINAE rather than plain overload
+        // resolution: a Derived that declares handle_info(const char*,…)
+        // (every gen-app node may) would otherwise name-HIDE the InfoMsg
+        // overload, and an unqualified call wouldn't compile. Detecting
+        // the override explicitly means nodes never need a `using`-decl.
+        auto& tr = ::demo::runtime::tracer_for(Derived::kNodeName);
+        if (tr.enabled()) {
+            tr.emit(::demo::runtime::TraceEvent::Info, "unrouted",
+                    m.corr_id, m.data, m.len);
+        }
+        dispatch_unknown_impl_<Derived>(m, 0);
+    }
+
+    // Derived overrides handle_info(const InfoMsg&, State&) → call it.
+    template <typename D>
+    auto dispatch_unknown_impl_(const InfoMsg& m, int)
+        -> decltype(std::declval<D&>().handle_info(m, std::declval<State&>()),
+                    void()) {
+        static_cast<D*>(this)->handle_info(m, state_);
+    }
+    // No override → the framework CRITICAL default (logs + aborts).
+    template <typename D>
+    void dispatch_unknown_impl_(const InfoMsg& m, ...) {
+        this->handle_info(m, state_);   // GenServer base [[noreturn]] default
     }
     void dispatch_terminate_(const char* reason) override {
         auto& tr = ::demo::runtime::tracer_for(Derived::kNodeName);

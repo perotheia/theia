@@ -1,4 +1,11 @@
-// TIPC uplink — connects the com bridge to the supervisor's TIPC service.
+// TIPC uplink — connects the com bridge to the SUPERVISOR's TIPC service.
+//
+// NOTE: this is NOT a services/log artifact. It belongs to the World-A
+// gRPC bridge (services-com, src/main.cpp): the bridge's single persistent
+// uplink to the supervisor. It is load-bearing for SupervisorView.Subscribe
+// (fan-out of observation frames to gRPC subscribers) and the unary
+// mutators (ControlRequest → supervisor, ControlReply back). The generic
+// Frame{tag,payload} naming is bridge-internal, not a log shape.
 //
 // One persistent SOCK_SEQPACKET socket to (type=0x80020001, instance=0).
 // A reader thread fans inbound frames to every subscribed gRPC stream

@@ -7,6 +7,8 @@
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
+#include <utility>
+#include <vector>
 
 namespace demo {
 namespace runtime {
@@ -172,14 +174,32 @@ void TipcMux::loop_() {
             if (hdr.msg_type != GW_MSG_GEN_CAST &&
                 hdr.msg_type != GW_MSG_GEN_CALL) continue;
 
+            const uint8_t* payload = buf + sizeof(GwMessageHeader);
             auto eit = binding->entries.find(hdr.rpc.service_id);
             if (eit == binding->entries.end()) {
-                std::fprintf(stderr,
-                    "[TipcMux] no handler for service_id=0x%04X on node tipc=0x%08X\n",
-                    hdr.rpc.service_id, binding->tipc_type);
+                // Fall-through (#409): no registered codec claimed this
+                // service_id. Hand the raw frame to the bound node's
+                // handle_info(const InfoMsg&, State&) on its OWN thread —
+                // the test probe consumes arbitrary traffic; every other
+                // node hits the GenServer CRITICAL default (an unrouted
+                // message means the netgraph and running wiring disagree).
+                // Copy the bytes: payload points into this loop's recv
+                // buffer, but the dispatch is async on the node thread.
+                std::vector<uint8_t> bytes(payload, payload + hdr.proto_len);
+                InfoMsg info;
+                info.service_id    = hdr.rpc.service_id;
+                info.len           = hdr.proto_len;
+                info.dst_tipc_type = binding->tipc_type;
+                info.msg_type      = hdr.msg_type;
+                info.corr_id       = hdr.rpc.correlation_id;
+                info.reply_fd      = fd;
+                binding->node->enqueue(
+                    [bytes = std::move(bytes), info](GenServerBase* base) mutable {
+                        info.data = bytes.data();
+                        base->dispatch_unknown(info);
+                    });
                 continue;
             }
-            const uint8_t* payload = buf + sizeof(GwMessageHeader);
             eit->second.dispatch(payload, hdr.proto_len, fd,
                                   hdr.rpc.correlation_id);
         }

@@ -83,6 +83,13 @@ interface clientServer ProbeCtl {
 
 node atomic ProbeDaemon {
     tipc type=0x800100FF instance=0
+    // The probe is a fall-through node: it impersonates/ drives arbitrary
+    // nodes for tests, so it accepts inbound TIPC frames the port schema
+    // doesn't name. gen-app emits handle_info(const InfoMsg&, State&) and
+    // the impl decides what to do with each frame. (A production FC would
+    // never set this — the GenServer default CRITICAL-errors on unrouted
+    // frames precisely to catch netgraph/wiring drift.)
+    fallthrough = true
     tag = "PROBE"
     ports {
         server probe_ctl provides ProbeCtl

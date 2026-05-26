@@ -106,14 +106,21 @@ public:
     void     unsubscribe_stream_out_rec(uint32_t id);
 
 
-    // ---- GenServer plumbing: handle_info + terminate defaults
+    // ---- GenServer plumbing: terminate default
     //
-    // GenServer's dispatch_info_ unconditionally calls
-    // Derived::handle_info; the base also looks for terminate. We
-    // provide no-op defaults inline; impl can shadow either with
-    // its own overload if the daemon needs them.
-    void handle_info(const char* /*info*/, TraceCollectorState& /*s*/) {}
+    // handle_info is NOT declared here on purpose. The GenServer base
+    // provides both clauses:
+    //   * handle_info(const char*, State&) — benign no-op for post_info().
+    //   * handle_info(const InfoMsg&, State&) — an inbound TIPC frame that
+    //     matched no register_cast/register_call: the base default is a
+    //     CRITICAL ERROR (an unrouted message ⇒ the netgraph and the
+    //     running wiring disagree). A node that legitimately handles
+    //     arbitrary traffic (the test probe) shadows the InfoMsg clause in
+    //     its impl; a normal FC node must NOT — letting an unknown message
+    //     through silently is exactly the bug this guards against.
+    // terminate keeps an inline no-op default; impl may shadow it.
     void terminate(const char* /*reason*/, TraceCollectorState& /*s*/) noexcept {}
+
 
     // ---- handle_cast / handle_call — declared here, body in impl
     //

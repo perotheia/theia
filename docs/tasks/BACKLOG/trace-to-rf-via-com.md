@@ -303,9 +303,50 @@ collector gRPC DONE (built + live e2e green):
 - 18 addr→name mappings digested from cluster netgraph at startup.
 
 REMAINING:
-- step 5: supervisor ConfigureTrace op_kind=9 handles target_node+msg_type;
-  add trace_kind passthrough. (com proto TraceConfigRequest already has
-  kind=4; the trace_stream subscribe already filters by kind.)
+- step 5 (DECISION: push kind to the node — control path). BLOCKER FOUND
+  2026-05-26: the node-side TraceConfig receiver was never wired. The
+  supervisor pushes kTagTraceApplyConfig=0x0300 via send_frame_to_tipc_name
+  ([u16 tag][payload], NOT the GwMessageHeader path the config_mux reads),
+  and NOTHING on the FC side decodes that frame → the daemons'
+  trace_enable() methods are dead-ended (#361/#363 left the node half
+  incomplete). So "push kind to node" first requires building the node-side
+  trace-config decode (a 0x0300 receiver that decodes TraceConfig and calls
+  Tracer kind+msg_type enable) — a detour beyond a kind passthrough. Then:
+  supervisor .art TraceConfig gains kind → regen; apply/push_trace_config
+  carry kind; Tracer gains a kind filter (today msg_type only); 5-FC
+  implications. PAUSED for scoping. (Collector-side kind filter already
+  works from step 4 as the interim path.)
+
+  RESOLUTION (user): supervisor↔child talk standard .art messages in
+  platform/runtime/system/package.art; gen-app auto-wires them for every
+  reporting=true node — follow LogLevelPush exactly. This also FIXES the
+  #361/#363 node-side gap by routing trace config through the proven
+  LogLevelPush mechanism (drop the dead 0x0300 tag frame).
+
+  DONE so far: platform/runtime/system/package.art gains `TraceKind` enum
+  (TK_* mirrors log) + `message TraceControlPush { TraceKind kind; bool
+  enabled }` — SCALAR-only (no msg_type string: nanopb string=callback,
+  same constraint as LogLevelPush; kind is the selector). runtime.proto
+  regenerated (nanopb scalar fields confirmed). NB: gen-proto-package
+  emitted to proto/platform/runtime/ — had to copy into the build's
+  proto/platform_runtime/ path + remove the stray dir (artheia
+  package-dir-collapse quirk).
+
+  REMAINING step-5 worklist (each mirrors LogLevelPush):
+  1. Tracer (Tracer.hh): add a kind filter alongside the msg_type filter —
+     trace_enable_kind(TraceKind, bool) + emit() checks it (today filters
+     msg_type only). enabled kind set; empty = all (back-compat).
+  2. GenServer.hh: add handle_cast(platform_runtime_TraceControlPush&) base
+     overload (next to handle_cast(LogLevelPush)) → tracer.trace_enable_kind.
+  3. gen-app main.cc.j2 / main.statem.cc.j2: reporting node config_mux adds
+     register_cast<platform_runtime_TraceControlPush> (beside LogLevelPush).
+     Regen 5 FCs.
+  4. supervisor runtime.cpp: push TraceControlPush via send_gw_cast_to_tipc_
+     name (service_id = djb2("platform_runtime_TraceControlPush")) — REPLACE
+     the dead kTagTraceApplyConfig=0x0300 send_frame path. apply/push carry
+     kind. supervisor .art TraceConfig may gain kind for the stored config.
+  5. com ConfigureTrace already forwards kind via TraceConfigRequest.kind=4;
+     thread it into op_kind=9 ControlRequest → supervisor.
 - repoint supdbg client.subscribe_traces to a collector-endpoint channel
   (trace_stream_pb2_grpc.TraceStreamStub on :7710) — currently raises
   NotImplementedError. rf-theia keyword surface is step 7.

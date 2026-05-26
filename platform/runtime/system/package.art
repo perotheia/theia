@@ -33,3 +33,29 @@ enum LogLevelValue {
 message LogLevelPush {
     LogLevelValue level
 }
+
+// Trace-item kind — which dispatch class to trace. Mirrors the log
+// FC's services_services_log.TraceKind (same ordinals); duplicated here
+// because this is the supervisor↔child control plane's own package and
+// the runtime can't depend on a leaf FC's proto.
+enum TraceKind {
+    TK_OTHER     = 0
+    TK_CAST_OUT  = 1
+    TK_CAST_IN   = 2
+    TK_CALL_OUT  = 3
+    TK_CALL_IN   = 4
+    TK_STATEM    = 5
+}
+
+// Pushed by the supervisor to turn a node's Tracer on/off for a given
+// trace KIND (rf → com ConfigureTrace → supervisor → here). Scalar-only
+// by the same constraint as LogLevelPush — nanopb renders proto3 string
+// as pb_callback_t which the register_cast path can't capture, so the
+// per-msg-type dimension is NOT carried here; `kind` (an enum) selects
+// the dispatch class, `enabled` toggles it. GenServer's base handle_cast
+// applies it via the node's Tracer. kind=TK_OTHER(0) + enabled means
+// "all kinds" (master on); enabled=false clears.
+message TraceControlPush {
+    TraceKind kind
+    bool      enabled
+}

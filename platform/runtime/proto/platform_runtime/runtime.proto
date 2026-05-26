@@ -12,7 +12,21 @@ enum LogLevelValue {
     LL_ERROR = 4;
 }
 
+enum TraceKind {
+    TK_OTHER = 0;
+    TK_CAST_OUT = 1;
+    TK_CAST_IN = 2;
+    TK_CALL_OUT = 3;
+    TK_CALL_IN = 4;
+    TK_STATEM = 5;
+}
+
 message LogLevelPush {
     LogLevelValue level = 1;
+}
+
+message TraceControlPush {
+    TraceKind kind = 1;
+    bool enabled = 2;
 }
 

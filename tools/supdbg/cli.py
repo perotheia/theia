@@ -129,7 +129,10 @@ def cmd_repl(args: argparse.Namespace) -> int:
 
 @_wrap
 def cmd_trace_enable(args: argparse.Namespace) -> int:
-    """Toggle a (node, msg_type) trace filter ON via TraceStream.Configure."""
+    """Toggle a (node, msg_type) trace filter ON via the trace CONTROL
+    path: SupervisorView.ConfigureTrace (rf → com → supervisor → node).
+    Trace EGRESS (reading records) is the separate `trace stream` command,
+    served by the collector's own gRPC (services/log)."""
     with Client(args.target) as c:
         r = c.configure_trace(args.node, args.msg_type, enabled=True)
         if r.status != 0:
@@ -153,7 +156,9 @@ def cmd_trace_disable(args: argparse.Namespace) -> int:
 
 @_wrap
 def cmd_trace_stream(args: argparse.Namespace) -> int:
-    """Subscribe to the TraceStream and print every record.
+    """Subscribe to the collector's OWN TraceStream gRPC (services/log,
+    egress-direct — com is not in the trace byte path) and print every
+    record.
 
     With --decode, looks up libtrace_decoder.so via rf_theia and
     pretty-prints the JSON-decoded payload alongside each record.
@@ -263,7 +268,8 @@ def build_parser() -> argparse.ArgumentParser:
     # ---- trace (#360) ----------------------------------------------------
     ptrace = sub.add_parser(
         "trace",
-        help="control TraceStream — enable/disable filters, stream records",
+        help="trace — enable/disable filters (via com control path), "
+             "stream records (from the collector's own gRPC)",
     )
     trace_sub = ptrace.add_subparsers(dest="trace_cmd")
     trace_sub.required = True

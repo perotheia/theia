@@ -160,3 +160,63 @@ encode → GW_MSG_GEN_CALL (service_id=djb2("services_services_sm_SmRequest"))
    fc_regen_stability; a Robot scenario that injects a signal and
    calls a service, asserting the target reacted (via trace) and the
    call returned the expected reply. **theia.**
+
+---
+
+## Implemented send-signal path (2026-05-26) — probe node + gate split
+
+The #387 design above (supervisor-routed envelope) was superseded by a
+cleaner, proven design. Two structural decisions landed it:
+
+### 1. The "probe" is a NODE in services/com (distinct TIPC address)
+
+"Robot node" is renamed **probe** (avoids "robot node" vs "robot test"
+confusion). It is a second node declared in `services/system/com`'s
+`.art` — `ProbeDaemon`, TIPC **0x800100FF** (well clear of the FC range
+0x..01–0x..12). TIPC is network-wide, so the probe carries its OWN
+distinct address; it sends TO a target FROM its own identity,
+impersonation is attribution only (header `src`), never an address
+takeover. This was the first real use of the multi-node `gen-app --kind
+fc` (artheia 16c4db9) — com emits ComDaemon + ProbeDaemon, one
+`com_codecs.hh`, a main that starts both threads. The actual forward
+engine stays `robot_inject_signal`/`robot_call_service` in
+`services/com/src/robot_node.cpp`, fronted by the existing gRPC
+`InjectSignal`/`CallService`. com's hand-written gRPC bridge (src/) is
+untouched by gen-app; only lib/impl regenerate.
+
+### 2. A statem must not take external messages directly → gate split
+
+sm's statem events (SystemBoot/StartupComplete/…) are driven by INTERNAL
+`post_event()` only — `SmDaemon` has no inbound port for them, so a
+direct cast lands on an unregistered service_id and is dropped. So sm is
+now TWO nodes (theia 927cab5):
+- **SmDaemon** — the GenStateM node, TIPC 0x8001000D (unchanged statem).
+- **SmGate** — a plain GenServer, TIPC **0x8001001D**, with a receiver
+  port for the lifecycle messages. Its `handle_cast` forwards each into
+  SmDaemon's FSM IN-PROCESS via `post_event()` through a
+  `LocalRef<SmDaemon>` (both are threads in the one sm process; the
+  cross-node ref is published by sm's hand-owned main.cc as
+  `sm_statem_ref()`). The gate is the FC's only TIPC-reachable surface
+  for FSM events.
+
+### Proven flow (live)
+
+```
+test → com gRPC InjectSignal(target=SmGate 0x8001001D, msg=StartupComplete, payload)
+     → probe (robot_inject_signal) → TIPC GW_MSG_GEN_CAST
+     → SmGate.handle_cast → post_event() in-process → SmDaemon FSM
+```
+
+- **T1** (supervisor → sm): supervisor, after all children up, casts
+  SystemBoot + StartupComplete to the gate → sm reaches RUNNING. (theia
+  8e2ef69 + 927cab5.)
+- **T2** (probe re-send): probe re-sends StartupComplete to the gate
+  impersonating the supervisor; sm already RUNNING → received-and-ignored
+  (no transition out of RUNNING). (theia 401aeee.)
+- Robot scenario: `testing/rf_theia/scenarios/_selftest/sm_gate/` (T1+T2,
+  2/2, live-tagged). The CMake `services-com` gRPC bridge must start
+  AFTER the supervisor (it connects to supervisor TIPC at boot).
+
+Status: the send-signal half is DONE and pushed to main. The trace half
+(rf reads node traces back via the com gRPC proxy) is the next task — see
+the trace-proxy design doc.

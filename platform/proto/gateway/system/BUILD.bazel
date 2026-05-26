@@ -6,12 +6,28 @@
 # `#include "gateway/system/status.pb.h"` once they add
 # platform/proto/ to their include path.
 #
-# Today the .pb.{h,c} are committed alongside the .proto (one-shot
-# nanopb_generator output). A Bazel-driven regen will replace this with
-# `genrule` / `nanopb_generate` later; the file targets below stay the
-# same so callers don't need to change.
+# .pb.{c,h} are BUILT, not committed: the genrule below invokes
+# nanopb_generator on status.proto — same pattern as the per-FC protos
+# (see platform/proto/system/services/sm/BUILD.bazel). The .proto stays
+# committed; the .pb.{c,h} are derived (gitignored). The status_pb_c /
+# status_pb_h filegroup names are unchanged so callers don't move.
 
 package(default_visibility = ["//visibility:public"])
+
+genrule(
+    name = "status_pb",
+    srcs = ["status.proto"],
+    outs = [
+        "status.pb.c",
+        "status.pb.h",
+    ],
+    cmd = "set -e;"
+        + " in_dir=$$(dirname $(location status.proto));"
+        + " out_dir=$$(dirname $(location status.pb.c));"
+        + " nanopb_generator -I $$in_dir -D $$out_dir status.proto;",
+    tools = [],
+    local = True,  # host-installed nanopb_generator, same as the FC protos
+)
 
 filegroup(
     name = "status_pb_c",

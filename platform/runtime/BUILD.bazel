@@ -66,6 +66,23 @@ cc_library(
 # ---- Test suite (gen_server runtime; mirrors slices of OTP's
 #      gen_server_SUITE.erl). Self-contained nanopb proto under
 #      test/proto/ so the cc_test has no external app dependencies.
+#      .pb.{c,h} are BUILT from messages.proto (same genrule pattern as
+#      control_pb above), not committed.
+
+genrule(
+    name = "test_messages_pb",
+    srcs = ["test/proto/platform_runtime_test/messages.proto"],
+    outs = [
+        "test/proto/platform_runtime_test/messages.pb.c",
+        "test/proto/platform_runtime_test/messages.pb.h",
+    ],
+    cmd = "set -e;"
+        + " in_dir=$$(dirname $(location test/proto/platform_runtime_test/messages.proto));"
+        + " out_dir=$$(dirname $(location test/proto/platform_runtime_test/messages.pb.c));"
+        + " nanopb_generator -I $$in_dir -D $$out_dir messages.proto;",
+    tools = [],
+    local = True,  # host-installed nanopb_generator, same as the FC protos
+)
 
 cc_library(
     name = "test_protos",

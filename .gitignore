@@ -96,3 +96,22 @@ deploy/logs/
 /third_party/etcd-cpp-apiv3/
 core.*
 .gdb_history
+
+# Staged deploy trees — `demo/stage_local.sh` + the rig pipeline write
+# the per-machine supervisor/executor.json/bin/<child>/services-log/
+# netgraph.json here. Build output, never source.
+/install/
+
+# Manifest/proto regen output belongs ONLY under install/ and dist/, not
+# scattered in the source tree:
+#   - `artheia executor emit --out demo/manifest/executor.json` etc. is a
+#     stray; emit to install/ or stdout. (The canonical rig manifests are
+#     emitted into dist/manifest/ by the dist_manifest pipeline.)
+#   - `artheia gen-app --kind fc --proto-out services/<fc>/proto` litters a
+#     package-mirror tree (services/<fc>/proto/system/<pkg>/<leaf>.proto)
+#     + its .pb.{c,h}; the CANONICAL FC protos live in platform/proto/, so
+#     this byproduct is generated, never committed. (Narrow to the
+#     generated system/ subtree so hand-authored protos like
+#     services/log/proto/trace_stream.proto stay tracked.)
+/demo/manifest/executor.json
+/services/*/proto/system/

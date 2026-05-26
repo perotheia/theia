@@ -1,16 +1,61 @@
 # services/com — gRPC bridge between the in-host supervisor (TIPC)
-# and external clients (GUI / dashboards). Built today by CMake;
-# this BUILD.bazel just exposes its sources so other Bazel targets
-# can sandbox them. A future native-Bazel cc_binary lives elsewhere.
+# and external clients (GUI / dashboards / rf-theia).
+#
+# Two build entry points, split by dependency:
+#   //services/com/main:com     — the FC daemon (ComDaemon + ProbeDaemon),
+#                                 native Bazel cc_binary, nanopb + TIPC only.
+#   //services/com:services-com — the gRPC bridge (src/main.cpp), built via
+#                                 the rules_foreign_cc cmake() wrapper below.
+#
+# Why cmake() and not a native cc_binary: gRPC (grpc++) is NOT in theia's
+# bzlmod module graph — no `bazel_dep(name="grpc")`, no http_archive +
+# grpc_deps() (mosaic's @com_github_grpc_grpc lives only in its own separate
+# WORKSPACE). grpc++ is reached via host pkg-config, which Bazel only sees
+# through rules_foreign_cc. Same pattern as //supervisor-gui and
+# //services/log:services-log. CMakeLists.txt stays the dev source of truth
+# (`cmake -S . -B build` still works); `bazel build //services/com:services-com`
+# produces the same binary into bazel-bin/ for the rig pipeline. Native
+# gRPC-from-source (mosaic-style) would be a workspace-wide infra change,
+# tracked separately.
+
+load("@rules_foreign_cc//foreign_cc:defs.bzl", "cmake")
 
 package(default_visibility = ["//visibility:public"])
 
-# .proto sources consumed by supervisor-gui's CMake build via its
-# ${CMAKE_CURRENT_SOURCE_DIR}/../services/com/proto path.
+# .proto sources consumed by supervisor-gui's CMake build (+ the cmake()
+# sandbox below) via ${CMAKE_CURRENT_SOURCE_DIR}/../com/proto.
 filegroup(
     name = "proto_srcs",
     srcs = glob(
         ["proto/**/*.proto"],
         allow_empty = False,
     ),
+)
+
+filegroup(
+    name = "all_srcs",
+    srcs = glob(
+        [
+            "CMakeLists.txt",
+            "src/**",
+            "include/**",
+            "proto/**",
+        ],
+        allow_empty = False,
+    ) + [
+        # CMakeLists pulls the supervisor protos via
+        # ../../platform/supervisor/generated/proto — they must be in the
+        # sandbox too (com/proto is covered by the glob above).
+        "//platform/supervisor:proto_srcs",
+    ],
+)
+
+cmake(
+    name = "services-com",
+    lib_source = ":all_srcs",
+    out_binaries = ["services-com"],
+    # THEIA_ROBOT_NODE defaults ON in CMakeLists (the test-only probe
+    # inject/call surface). CMake finds protoc + grpc_cpp_plugin + grpc++ +
+    # protobuf as host-apt packages (cmake() doesn't sandbox /usr).
+    targets = ["services-com"],
 )

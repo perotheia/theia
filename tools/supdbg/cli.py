@@ -175,9 +175,10 @@ def cmd_trace_stream(args: argparse.Namespace) -> int:
         except Exception as e:
             print(f"# WARNING: decoder unavailable ({e}); falling back to raw")
 
-    with Client(args.target) as c:
+    with Client(args.target, collector_endpoint=args.collector) as c:
         try:
-            for rec, decoded in c.subscribe_traces(decoder=decoder):
+            for rec, decoded in c.subscribe_traces(
+                    kind=args.kind, target_node=args.node, decoder=decoder):
                 if decoded is not None:
                     print(f"[{rec.ts_ns}] {rec.node_name} {rec.msg_type} "
                           f"corr={rec.corr_id} {decoded}")
@@ -291,6 +292,20 @@ def build_parser() -> argparse.ArgumentParser:
     pts = trace_sub.add_parser(
         "stream", help="stream trace records (Ctrl-C to stop)")
     _add_target(pts)
+    pts.add_argument(
+        "--collector", default="127.0.0.1:7710",
+        help="collector TraceStream gRPC endpoint (services/log, the trace "
+             "EGRESS — NOT com). Default 127.0.0.1:7710",
+    )
+    pts.add_argument(
+        "--kind", type=int, default=0,
+        help="TraceKind filter ordinal (1=cast_out 2=cast_in 3=call_out "
+             "4=call_in 5=statem); 0 = all kinds",
+    )
+    pts.add_argument(
+        "--node", default="",
+        help="restrict to one source node (component name); default all",
+    )
     pts.add_argument(
         "--decode", action="store_true",
         help="decode payload via libtrace_decoder.so (#356); falls back "

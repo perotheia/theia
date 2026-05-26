@@ -514,6 +514,12 @@ int Supervisor::run() {
     log_info("supervisor starting (root=" + root_->name + ")");
     start_subtree(*root_);
 
+    // T1: arm the SM startup handshake. Children were just forked; give
+    // them a grace window to bind their TIPC sockets, then send_sm_ready()
+    // (below, in the loop) casts SystemBoot + StartupComplete to sm.
+    sm_ready_deadline_ =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+
     while (!shutdown_requested_.load()) {
         // Wait for signalfd readable; budget 1s so we wake periodically.
         fd_set rfds;
@@ -562,6 +568,15 @@ int Supervisor::run() {
         // Reap any exited workers, regardless of whether select returned a
         // signalfd event — we may have missed coalesced SIGCHLDs.
         reap();
+
+        // T1: once the post-boot grace window elapses, send the SM
+        // startup handshake exactly once (children have had time to bind
+        // their TIPC sockets).
+        if (!sm_ready_sent_ &&
+            std::chrono::steady_clock::now() >= sm_ready_deadline_) {
+            send_sm_ready();
+            sm_ready_sent_ = true;
+        }
 
         // Drain the TIPC socket: accept new clients, deliver inbound
         // ControlRequest / HeartbeatReport / SendTimeoutReport frames
@@ -1978,6 +1993,35 @@ void Supervisor::push_log_level_to_child(const std::string& child_name) {
             "(type=0x%x inst=%u) — child not listening yet; "
             "env-applied on next restart\n",
             child_name.c_str(), type, instance);
+    }
+}
+
+// T1: tell the state-manager the platform has booted. sm's statem is
+// OFF --SystemBoot--> STARTING --StartupComplete--> RUNNING, so we cast
+// both in sequence to sm's TIPC name (0x8001000D:0). Both are empty
+// messages (zero payload); service_id = djb2 of the nanopb C type name,
+// exactly what sm's register_cast<...> hashed. Same GW_MSG_GEN_CAST wire
+// shape as the #386 log push. Fired once; sm_ready_sent_ guards re-send.
+void Supervisor::send_sm_ready() {
+    constexpr uint32_t kSmTipcType     = 0x8001000Du;
+    constexpr uint32_t kSmTipcInstance = 0u;
+    static const uint16_t kSystemBootSvcId =
+        djb2_low16("services_services_sm_SystemBoot");
+    static const uint16_t kStartupCompleteSvcId =
+        djb2_low16("services_services_sm_StartupComplete");
+
+    const std::string empty;  // both messages have no fields
+    const bool b1 = send_gw_cast_to_tipc_name(
+        kSmTipcType, kSmTipcInstance, kSystemBootSvcId, empty);
+    const bool b2 = send_gw_cast_to_tipc_name(
+        kSmTipcType, kSmTipcInstance, kStartupCompleteSvcId, empty);
+    if (b1 && b2) {
+        log_info("sm startup handshake sent (SystemBoot + StartupComplete)");
+    } else {
+        std::fprintf(stderr,
+            "supervisor: sm startup handshake send failed "
+            "(SystemBoot=%d StartupComplete=%d) — sm not listening yet\n",
+            b1, b2);
     }
 }
 

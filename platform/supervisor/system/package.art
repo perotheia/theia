@@ -272,6 +272,9 @@ message TraceConfig {
     string  target_node
     string  msg_type
     bool    enabled
+    uint32  kind         // TraceKind ordinal (call/cast×in/out, statem);
+                         // 0 = all kinds. Pushed to the node's Tracer via
+                         // platform_runtime.TraceControlPush (#403).
 }
 
 message ConfigureTraceRequest {

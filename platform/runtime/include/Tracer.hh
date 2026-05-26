@@ -269,6 +269,28 @@ public:
         return it != filter_.end() && it->second;
     }
 
+    // Per-trace-KIND filter (#403). Parallel to the msg_type filter but
+    // gates by the coarse dispatch class (TraceKind: call/cast × in/out,
+    // statem). Driven by the supervisor's TraceControlPush push (the
+    // standard runtime control message) → GenServer base handle_cast →
+    // here. A bitmask over TraceKind ordinals (0..5); mask 0 = "all kinds"
+    // (back-compat, master-on default). Lock-free reads via relaxed atomic
+    // so emit()'s kind check stays as cheap as the msg_type one.
+    void trace_enable_kind(TraceKind k, bool on) noexcept {
+        uint32_t bit = 1u << static_cast<uint32_t>(k);
+        uint32_t cur = kind_mask_.load(std::memory_order_relaxed);
+        kind_mask_.store(on ? (cur | bit) : (cur & ~bit),
+                         std::memory_order_relaxed);
+    }
+    void trace_clear_kinds() noexcept {
+        kind_mask_.store(0, std::memory_order_relaxed);
+    }
+    bool trace_kind_passes(TraceKind k) const noexcept {
+        uint32_t mask = kind_mask_.load(std::memory_order_relaxed);
+        if (mask == 0) return true;  // no kind filter set → all kinds pass
+        return (mask & (1u << static_cast<uint32_t>(k))) != 0;
+    }
+
     // Hot path. Caller MUST have already checked enabled() — we don't
     // re-check, to make the cost model explicit at call sites.
     // payload may be nullptr / 0-len for events without typed data.
@@ -284,6 +306,9 @@ public:
               uint32_t       corr_id,
               const uint8_t* payload, uint16_t payload_len) noexcept {
         if (!trace_filter_passes(msg_type_name)) return;
+        // Kind filter (#403): supervisor's TraceControlPush selects which
+        // dispatch classes to trace. Empty mask = all kinds (back-compat).
+        if (!trace_kind_passes(trace_kind_of(kind))) return;
         // Reporting gate (#401): non-reporting nodes never reach the bus,
         // even if enabled_ was flipped by the THEIA_TRACE boot switch.
         if (!reporting_.load(std::memory_order_relaxed)) return;
@@ -355,6 +380,7 @@ private:
     const char*                                    name_;
     std::atomic<bool>                              enabled_{false};
     std::atomic<bool>                              reporting_{false};
+    std::atomic<uint32_t>                          kind_mask_{0};  // 0 = all kinds (#403)
     std::chrono::steady_clock::time_point          start_tp_;
 
     // Per-msg-type filter (#355). Keys are stable string literals

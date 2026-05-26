@@ -57,6 +57,9 @@
 // register_cast<>'s this type, so the codec belongs with the framework.
 // Emits RemoteCodec<platform_runtime_LogLevelPush> + msg_type_name.
 DEMO_DECLARE_REMOTE_CODEC(platform_runtime_LogLevelPush)
+// Trace control (#403) — the supervisor's per-node trace-kind push.
+// Same framework-universal codec rationale as LogLevelPush above.
+DEMO_DECLARE_REMOTE_CODEC(platform_runtime_TraceControlPush)
 
 namespace demo {
 namespace runtime {
@@ -246,6 +249,29 @@ public:
         std::fprintf(stderr, "[%s] log level -> %s (supervisor push)\n",
                      Derived::kNodeName,
                      platform::runtime::log_level_name(lvl));
+    }
+
+    // ---- Config service: TraceControlPush (#403) ------------------------
+    //
+    // Framework-provided handle_cast overload for the supervisor's trace
+    // control push (rf → com ConfigureTrace → supervisor → here). Same
+    // shape + wiring as LogLevelPush: a reporting node's main.cc
+    // register_cast<platform_runtime_TraceControlPush>'s it, the cast
+    // lands here on the node thread, and we flip the node's Tracer kind
+    // filter. The runtime TraceKind ordinals (TK_*) are aligned with
+    // demo::runtime::TraceKind, so it's a static_cast. enabled toggles the
+    // kind bit; an empty kind mask means "all kinds" (master on).
+    void handle_cast(const platform_runtime_TraceControlPush& push,
+                     StateT& /*s*/) noexcept {
+        auto& tr = ::demo::runtime::tracer_for(Derived::kNodeName);
+        tr.enable(true);  // master on — the kind mask narrows from here
+        tr.trace_enable_kind(
+            static_cast<::demo::runtime::TraceKind>(push.kind),
+            push.enabled);
+        std::fprintf(stderr,
+            "[%s] trace kind %d -> %s (supervisor push)\n",
+            Derived::kNodeName, static_cast<int>(push.kind),
+            push.enabled ? "ON" : "OFF");
     }
 
 protected:

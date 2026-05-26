@@ -332,21 +332,32 @@ REMAINING:
   proto/platform_runtime/ path + remove the stray dir (artheia
   package-dir-collapse quirk).
 
-  REMAINING step-5 worklist (each mirrors LogLevelPush):
-  1. Tracer (Tracer.hh): add a kind filter alongside the msg_type filter —
-     trace_enable_kind(TraceKind, bool) + emit() checks it (today filters
-     msg_type only). enabled kind set; empty = all (back-compat).
-  2. GenServer.hh: add handle_cast(platform_runtime_TraceControlPush&) base
-     overload (next to handle_cast(LogLevelPush)) → tracer.trace_enable_kind.
-  3. gen-app main.cc.j2 / main.statem.cc.j2: reporting node config_mux adds
-     register_cast<platform_runtime_TraceControlPush> (beside LogLevelPush).
-     Regen 5 FCs.
-  4. supervisor runtime.cpp: push TraceControlPush via send_gw_cast_to_tipc_
-     name (service_id = djb2("platform_runtime_TraceControlPush")) — REPLACE
-     the dead kTagTraceApplyConfig=0x0300 send_frame path. apply/push carry
-     kind. supervisor .art TraceConfig may gain kind for the stored config.
-  5. com ConfigureTrace already forwards kind via TraceConfigRequest.kind=4;
-     thread it into op_kind=9 ControlRequest → supervisor.
+  step-5 worklist progress:
+  DONE (runtime half — builds green //platform/runtime:runtime):
+  1. Tracer.hh: kind filter — trace_enable_kind(TraceKind,bool) +
+     trace_kind_passes() (atomic bitmask, 0=all) + emit() gates on
+     trace_kind_of(kind). kind_mask_ member.
+  2. GenServer.hh: handle_cast(platform_runtime_TraceControlPush&) base
+     overload (next to LogLevelPush) → enable(true)+trace_enable_kind;
+     DEMO_DECLARE_REMOTE_CODEC(platform_runtime_TraceControlPush).
+  3. gen-app main.cc.j2 + main.statem.cc.j2: reporting config_mux adds
+     register_cast<platform_runtime_TraceControlPush>. (NOT yet regen'd to
+     the 5 FCs.)
+  PROTO plumbing DONE: supervisor .art TraceConfig gains `uint32 kind=4`;
+  gen-proto regen'd TraceConfig.proto (+ siblings).
+  REMAINING:
+  4. supervisor runtime.cpp: apply_trace_config(.., kind) store+push;
+     push_trace_config_to_child sends platform_runtime.TraceControlPush via
+     send_gw_cast_to_tipc_name (service_id=djb2("platform_runtime_
+     TraceControlPush"), encode {kind varint field1, enabled field2} by
+     hand like encode_log_level_push) — REPLACING the dead
+     kTagTraceApplyConfig=0x0300 send_frame_to_tipc_name path. CMake rebuild.
+  5. com src/main.cpp ConfigureTrace: cfg->set_kind(req->kind()). CMake
+     rebuild.
+  6. regen 5 FCs (gen-app) so each reporting node register_casts
+     TraceControlPush; byte-stable except the new line. Build all FCs.
+  7. live verify: push TraceControlPush to sm, assert its tracer kind mask
+     flips (only that kind reaches the collector gRPC).
 - repoint supdbg client.subscribe_traces to a collector-endpoint channel
   (trace_stream_pb2_grpc.TraceStreamStub on :7710) — currently raises
   NotImplementedError. rf-theia keyword surface is step 7.

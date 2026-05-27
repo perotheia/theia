@@ -19,6 +19,13 @@ discovers it. It runs on the **workspace `.venv`** — no per-plugin venv.
   manual changes.
 - Keeps a **running in-memory log** of `created / modified / deleted / moved`
   events, deduplicating burst saves.
+- **Tails your shell history** (`$HISTFILE`, default `~/.zsh_history`) — zsh's
+  history is append-only and shared across terminals, so this is a single
+  chronological feed of what you ran (build, test, git, …). `check_me` pairs
+  it with the file edits as **intent signal**: it can cross-check "you edited
+  X" against "you ran Y". Read-only; baseline starts when the watcher does,
+  so only post-start commands are reported. Capped at the most recent
+  `SHELL_MAX` (200) per checkpoint.
 
 | Tool | Trigger phrase | What it does |
 |---|---|---|

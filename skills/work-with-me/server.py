@@ -46,6 +46,10 @@ from watchdog.observers import Observer
 # that a real user edit seconds later still lands in the log.
 AGENT_WINDOW_S = 4.0
 
+# Cap how many shell commands a checkpoint reports, so a huge history burst
+# can't blow up the check_me payload.
+SHELL_MAX = 200
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Repo helpers
@@ -138,6 +142,97 @@ class AgentEdits:
             now = time.monotonic()
             self._recent = {p: d for p, d in self._recent.items() if d > now}  # prune
             return abs_path in self._recent
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Shell history tail — what the user is running in their terminals
+# ──────────────────────────────────────────────────────────────────────────────
+
+class ShellHistory:
+    """Tails the shared zsh history file ($HISTFILE, default ~/.zsh_history),
+    returning the commands appended since the last checkpoint. zsh's history
+    is append-only and common to all terminals, so this is a single
+    chronological feed of what the USER typed at the shell — context that
+    pairs with the file-change log (e.g. 'edited X' alongside 'ran build Y').
+
+    Read-only: never writes the history file. Tolerant of a missing file
+    (no shell history → empty feed). Parses zsh's EXTENDED_HISTORY format
+    `: <epoch>:<elapsed>;<command>` and falls back to plain lines."""
+
+    def __init__(self, histfile: Path):
+        self._histfile = histfile
+        self._lock = threading.Lock()
+        # Start the checkpoint at the current end of file so we only ever
+        # report commands run AFTER the watcher started.
+        try:
+            self._pos = histfile.stat().st_size
+        except OSError:
+            self._pos = 0
+
+    @staticmethod
+    def _parse(line: str) -> "tuple[int | None, str] | None":
+        """(epoch|None, command) for one history line, or None to skip."""
+        line = line.rstrip("\n")
+        if not line.strip():
+            return None
+        if line.startswith(":"):
+            # `: 1700000000:0;the command`
+            try:
+                meta, cmd = line.split(";", 1)
+                epoch = int(meta.split(":")[1].strip())
+                return epoch, cmd
+            except (ValueError, IndexError):
+                return None, line
+        return None, line
+
+    def _read_new(self) -> list[str]:
+        """Pull lines appended since last read; advance the offset."""
+        try:
+            size = self._histfile.stat().st_size
+        except OSError:
+            return []
+        if size < self._pos:       # history rotated/truncated → restart
+            self._pos = 0
+        if size == self._pos:
+            return []
+        try:
+            # zsh writes latin-1-ish bytes for meta-quoted multibyte chars;
+            # decode leniently so a stray byte never drops a command.
+            with self._histfile.open("r", encoding="utf-8", errors="replace") as fh:
+                fh.seek(self._pos)
+                chunk = fh.read()
+                self._pos = fh.tell()
+        except OSError:
+            return []
+        out: list[str] = []
+        # zsh joins multi-line commands with a trailing backslash; keep it
+        # simple — one history entry per physical line is the common case.
+        for raw in chunk.splitlines():
+            parsed = self._parse(raw)
+            if parsed is None:
+                continue
+            epoch, cmd = parsed
+            cmd = cmd.strip()
+            if cmd:
+                ts = datetime.fromtimestamp(epoch, timezone.utc).strftime("%H:%M:%S") \
+                    if epoch else "--:--:--"
+                out.append(f"[{ts}] {cmd}")
+        return out
+
+    def snapshot_and_advance(self) -> list[str]:
+        """Commands since the last checkpoint; advance past them (clears)."""
+        with self._lock:
+            return self._read_new()
+
+    def peek(self) -> list[str]:
+        """Commands since the last checkpoint WITHOUT advancing (get_changes).
+        We read new lines, then rewind the offset so they're reported again
+        on the next call until a checkpoint consumes them."""
+        with self._lock:
+            before = self._pos
+            lines = self._read_new()
+            self._pos = before
+            return lines
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -277,6 +372,22 @@ def _render_log(entries: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _render_shell(cmds: list[str]) -> str:
+    """Numbered list of shell commands, capped at SHELL_MAX (keep the most
+    recent — those are closest to the edits being reviewed)."""
+    if not cmds:
+        return "(none)"
+    shown = cmds[-SHELL_MAX:]
+    elided = len(cmds) - len(shown)
+    lines = []
+    if elided:
+        lines.append(f"  … {elided} earlier command(s) elided …")
+    base = elided + 1
+    for i, c in enumerate(shown, start=base):
+        lines.append(f"  {i:>4}. {c}")
+    return "\n".join(lines)
+
+
 def _group_by_path(entries: list[dict]) -> dict[str, list[str]]:
     """Return {path: [event_types]} for the check_me prompt."""
     grouped: dict[str, list[str]] = {}
@@ -294,7 +405,14 @@ def _group_by_path(entries: list[dict]) -> dict[str, list[str]]:
 
 app = Server("work-with-me")
 changelog = ChangeLog()
+shellhist: "ShellHistory | None" = None   # set in main() once HISTFILE is known
 _observer: "Observer | None" = None
+
+
+def _histfile() -> Path:
+    """The shared zsh history file: $HISTFILE, else ~/.zsh_history."""
+    env = os.environ.get("HISTFILE")
+    return Path(env).expanduser() if env else Path.home() / ".zsh_history"
 
 
 @app.list_tools()
@@ -303,14 +421,16 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="check_me",
             description=(
-                "Review all file modifications the USER has made since the last checkpoint "
-                "for consistency with the current session context. (Edits made by the agent's "
-                "own Edit/Write tools are excluded — this reviews the human's manual changes.) "
-                "Identify issues such as: incomplete edits, missing counterpart changes "
-                "(updated a call site but not the definition, or vice versa), broken imports, "
-                "type / signature mismatches, or logic gaps. "
-                "Provide actionable advice on what to fix. "
-                "Clears the change log after reviewing (starts a fresh checkpoint). "
+                "Review the USER's file modifications since the last checkpoint for "
+                "consistency with the current session, ALONGSIDE the shell commands they "
+                "ran (tailed from the shared zsh history — what they built/ran/debugged). "
+                "(Edits made by the agent's own Edit/Write tools are excluded — this "
+                "reviews the human's manual changes.) Use the commands as intent signal "
+                "and cross-check against the edits. Identify: incomplete edits, missing "
+                "counterpart changes (call site updated but not the definition, or vice "
+                "versa), broken imports, type / signature mismatches, logic gaps, or edits "
+                "inconsistent with what the commands imply. Provide actionable advice. "
+                "Clears the change log + shell tail (starts a fresh checkpoint). "
                 "Call this tool when the user says 'check me'."
             ),
             inputSchema={"type": "object", "properties": {}, "required": []},
@@ -318,8 +438,9 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="get_changes",
             description=(
-                "Return the accumulated USER file-change log since the last checkpoint "
-                "without clearing it. Useful for a quick peek at what has changed."
+                "Return the accumulated USER file-change log AND the shell commands run "
+                "since the last checkpoint, without clearing. A quick peek at what has "
+                "changed and what the user has been running."
             ),
             inputSchema={"type": "object", "properties": {}, "required": []},
         ),
@@ -337,57 +458,75 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     # ── check_me ────────────────────────────────────────────────────────────
     if name == "check_me":
         entries = changelog.snapshot_and_clear()
-        if not entries:
+        cmds = shellhist.snapshot_and_advance() if shellhist else []
+
+        if not entries and not cmds:
             return [TextContent(
                 type="text",
                 text=(
-                    "No USER file changes recorded since the last checkpoint.\n"
+                    "No USER file changes or shell commands since the last checkpoint.\n"
                     "(Agent edits are tracked separately and excluded.)\n"
                     "The change log is now cleared — fresh checkpoint started."
                 ),
             )]
 
-        log_text = _render_log(entries)
-        grouped = _group_by_path(entries)
-        files_touched = "\n".join(
-            f"  {path}  ({', '.join(ops)})" for path, ops in grouped.items()
-        )
+        files_block = "(no file changes)"
+        if entries:
+            grouped = _group_by_path(entries)
+            files_touched = "\n".join(
+                f"  {path}  ({', '.join(ops)})" for path, ops in grouped.items()
+            )
+            files_block = f"{files_touched}\n\n**Full event log:**\n{_render_log(entries)}"
 
         prompt = (
             "## work-with-me checkpoint\n\n"
-            f"**Files the USER touched since last checkpoint:**\n{files_touched}\n\n"
-            f"**Full event log:**\n{log_text}\n\n"
+            f"**Files the USER touched since last checkpoint:**\n{files_block}\n\n"
+            f"**Shell commands the USER ran (zsh history, all terminals):**\n"
+            f"{_render_shell(cmds)}\n\n"
             "---\n"
-            "Please review the user's changes above in the context of this session.\n\n"
+            "Please review the user's changes above in the context of this session.\n"
+            "Use the shell commands as intent signal — what they were building, "
+            "running, or debugging — and cross-check it against the file edits.\n\n"
             "Check for:\n"
             "- Incomplete edits (a rename/refactor applied in one place but not others)\n"
             "- Missing counterpart changes (call site updated but not the function, or vice versa)\n"
             "- Import / export mismatches introduced by file additions or deletions\n"
             "- Type / signature drift\n"
             "- Deleted files that are still referenced\n"
-            "- Any logic gaps visible from the file list\n\n"
+            "- Edits inconsistent with what the shell commands suggest they intended\n"
+            "- A command that failed or implies a step not yet done\n\n"
             "Give concrete, actionable advice for each issue found. "
             "If everything looks consistent, say so.\n\n"
-            "_Change log cleared — next checkpoint starts now._"
+            "_Change log + shell tail cleared — next checkpoint starts now._"
         )
         return [TextContent(type="text", text=prompt)]
 
     # ── get_changes ─────────────────────────────────────────────────────────
     elif name == "get_changes":
         entries = changelog.snapshot()
-        if not entries:
-            return [TextContent(type="text", text="No user changes recorded yet.")]
+        cmds = shellhist.peek() if shellhist else []
+        if not entries and not cmds:
+            return [TextContent(type="text", text="No user changes or shell commands recorded yet.")]
         return [TextContent(
             type="text",
-            text=f"## Current user-change log ({len(entries)} events)\n\n{_render_log(entries)}",
+            text=(
+                f"## Current user-change log ({len(entries)} events)\n\n"
+                f"{_render_log(entries)}\n\n"
+                f"## Shell commands since checkpoint ({len(cmds)})\n\n"
+                f"{_render_shell(cmds)}"
+            ),
         )]
 
     # ── clear_changes ────────────────────────────────────────────────────────
     elif name == "clear_changes":
         n = changelog.clear()
+        cmds = shellhist.snapshot_and_advance() if shellhist else []  # advance past
         return [TextContent(
             type="text",
-            text=f"Change log cleared ({n} events removed). Fresh checkpoint started.",
+            text=(
+                f"Change log cleared ({n} file events, {len(cmds)} shell commands "
+                f"discarded). Fresh checkpoint started."
+            ),
         )]
 
     return [TextContent(type="text", text=f"Unknown tool: {name}")]
@@ -398,13 +537,17 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 # ──────────────────────────────────────────────────────────────────────────────
 
 async def main() -> None:
-    global _observer
+    global _observer, shellhist
 
     root = find_repo_root(Path.cwd())
     sidecar = root / ".claude" / "work-with-me" / "agent-edits.jsonl"
     sidecar.parent.mkdir(parents=True, exist_ok=True)
     agent = AgentEdits(sidecar)
     handler = RepoHandler(root, changelog, agent)
+
+    # Shell-history tail: the checkpoint baseline is "now", so we only ever
+    # report commands the user runs after the watcher starts.
+    shellhist = ShellHistory(_histfile())
 
     _observer = Observer()
     _observer.schedule(handler, str(root), recursive=True)

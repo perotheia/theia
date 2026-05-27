@@ -25,6 +25,7 @@ clear_changes Manually reset the log.
 """
 
 import asyncio
+import bisect
 import json
 import os
 import threading
@@ -49,6 +50,17 @@ AGENT_WINDOW_S = 4.0
 # Cap how many shell commands a checkpoint reports, so a huge history burst
 # can't blow up the check_me payload.
 SHELL_MAX = 200
+
+# Correlate shell commands to THIS repo's file activity by time, so a shared
+# history full of commands from other terminals doesn't accumulate. A command
+# at time Tc is kept if some file-change event at Tf falls in
+# [Tc - SHELL_PRE_S, Tc + SHELL_POST_S]:
+#   PRE  — you ran something, then edited a file (small lookback).
+#   POST — a command that ITSELF writes files (generator/compiler/cp/git):
+#          its outputs land seconds AFTER the command, so the file events sit
+#          in the command's near future. Wider than PRE.
+SHELL_PRE_S = 3.0
+SHELL_POST_S = 20.0
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -185,8 +197,9 @@ class ShellHistory:
                 return None, line
         return None, line
 
-    def _read_new(self) -> list[str]:
-        """Pull lines appended since last read; advance the offset."""
+    def _read_new(self) -> list[dict]:
+        """Pull entries appended since last read; advance the offset.
+        Each entry is {"ts": epoch|None, "cmd": str}."""
         try:
             size = self._histfile.stat().st_size
         except OSError:
@@ -204,7 +217,7 @@ class ShellHistory:
                 self._pos = fh.tell()
         except OSError:
             return []
-        out: list[str] = []
+        out: list[dict] = []
         # zsh joins multi-line commands with a trailing backslash; keep it
         # simple — one history entry per physical line is the common case.
         for raw in chunk.splitlines():
@@ -214,25 +227,23 @@ class ShellHistory:
             epoch, cmd = parsed
             cmd = cmd.strip()
             if cmd:
-                ts = datetime.fromtimestamp(epoch, timezone.utc).strftime("%H:%M:%S") \
-                    if epoch else "--:--:--"
-                out.append(f"[{ts}] {cmd}")
+                out.append({"ts": epoch, "cmd": cmd})
         return out
 
-    def snapshot_and_advance(self) -> list[str]:
-        """Commands since the last checkpoint; advance past them (clears)."""
+    def snapshot_and_advance(self) -> list[dict]:
+        """Entries since the last checkpoint; advance past them (clears)."""
         with self._lock:
             return self._read_new()
 
-    def peek(self) -> list[str]:
-        """Commands since the last checkpoint WITHOUT advancing (get_changes).
+    def peek(self) -> list[dict]:
+        """Entries since the last checkpoint WITHOUT advancing (get_changes).
         We read new lines, then rewind the offset so they're reported again
         on the next call until a checkpoint consumes them."""
         with self._lock:
             before = self._pos
-            lines = self._read_new()
+            entries = self._read_new()
             self._pos = before
-            return lines
+            return entries
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -245,8 +256,10 @@ class ChangeLog:
         self._entries: list[dict] = []
 
     def add(self, event_type: str, path: str, dest: str | None = None) -> None:
+        now = datetime.now(timezone.utc)
         entry: dict = {
-            "time": datetime.now(timezone.utc).strftime("%H:%M:%S"),
+            "ts": now.timestamp(),               # epoch — for shell-window correlation
+            "time": now.strftime("%H:%M:%S"),    # display
             "type": event_type,
             "path": path,
         }
@@ -372,9 +385,38 @@ def _render_log(entries: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _render_shell(cmds: list[str]) -> str:
+def _window_filter(cmds: list[dict], file_ts: list[float]) -> list[dict]:
+    """Keep only commands time-correlated to this repo's file activity, so a
+    shared history full of other-terminal commands doesn't accumulate.
+
+    A command at Tc is kept if some file event Tf satisfies
+        Tc - SHELL_PRE_S  ≤  Tf  ≤  Tc + SHELL_POST_S
+    (asymmetric: a file-writing command's outputs land AFTER it → POST wide).
+
+    If there are no file events to anchor against, OR a command carries no
+    timestamp (plain history line), we fail OPEN and keep it — better a little
+    noise than dropping a relevant command."""
+    if not file_ts:
+        return cmds
+    ft = sorted(file_ts)
+    kept: list[dict] = []
+    for c in cmds:
+        tc = c.get("ts")
+        if tc is None:
+            kept.append(c)            # untimestamped → can't window, keep
+            continue
+        lo, hi = tc - SHELL_PRE_S, tc + SHELL_POST_S
+        # any file event within [lo, hi]?  (bisect over sorted ft)
+        i = bisect.bisect_left(ft, lo)
+        if i < len(ft) and ft[i] <= hi:
+            kept.append(c)
+    return kept
+
+
+def _render_shell(cmds: list[dict]) -> str:
     """Numbered list of shell commands, capped at SHELL_MAX (keep the most
-    recent — those are closest to the edits being reviewed)."""
+    recent — those are closest to the edits being reviewed). Each entry is
+    {"ts": epoch|None, "cmd": str}."""
     if not cmds:
         return "(none)"
     shown = cmds[-SHELL_MAX:]
@@ -384,7 +426,10 @@ def _render_shell(cmds: list[str]) -> str:
         lines.append(f"  … {elided} earlier command(s) elided …")
     base = elided + 1
     for i, c in enumerate(shown, start=base):
-        lines.append(f"  {i:>4}. {c}")
+        ts = c.get("ts")
+        clock = datetime.fromtimestamp(ts, timezone.utc).strftime("%H:%M:%S") \
+            if ts else "--:--:--"
+        lines.append(f"  {i:>4}. [{clock}] {c['cmd']}")
     return "\n".join(lines)
 
 
@@ -459,13 +504,16 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     if name == "check_me":
         entries = changelog.snapshot_and_clear()
         cmds = shellhist.snapshot_and_advance() if shellhist else []
+        # Correlate commands to THIS repo's file activity by time, so a shared
+        # history full of other-terminal commands doesn't pile up.
+        cmds = _window_filter(cmds, [e["ts"] for e in entries if "ts" in e])
 
         if not entries and not cmds:
             return [TextContent(
                 type="text",
                 text=(
-                    "No USER file changes or shell commands since the last checkpoint.\n"
-                    "(Agent edits are tracked separately and excluded.)\n"
+                    "No USER file changes or correlated shell commands since the last "
+                    "checkpoint.\n(Agent edits are tracked separately and excluded.)\n"
                     "The change log is now cleared — fresh checkpoint started."
                 ),
             )]
@@ -481,7 +529,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         prompt = (
             "## work-with-me checkpoint\n\n"
             f"**Files the USER touched since last checkpoint:**\n{files_block}\n\n"
-            f"**Shell commands the USER ran (zsh history, all terminals):**\n"
+            f"**Shell commands time-correlated to those edits (zsh history):**\n"
             f"{_render_shell(cmds)}\n\n"
             "---\n"
             "Please review the user's changes above in the context of this session.\n"

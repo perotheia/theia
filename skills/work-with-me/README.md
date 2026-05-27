@@ -26,6 +26,16 @@ discovers it. It runs on the **workspace `.venv`** — no per-plugin venv.
   X" against "you ran Y". Read-only; baseline starts when the watcher does,
   so only post-start commands are reported. Capped at the most recent
   `SHELL_MAX` (200) per checkpoint.
+  - **Time-correlated to this repo's activity.** Because the history is
+    shared, `check_me` keeps only commands near a file-change event: a
+    command at `Tc` is kept iff some edit `Tf` falls in
+    `[Tc - SHELL_PRE_S, Tc + SHELL_POST_S]` (default 3 s / 20 s). The window
+    is asymmetric — `PRE` is small (you ran something, then edited); `POST`
+    is wider because a file-writing command (generator, compiler, `cp`,
+    `git`) lands its outputs *seconds after* it runs, so the edits sit in the
+    command's near future. Commands with no nearby edit — i.e. from another
+    terminal doing unrelated work — are dropped. Fails open: with no edits to
+    anchor against, or a history line with no timestamp, the command is kept.
 
 | Tool | Trigger phrase | What it does |
 |---|---|---|

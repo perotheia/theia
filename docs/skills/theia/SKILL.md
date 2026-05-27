@@ -1,0 +1,190 @@
+---
+name: theia
+description: Refresher for agents working in the theia monorepo — the AUTOSAR-Adaptive-style platform (Functional Clusters on the Theia C++ actor runtime, modeled in the artheia .art DSL). Orients you to the layout, the build, and where to dig deeper. Args: (none) — read top-to-bottom, then load a reference under references/ for the task at hand.
+disable-model-invocation: true
+---
+
+Theia is a Porsche CMP gateway platform: AUTOSAR-Adaptive-Platform-style
+**Functional Clusters (FCs)** running as supervised processes on a custom
+C++ **actor runtime** ("the Theia runtime"), with the whole system modeled
+in the **artheia** `.art` DSL and built with Bazel inside a Google-`repo`
+workspace.
+
+Read this page to orient. For a specific task, load the matching reference:
+
+| You're doing… | Read |
+| --- | --- |
+| Writing or editing `.art` files | [references/art-lang-grammar.md](references/art-lang-grammar.md) |
+| Generating / regenerating an FC's C++ (lib/main/impl) | [references/artheia-gen-app.md](references/artheia-gen-app.md) |
+| Regenerating the system: .art → manifests → build → deploy | [references/artheia-gen-system.md](references/artheia-gen-system.md) |
+
+Always run artheia with the workspace venv on PATH:
+`PATH="$PWD/.venv/bin:$PATH" artheia …`. It is editable-installed
+(`pip install -e artheia/`), so edits to `artheia/artheia/**.py` take
+effect immediately.
+
+## The abstraction ladder
+
+Everything in `.art` rests on three primitives. Internalize them:
+
+| Primitive | Is a | Owns |
+| --- | --- | --- |
+| **node** | thread | one TIPC `type/instance`, ports, a `GenServer`/`GenStateM`/`GenRunnable` |
+| **composition** | process (one executable) | prototypes (node instances) + in-process wiring (`connect`) |
+| **cluster** | distribution bundle | compositions + inter-process wiring; the deploy/packaging unit |
+
+There is no composition-of-compositions for deployment — the top units are
+**clusters**, and a cluster-of-clusters is not a thing (deploy-time
+orchestration is the rig's job, not the model's).
+
+## Repository map
+
+The repo is a Google-`repo` workspace; several dirs are sibling git repos
+checked out by `repo sync` (gitignored in pero_theia). Major dirs:
+
+- **`system/`** — the **virtual root** of the `system` package and the
+  aggregation point everything resolves against. `system/system.art`
+  (`cluster Platform`), `system/services/cluster.art` (`cluster Services`),
+  and per-FC symlinks `system/services/<fc>` → the real spec in the impl
+  tree. This replaced the old `platform/system/` (now retired).
+- **`services/`** — the FCs. 6 with real daemons live at
+  `services/<fc>/system/<fc>/{package,component}.art` (spec) +
+  `services/<fc>/{lib,main,impl}/` (generated + hand-owned C++). 12
+  daemon-less placeholders live together under `services/nop/`.
+- **`platform/`** — the C++ **runtime** (`platform/runtime/`), the
+  **supervisor** (`platform/supervisor/`), the **gateway** service
+  (`platform/gateway/`, a sibling repo), and `platform/config/`,
+  `platform/proto/` (committed `.proto`; the `.pb.*` are gitignored,
+  genrule-derived).
+- **`artheia/`** — **separate git repo** (remote `theia`). The `.art`
+  grammar, parser/resolver, code generators, manifest model, LSP, VS Code
+  extension. Commit/push it independently of pero_theia.
+- **`demo/`** — the demo rig (`demo/manifest/rig.py` = `Demo3Way`) +
+  `demo/system/demo/` app `.art`.
+- **`tools/`** — `supdbg` (Python gRPC debug CLI), `supervisor-gui`
+  (wx OTP-observer GUI), `deploy_rpi4.sh`.
+- **`testing/`** — `rf-theia`: Robot Framework + TPT harness, **its own
+  `.venv`** at `testing/`.
+- **`rules/`** — Bazel rules (`rig.bzl` module extension, `config/`
+  platforms, `psp.bzl`, `opkg.bzl`).
+- **`autosar/`** — the vendor PSP (`mlbevo_gen2_cmp_psp`): FIBEX/DBC →
+  catalog/`.art`/netgraph. **`gateway/`** — CMP codec libs + Hercules
+  firmware (sibling repos). **`vendor/`** — per-vendor app fragments.
+- **`docs/`** — `runtime.md` (the actor model, authoritative),
+  `supervision.md`, `tasks/` (the BACKLOG→TODO→PROGRESS→DONE workflow),
+  `skills/` (this tree). Note: `docs/architecture/ARCHITECTURE.md` still
+  references the pre-move `platform/system/` paths — treat its path
+  references as stale until refreshed; the conceptual layering is fine.
+
+## The Functional Cluster catalog
+
+The 18 AUTOSAR FCs are enumerated in
+`artheia/artheia/manifest/clusters.py` (`CLUSTERS` / `BY_SHORT`). Six ship a
+real daemon today; the rest are placeholders carrying a TIPC slot + the
+AUTOSAR-named interface contract but no process:
+
+| short | what | daemon? |
+| --- | --- | --- |
+| `com` | Communication Mgmt — the gRPC bridge (supervisor ↔ external tools), two-codec proxy | ✅ |
+| `log` | Log & Trace — two nodes: `LogDaemon` (syslog sink) + `TraceCollector` (trace fan-out) | ✅ |
+| `per` | Persistency | ✅ |
+| `sm` | State Management — a `GenStateM` FSM | ✅ |
+| `ucm` | Update & Config Mgmt | ✅ |
+| `shwa` | Safe Hardware Accelerator (pinned to the compute machine) | ✅ |
+| `exec` | Execution Mgmt — **realized BY the supervisor**, not a separate process | ⛔ (nop) |
+| `core` `crypto` `diag` `fw` `idsm` `nm` `osi` `phm` `rds` `tsync` `vucm` | AUTOSAR placeholders | ⛔ (nop) |
+
+`exec` is the special placeholder: its `services/nop/exec/` spec keeps
+`node atomic ExecDaemon` (tipc `0x80010005`) for the manifest binding,
+imports `system.supervisor.*`, and aliases `composition Exec { prototype
+Supervisor exec }` — the supervisor enacts EXEC's function-group control.
+
+## The Theia C++ runtime
+
+`platform/runtime/include/` — an OTP-faithful actor runtime (see
+`up/otp/lib/stdlib/src/gen_server.erl` for the reference shape, and
+`docs/runtime.md`). One **thread per node**. Three node base classes
+(picked by the `.art` node shape):
+
+- **`GenServer`** — sync-first mailbox actor: `handle_call` (request→reply),
+  `handle_cast` (fire-and-forget), `handle_info` (unrouted TIPC frame /
+  internal signal; default is CRITICAL+abort — drift is a bug).
+- **`GenStateM`** — finite state machine (Erlang `gen_statem` shape);
+  per-state event handlers + timeouts. `sm` uses it.
+- **`GenRunnable`** — a free worker thread: `do_start` / `do_loop` /
+  `do_stop`. `com`'s gRPC proxy node uses it.
+
+Transport is **TIPC** (`TipcMux`, per-process listener) carrying **nanopb**
+wire bytes; `RemoteRef`/`NodeRef` do correlated request/reply;
+`RemoteCodec` hashes a stable 16-bit `service_id` per message type.
+`Tracer` emits `[header][proto-wire]` records when a node is selectively
+enabled. etcd is the **observability mirror only** — never the control-path
+carrier between components (that's gRPC/TIPC).
+
+## The supervisor
+
+`platform/supervisor/` — an OTP-style fork/exec orchestrator (one Process
+per FC binary + per vendor app), owning Function-Group state. It exposes a
+**control surface** (`RestartChild`/`TerminateChild`/`StartChild`/
+`DeleteChild`, `ConfigureTrace`, `ConfigureLogLevel`) as a `gen_server`
+node on the standard Theia transport (nanopb `ControlRequest`), runs a
+**heartbeat watchdog**, and publishes a **firehose**: a stream of small
+name-keyed `NodeEdge`/`NodeState` topo-pairs (order-independent reassembly)
+rather than a monolithic snapshot. The `com` FC bridges
+supervisor↔gRPC so external tools (`supdbg`, `supervisor-gui`, `rf-theia`)
+never speak TIPC directly.
+
+## The pipeline, end to end
+
+```
+ .art system tree           gen-app --kind fc      C++ FC daemons
+ (system/, services/)  ──►   per node:        ──►  //services/<fc>/main:<fc>
+        │                    lib/ main/ impl/
+        │
+        │ load_platform_services (system/services as root)
+        ▼
+ manifest python layer       executor emit /        serialized JSON manifests
+ (services/manifest,    ──►  gui emit /         ──► executor.json, machines.yaml,
+  demo/manifest/rig)         generate-manifest      dist/manifest/<machine>/*.json
+        │
+        │ rig_ext (//rules:rig.bzl)
+        ▼
+ bazel build @rig_demo//…  ──►  .ipk bundles, //:install runtime layout
+```
+
+Details and exact commands are in
+[references/artheia-gen-system.md](references/artheia-gen-system.md).
+
+## Build & verify (cheat sheet)
+
+```sh
+export PATH="$PWD/.venv/bin:$PATH"
+
+artheia parse system/system.art                 # full-tree resolve (validation)
+bazel build --config=linux //services/com/main:com //services/sm/main:sm …
+bazel build @rig_demo//:executor_json           # the manifest pipeline under Bazel
+bazel build //system:art_sources                # the .art filegroup
+
+# Regen-stability guard — committed lib/main/impl/BUILD must equal gen-app output:
+cd testing && PATH="$PWD/.venv/bin:$PATH" \
+  python -m robot rf_theia/scenarios/_selftest/fc_regen_stability/fc_regen_stability.robot
+```
+
+Firmware uses `--config=ti_arm_cgt_18` (Hercules TMS570) or
+`--config=cortex_r4f`. Do **not** commit `MODULE.bazel.lock`.
+
+## Conventions worth knowing
+
+- **Generated files are not hand-edited.** `lib/` and `main/` carry an
+  `AUTO-GENERATED … DO NOT EDIT` banner; only `impl/<Node>_handlers.cc`
+  (`FIRST-TIME-ONLY SCAFFOLD`) is yours. To change generated output, change
+  the `.art` (or the template in `artheia/.../templates/fc_app/`) and
+  re-run gen-app. The regen-stability test enforces this.
+- **Cross-repo Bazel labels are hierarchical**: `//gateway/pero_cmp_lnx/lib:…`,
+  never `//pero_cmp_lnx/lib:…`.
+- **Branch convention**: the manifest pins `main` everywhere; do work on a
+  feature branch, FF-merge into `main`, then push. Skyway is **GitLab**
+  (not Gerrit): `git push theia HEAD:<branch>` + MR; no `repo upload`.
+- **artheia is a separate repo** — commit and push it on its own.
+- **Task notes MOVE** between `docs/tasks/{BACKLOG,TODO,PROGRESS,DONE}/`
+  (`git mv` then edit); never duplicate.

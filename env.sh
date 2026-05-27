@@ -39,13 +39,17 @@ if [ -n "${ZSH_VERSION:-}" ]; then
     if ! whence compdef >/dev/null 2>&1; then
         autoload -Uz compinit && compinit -u
     fi
+    # artheia is click-based — use its native completion source.
     eval "$(_ARTHEIA_COMPLETE=zsh_source artheia)"
-    eval "$(_THEIA_COMPLETE=zsh_source theia)"
+    # theia is a plain argparse dispatcher (no click), so complete its fixed
+    # verb set with a small completion function registered via compdef.
+    _theia_complete() { compadd rig provision orchestrate dist install }
+    compdef _theia_complete theia
 elif [ -n "${BASH_VERSION:-}" ]; then
     # bash fallback (you're on zsh per the project default, but keep this
     # so sourcing from a bash subshell still works).
     eval "$(_ARTHEIA_COMPLETE=bash_source artheia)"
-    eval "$(_THEIA_COMPLETE=bash_source theia)"
+    complete -W "rig provision orchestrate dist install" theia
 fi
 
 echo "theia env ready: .venv active, completion for artheia + theia loaded"

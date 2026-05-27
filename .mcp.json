@@ -4,6 +4,11 @@
       "command": "${workspaceFolder}/testing/run_mcp.sh",
       "args": [],
       "type": "stdio"
+    },
+    "work-with-me": {
+      "command": ".venv/bin/python",
+      "args": [".claude/plugins/work-with-me/server.py"],
+      "type": "stdio"
     }
   }
 }

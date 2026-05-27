@@ -1,0 +1,32 @@
+// EXEC is the AUTOSAR Execution Management FC, but Theia ships NO separate
+// exec daemon — Execution Management is realized BY the supervisor
+// (system.supervisor: the OTP-style fork/exec orchestrator that owns
+// Function-Group state). So the Exec composition aliases onto the
+// supervisor's node rather than standing up its own process.
+//
+// Per the FC split: package.art forward-declares the supervisor MESSAGE
+// EXEC couples to; this file forward-declares the supervisor NODE EXEC
+// instantiates. `import system.supervisor.*` brings the real definition
+// into scope; the local `node atomic Supervisor { }` stub lets the
+// prototype reference resolve standalone (the resolver materializes the
+// real node from system.supervisor at parse time).
+//
+// See services/nop/exec/package.art ("NOT IMPLEMENTED here. Implemented
+// by platform/supervisor.") and the nop/ rationale: placeholder FCs that
+// carry a TIPC slot + AUTOSAR contract but no daemon of their own.
+package system.services.exec
+
+import system.supervisor.*
+
+// ---- forward-decl: supervisor node EXEC is realized by ------------------
+// Mirrors system.supervisor's `node atomic Supervisor` (tipc 0x80020001) so
+// the prototype below resolves when this file is parsed standalone. The
+// grammar requires a tipc on every node, so the stub carries the real one;
+// the resolver materializes the full node (ports/params) from the import.
+node atomic Supervisor {
+    tipc type=0x80020001 instance=0
+}
+
+composition Exec {
+    prototype Supervisor exec
+}

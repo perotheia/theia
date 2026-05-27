@@ -22,7 +22,7 @@ filegroup(
         "//services/manifest:service_sources",
         # All .art files anywhere in the system tree (we glob from
         # the package root so '..' is unnecessary).
-        "//platform/system:art_sources",
+        "//system:art_sources",
     ],
     visibility = ["//visibility:public"],
 )

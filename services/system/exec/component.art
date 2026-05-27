@@ -1,7 +1,0 @@
-package system.services.exec
-
-
-composition Exec {
-    prototype ExecDaemon exec_daemon
-}
-

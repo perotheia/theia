@@ -1,0 +1,24 @@
+# //system — workspace's virtual root for the `system` package.
+#
+# Re-exports every .art file reachable from here as a single
+# filegroup so downstream manifest builds depend on the full
+# system tree. The directory itself is the namespace anchor for
+# `import system.*` declarations.
+#
+# We do NOT follow_symlinks here. The per-FC entries under
+# system/services/ symlink into the real component trees
+# (services/<fc>/system/<fc>/, services/nop/<fc>/), and the
+# top-level entries (demo/, gateway/, supervisor/, …) symlink to
+# their owning repos; Bazel treats these as opaque inputs (artheia
+# chases them at runtime), so they aren't re-exposed as Bazel
+# sources. Only the physical aggregators (system.art,
+# services/cluster.art) are globbed here.
+
+filegroup(
+    name = "art_sources",
+    srcs = glob(
+        ["**/*.art"],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)

@@ -2,7 +2,7 @@
 
 The contract: every committed FC under services/<short>/{lib,main,impl}
 MUST match what `artheia gen-app --kind fc` emits when run against the
-sibling spec at services/<short>/system/package.art. Hand-edits to
+spec at services/<short>/system/<short>/package.art. Hand-edits to
 generated files (lib/, main/, and the BUILD.bazel in impl/) are
 forbidden — they cause silent drift and break the gen → build
 dependency that the rest of the toolchain assumes.
@@ -29,11 +29,15 @@ from robot.api.deco import keyword, library
 # (short, spec_path, namespace). spec_path is the .art that
 # `artheia gen-app` should be invoked against.
 FC_SPECS = [
-    ("sm",  "services/system/sm/package.art",  "ara::sm"),
-    ("com", "services/system/com/package.art", "ara::com"),
-    ("per", "services/system/per/package.art", "ara::per"),
-    ("ucm", "services/system/ucm/package.art", "ara::ucm"),
-    ("log", "services/log/system/package.art", "ara::log"),
+    # The 6 daemon FCs colocate spec with impl at
+    # services/<short>/system/<short>/package.art (the //system tree
+    # aggregates them via symlink). `log` is the trace-collector spec,
+    # which keeps its own #368 location at services/log/system/.
+    ("sm",  "services/sm/system/sm/package.art",   "ara::sm"),
+    ("com", "services/com/system/com/package.art", "ara::com"),
+    ("per", "services/per/system/per/package.art", "ara::per"),
+    ("ucm", "services/ucm/system/ucm/package.art", "ara::ucm"),
+    ("log", "services/log/system/package.art",     "ara::log"),
 ]
 
 

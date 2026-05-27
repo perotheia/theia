@@ -67,7 +67,7 @@ stage compute ComputeRig \
 LOG_BIN="$REPO/services/log/build/services-log"
 if [[ -x "$LOG_BIN" ]]; then
     cp -f "$LOG_BIN" "$REPO/install/central/services-log"
-    artheia gen-netgraph -R platform/system/system.art \
+    artheia gen-netgraph -R system/system.art \
         --out "$REPO/install/central/netgraph.json"
     echo "staged install/central/services-log + netgraph.json"
 else

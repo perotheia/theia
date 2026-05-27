@@ -8,8 +8,22 @@
 // terminates the cluster). The .art declaration captures the
 // interface; the actual subscription wiring lives in
 // platform/supervisor/src/.
+//
+// EXEC is realized BY the supervisor (system.supervisor), so this FC
+// couples to that package: `import system.supervisor.*` brings it into
+// scope and `message SupervisionEvent { }` forward-declares the one
+// supervisor message EXEC reasons about (the supervisor materializes
+// the real definition at resolve time). The sibling component.art
+// forward-declares the supervisor NODE; this file forward-declares the
+// supervisor MESSAGE. Imports must precede declarations.
 
 package system.services.exec
+
+import system.supervisor.*
+
+// ---- forward-decl: supervisor message EXEC couples to -------------------
+// (real def in system.supervisor; materialized by the resolver.)
+message SupervisionEvent { }
 
 interface senderReceiver SmStateStream { }  // from system.services.sm
 
@@ -56,6 +70,11 @@ interface clientServer ExecCtl {
     operation StopGroup(in r:StopGroupRequest)   returns ExecEmpty
 }
 
+// The AUTOSAR-named EXEC node + its TIPC slot. EXEC ships no process of
+// its own at runtime — the supervisor enacts these ops — but the node
+// stays here so the manifest keeps EXEC's TIPC binding (0x80010005) and
+// the AUTOSAR-facing surface. component.art's `composition Exec` wires
+// it onto the supervisor's realization.
 node atomic ExecDaemon {
     tipc type=0x80010005 instance=0
     ports {

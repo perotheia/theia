@@ -1,20 +1,56 @@
-// Log (LOG) — Adaptive Platform Functional Cluster.
+// Log (LOG / TRACE) — Adaptive Platform Functional Cluster.
 //
-// Implementation:
-//   - log records → syslog (forwarded by LogDaemon)
-//   - trace stream → trace service (existing TIPC trace.proto, owned by log)
+// One FC, two daemons that together own the observability lanes:
 //
-// Communication shape:
-//   `LogStream` is a *senderReceiver* fan-in. Every FC that emits log
-//   records is a SENDER; LogDaemon is the single RECEIVER. We pick
-//   senderReceiver (not clientServer) so log emission is fire-and-
-//   forget and best-effort — losing a log record must never block
-//   application logic.
+//   Logger        — structured operational events  →  syslog   (LogDaemon)
+//   Tracer        — runtime execution records      →  fan-out  (TraceCollector)
+//   Crash dump    — VM memory snapshot             →  supervisor → tombstone
+//   Lifecycle     — supervision/restart events     →  both lanes
 //
-//   LogDaemon does NOT call anyone. It is a sink + syslog/trace
-//   forwarder.
+// LogDaemon is the syslog sink: every FC's `sender to_log` fans into its
+// single `LogStream` receiver, fire-and-forget / best-effort so log
+// emission never blocks application logic. LogDaemon calls no one.
+//
+// TraceCollector is the trace fan-out service — NOT a logger. It carries
+// runtime EXECUTION INSTRUMENTATION (the dispatcher-level
+// `[header][proto-wire]` records FCs emit when selectively enabled).
+//
+// Trace communication shape (both consumer paths speak the SAME TIPC
+// protocol and route config changes THROUGH THE SUPERVISOR so trace
+// config survives child restart — the supervisor remembers it per child
+// and re-applies on every (re)start, like config + keepalive):
+//
+//   Path 1 — supdbg (local debugging tool):
+//     supdbg ──TIPC──► TraceCollector ── ConfigureTrace ──► Supervisor
+//                            ▲                                  │ push to child
+//                            │ TraceRecord stream               ▼
+//                            └────────────────────────── target FC (Tracer)
+//
+//   Path 2 — external (supervisor-gui, robot tests):
+//     external ──gRPC──► services/com ──TIPC──► TraceCollector  (same loop)
+//
+// Why through the supervisor? It already owns config + keepalive to every
+// supervised app, so trace is just a third request kind on the same
+// channel; trace config SURVIVES RESTART for free; and there's a single
+// source of truth (supervisor.trace_config[child]) for "what's traced now".
+//
+// Erlang reference: TraceCollector is the `dbg:tracer(port, ...)` shape —
+// selective enable + record fan-out, TIPC instead of Erlang ports, the
+// supervisor playing the always-on dbg server that re-applies trace
+// settings to restarted processes.
 
 package system.services.log
+
+// ─── Foreign interface forward decls ─────────────────────────────────
+//
+// SupervisorControlIf — owned by `system.supervisor`. TraceCollector is
+// a CLIENT (it calls ConfigureTrace / GetTraceConfig). The full shape
+// lives in platform/supervisor/system/package.art; we only need a
+// forward-decl to wire the port.
+interface clientServer SupervisorControlIf { }  // from system.supervisor
+
+
+// ─── Log wire types + the syslog fan-in ──────────────────────────────
 
 message LogRecord {
     string context
@@ -23,13 +59,147 @@ message LogRecord {
     string text
 }
 
+// LogStream — every FC has a `sender to_log` (self-reference; declared
+// here because we ARE the log package). senderReceiver fan-in: every FC
+// is a SENDER; LogDaemon is the single RECEIVER. best_effort so emission
+// is fire-and-forget.
 interface senderReceiver LogStream {
     data LogRecord record
 }
 
+
+// ─── Trace wire types ─────────────────────────────────────────────────
+
+// Trace-item kind. Classifies the dispatch the record describes so a
+// consumer can request "only calls in", "only statem transitions", etc.
+// Mapped from the runtime's TraceEvent at emit time
+// (platform/runtime/Tracer.hh): the call/cast × in/out matrix plus the
+// statem transitions collapse onto these.
+//
+//   CAST_OUT  — outbound cast being sent          (TraceEvent::Send, cast)
+//   CAST_IN   — inbound cast landed / dispatched   (Recv/Dispatch, cast)
+//   CALL_OUT  — outbound call request / wait / result (Send/CallWait/CallResult)
+//   CALL_IN   — inbound call dispatched / reply sent  (Dispatch/SendReply)
+//   STATEM    — gen_statem state transition / timeout (StateTransition/StateTimeout)
+//   OTHER     — info / terminate / uncategorized
+enum TraceKind {
+    OTHER     = 0
+    CAST_OUT  = 1
+    CAST_IN   = 2
+    CALL_OUT  = 3
+    CALL_IN   = 4
+    STATEM    = 5
+}
+
+// One trace record. Wraps the original dispatched message verbatim in
+// `payload` (which holds [header][proto-wire] as the FC emitted it).
+// Headers below let the consumer route + decode without parsing the
+// payload. Receivers reconstruct the original message by looking msg_type
+// up in the netgraph (artheia knows every wire type; the receiver picks
+// the matching nanopb descriptor).
+//
+// src/dst/msg_id/kind form the trace header. On the bus src/dst carry the
+// emitting+peer NODE name as the FC knows it; on egress to a gRPC
+// subscriber the collector rewrites them to component names via
+// netgraph.json. `node_name` stays = src (back-compat alias for the many
+// consumers already reading it). `corr_id` IS msg_id.
+message TraceRecord {
+    string   node_name      // source FC node ("SmDaemon", ...) = src
+    string   dst            // destination/peer node, "" if none (e.g. broadcast)
+    string   msg_type       // wire-type name ("SmStateMsg", ...)
+    uint32   corr_id        // correlation id from the dispatch header = msg_id,
+                            // 0 if not part of a request/reply pair
+    uint64   ts_ns          // wall time at the dispatcher
+    TraceKind kind          // call/cast × in/out, statem
+    bytes    payload        // [header][proto-wire] verbatim
+}
+
+// Configuration request from a consumer (supdbg or com-on-behalf-of-
+// external) into TraceCollector. The collector translates this into a
+// `ConfigureTrace` RPC on the supervisor — the supervisor is where the
+// config actually lives, so it can push it to the target node both now
+// AND on every future restart (via the node's first-heartbeat trigger).
+//
+// `target_node`   — artheia node-type-name to trace ("SmDaemon"). The
+//                   AUTOSAR-aligned addressing unit (one thread per node,
+//                   one heartbeat stream per node, one NodeTraceCtl TIPC
+//                   server per reporting=true node).
+// `msg_type`      — wire-type name. Empty = "all message types".
+// `enabled`       — true = recording on, false = clear this filter.
+//
+// Note: non-reporting nodes (NodeDecl `reporting=false`) cannot be
+// addressed; the supervisor accepts the request but the push will never
+// reach a non-existent NodeTraceCtl port. Use the legacy Tracer.enable()
+// in-process API to opt-in such nodes manually.
+message TraceConfigRequest {
+    string    target_node
+    string    msg_type
+    bool      enabled
+    TraceKind kind         // which trace kind to enable; OTHER(0) = all kinds
+}
+
+message TraceEmpty { }
+
+
+// ─── Trace interfaces ─────────────────────────────────────────────────
+
+// Control surface — consumers (supdbg directly, com on behalf of
+// external) request trace configuration changes here. TraceCollector then
+// RELAYS the change to the supervisor's ConfigureTrace operation.
+interface clientServer TraceControl {
+    operation Configure(in r:TraceConfigRequest) returns TraceEmpty
+}
+
+// Record stream — broadcast pub/sub. Multiple consumers can attach; each
+// sees the same record sequence. TraceCollector is the SENDER, supdbg /
+// com are RECEIVERS.
+interface senderReceiver TraceRecordStream {
+    data TraceRecord rec
+}
+
+// FC → TraceCollector record submission. Every FC with tracing
+// configured-on becomes a SENDER on this interface; TraceCollector is the
+// RECEIVER. (FC-side trace ENABLE/DISABLE comes from the supervisor's
+// config push, NOT from TraceCollector — TraceCollector only receives
+// records.)
+interface senderReceiver TraceRecordSubmit {
+    data TraceRecord rec
+}
+
+
+// ─── Nodes ─────────────────────────────────────────────────────────────
+
+// The syslog sink. tipc 0x80010003.
 node atomic LogDaemon {
     tipc type=0x80010003 instance=0
     ports {
         receiver log_in requires LogStream best_effort
+    }
+}
+
+// The trace fan-out. tipc 0x80010013.
+//
+// Tracing-related ports use intent-suffixed names to keep the role clear:
+//   ctl_supdbg / ctl_com   the two `TraceControl` server handles (supdbg
+//                          connects directly; com bridges for external)
+//   stream_out             outbound senderReceiver fanning records to all
+//                          subscribers
+//   in_records             inbound senderReceiver where every
+//                          Tracer-equipped FC submits its records
+//   to_supervisor          outbound client for ConfigureTrace /
+//                          GetTraceConfig — THIS is where trace config
+//                          flows so it survives restart
+//   to_log                 ad-hoc operational events from the collector to
+//                          syslog (e.g. "subscriber attached")
+node atomic TraceCollector {
+    tipc type=0x80010013 instance=0
+    tag = "LOG"
+    ports {
+        server   ctl_supdbg     provides TraceControl
+        server   ctl_com        provides TraceControl
+        sender   stream_out     provides TraceRecordStream
+        receiver in_records     requires TraceRecordSubmit
+        client   to_supervisor  requires SupervisorControlIf
+        sender   to_log         provides LogStream  best_effort
     }
 }

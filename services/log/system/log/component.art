@@ -1,7 +1,9 @@
 package system.services.log
 
 
+// Both daemons of the LOG/TRACE FC in one composition: the syslog sink
+// (LogDaemon) and the trace fan-out service (TraceCollector).
 composition Log {
-    prototype LogDaemon log_daemon
+    prototype LogDaemon      log_daemon
+    prototype TraceCollector trace_collector
 }
-

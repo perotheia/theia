@@ -1,4 +1,4 @@
-# FIRST-TIME-ONLY (regenerated with --force). source: services/log/system/package.art
+# FIRST-TIME-ONLY (regenerated with --force). source: services/log/system/log/package.art
 #
 # Impl slice — handler bodies. The user owns this BUILD.bazel after
 # first emit (you may want to add per-FC test_*.cc files; gen-app
@@ -11,6 +11,7 @@ package(default_visibility = ["//visibility:public"])
 cc_library(
     name = "log_impl",
     srcs = [
+        "LogDaemon_handlers.cc",
         "TraceCollector_handlers.cc",
     ],
     copts = [

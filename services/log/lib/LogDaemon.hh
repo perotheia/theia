@@ -4,7 +4,7 @@
 // Lib slice — message wiring + class declaration for ONE node. An FC
 // may declare several nodes; each gets its own <Node>.hh (this file).
 // Regenerated on every gen-app run. User edits land in
-// impl/TraceCollector_handlers.cc.
+// impl/LogDaemon_handlers.cc.
 
 #pragma once
 
@@ -26,15 +26,12 @@
 namespace ara::log {
 
 
-// ---- TraceCollector ----------------------------------------------------------
+// ---- LogDaemon ----------------------------------------------------------
 
 // Local-namespace aliases over the nanopb C structs. The nanopb
 // generator prefixes types with the libc-safe proto package
 // (services_services_log_*); aliasing them here keeps callers'
 // signatures readable.
-using TraceConfigRequest = services_services_log_TraceConfigRequest;
-using TraceEmpty = services_services_log_TraceEmpty;
-using TraceRecord = services_services_log_TraceRecord;
 using LogRecord = services_services_log_LogRecord;
 
 
@@ -42,24 +39,20 @@ using LogRecord = services_services_log_LogRecord;
 // One subscriber on every sender-port broadcast. Free-function so
 // the daemon doesn't care whether delivery is in-process, TIPC, or
 // gRPC. Subscribers MUST be best-effort.
-using Stream_outRecSubscriber =
-    std::function<void(const TraceRecord&)>;
-using To_logRecordSubscriber =
-    std::function<void(const LogRecord&)>;
 
 
 // State held by the daemon — kept minimal; per-handler scratch
 // goes in impl. Future iterations push more here once the FC has
 // real persistent state needs.
-struct TraceCollectorState {
+struct LogDaemonState {
     
     int  reserved{0};
 };
 
-class TraceCollector : public demo::runtime::GenServer<TraceCollector, TraceCollectorState> {
+class LogDaemon : public demo::runtime::GenServer<LogDaemon, LogDaemonState> {
 public:
-    static constexpr const char* kNodeName = "trace_collector";
-    static constexpr uint32_t kTipcType     = 0x80010013u;
+    static constexpr const char* kNodeName = "log_daemon";
+    static constexpr uint32_t kTipcType     = 0x80010003u;
     static constexpr uint32_t kTipcInstance = 0u;
 
     // AUTOSAR Reporting / Non-Reporting flag (per .art `reporting`
@@ -75,7 +68,7 @@ public:
     // overload by name, so register_cast<LogLevelPush> wouldn't
     // resolve. This using-decl keeps both visible; overload resolution
     // then picks the right one per message type.
-    using demo::runtime::GenServer<TraceCollector, TraceCollectorState>::handle_cast;
+    using demo::runtime::GenServer<LogDaemon, LogDaemonState>::handle_cast;
 
     // ---- Trace config (reporting=true only) -----------------------
     //
@@ -103,16 +96,6 @@ public:
 
     // ---- Subscriber registration ----------------------------------
 
-    // stream_out.rec broadcast subscribers.
-    uint32_t subscribe_stream_out_rec(
-        Stream_outRecSubscriber s);
-    void     unsubscribe_stream_out_rec(uint32_t id);
-
-    // to_log.record broadcast subscribers.
-    uint32_t subscribe_to_log_record(
-        To_logRecordSubscriber s);
-    void     unsubscribe_to_log_record(uint32_t id);
-
 
     // ---- GenServer plumbing: terminate default
     //
@@ -127,7 +110,7 @@ public:
     //     its impl; a normal FC node must NOT — letting an unknown message
     //     through silently is exactly the bug this guards against.
     // terminate keeps an inline no-op default; impl may shadow it.
-    void terminate(const char* /*reason*/, TraceCollectorState& /*s*/) noexcept {}
+    void terminate(const char* /*reason*/, LogDaemonState& /*s*/) noexcept {}
 
 
     // ---- handle_cast / handle_call — declared here, body in impl
@@ -138,106 +121,19 @@ public:
     // gets emitted once. handle_call/handle_cast dispatch by
     // request type, not by port.
 
-    void handle_cast(const TraceRecord& msg, TraceCollectorState& s);
+    void handle_cast(const LogRecord& msg, LogDaemonState& s);
 
-
-    TraceEmpty handle_call(const TraceConfigRequest& req,
-                                            TraceCollectorState& s);
 
 
     // ---- send helpers — bodies in impl (the broadcast fan-out)
 
-    void broadcast_stream_out_rec(const TraceRecord& msg);
-
-    void broadcast_to_log_record(const LogRecord& msg);
-
 
 private:
-
-    struct Stream_outRecEntry {
-        uint32_t id;
-        Stream_outRecSubscriber fn;
-    };
-    std::mutex stream_out_rec_mu_;
-    uint32_t stream_out_rec_next_id_{1};
-    std::vector<Stream_outRecEntry>
-        stream_out_rec_subs_;
-
-    struct To_logRecordEntry {
-        uint32_t id;
-        To_logRecordSubscriber fn;
-    };
-    std::mutex to_log_record_mu_;
-    uint32_t to_log_record_next_id_{1};
-    std::vector<To_logRecordEntry>
-        to_log_record_subs_;
 
 };
 
 // Subscriber registration — defined in the lib slice (not impl) so
 // it stays auto-generated. The user touches handle_* in impl.
-
-inline uint32_t TraceCollector::subscribe_stream_out_rec(
-        Stream_outRecSubscriber s) {
-    std::lock_guard<std::mutex> lk(stream_out_rec_mu_);
-    uint32_t id = stream_out_rec_next_id_++;
-    stream_out_rec_subs_.push_back({id, std::move(s)});
-    return id;
-}
-
-inline void TraceCollector::unsubscribe_stream_out_rec(uint32_t id) {
-    std::lock_guard<std::mutex> lk(stream_out_rec_mu_);
-    auto& v = stream_out_rec_subs_;
-    v.erase(std::remove_if(v.begin(), v.end(),
-              [id](const auto& e) { return e.id == id; }), v.end());
-}
-
-inline void TraceCollector::broadcast_stream_out_rec(const TraceRecord& msg) {
-    std::vector<Stream_outRecEntry> snap;
-    {
-        std::lock_guard<std::mutex> lk(stream_out_rec_mu_);
-        snap = stream_out_rec_subs_;
-    }
-    for (const auto& e : snap) {
-        try { e.fn(msg); }
-        catch (...) {
-            std::fprintf(stderr,
-                "[%s] subscriber %u threw on stream_out.rec — dropping\n",
-                kNodeName, e.id);
-        }
-    }
-}
-
-inline uint32_t TraceCollector::subscribe_to_log_record(
-        To_logRecordSubscriber s) {
-    std::lock_guard<std::mutex> lk(to_log_record_mu_);
-    uint32_t id = to_log_record_next_id_++;
-    to_log_record_subs_.push_back({id, std::move(s)});
-    return id;
-}
-
-inline void TraceCollector::unsubscribe_to_log_record(uint32_t id) {
-    std::lock_guard<std::mutex> lk(to_log_record_mu_);
-    auto& v = to_log_record_subs_;
-    v.erase(std::remove_if(v.begin(), v.end(),
-              [id](const auto& e) { return e.id == id; }), v.end());
-}
-
-inline void TraceCollector::broadcast_to_log_record(const LogRecord& msg) {
-    std::vector<To_logRecordEntry> snap;
-    {
-        std::lock_guard<std::mutex> lk(to_log_record_mu_);
-        snap = to_log_record_subs_;
-    }
-    for (const auto& e : snap) {
-        try { e.fn(msg); }
-        catch (...) {
-            std::fprintf(stderr,
-                "[%s] subscriber %u threw on to_log.record — dropping\n",
-                kNodeName, e.id);
-        }
-    }
-}
 
 
 

@@ -31,13 +31,14 @@ from robot.api.deco import keyword, library
 FC_SPECS = [
     # The 6 daemon FCs colocate spec with impl at
     # services/<short>/system/<short>/package.art (the //system tree
-    # aggregates them via symlink). `log` is the trace-collector spec,
-    # which keeps its own #368 location at services/log/system/.
+    # aggregates them via symlink). The log FC spec carries BOTH the
+    # LogDaemon (syslog sink) and TraceCollector (trace fan-out) nodes in
+    # one package.
     ("sm",  "services/sm/system/sm/package.art",   "ara::sm"),
     ("com", "services/com/system/com/package.art", "ara::com"),
     ("per", "services/per/system/per/package.art", "ara::per"),
     ("ucm", "services/ucm/system/ucm/package.art", "ara::ucm"),
-    ("log", "services/log/system/package.art",     "ara::log"),
+    ("log", "services/log/system/log/package.art", "ara::log"),
 ]
 
 

@@ -85,45 +85,35 @@ AUTOSAR-named interface contract but no process:
 | `exec` | Execution Mgmt — **realized BY the supervisor**, not a separate process | ⛔ (nop) |
 | `core` `crypto` `diag` `fw` `idsm` `nm` `osi` `phm` `rds` `tsync` `vucm` | AUTOSAR placeholders | ⛔ (nop) |
 
-`exec` is the special placeholder: its `services/nop/exec/` spec keeps
-`node atomic ExecDaemon` (tipc `0x80010005`) for the manifest binding,
-imports `system.supervisor.*`, and aliases `composition Exec { prototype
-Supervisor exec }` — the supervisor enacts EXEC's function-group control.
 
 ## The Theia C++ runtime
 
-`platform/runtime/include/` — an OTP-faithful actor runtime (see
-`up/otp/lib/stdlib/src/gen_server.erl` for the reference shape, and
-`docs/runtime.md`). One **thread per node**. Three node base classes
-(picked by the `.art` node shape):
+`platform/runtime/include/` — an OTP-faithful actor runtime. One **thread per node**. Three node base classes (picked by the `.art` node shape):
 
 - **`GenServer`** — sync-first mailbox actor: `handle_call` (request→reply),
   `handle_cast` (fire-and-forget), `handle_info` (unrouted TIPC frame /
   internal signal; default is CRITICAL+abort — drift is a bug).
 - **`GenStateM`** — finite state machine (Erlang `gen_statem` shape);
-  per-state event handlers + timeouts. `sm` uses it.
+  per-state event handlers + timeouts.
 - **`GenRunnable`** — a free worker thread: `do_start` / `do_loop` /
-  `do_stop`. `com`'s gRPC proxy node uses it.
+  `do_stop`.
 
 Transport is **TIPC** (`TipcMux`, per-process listener) carrying **nanopb**
 wire bytes; `RemoteRef`/`NodeRef` do correlated request/reply;
 `RemoteCodec` hashes a stable 16-bit `service_id` per message type.
 `Tracer` emits `[header][proto-wire]` records when a node is selectively
-enabled. etcd is the **observability mirror only** — never the control-path
-carrier between components (that's gRPC/TIPC).
+enabled.
 
 ## The supervisor
 
-`platform/supervisor/` — an OTP-style fork/exec orchestrator (one Process
+`platform/supervisor/` — a fork/exec orchestrator (one Process
 per FC binary + per vendor app), owning Function-Group state. It exposes a
 **control surface** (`RestartChild`/`TerminateChild`/`StartChild`/
 `DeleteChild`, `ConfigureTrace`, `ConfigureLogLevel`) as a `gen_server`
 node on the standard Theia transport (nanopb `ControlRequest`), runs a
-**heartbeat watchdog**, and publishes a **firehose**: a stream of small
-name-keyed `NodeEdge`/`NodeState` topo-pairs (order-independent reassembly)
-rather than a monolithic snapshot. The `com` FC bridges
-supervisor↔gRPC so external tools (`supdbg`, `supervisor-gui`, `rf-theia`)
-never speak TIPC directly.
+**heartbeat watchdog**.
+
+The `com` FC bridges theia↔gRPC to external tools (`supdbg`, `supervisor-gui`, `rf-theia`).
 
 ## The pipeline, end to end
 
@@ -135,8 +125,8 @@ never speak TIPC directly.
         │ load_platform_services (system/services as root)
         ▼
  manifest python layer       executor emit /        serialized JSON manifests
- (services/manifest,    ──►  gui emit /         ──► executor.json, machines.yaml,
-  demo/manifest/rig)         generate-manifest      dist/manifest/<machine>/*.json
+ (services/manifest,    ──►  generate-manifest  ──► dist/manifest/<machine>/*.json
+  demo/manifest/rig)
         │
         │ rig_ext (//rules:rig.bzl)
         ▼
@@ -149,20 +139,15 @@ Details and exact commands are in
 ## Build & verify (cheat sheet)
 
 ```sh
-export PATH="$PWD/.venv/bin:$PATH"
-
 artheia parse system/system.art                 # full-tree resolve (validation)
 bazel build --config=linux //services/com/main:com //services/sm/main:sm …
 bazel build @rig_demo//:executor_json           # the manifest pipeline under Bazel
 bazel build //system:art_sources                # the .art filegroup
 
 # Regen-stability guard — committed lib/main/impl/BUILD must equal gen-app output:
-cd testing && PATH="$PWD/.venv/bin:$PATH" \
-  python -m robot rf_theia/scenarios/_selftest/fc_regen_stability/fc_regen_stability.robot
+robot rf_theia/scenarios/_selftest/fc_regen_stability/fc_regen_stability.robot
 ```
-
-Firmware uses `--config=ti_arm_cgt_18` (Hercules TMS570) or
-`--config=cortex_r4f`. Do **not** commit `MODULE.bazel.lock`.
+Do **not** commit `MODULE.bazel.lock`.
 
 ## Conventions worth knowing
 
@@ -174,8 +159,6 @@ Firmware uses `--config=ti_arm_cgt_18` (Hercules TMS570) or
 - **Cross-repo Bazel labels are hierarchical**: `//gateway/pero_cmp_lnx/lib:…`,
   never `//pero_cmp_lnx/lib:…`.
 - **Branch convention**: the manifest pins `main` everywhere; do work on a
-  feature branch, FF-merge into `main`, then push. Skyway is **GitLab**
-  (not Gerrit): `git push theia HEAD:<branch>` + MR; no `repo upload`.
+  feature branch, FF-merge into `main`, then push. **GitLab**
+  (not Gerrit): `git push theia HEAD:<branch>` + MR.
 - **artheia is a separate repo** — commit and push it on its own.
-- **Task notes MOVE** between `docs/tasks/{BACKLOG,TODO,PROGRESS,DONE}/`
-  (`git mv` then edit); never duplicate.

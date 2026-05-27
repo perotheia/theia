@@ -43,6 +43,18 @@ public:
     // Request graceful shutdown — safe to call from a signal handler.
     void request_shutdown() { shutdown_requested_.store(true); }
 
+    // Control surface over the STANDARD Theia transport (nanopb). Called by
+    // SupervisorControlNode::handle_call on the TipcMux thread for an inbound
+    // ControlRequest CALL; fills the ControlReply. Handles the single-reply
+    // ops (Start/Delete/Restart/Terminate/Stop/ConfigureTrace/GetTraceConfig/
+    // ConfigureLogLevel) by thunking into the do_*/apply_* primitives below.
+    // (GetTree/GetSystemInfo are two-frame reads — they stay on the legacy
+    // TipcPublisher path until the firehose migration.) Declared with opaque
+    // void* + a .cpp-local reinterpret so runtime.h needn't include the
+    // nanopb ControlRequest.pb.h (keeps the libprotobuf/nanopb worlds apart
+    // in the header). control_node.cpp passes the real nanopb pointers.
+    void dispatch_control_nanopb(const void* req_nanopb, void* rep_nanopb);
+
 private:
     // Subtree traversal.
     std::vector<WorkerNode*> all_workers(SupervisorNode& sup);

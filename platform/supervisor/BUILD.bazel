@@ -1,14 +1,15 @@
-# platform/supervisor — OTP-style process supervisor. Built today by
-# CMake (see CMakeLists.txt). This BUILD.bazel exposes the generated
-# proto sources so other Bazel targets — notably supervisor-gui's
-# rules_foreign_cc wrapper — can sandbox them.
+# platform/supervisor — OTP-style process supervisor.
 #
-# A future native-Bazel cc_binary that fully replaces the CMake build
-# would land alongside, but isn't required for the current Bazel
-# integration goal (driving CMake from Bazel + producing per-machine
-# .ipk / .deb).
+# `bazel build //platform/supervisor:supervisor` drives the canonical
+# CMakeLists.txt through rules_foreign_cc's cmake() (same hybrid as
+# //supervisor-gui and //services/com:services-com). CMakeLists stays the
+# dev source of truth (`cmake -S . -B build` still works); Bazel produces
+# the same binary into bazel-bin/ for the rig pipeline AND lets the
+# supervisor consume Bazel cc_libraries — notably the platform/runtime
+# standard transport + the nanopb supervisor binding — in its sandbox.
 
 load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@rules_foreign_cc//foreign_cc:defs.bzl", "cmake")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -21,6 +22,61 @@ filegroup(
         ["generated/proto/**/*.proto"],
         allow_empty = False,
     ),
+)
+
+# Everything CMakeLists needs in the cmake() sandbox. The generated
+# protos (gitignored, but on disk via gen-proto) come in through
+# proto_srcs — CMakeLists globs generated/proto/*.proto and runs protoc
+# itself, so we pass SKIP_GEN_PROTO=ON (the venv artheia isn't in the
+# sandbox) and let those .proto files already be present.
+filegroup(
+    name = "all_srcs",
+    srcs = glob(
+        [
+            "CMakeLists.txt",
+            "include/**",
+            "src/**",
+            "system/**",
+            "tombstone/**",
+            # CMakeLists declares test + crasher add_executable()s
+            # unconditionally; their sources must be present for the
+            # CMake CONFIGURE step even though targets=["supervisor"]
+            # only BUILDs the supervisor binary.
+            "test/**",
+        ],
+        allow_empty = False,
+    ) + [":proto_srcs"],
+)
+
+# Bazel build of the supervisor binary via the canonical CMakeLists.
+# Same rules_foreign_cc cmake() pattern as //supervisor-gui: etcd-cpp +
+# nlohmann/json are vendored under third_party/ and mounted via data=;
+# their prefixes are passed as cache_entries (the -D mirror). The future
+# platform/runtime nanopb transport will be added here as a dep (it stages
+# into $EXT_BUILD_DEPS for CMakeLists to link), exactly like com's hybrid.
+cmake(
+    name = "supervisor",
+    lib_source = ":all_srcs",
+    out_binaries = ["supervisor"],
+    cache_entries = {
+        "ETCD_CPP_PREFIX": "$$EXT_BUILD_ROOT$$/third_party/etcd-cpp-apiv3/install",
+        "NLOHMANN_JSON_INCLUDE_DIR": "$$EXT_BUILD_ROOT$$/third_party/nlohmann_json",
+        # gen-proto needs the venv artheia, which isn't in the sandbox;
+        # the .proto files are already staged via proto_srcs, so skip it.
+        "SKIP_GEN_PROTO": "ON",
+        # Build/install only the supervisor binary; crasher + tombstone
+        # (the crash-forensics demo/lib) are not in targets=, so their
+        # install() rules would fail. Standalone CMake keeps them ON.
+        "INSTALL_SUPERVISOR_EXTRAS": "OFF",
+    },
+    data = [
+        "//third_party:etcd-cpp-apiv3-install",
+        "//third_party:nlohmann_json_hdrs",
+    ],
+    # CMake finds protoc + protobuf as host-apt packages (cmake() doesn't
+    # sandbox /usr). Only the `supervisor` target — not tombstone demos /
+    # tests — is built.
+    targets = ["supervisor"],
 )
 
 # ---------------------------------------------------------------------------

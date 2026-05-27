@@ -143,8 +143,17 @@ add_executable(crasher
 target_link_libraries(crasher PRIVATE tombstone)
 
 install(TARGETS supervisor RUNTIME DESTINATION bin)
-install(TARGETS crasher RUNTIME DESTINATION bin)
-install(TARGETS tombstone ARCHIVE DESTINATION lib)
+
+# crasher + tombstone are the crash-forensics demo/lib. Install them for a
+# standalone `cmake --install` (dev + the .ipk packaging), but NOT under the
+# Bazel cmake() wrapper, which builds targets=["supervisor"] only — a stray
+# install(TARGETS crasher) there fails because crasher was never built.
+# Flip OFF via -DINSTALL_SUPERVISOR_EXTRAS=OFF (the Bazel cmake() does).
+option(INSTALL_SUPERVISOR_EXTRAS "Install crasher + tombstone alongside the supervisor" ON)
+if(INSTALL_SUPERVISOR_EXTRAS)
+    install(TARGETS crasher RUNTIME DESTINATION bin)
+    install(TARGETS tombstone ARCHIVE DESTINATION lib)
+endif()
 
 
 # ---------------------------------------------------------------------------

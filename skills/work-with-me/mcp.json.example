@@ -1,0 +1,13 @@
+{
+  "_comment": "Merge this mcpServers entry into the repo-root .mcp.json (project scope, shared) or into .claude/settings.local.json under an mcpServers key (local scope, personal). It runs server.py with the WORKSPACE .venv interpreter (no per-plugin venv); CLAUDE_PROJECT_DIR is expanded at config-load time so the watcher and the hook agree on the repo root.",
+  "mcpServers": {
+    "work-with-me": {
+      "type": "stdio",
+      "command": ".venv/bin/python",
+      "args": [".claude/plugins/work-with-me/server.py"],
+      "env": {
+        "CLAUDE_PROJECT_DIR": "${CLAUDE_PROJECT_DIR}"
+      }
+    }
+  }
+}

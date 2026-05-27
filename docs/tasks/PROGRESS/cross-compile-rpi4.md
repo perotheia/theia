@@ -15,7 +15,7 @@ that's bare-metal — separate toolchain, no shared object pipeline.
   on Pi 4 class boards; we currently hand-build there. A first-class
   cross-compile fold collapses ~30 min of manual setup per board.
 - **Bazel hygiene**: forces us to express toolchain selection as a
-  `--platforms=//config:rpi4` flag rather than implicit
+  `--platforms=//rules/config:rpi4` flag rather than implicit
   host-toolchain. Catches a class of "works on my machine" bugs.
 - **services-com on arm64**: today's gRPC bridge binary is amd64-only.
   A real cross-compile validates the full stack (TIPC, gRPC,
@@ -24,7 +24,7 @@ that's bare-metal — separate toolchain, no shared object pipeline.
 ## Pieces
 
 1. **Bazel platform + toolchain**
-   - Define `//config:rpi4` platform constraint
+   - Define `//rules/config:rpi4` platform constraint
      (`cpu=aarch64, os=linux`).
    - Pick a cross-toolchain. Two realistic options:
      - `aarch64-linux-gnu-gcc` from `gcc-aarch64-linux-gnu` apt package
@@ -54,7 +54,7 @@ that's bare-metal — separate toolchain, no shared object pipeline.
 3. **Update `pkg_opkg` arch**
    - `rules/rig.bzl` currently hardcodes `arch = "amd64"` (see
      `_machine_targets`). It needs to read the target platform:
-     `arch = "arm64"` when `//config:rpi4` is selected, else `amd64`.
+     `arch = "arm64"` when `//rules/config:rpi4` is selected, else `amd64`.
    - The Bazel `select()` on `@platforms//cpu:arm64` returns the
      right value. The .ipk name (`demo-<machine>_1.0.0_arm64.ipk`)
      should also reflect the arch.
@@ -88,7 +88,7 @@ that's bare-metal — separate toolchain, no shared object pipeline.
      this when switching from opkg to dpkg).
    - Add `tools/deploy_rpi4.sh` that wraps:
      ```
-     bazel build @rig_<n>//<machine>:image --platforms=//config:rpi4
+     bazel build @rig_<n>//<machine>:image --platforms=//rules/config:rpi4
      scp bazel-bin/.../<machine>.ipk pi@<host>:/tmp/
      ssh pi@<host> 'sudo dpkg -i /tmp/<machine>.ipk'
      ```
@@ -141,27 +141,27 @@ that's bare-metal — separate toolchain, no shared object pipeline.
    aarch64 ELF). `--help` runs cleanly under qemu. The TIPC-connect
    smoke needs a real Pi 4 (qemu-user-static doesn't emulate AF_TIPC
    sockets reliably); deferred to step 7.
-5. ~~Wire up Bazel `//config:rpi4` platform + arch selection in
-   `rules/rig.bzl`.~~ **DONE.** `//config:BUILD.bazel` declares both
+5. ~~Wire up Bazel `//rules/config:rpi4` platform + arch selection in
+   `rules/rig.bzl`.~~ **DONE.** `//rules/config:BUILD.bazel` declares both
    `host` (linux + x86_64) and `rpi4` (linux + aarch64) platforms,
    plus `is_amd64`/`is_arm64` config_settings. `rules/rig.bzl`'s
    `pkg_opkg(arch=...)` is now a `select()` keyed on those settings.
    Verified all three paths:
    - Default (no flag) → `demo-compute_host_1.0.0_amd64.ipk`
-   - `--platforms=//config:host` → same amd64
-   - `--platforms=//config:rpi4` → `demo-compute_host_1.0.0_arm64.ipk`
+   - `--platforms=//rules/config:host` → same amd64
+   - `--platforms=//rules/config:rpi4` → `demo-compute_host_1.0.0_arm64.ipk`
    Control file's `Architecture:` field tracks; ipk name reflects arch.
 
    Note: today's compute_host components are `bazel_buildable=False`
    placeholder shell scripts, so the produced .ipk is arch-agnostic
    content with arch-tagged metadata. When the demo apps + FCs grow
    real cc_binary targets, Bazel's cc toolchain selection will need
-   the same `//config:rpi4` wiring (separate piece of work — see
+   the same `//rules/config:rpi4` wiring (separate piece of work — see
    step 6 below).
 6. ~~Bazel `pkg_opkg(arch=...)` reads from rig.py.~~ **DONE** —
    `rules/rig.bzl`'s `_machine_targets()` now emits `arch = "<rig_arch>"`
    from the rig-deps JSON's `arch` field. The previous `select()` only
-   fired when an explicit `--platforms=//config:rpi4` was passed; the
+   fired when an explicit `--platforms=//rules/config:rpi4` was passed; the
    rule now uses the rig-declared arch as the source of truth and
    `--platforms=` is reserved for cc_toolchain selection (relevant
    once components grow real cc_binary targets).
@@ -179,7 +179,7 @@ that's bare-metal — separate toolchain, no shared object pipeline.
    - TIPC modprobe preflight on the target Pi (covers step 6's
      "modprobe tipc" sanity check) — refuses to deploy if AF_TIPC is
      unavailable in the kernel.
-   - `bazel build @rig_<name>//<machine>:image --platforms=//config:rpi4`.
+   - `bazel build @rig_<name>//<machine>:image --platforms=//rules/config:rpi4`.
    - `bazel cquery --output=files` to locate the produced .ipk
      (no hardcoded paths).
    - `scp` + `ssh sudo dpkg -i`.

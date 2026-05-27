@@ -24,7 +24,7 @@
 set -euo pipefail
 
 RIG_TARGET="@rig_demo"
-PLATFORM_FLAG="--platforms=//config:rpi4"
+PLATFORM_FLAG="--platforms=//rules/config:rpi4"
 
 usage() {
     cat <<EOF
@@ -36,7 +36,7 @@ Usage: $(basename "$0") [--rig <bazel-target>] [--no-platform] <machine> <ssh-ta
 
 Options:
   --rig <T>      Override @rig_demo with another @rig_<name> target.
-  --no-platform  Skip --platforms=//config:rpi4 (use rig-declared arch
+  --no-platform  Skip --platforms=//rules/config:rpi4 (use rig-declared arch
                  only — useful when the rig's cc_binary components don't
                  cross-compile yet and you only want the .ipk metadata).
   -h, --help     This message.
@@ -110,7 +110,7 @@ echo "==> built ${IPK_NAME} ($(stat -c%s "${IPK_PATH}") bytes)"
 # The Pi 4 is aarch64 → expect _arm64.ipk in the name.
 if [[ "${IPK_NAME}" != *"_arm64.ipk" ]]; then
     echo "WARNING: ${IPK_NAME} is not arm64 — did you mean to pass" >&2
-    echo "         --platforms=//config:rpi4 (or set the machine's" >&2
+    echo "         --platforms=//rules/config:rpi4 (or set the machine's" >&2
     echo "         arch=aarch64 in rig.py)?" >&2
 fi
 

@@ -19,7 +19,7 @@ pkg_check_modules(GRPCPP   REQUIRED grpc++)
 # nlohmann/json — header-only, vendored under third_party/ (see #380).
 # Replaces yaml-cpp now that manifests are JSON-only.
 set(NLOHMANN_JSON_INCLUDE_DIR
-    "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/nlohmann_json"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/nlohmann_json"
     CACHE PATH "Path containing nlohmann/json.hpp")
 
 find_package(wxWidgets REQUIRED COMPONENTS core base aui)
@@ -31,7 +31,7 @@ include(${wxWidgets_USE_FILE})
 # system-wide install ever ships, CMAKE_PREFIX_PATH on the cmdline can
 # override.
 set(ETCD_CPP_PREFIX
-    "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/etcd-cpp-apiv3/install"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/etcd-cpp-apiv3/install"
     CACHE PATH "etcd-cpp-apiv3 install prefix")
 find_package(etcd-cpp-api REQUIRED CONFIG
     HINTS "${ETCD_CPP_PREFIX}/lib/cmake/etcd-cpp-api")
@@ -40,9 +40,9 @@ find_program(PROTOC_EXECUTABLE protoc           REQUIRED)
 find_program(GRPC_CPP_PLUGIN   grpc_cpp_plugin  REQUIRED)
 
 # Supervisor's .proto pile — wire-side message types.
-set(SUP_PROTO_DIR  ${CMAKE_CURRENT_SOURCE_DIR}/../platform/supervisor/generated/proto)
+set(SUP_PROTO_DIR  ${CMAKE_CURRENT_SOURCE_DIR}/../../platform/supervisor/generated/proto)
 # services/com's bridge .proto — gRPC service surface.
-set(COM_PROTO_DIR  ${CMAKE_CURRENT_SOURCE_DIR}/../services/com/proto)
+set(COM_PROTO_DIR  ${CMAKE_CURRENT_SOURCE_DIR}/../../services/com/proto)
 set(PROTO_GEN_DIR  ${CMAKE_CURRENT_BINARY_DIR}/generated)
 file(MAKE_DIRECTORY ${PROTO_GEN_DIR})
 

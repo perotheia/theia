@@ -321,7 +321,7 @@ def _run(
     # Step 3: locate the binaries (built under platform/supervisor/build/ etc).
     supervisor_bin = WORKSPACE / "platform" / "supervisor" / "build" / "supervisor"
     com_bin = WORKSPACE / "services" / "com" / "build" / "services-com"
-    gui_bin = WORKSPACE / "supervisor-gui" / "build" / "supervisor-gui"
+    gui_bin = WORKSPACE / "tools" / "supervisor-gui" / "build" / "supervisor-gui"
 
     for name, path in [
         ("supervisor", supervisor_bin),

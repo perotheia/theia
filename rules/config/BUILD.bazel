@@ -3,14 +3,14 @@
 # Each `platform()` here corresponds to one target environment Theia
 # builds for. Today only two:
 #
-#   //config:host   — workspace host (linux x86_64, whatever you run
+#   //rules/config:host   — workspace host (linux x86_64, whatever you run
 #                     bazel on; matches the docker-compose stack)
-#   //config:rpi4   — Raspberry Pi 4 (linux aarch64, Debian bookworm)
+#   //rules/config:rpi4   — Raspberry Pi 4 (linux aarch64, Debian bookworm)
 #
 # Usage from the command line:
 #
 #   bazel build @rig_demo//compute_host:image \
-#       --platforms=//config:rpi4
+#       --platforms=//rules/config:rpi4
 #
 # Adding a new target (Pi Zero, Pi 5, NVIDIA Jetson…): copy the rpi4
 # block, change cpu/os, point at a corresponding sysroot in
@@ -49,7 +49,7 @@ platform(
 # -----------------------------------------------------------------------------
 # config_setting shortcuts — let rules/rig.bzl select() on these names
 # instead of writing constraint expressions verbatim. The platform
-# constraint approach (`bazel build --platforms=//config:rpi4`) sets
+# constraint approach (`bazel build --platforms=//rules/config:rpi4`) sets
 # @platforms//cpu values, which the selects below convert into the
 # arch token the .ipk packager wants.
 # -----------------------------------------------------------------------------

@@ -25,7 +25,6 @@ filegroup(
             "CMakeLists.txt",
             "include/**",
             "src/**",
-            "system/**",
         ],
         allow_empty = False,
     ) + [

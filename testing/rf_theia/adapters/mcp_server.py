@@ -41,10 +41,12 @@ mcp = FastMCP(
     ),
 )
 
-# testing/rf_theia/adapters/mcp_server.py → testing/
+# testing/rf_theia/adapters/mcp_server.py → testing/ → workspace root
 _TESTING_DIR = Path(__file__).resolve().parent.parent.parent
+_WORKSPACE_DIR = _TESTING_DIR.parent
 _SCENARIOS_DIR = _TESTING_DIR / "rf_theia" / "scenarios"
-_VENV_BIN = _TESTING_DIR / ".venv" / "bin"
+# Single workspace .venv (rf-theia is editable-installed there).
+_VENV_BIN = _WORKSPACE_DIR / ".venv" / "bin"
 _OUTPUT_DIR = Path("/tmp/rf_theia_output")
 
 

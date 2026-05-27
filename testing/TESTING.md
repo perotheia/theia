@@ -10,15 +10,17 @@ Keyword cheat-sheet: `KEYWORDS.md`.
 
 ## Setup
 
+rf-theia shares the single **workspace `.venv`** (no separate testing venv).
+From the repo root:
+
 ```bash
-cd testing
-python3 -m venv .venv
-./.venv/bin/pip install -r requirements.txt
+python3 -m venv .venv          # if it doesn't already exist
+./.venv/bin/pip install -e 'testing/[mcp,dev]'
 ```
 
-The venv lives at `testing/.venv/`. Activate per-shell or invoke the
-binaries directly (`./.venv/bin/robot`, `./.venv/bin/python`). No global
-install needed — keeps rf-theia hermetic from the artheia venv.
+This editable-installs the `rf_theia` package (so `robot`, `rf-theia-mcp`,
+and the deps land in `.venv/bin`). Invoke the binaries directly
+(`.venv/bin/robot`, `.venv/bin/python`) or `source .venv/bin/activate`.
 
 
 ## Running scenarios
@@ -27,18 +29,18 @@ install needed — keeps rf-theia hermetic from the artheia venv.
 cd testing
 
 # Hermetic — rf-theia self-tests (proves the framework works).
-PYTHONPATH=. ./.venv/bin/robot \
+PYTHONPATH=. ../.venv/bin/robot \
   --outputdir /tmp/rf_theia_output \
   rf_theia/scenarios/_selftest/
 
 # Real SUT regression — platform layer.
-PYTHONPATH=. ./.venv/bin/robot \
+PYTHONPATH=. ../.venv/bin/robot \
   --outputdir /tmp/rf_theia_output \
   rf_theia/scenarios/platform/
 
 # Dryrun (parse + resolve keywords, don't execute) — catches typos in
 # any scenario whether or not the live stack is up.
-PYTHONPATH=. ./.venv/bin/robot --dryrun \
+PYTHONPATH=. ../.venv/bin/robot --dryrun \
   --outputdir /tmp/rf_theia_dry \
   rf_theia/scenarios/
 ```
@@ -46,8 +48,8 @@ PYTHONPATH=. ./.venv/bin/robot --dryrun \
 Filter by tag:
 
 ```bash
-./.venv/bin/robot --include hermetic rf_theia/scenarios/
-./.venv/bin/robot --exclude live    rf_theia/scenarios/
+../.venv/bin/robot --include hermetic rf_theia/scenarios/
+../.venv/bin/robot --exclude live    rf_theia/scenarios/
 ```
 
 Tag conventions:

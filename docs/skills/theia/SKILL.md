@@ -4,7 +4,7 @@ description: Refresher for agents working in the theia monorepo — the AUTOSAR-
 disable-model-invocation: true
 ---
 
-Theia is a Porsche CMP gateway platform: AUTOSAR-Adaptive-Platform-style
+Theia is a AUTOSAR-Adaptive-Platform-style
 **Functional Clusters (FCs)** running as supervised processes on a custom
 C++ **actor runtime** ("the Theia runtime"), with the whole system modeled
 in the **artheia** `.art` DSL and built with Bazel inside a Google-`repo`
@@ -15,7 +15,7 @@ Read this page to orient. For a specific task, load the matching reference:
 | You're doing… | Read |
 | --- | --- |
 | Writing or editing `.art` files | [references/art-lang-grammar.md](references/art-lang-grammar.md) |
-| Generating / regenerating an FC's C++ (lib/main/impl) | [references/artheia-gen-app.md](references/artheia-gen-app.md) |
+| Generating / regenerating an aplication C++ (lib/main/impl) | [references/artheia-gen-app.md](references/artheia-gen-app.md) |
 | Regenerating the system: .art → manifests → build → deploy | [references/artheia-gen-system.md](references/artheia-gen-system.md) |
 
 Always run artheia with the workspace venv on PATH:
@@ -33,9 +33,6 @@ Everything in `.art` rests on three primitives. Internalize them:
 | **composition** | process (one executable) | prototypes (node instances) + in-process wiring (`connect`) |
 | **cluster** | distribution bundle | compositions + inter-process wiring; the deploy/packaging unit |
 
-There is no composition-of-compositions for deployment — the top units are
-**clusters**, and a cluster-of-clusters is not a thing (deploy-time
-orchestration is the rig's job, not the model's).
 
 ## Repository map
 
@@ -46,11 +43,10 @@ checked out by `repo sync` (gitignored in pero_theia). Major dirs:
   aggregation point everything resolves against. `system/system.art`
   (`cluster Platform`), `system/services/cluster.art` (`cluster Services`),
   and per-FC symlinks `system/services/<fc>` → the real spec in the impl
-  tree. This replaced the old `platform/system/` (now retired).
+  tree.
 - **`services/`** — the FCs. 6 with real daemons live at
   `services/<fc>/system/<fc>/{package,component}.art` (spec) +
-  `services/<fc>/{lib,main,impl}/` (generated + hand-owned C++). 12
-  daemon-less placeholders live together under `services/nop/`.
+  `services/<fc>/{lib,main,impl}/` (generated + hand-owned C++).
 - **`platform/`** — the C++ **runtime** (`platform/runtime/`), the
   **supervisor** (`platform/supervisor/`), the **gateway** service
   (`platform/gateway/`, a sibling repo), and `platform/config/`,
@@ -62,19 +58,14 @@ checked out by `repo sync` (gitignored in pero_theia). Major dirs:
 - **`demo/`** — the demo rig (`demo/manifest/rig.py` = `Demo3Way`) +
   `demo/system/demo/` app `.art`.
 - **`tools/`** — `supdbg` (Python gRPC debug CLI), `supervisor-gui`
-  (wx OTP-observer GUI), `deploy_rpi4.sh`.
-- **`testing/`** — `rf-theia`: Robot Framework + TPT harness, **its own
-  `.venv`** at `testing/`.
+  (wx observer GUI).
+- **`testing/`** — `rf-theia`: Robot Framework + TPT harness.
 - **`rules/`** — Bazel rules (`rig.bzl` module extension, `config/`
   platforms, `psp.bzl`, `opkg.bzl`).
 - **`autosar/`** — the vendor PSP (`mlbevo_gen2_cmp_psp`): FIBEX/DBC →
   catalog/`.art`/netgraph. **`gateway/`** — CMP codec libs + Hercules
   firmware (sibling repos). **`vendor/`** — per-vendor app fragments.
-- **`docs/`** — `runtime.md` (the actor model, authoritative),
-  `supervision.md`, `tasks/` (the BACKLOG→TODO→PROGRESS→DONE workflow),
-  `skills/` (this tree). Note: `docs/architecture/ARCHITECTURE.md` still
-  references the pre-move `platform/system/` paths — treat its path
-  references as stale until refreshed; the conceptual layering is fine.
+- **`docs/`** — theia docs.
 
 ## The Functional Cluster catalog
 

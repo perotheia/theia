@@ -2,11 +2,10 @@
 //
 // The third node base, beside GenServer<Derived,State> (reactive, mailbox)
 // and GenStateM<Derived,…> (FSM). GenRunnable is for a FREE RUNNABLE: a
-// worker that owns a thread and does its own thing — typically blocking —
-// rather than reacting to a message mailbox. The motivating case is a gRPC
-// proxy thread (services/com): it blocks in Server::Wait(), it is not a
-// gen_server, and before GenRunnable the only home for it was a hand-written
-// main.cc — which is exactly the runtime-generality leak we close here.
+// worker that owns a thread and does its own thing rather than reacting to a
+// message mailbox. The motivating case is a gRPC proxy thread (services/com):
+// it is not a gen_server, and before GenRunnable the only home for it was a
+// hand-written main.cc — exactly the runtime-generality leak we close here.
 //
 // OTP shape: gen_server (reactive) / gen_statem (FSM) / gen_runnable (plain
 // worker, ~ proc_lib:spawn_link). All three are owned uniformly by the
@@ -17,39 +16,45 @@
 //
 //   void do_start()   — one-time setup on the worker thread before the loop
 //                        (e.g. build + start the gRPC server). Optional.
-//   void do_loop()    — the body. MAY BLOCK for the runnable's whole life
-//                        (e.g. server->Wait()). Called once. If it returns,
-//                        the runnable is done. The base does NOT re-invoke it
-//                        in a tight loop — a runnable that wants a poll loop
-//                        writes its own `while (!stop_requested()) { … }`.
-//   void do_stop()    — MUST unblock do_loop() (e.g. server->Shutdown()) and
-//                        release resources. Runs on the caller's thread from
-//                        stop(); the worker thread is joined after.
+//   void do_loop()    — the body. Called once on the worker thread. It runs
+//                        until it RETURNS — the runnable is then done. The
+//                        base does not re-invoke it.
+//   void do_stop()    — release resources + signal the loop to end. Runs on
+//                        the caller's thread from stop(); the worker is joined
+//                        after. Optional.
 //
-//   bool stop_requested() const — poll inside a do_loop() that loops, so the
-//                        loop can exit cooperatively on stop().
+//   bool stop_requested() const — the single stop signal; stop() sets it.
 //
-// The "do_stop unblocks do_loop" contract is the clean half of the design:
-// a blocking do_loop() (grpc Wait()) is fine because do_stop() (grpc
-// Shutdown()) wakes it; a polling do_loop() checks stop_requested().
+// ---- how do_loop ends: the user's choice, not the base's burden ---------
 //
-// ---- reporting=true → watchdog heartbeat --------------------------------
+// The base owns one atomic, exposed as stop_requested(). stop() flips it.
+// How do_loop() observes it is the runnable author's call:
 //
-// A blocking do_loop() can't beat a heartbeat from inside itself, so the
-// base owns a SEPARATE cadence timer thread (only when kReporting is true)
-// that calls do_heartbeat() every kHeartbeatPeriodMs. That keeps a runnable
-// a first-class supervised citizen — same as a reporting gen_server — no
-// matter what do_loop() blocks on. do_heartbeat()'s default is a no-op; the
-// nanopb heartbeat sender wires into it when that lands (it is deliberately
-// NOT coupled to the libprotobuf HeartbeatPublisher here).
+//   cooperative (the common case):
+//       void do_loop() { while (!stop_requested()) { work(); } }
+//
+//   periodic with heartbeat (reporting nodes):
+//       void do_loop() {
+//           while (!stop_requested()) { server_->Wait(deadline_ms); beat(); }
+//       }
+//       — a Wait()-with-timeout loop both serves requests AND beats the
+//       watchdog itself, so no separate heartbeat thread is needed. This is
+//       why the base does NOT spawn one.
+//
+//   genuinely blocking (no timeout, e.g. bare server->Wait()):
+//       void do_loop() { server_->Wait(); }          // returns on Shutdown
+//       void do_stop() { server_->Shutdown(); }      // wakes the Wait()
+//       — fine for a reporting=false runnable; if it must beat, use the
+//       periodic form above instead.
+//
+// So: heartbeat is the user's choice via reporting + how they write do_loop
+// (reporting=false → no beat needed; a Wait(timeout) loop → beat per tick).
+// kReporting is still read (below) so the generated main / supervisor know
+// whether to watchdog this node — the base just doesn't add a thread for it.
 
 #pragma once
 
 #include <atomic>
-#include <chrono>
-#include <condition_variable>
-#include <cstdint>
-#include <mutex>
 #include <string>
 #include <thread>
 
@@ -65,35 +70,31 @@ public:
     GenRunnable(const GenRunnable&)            = delete;
     GenRunnable& operator=(const GenRunnable&) = delete;
 
-    // Uniform with GenServer::start(): spawn the worker thread (runs
-    // do_start then do_loop). If kReporting, also spawn the heartbeat timer.
+    // Uniform with GenServer::start(): spawn the worker thread, which runs
+    // do_start() then do_loop().
     void start() {
         if (running_.exchange(true)) return;
         worker_ = std::thread([this] {
             static_cast<Derived*>(this)->do_start();
             static_cast<Derived*>(this)->do_loop();
         });
-        if (reporting_) {
-            hb_ = std::thread([this] { heartbeat_loop_(); });
-        }
     }
 
-    // Uniform with GenServer::stop(): signal stop, unblock do_loop via
-    // do_stop(), join. Idempotent.
+    // Uniform with GenServer::stop(): flip the stop atomic, let do_stop()
+    // release/wake, join the worker. Idempotent.
     void stop(const std::string& reason = "normal") {
-        if (!running_.exchange(false)) return;
+        if (!running_.exchange(false)) return;  // running_ false ⇒ stop_requested()
         terminate_reason_ = reason;
-        {
-            std::lock_guard<std::mutex> lk(hb_mu_);
-            hb_cv_.notify_all();           // wake the heartbeat timer to exit
-        }
-        static_cast<Derived*>(this)->do_stop();  // MUST unblock do_loop()
+        static_cast<Derived*>(this)->do_stop();
         if (worker_.joinable()) worker_.join();
-        if (hb_.joinable())     hb_.join();
     }
 
-    // Poll inside a cooperative do_loop().
+    // The single stop signal. do_loop() polls this to exit cooperatively.
     bool stop_requested() const { return !running_.load(); }
+
+    // Whether this runnable is alive (started, not yet stopped). Inverse of
+    // stop_requested(); offered for readability inside do_loop().
+    bool running() const { return running_.load(); }
 
     // ---- defaults Derived may override --------------------------------
     // do_start / do_stop default to no-ops; do_loop has no default (a
@@ -101,31 +102,16 @@ public:
     void do_start() {}
     void do_stop() {}
 
-    // reporting=true heartbeat tick. Default no-op; the nanopb heartbeat
-    // sender overrides this. Runs on the base's heartbeat timer thread,
-    // independent of do_loop().
-    void do_heartbeat() {}
-
-    // Heartbeat cadence (ms). Derived may shadow with its own constant.
-    static constexpr uint32_t kHeartbeatPeriodMs = 1000;
-
 protected:
     const std::string& terminate_reason() const { return terminate_reason_; }
 
-private:
-    void heartbeat_loop_() {
-        std::unique_lock<std::mutex> lk(hb_mu_);
-        while (running_.load()) {
-            hb_cv_.wait_for(lk,
-                std::chrono::milliseconds(Derived::kHeartbeatPeriodMs),
-                [this] { return !running_.load(); });
-            if (!running_.load()) break;
-            lk.unlock();
-            static_cast<Derived*>(this)->do_heartbeat();
-            lk.lock();
-        }
-    }
+    // AUTOSAR Reporting flag (from the .art `reporting`, via Derived's
+    // kReporting, default false). The base does NOT act on it — heartbeat is
+    // the user's choice in do_loop (see header note). Exposed so the
+    // generated main / supervisor watchdog know whether this node beats.
+    bool is_reporting() const { return reporting_; }
 
+private:
     void force_stop_() {
         if (running_.load()) stop("forced");
     }
@@ -140,13 +126,10 @@ private:
     static bool reporting_of_(...) { return false; }
     void mark_reporting_() { reporting_ = reporting_of_<Derived>(0); }
 
-    std::atomic<bool>        running_{false};
-    bool                     reporting_{false};
-    std::thread              worker_;
-    std::thread              hb_;
-    std::mutex               hb_mu_;
-    std::condition_variable  hb_cv_;
-    std::string              terminate_reason_{"normal"};
+    std::atomic<bool>  running_{false};
+    bool               reporting_{false};
+    std::thread        worker_;
+    std::string        terminate_reason_{"normal"};
 };
 
 }  // namespace runtime

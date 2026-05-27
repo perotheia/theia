@@ -1,9 +1,14 @@
-// Wiring layer for the supervisor + its GUI observer.
+// Wiring layer for the supervisor.
 //
 // package.art holds the schema (messages + interfaces). Here we declare:
-//   - the node TYPES (Supervisor, SupervisorGui) — their TIPC slot,
-//     ports, and params.
-//   - the compositions that instantiate + wire them.
+//   - the node TYPE (Supervisor) — its TIPC slot, ports, and params.
+//   - the composition that instantiates it.
+//
+// The wxWidgets observer (repo-root supervisor-gui/) is NOT modelled here:
+// it is external dev tooling, not a platform node. It connects to the
+// supervisor at runtime as an ordinary client (now via com's gRPC bridge),
+// so the supervisor only PROVIDES SupervisorControlIf / SupervisorEventIf —
+// it does not need to know about any particular consumer in the model.
 
 package system.supervisor
 
@@ -34,52 +39,10 @@ node atomic Supervisor {
     }
 }
 
-// supervisor-gui — the wxWidgets observer (modelled on OTP's
-// observer_*_wx.erl). It is a CLIENT of the supervisor over TIPC: it
-// calls SupervisorControlIf to populate the Tree pane and issue
-// restart/terminate/stop, and receives SupervisorEventIf to drive the
-// Trace pane and keep the tree live without polling. It lives in the
-// supervisor package (not a separate supervisor-gui/system/ tree)
-// because it shares the SupervisorControlIf / SupervisorEventIf
-// definitions — same package, same generated .proto namespace, so both
-// ends decode the same wire bytes without translation.
-//
-// TIPC type 0x80020002 — second slot in the system-services band.
-// Singleton: one GUI per dev workstation talking to one supervisor.
-node atomic SupervisorGui {
-    tipc type=0x80020002 instance=0
-    ports {
-        client    control requires SupervisorControlIf
-        receiver  events  requires SupervisorEventIf
-    }
-    params {
-        // Where the GUI window opens. Sticky positioning happens
-        // outside the manifest (~/.config/supervisor-gui/state.json).
-        window_width_px  : uint32 = 1280
-        window_height_px : uint32 =  800
-
-        // How long after the most recent HealthBeacon to declare the
-        // connection stale and flash the status bar red. Match
-        // ~3× supervisor.heartbeat_period_ms by default.
-        stale_threshold_ms : uint32 = 3500
-
-        // Cap the trace ring buffer size (in entries) so a busy
-        // restart cascade doesn't eat all RAM.
-        trace_buffer_max : uint32 = 4096
-    }
-}
-
 // ---- compositions --------------------------------------------------------
 
 // The supervisor standing alone — referenced by `cluster Platform` in
 // platform/system/system.art (composition Supervisor sup).
 composition Supervisor {
     prototype Supervisor supervisor
-}
-
-// The GUI observer is its OWN process: just the GUI node. It is NOT
-// composed with the supervisor — the supervisor is a separate
-// composition / process; the GUI reaches it over TIPC at runtime.
-composition SupervisorObserver {
-    prototype SupervisorGui gui
 }

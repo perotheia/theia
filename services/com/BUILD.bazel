@@ -1,29 +1,26 @@
-# services/com — gRPC bridge between the in-host supervisor (TIPC)
-# and external clients (GUI / dashboards / rf-theia).
+# services/com — gRPC bridge between the in-host supervisor (TIPC) and
+# external clients (dashboards / supdbg / rf-theia).
 #
-# Two build entry points, split by dependency:
-#   //services/com/main:com     — the FC daemon (ComDaemon + ProbeDaemon),
-#                                 native Bazel cc_binary, nanopb + TIPC only.
-#   //services/com:services-com — the gRPC bridge (src/main.cpp), built via
-#                                 the rules_foreign_cc cmake() wrapper below.
+# ONE binary now: //services/com/main:com, a native Bazel cc_binary. It runs
+# BOTH nodes from services/system/com/package.art —
+#   ComDaemon    (gen_server, nanopb mailbox node), and
+#   ComGrpcProxy (the gRPC bridge runnable; do_* in impl/ComGrpcProxy_handlers).
+# The old World-A hand-rolled gRPC main() (services/com/src/, + a
+# rules_foreign_cc cmake() target) is gone — World A folded into World B.
 #
-# Why cmake() and not a native cc_binary: gRPC (grpc++) is NOT in theia's
-# bzlmod module graph — no `bazel_dep(name="grpc")`, no http_archive +
-# grpc_deps() (mosaic's @com_github_grpc_grpc lives only in its own separate
-# WORKSPACE). grpc++ is reached via host pkg-config, which Bazel only sees
-# through rules_foreign_cc. Same pattern as //supervisor-gui and
-# //services/log:services-log. CMakeLists.txt stays the dev source of truth
-# (`cmake -S . -B build` still works); `bazel build //services/com:services-com`
-# produces the same binary into bazel-bin/ for the rig pipeline. Native
-# gRPC-from-source (mosaic-style) would be a workspace-wide infra change,
-# tracked separately.
+# How grpc++ links natively (no bzlmod grpc): host protoc + grpc_cpp_plugin
+# generate the bridge .pb.cc / .grpc.pb.cc in the com_bridge_grpc_gen genrule
+# (same host-protoc pattern as //platform/supervisor:supervisor_pb_cpp_gen),
+# and com_bridge_grpc links grpc++ via system linkopts. The process therefore
+# links libprotobuf (gRPC edge) AND libprotobuf-nanopb (ComDaemon's TIPC
+# wire) — the deliberate two-codec, one-process design.
 
-load("@rules_foreign_cc//foreign_cc:defs.bzl", "cmake")
+load("@rules_cc//cc:defs.bzl", "cc_library")
 
 package(default_visibility = ["//visibility:public"])
 
-# .proto sources consumed by supervisor-gui's CMake build (+ the cmake()
-# sandbox below) via ${CMAKE_CURRENT_SOURCE_DIR}/../com/proto.
+# .proto sources consumed by external CMake builds (the repo-root
+# supervisor-gui/ tree) via a relative path into this package.
 filegroup(
     name = "proto_srcs",
     srcs = glob(
@@ -32,44 +29,71 @@ filegroup(
     ),
 )
 
-filegroup(
-    name = "all_srcs",
-    srcs = glob(
-        [
-            "CMakeLists.txt",
-            "src/**",
-            "include/**",
-            "proto/**",
-        ],
-        allow_empty = False,
-    ) + [
-        # CMakeLists still needs the supervisor .proto sources in the
-        # sandbox: supervisor_bridge.proto imports them (the grpc bridge
-        # codegen stays in CMake — there's no Bazel grpc here). The .pb.cc
-        # compilation of those types, though, is Bazel's job now — see the
-        # supervisor_pb_cpp dep below.
+# ---------------------------------------------------------------------------
+# gRPC bridge protos (libprotobuf C++ + grpc service stubs).
+#
+# supervisor_bridge.proto imports the supervisor's own message protos with
+# bare names (import "ChildState.proto";), so protoc gets two -I roots: this
+# package's proto/ and the supervisor's generated/proto/. We emit ONLY the
+# bridge's own .pb/.grpc.pb here; the supervisor message .pb.cc come from
+# //platform/supervisor:supervisor_pb_cpp (linked as a dep below) — no
+# double-compilation of those types.
+genrule(
+    name = "com_bridge_grpc_gen",
+    srcs = [
+        "proto/supervisor_bridge.proto",
         "//platform/supervisor:proto_srcs",
     ],
+    outs = [
+        "cpp/supervisor_bridge.pb.cc",
+        "cpp/supervisor_bridge.pb.h",
+        "cpp/supervisor_bridge.grpc.pb.cc",
+        "cpp/supervisor_bridge.grpc.pb.h",
+    ],
+    cmd = ("set -e;" +
+           " com_dir=$$(dirname $(location proto/supervisor_bridge.proto));" +
+           " sup_dir=$$(dirname $$(echo '$(locations //platform/supervisor:proto_srcs)'" +
+           "   | tr ' ' '\\n' | grep -m1 'ChildState.proto'));" +
+           " out_dir=$$(dirname $(location cpp/supervisor_bridge.pb.cc));" +
+           " protoc -I $$com_dir -I $$sup_dir" +
+           "   --cpp_out=$$out_dir --grpc_out=$$out_dir" +
+           "   --plugin=protoc-gen-grpc=$$(which grpc_cpp_plugin)" +
+           "   $$com_dir/supervisor_bridge.proto;"),
+    # host-installed protoc + grpc_cpp_plugin, same policy as the supervisor
+    # and nanopb genrules.
+    local = True,
 )
 
-cmake(
-    name = "services-com",
-    lib_source = ":all_srcs",
-    out_binaries = ["services-com"],
-    # The hybrid (#proto-as-dep): Bazel runs protoc --cpp_out over the
-    # supervisor protos (//platform/supervisor:supervisor_pb_cpp), and
-    # rules_foreign_cc stages its libsupervisor_pb_cpp.a into
-    # $EXT_BUILD_DEPS/lib + headers into $EXT_BUILD_DEPS/include (both on
-    # CMAKE_PREFIX_PATH). The bool below makes CMake find_library() the
-    # staged .a and skip its own foreach(protoc) loop — Bazel owns that
-    # codegen. (supervisor_bridge's grpc stubs still come from CMake's
-    # protoc; no Bazel grpc in this graph.)
-    deps = ["//platform/supervisor:supervisor_pb_cpp"],
-    cache_entries = {
-        "THEIA_USE_BAZEL_SUP_PB": "ON",
-    },
-    # THEIA_ROBOT_NODE defaults ON in CMakeLists (the test-only probe
-    # inject/call surface). CMake finds protoc + grpc_cpp_plugin + grpc++ +
-    # protobuf as host-apt packages (cmake() doesn't sandbox /usr).
-    targets = ["services-com"],
+cc_library(
+    name = "com_bridge_grpc",
+    srcs = [
+        "cpp/supervisor_bridge.pb.cc",
+        "cpp/supervisor_bridge.grpc.pb.cc",
+    ],
+    hdrs = [
+        "cpp/supervisor_bridge.pb.h",
+        "cpp/supervisor_bridge.grpc.pb.h",
+    ],
+    # `cpp/` is the include root so callers write
+    # `#include "supervisor_bridge.grpc.pb.h"` and the generated .pb.cc find
+    # the supervisor headers (flat names) on the same path.
+    includes = ["cpp"],
+    copts = [
+        "-std=c++17",
+        # protobuf/grpc-generated sources are noisy under -Wall -Wextra.
+        "-Wno-unused-parameter",
+    ],
+    deps = [
+        # The supervisor message types (ChildState, ControlReply, …) that
+        # supervisor_bridge.{pb,grpc.pb} reference — libprotobuf C++ bindings.
+        "//platform/supervisor:supervisor_pb_cpp",
+    ],
+    # grpc++ + its deps from the host toolchain (not in bzlmod). protobuf is
+    # already pulled transitively by supervisor_pb_cpp → //third_party:
+    # system_protobuf, but grpc needs -lgrpc++ -lgrpc -lgpr explicitly.
+    linkopts = [
+        "-lgrpc++",
+        "-lgrpc",
+        "-lgpr",
+    ],
 )

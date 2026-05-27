@@ -217,3 +217,77 @@ GUI edge only. nanopb field sizing lives in
 The `testing/rf_theia/scenarios/services/log/trace_crash_investigation.robot`
 scenario (set trace via com → read back via com → crash sm → supervisor
 re-applies) is the acceptance gate for the control-path swap.
+
+---
+
+## §6 — Firehose as a topologically-sorted stream (#419)
+
+The monolithic `TreeSnapshot` (one message holding `repeated ChildState`,
+×64 nodes each with `threads_detail[16]` + `sockets[16]`) blows past nanopb's
+fixed-struct limits (>64 kB), which is why the firehose was the last thing left
+on the legacy `TipcPublisher`. We replace it with a **stream of small, fixed
+messages over the standard Theia transport** — no message is ever large.
+
+### Wire shape (split: edges vs state)
+
+Two tiny message types, plus a framing op, all cast over the runtime
+(GwMessageHeader + nanopb), reusing the same types for full snapshots AND
+incremental updates:
+
+- `SnapshotBegin { uint64 generation; uint64 timestamp_ms }` — opens a full walk.
+- `NodeEdge { uint32 op; string parent_name; string name; uint32 kind }` —
+  one (parent → node) edge. `parent_name == ""` ⇒ root. `op` ∈
+  {ADD, REMOVE}. Emitted in **topological order**: a node's edge is sent only
+  after its parent's edge already went out (the existing `emit_snapshot` walk
+  is already topological — root, then children under known parents).
+- `NodeState { string name; sint32 pid; uint32 tid; uint32 state;
+  uint32 flags; <resources: cpu_pct, rss_kb, vsz_kb, threads, …> }` — per-node
+  mutable state, keyed by `name`. Sent independently of the edge so a
+  pid/tid/flag change is one small cast, not a tree rebuild.
+- `SnapshotEnd { uint64 generation }` — closes the walk; the receiver swaps the
+  rebuilt tree atomically on matching `generation`.
+
+`flags` is a bitmask (`NodeFlag`): `CORE_DUMPED = 1` (last exit dumped core,
+set in `reap()` on `WIFSIGNALED` + coredump), `DEGRADED = 2` (supervisor policy,
+e.g. restart budget nearing exhaustion), room for more without schema churn.
+
+### Snapshot vs update — same types
+
+- **Full tree**: `SnapshotBegin` → for each node in topo order
+  {`NodeEdge(ADD)` + `NodeState`} → `SnapshotEnd`.
+- **Incremental** (the common case — a node restarts, gets a new tid; a node
+  cores; a node goes degraded): a single `NodeState` cast for the one node. No
+  Begin/End, no edges. Tree shape unchanged ⇒ no `NodeEdge`. Node added/removed
+  ⇒ a lone `NodeEdge(ADD|REMOVE)` (+ `NodeState` for ADD).
+
+### Transport + threading
+
+The stream casts over the same runtime path as control (the supervisor's
+TipcMux), to com's `ComDaemon` `from_sup` receiver, which reassembles and
+forwards to the gRPC `Subscribe` stream. This retires `TipcPublisher` and
+`services/com/impl/tipc_uplink.cpp` entirely.
+
+The emit + all orchestrator state mutation must be **single-threaded** w.r.t.
+the select() loop (the #418 hazard): control CALLs land on the TipcMux epoll
+thread, the loop reaps/samples/emits — both touch the tree. Resolve by
+serializing mutation onto one owner (a command queue drained by the select
+loop, or one supervisor mutex around `do_*`/`apply_*`/`emit_*` + `reap`/`sample`
+— never holding it across `fork`).
+
+### Threading: command queue → select loop (chosen)
+
+The select() loop is the SOLE owner of all supervision state (the OTP
+"supervisor process"). The control node's `handle_call` runs on the TipcMux
+epoll thread and must NOT touch tree state. Instead:
+
+1. `handle_call` builds the nanopb request, pushes `{req, std::promise<reply>}`
+   onto a thread-safe command queue, wakes the select loop (self-pipe / eventfd
+   added to its `fd_set`), and blocks on the future (bounded timeout).
+2. The select loop, each iteration, drains the queue and runs
+   `dispatch_control_nanopb` (→ `do_*`/`apply_*`) inline — same thread as
+   `reap()`, `sample_procs()`, and the firehose emit. It fulfils each promise.
+
+Result: one writer thread, zero mutexes, no fork-under-lock (`do_start_child`
+forks on the loop thread as it always did). The epoll thread only marshals
+bytes + waits. The firehose stream is emitted from the loop thread too, so it
+always sees a consistent tree.

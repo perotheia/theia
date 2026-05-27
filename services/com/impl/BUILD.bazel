@@ -1,19 +1,154 @@
-# FIRST-TIME-ONLY (regenerated with --force). source: services/system/com/package.art
+# HAND-OWNED. source: services/system/com/package.art
 #
-# Impl slice — handler bodies. The user owns this BUILD.bazel after
-# first emit (you may want to add per-FC test_*.cc files; gen-app
-# won't reach in and squash that).
+# Impl slice — handler bodies for BOTH com nodes, compiled into the native
+# //services/com/main:com binary:
+#   ComDaemon_handlers.cc    — gen_server mailbox node (nanopb only).
+#   ComGrpcProxy_handlers.cc — the gRPC bridge runnable (World A folded into
+#                              World B). Pulls grpc++ + the supervisor bridge
+#                              protos via the //services/com:com_bridge_grpc
+#                              dep, plus sup_link (control) + the firehose
+#                              uplink (below).
+#   sup_link.cc              — #418: the proxy's RemoteRef to the supervisor
+#                              control node (TIPC 0x80020003/0) over the
+#                              STANDARD transport (nanopb). Carries the unary
+#                              mutators. Confines the nanopb supervisor structs
+#                              (supervisor_codecs.hh + :supervisor_nanopb) to
+#                              one TU so the same-basename ControlRequest.pb.h
+#                              never meets the libprotobuf gRPC edge.
+#   sup_firehose.cc          — #432: REASSEMBLES the supervisor's #429 topo-pair
+#                              stream (SnapshotBegin/NodeEdge/NodeState/
+#                              SnapshotEnd) into a LIBPROTOBUF TreeSnapshot +
+#                              fans it out to the gRPC Subscribe streams. Takes
+#                              plain scalars in (no proto type crosses its API),
+#                              so the gRPC face stays the SAME Supervisor
+#                              Observation oneof — clients unchanged.
+#   sup_firehose_register.cc — #432: the NANOPB decode side. Installs the four
+#                              firehose Cast entries on ComDaemon's binding +
+#                              feeds sup_firehose. Isolated (its OWN target,
+#                              like sup_link) so the nanopb supervisor headers
+#                              never meet the libprotobuf gRPC edge.
+#
+# tipc_uplink.{cpp,hpp} DELETED (#432): the firehose now arrives over the
+# standard runtime transport via ComDaemon, not a bespoke publisher socket.
+#
+# gen-app emits this BUILD listing only the <Node>_handlers.cc; we add the
+# bridge dep + sup_link + sup_firehose, so it diverges from the template — the
+# HAND-OWNED banner makes the fc_regen_stability selftest skip its byte-diff.
 
-load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
 
 package(default_visibility = ["//visibility:public"])
+
+# #432 — the reassembler, its OWN cc_library: libprotobuf TreeSnapshot only
+# (NO grpc, NO nanopb). Its plain-scalar sink API (sup_firehose.hpp) is what
+# the nanopb decode side (sup_firehose_register) feeds and what com_impl's gRPC
+# edge fans out. Isolating it keeps the unit test below grpc-free.
+cc_library(
+    name = "sup_firehose",
+    srcs = ["sup_firehose.cc"],
+    hdrs = ["sup_firehose.hpp"],
+    includes = [".."],
+    copts = [
+        "-std=c++17",
+        "-Wall",
+        "-Wextra",
+        "-fPIC",
+    ],
+    deps = [
+        # libprotobuf supervisor message types (the gRPC-edge codec it
+        # reassembles INTO). No grpc, no nanopb.
+        "//platform/supervisor:supervisor_pb_cpp",
+    ],
+)
+
+# #432 — "test it with unordered pairs": prove the name-keyed reassembler is
+# order-independent (child-before-parent reassembles identically to topo
+# order). Drives the plain-scalar sinks directly; no live supervisor / TIPC.
+cc_test(
+    name = "sup_firehose_test",
+    srcs = ["sup_firehose_test.cc"],
+    includes = [".."],
+    copts = ["-std=c++17", "-Wall", "-Wextra"],
+    deps = [
+        ":sup_firehose",
+        "//platform/supervisor:supervisor_pb_cpp",
+    ],
+)
+
+# #418 — sup_link is a SEPARATE cc_library, isolated from com_bridge_grpc on
+# purpose. com_bridge_grpc brings the LIBPROTOBUF supervisor headers (cpp/
+# ControlRequest.pb.h, a C++ class), while sup_link needs the NANOPB header
+# (nanopb/ControlRequest.pb.h, a C struct) — same basename. Keeping sup_link
+# in its own target means only the nanopb include dir is on its command line,
+# so `#include "ControlRequest.pb.h"` resolves to the nanopb one. The
+# libprotobuf<->primitives translation happens in ComGrpcProxy_handlers.cc
+# (which calls SupLink via sup_link.hpp's primitive-only surface).
+cc_library(
+    name = "sup_link",
+    srcs = ["sup_link.cc"],
+    hdrs = ["sup_link.hpp"],
+    # `..` so sup_link.cc resolves `#include "impl/sup_link.hpp"` from the
+    # services/com/ root.
+    includes = [".."],
+    copts = [
+        "-std=c++17",
+        "-Wall",
+        "-Wextra",
+        "-fPIC",
+    ],
+    deps = [
+        # NodeRef/TipcMux + the nanopb supervisor control structs + the
+        # RemoteCodec specializations. NO com_bridge_grpc — keeps the
+        # libprotobuf ControlRequest.pb.h off this TU's include path.
+        "//platform/runtime:runtime",
+        "//platform/supervisor:supervisor_nanopb",
+        "//platform/supervisor:supervisor_codecs_hdr",
+    ],
+)
+
+# #432 — sup_firehose_register is a SEPARATE cc_library, isolated from
+# com_bridge_grpc on the same rationale as sup_link: it includes the NANOPB
+# supervisor headers (supervisor_codecs.hh → nanopb/NodeEdge.pb.h, a C struct)
+# while com_impl's gRPC edge needs the LIBPROTOBUF ones (cpp/*.pb.h, same
+# basenames). Keeping the nanopb decode in its own target means only the nanopb
+# include dir is on its command line. It feeds sup_firehose through the
+# plain-scalar API (sup_firehose.hpp carries no proto type), so the two worlds
+# never share a TU. main.cc depends on it via the opaque
+# sup_firehose_register.hpp (NodeBinding fwd only).
+cc_library(
+    name = "sup_firehose_register",
+    srcs = ["sup_firehose_register.cc"],
+    hdrs = [
+        "sup_firehose_register.hpp",
+        "sup_firehose.hpp",   # the plain-scalar sink API it feeds
+    ],
+    includes = [".."],
+    copts = [
+        "-std=c++17",
+        "-Wall",
+        "-Wextra",
+        "-fPIC",
+    ],
+    deps = [
+        # NodeBinding/TipcMux + the nanopb supervisor structs + RemoteCodecs.
+        # NO com_bridge_grpc — keeps the libprotobuf supervisor cpp/*.pb.h off
+        # this TU's include path.
+        "//platform/runtime:runtime",
+        "//platform/supervisor:supervisor_nanopb",
+        "//platform/supervisor:supervisor_codecs_hdr",
+    ],
+)
 
 cc_library(
     name = "com_impl",
     srcs = [
         "ComDaemon_handlers.cc",
-        "ProbeDaemon_handlers.cc",
+        "ComGrpcProxy_handlers.cc",
+        # ProbeDaemon_handlers.cc parked (services/com/backup/, see .art BACKUP).
     ],
+    # `..` so ComGrpcProxy_handlers.cc resolves `#include "impl/sup_firehose.hpp"`
+    # and `#include "lib/ComGrpcProxy.hh"` from the services/com/ root.
+    includes = [".."],
     copts = [
         "-std=c++17",
         "-Wall",
@@ -22,5 +157,18 @@ cc_library(
     ],
     deps = [
         "//services/com/lib:com_lib",
+        # grpc++ + supervisor_bridge.{pb,grpc.pb} + supervisor message types
+        # (libprotobuf — also what sup_firehose reassembles into).
+        "//services/com:com_bridge_grpc",
+        # #432 — the reassembler (libprotobuf TreeSnapshot; its own grpc-free
+        # lib so the unit test can link it standalone).
+        ":sup_firehose",
+        # #418 — the standard-transport control link (nanopb, isolated above).
+        # ComGrpcProxy_handlers.cc only sees sup_link.hpp's primitive surface.
+        ":sup_link",
+        # #432 — the firehose decode/register (nanopb, isolated). main.cc calls
+        # register_firehose_casts via sup_firehose_register.hpp; expose it here
+        # so the cc_binary links it.
+        ":sup_firehose_register",
     ],
 )

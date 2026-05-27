@@ -25,5 +25,18 @@
 #include "ControlRequest.pb.h"     // nanopb (supervisor_nanopb include root)
 #include "ControlReply.pb.h"
 
+// #429 — the topo-pair firehose stream messages. The supervisor CASTs these
+// (GW_MSG_GEN_CAST) to com's ComDaemon; com register_casts the same C type
+// names so the djb2 service_ids match. They have no reply, so they need only
+// the cast codec — same as LogLevelPush/TraceControlPush.
+#include "NodeEdge.pb.h"
+#include "NodeState.pb.h"
+#include "SnapshotBegin.pb.h"
+#include "SnapshotEnd.pb.h"
+
 DEMO_DECLARE_REMOTE_CODEC(services_supervisor_ControlRequest)
 DEMO_DECLARE_REMOTE_CODEC(services_supervisor_ControlReply)
+DEMO_DECLARE_REMOTE_CODEC(services_supervisor_NodeEdge)
+DEMO_DECLARE_REMOTE_CODEC(services_supervisor_NodeState)
+DEMO_DECLARE_REMOTE_CODEC(services_supervisor_SnapshotBegin)
+DEMO_DECLARE_REMOTE_CODEC(services_supervisor_SnapshotEnd)

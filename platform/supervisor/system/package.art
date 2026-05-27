@@ -70,6 +70,12 @@ message ChildState {
     uint64  shared_kb        // Shared_Clean+Shared_Dirty from smaps_rollup
     uint64  data_kb          // /proc/<pid>/status VmData — heap + bss + data
 
+    // Status bitmask (NodeFlag) carried on the two-frame GetTree reply
+    // path so it matches the streamed NodeState.flags (#429). bit0 =
+    // CORE_DUMPED (last exit dumped core), bit1 = DEGRADED (restart
+    // budget nearing exhaustion). 0 = healthy.
+    uint32  flags
+
     // Per-thread detail (one entry per TID, sampled from
     // /proc/<pid>/task/<tid>/{stat,status,sched,comm}). The `threads`
     // field above is the count; this is the breakdown the GUI shows
@@ -133,6 +139,69 @@ message TreeSnapshot {
     uint64  generation       // monotonically increasing
     uint64  timestamp_ms     // wallclock at snapshot time
     repeated ChildState children
+}
+
+// ---- #429 topo-pair firehose stream --------------------------------------
+//
+// The monolithic TreeSnapshot (repeated ChildState x 64 nodes, each with
+// threads_detail[16] + sockets[16]) blows past nanopb's fixed-struct limits
+// (>64 kB), which is why the firehose was stuck on the legacy TipcPublisher.
+// We replace it with a STREAM of small fixed messages cast over the standard
+// Theia transport (GwMessageHeader + nanopb) — no message is ever large. The
+// same four types serve both a FULL walk and INCREMENTAL single-node updates.
+// See docs/com-supervisor-transport.md §6.
+
+// Per-node status bitmask. Treated as a uint32 bitmask on the wire (the
+// `flags` fields below): bit0 (value 1) = CORE_DUMPED, bit1 (value 2) =
+// DEGRADED. The enum members name the bit VALUES, not positions.
+enum NodeFlag {
+    NONE        = 0
+    CORE_DUMPED = 1   // last exit dumped core (reap WIFSIGNALED + WCOREDUMP)
+    DEGRADED    = 2   // supervisor policy: restart budget nearing exhaustion
+}
+
+// Opens a full topological walk. The receiver buffers the edges/states that
+// follow under this generation and swaps the rebuilt tree atomically on the
+// matching SnapshotEnd.
+message SnapshotBegin {
+    uint64  generation
+    uint64  timestamp_ms
+}
+
+// Closes a full walk opened by SnapshotBegin with the same generation.
+message SnapshotEnd {
+    uint64  generation
+}
+
+// One (parent -> node) edge. parent_name == "" means root. Emitted in
+// topological order — a node's edge follows its parent's. op: 0 = ADD,
+// 1 = REMOVE.
+message NodeEdge {
+    uint32  op               // 0 = ADD, 1 = REMOVE
+    string  parent_name      // "" for the root
+    string  name
+    uint32  kind             // 0 = worker, 1 = supervisor
+}
+
+// Per-node mutable state, keyed by `name`. FLAT (no repeated
+// threads_detail/sockets — that detail stays on the GetTree two-frame
+// ChildState path). Sent independently of the edge so a pid/tid/flag change
+// is one small cast, not a tree rebuild.
+message NodeState {
+    string  name
+    sint32  pid              // -1 when not running
+    uint32  tid              // primary thread id; changes on restart
+    uint32  state            // 0=stopped,1=starting,2=running,3=terminating,4=restarting
+    uint32  flags            // NodeFlag bitmask
+    uint32  restart_count
+    sint32  last_exit_code
+    uint64  uptime_ms
+    uint32  cpu_pct
+    uint64  rss_kb
+    uint64  vsz_kb
+    uint32  threads
+    uint64  shared_kb
+    uint64  data_kb
 }
 
 // One supervision event. kind discriminates the union; payload-specific
@@ -443,6 +512,6 @@ interface senderReceiver NodeReportIf {
     data SendTimeoutReport send_timeout
 }
 
-// Node types (Supervisor, SupervisorGui) and the wiring compositions
-// live in the sibling component.art — package.art is the schema layer
-// (messages + interfaces), component.art is the wiring layer.
+// The Supervisor node type and the wiring composition live in the sibling
+// component.art — package.art is the schema layer (messages + interfaces),
+// component.art is the wiring layer.

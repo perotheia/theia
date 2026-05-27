@@ -17,11 +17,16 @@ namespace ara::com {
 
 
 
+
+
 ComEmpty ComDaemon::handle_call(
         const ComEmpty& /*req*/,
         ComDaemonState& /*s*/) {
-    // TODO: implement ComBridge::Ping.
-    std::fprintf(stderr, "[%s] ComBridge::Ping called\n",
+    // TODO: implement Ping (ComEmpty →
+    //                                 ComEmpty).
+    // Dispatched by request type; one or more server ports may
+    // expose this operation.
+    std::fprintf(stderr, "[%s] Ping called\n",
                  kNodeName);
     return ComEmpty{};
 }
@@ -29,8 +34,11 @@ ComEmpty ComDaemon::handle_call(
 ComEmpty ComDaemon::handle_call(
         const NetworkBindingRequest& /*req*/,
         ComDaemonState& /*s*/) {
-    // TODO: implement ComCtl::EnableBindings.
-    std::fprintf(stderr, "[%s] ComCtl::EnableBindings called\n",
+    // TODO: implement EnableBindings (NetworkBindingRequest →
+    //                                 ComEmpty).
+    // Dispatched by request type; one or more server ports may
+    // expose this operation.
+    std::fprintf(stderr, "[%s] EnableBindings called\n",
                  kNodeName);
     return ComEmpty{};
 }

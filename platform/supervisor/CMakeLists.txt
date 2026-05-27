@@ -97,6 +97,94 @@ target_compile_options(supervisor_proto PRIVATE
 )
 target_link_libraries(supervisor_proto PUBLIC ${PROTOBUF_LIBRARIES})
 
+# ---------------------------------------------------------------------------
+# #417 — standard-transport control surface (nanopb). control_node.cpp +
+# ControlServer use the platform/runtime gen_server stack (GenServer.hh,
+# TipcMux.hh, NodeRef.hh, RemoteCodec.hh) and the NANOPB supervisor binding
+# (ControlRequest.pb.h from //platform/supervisor:supervisor_nanopb). It must
+# be a SEPARATE object library so its include path carries the nanopb
+# ControlRequest.pb.h — NOT the libprotobuf one in ${PROTO_GEN_DIR} that
+# runtime.cpp/supervisor_proto compile against. Same-basename headers, kept in
+# separate TUs (see src/control_node.cpp + include/supervisor/control_server.h).
+#
+# Under the Bazel cmake() wrapper the runtime library + nanopb headers/libs are
+# staged into $EXT_BUILD_DEPS via deps=[]; for a standalone `cmake -S . -B
+# build` dev tree they resolve through the in-tree sibling paths below.
+set(RUNTIME_DIR        "${CMAKE_CURRENT_SOURCE_DIR}/../../platform/runtime")
+set(LIBGW_INC_DIR      "${CMAKE_CURRENT_SOURCE_DIR}/../../gateway/libs/libgw/include")
+set(SUP_NANOPB_INC_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated_nanopb")
+
+# $EXT_BUILD_DEPS is set by rules_foreign_cc; empty for a standalone build.
+set(EXT_DEPS "$ENV{EXT_BUILD_DEPS}")
+
+# Standalone dev build: generate the nanopb supervisor headers (Bazel's
+# supervisor_nanopb genrule does this in the sandbox + stages them into
+# $EXT_BUILD_DEPS/include). Only the control-path .pb.h are needed for the
+# include path; the .pb.c we compile for the linked symbols.
+set(SUP_NANOPB_SRCS "")
+if(EXT_DEPS STREQUAL "")
+    find_program(NANOPB_GENERATOR nanopb_generator)
+    set(SUP_NANOPB_PROTOS
+        ControlRequest ControlReply
+        StartChildRequest DeleteChildRequest ChildSelector
+        GetChildRequest GetTreeRequest GetSystemInfoRequest
+        ConfigureTraceRequest GetTraceConfigRequest TraceConfig
+        TraceConfigList ConfigureLogLevelRequest LogLevelConfig
+        ChildSpec HeartbeatReport SendTimeoutReport)
+    file(MAKE_DIRECTORY ${SUP_NANOPB_INC_DIR})
+    if(NANOPB_GENERATOR)
+        set(SUP_NANOPB_PROTO_ARGS "")
+        foreach(P ${SUP_NANOPB_PROTOS})
+            list(APPEND SUP_NANOPB_PROTO_ARGS ${PROTO_SRC_DIR}/${P}.proto)
+            list(APPEND SUP_NANOPB_SRCS ${SUP_NANOPB_INC_DIR}/${P}.pb.c)
+        endforeach()
+        add_custom_command(
+            OUTPUT ${SUP_NANOPB_SRCS}
+            COMMAND ${NANOPB_GENERATOR}
+                    -I ${PROTO_SRC_DIR}
+                    -f ${CMAKE_CURRENT_SOURCE_DIR}/system/supervisor.options
+                    -D ${SUP_NANOPB_INC_DIR}
+                    --no-error-on-unmatched
+                    ${SUP_NANOPB_PROTO_ARGS}
+            DEPENDS ${PROTO_FILES}
+            COMMENT "nanopb_generator supervisor control protos"
+            VERBATIM)
+    else()
+        message(WARNING "nanopb_generator not found; standalone control-node "
+                        "build will fail. Bazel cmake() stages these headers.")
+    endif()
+endif()
+
+add_library(supervisor_control_node OBJECT
+    src/control_node.cpp
+    ${SUP_NANOPB_SRCS}
+)
+target_compile_options(supervisor_control_node PRIVATE
+    # The platform/runtime gen_server stack is C++17 (inline-vars +
+    # if-constexpr); override the project-wide C++14 for this TU only.
+    # In particular RemoteCodec<T>::service_id is a constexpr static that
+    # is implicitly inline (no out-of-line def) only under C++17.
+    -std=c++17
+    -fPIC
+    -Wno-unused-parameter
+)
+set_target_properties(supervisor_control_node PROPERTIES
+    CXX_STANDARD 17
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(supervisor_control_node PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    # platform/runtime gen_server headers + the runtime nanopb proto root
+    # (platform_runtime/runtime.pb.h) + libgw (gw_proto.h).
+    ${RUNTIME_DIR}/include
+    ${RUNTIME_DIR}/proto
+    ${LIBGW_INC_DIR}
+    # nanopb supervisor binding (ControlRequest.pb.h etc.). Bazel stages it
+    # into $EXT_BUILD_DEPS/include; standalone build generates it below.
+    ${SUP_NANOPB_INC_DIR}
+    ${EXT_DEPS}/include
+)
+
 add_executable(supervisor
     src/main.cpp
     src/runtime.cpp
@@ -104,6 +192,7 @@ add_executable(supervisor
     src/tipc_publisher.cpp
     src/etcd_publisher.cpp
     $<TARGET_OBJECTS:supervisor_proto>
+    $<TARGET_OBJECTS:supervisor_control_node>
 )
 
 target_include_directories(supervisor PRIVATE
@@ -123,6 +212,63 @@ target_link_libraries(supervisor PRIVATE
     etcd-cpp-api
     pthread
 )
+
+# ---------------------------------------------------------------------------
+# #417 — link the platform/runtime gen_server stack + nanopb runtime that the
+# control node needs (TipcMux::bind_node, TipcClient, tracer_for,
+# process_logger, the LogLevelPush nanopb codec, and the supervisor nanopb
+# control structs).
+#
+#   * Bazel cmake(): the built libraries are staged into $EXT_BUILD_DEPS/lib
+#     by deps=["//platform/runtime:runtime", ":supervisor_nanopb"]. We link
+#     the staged archives + the host nanopb runtime.
+#   * Standalone dev: compile the handful of runtime sources directly + the
+#     runtime nanopb codec; the supervisor nanopb .pb.c rode into the
+#     control-node object lib above.
+#
+# Either way the host nanopb runtime (libprotobuf-nanopb.a) supplies
+# pb_encode/pb_decode.
+if(NOT EXT_DEPS STREQUAL "")
+    # Bazel: link the staged STATIC archives. rules_foreign_cc stages BOTH
+    # lib<rule>.a and lib<rule>.so under $EXT_BUILD_DEPS/lib; find_library's
+    # default suffix order prefers .so, which would leave the deployed binary
+    # with an unresolvable libruntime.so / libsupervisor_nanopb.so at runtime
+    # (no rpath). Pin the search to .a so we statically link them — same
+    # static-only policy as supervisor_pb_cpp.a / libprotobuf-nanopb.a.
+    set(_saved_suffixes ${CMAKE_FIND_LIBRARY_SUFFIXES})
+    set(CMAKE_FIND_LIBRARY_SUFFIXES ".a")
+    find_library(RUNTIME_LIB        NAMES runtime libruntime
+                 PATHS ${EXT_DEPS}/lib NO_DEFAULT_PATH)
+    find_library(SUP_NANOPB_LIB     NAMES supervisor_nanopb libsupervisor_nanopb
+                 PATHS ${EXT_DEPS}/lib NO_DEFAULT_PATH)
+    set(CMAKE_FIND_LIBRARY_SUFFIXES ${_saved_suffixes})
+    target_link_libraries(supervisor PRIVATE
+        ${RUNTIME_LIB}
+        ${SUP_NANOPB_LIB}
+        -l:libprotobuf-nanopb.a
+    )
+    # gw_proto.h / runtime headers were copied to $EXT_BUILD_DEPS/include by
+    # the staged deps; control_node.cpp already includes them via the object
+    # lib's include dirs. supervisor's own TUs don't need them.
+else()
+    # Standalone: compile the minimal runtime sources the control node pulls.
+    target_sources(supervisor PRIVATE
+        ${RUNTIME_DIR}/src/TipcMux.cc
+        ${RUNTIME_DIR}/src/NodeRef.cc
+        ${RUNTIME_DIR}/src/Logger.cc
+        ${RUNTIME_DIR}/proto/platform_runtime/runtime.pb.c
+    )
+    set_source_files_properties(
+        ${RUNTIME_DIR}/src/TipcMux.cc
+        ${RUNTIME_DIR}/src/NodeRef.cc
+        ${RUNTIME_DIR}/src/Logger.cc
+        PROPERTIES COMPILE_OPTIONS "-std=c++17;-Wno-unused-parameter")
+    target_include_directories(supervisor PRIVATE
+        ${RUNTIME_DIR}/include
+        ${RUNTIME_DIR}/proto
+        ${LIBGW_INC_DIR})
+    target_link_libraries(supervisor PRIVATE -l:libprotobuf-nanopb.a)
+endif()
 
 # libtombstone — in-process crash forensics, linked by any daemon that
 # wants Android-style tombstones written on fatal signals.

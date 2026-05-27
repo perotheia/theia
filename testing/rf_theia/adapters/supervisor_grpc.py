@@ -244,6 +244,7 @@ def _snapshot_to_dict(snap) -> dict:
                 "state": SupervisorClient._state_name(c.state),
                 "restart_count": c.restart_count,
                 "uptime_ms": c.uptime_ms,
+                "flags": getattr(c, "flags", 0),
             }
             for c in getattr(snap, "children", [])
         ],

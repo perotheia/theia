@@ -96,6 +96,14 @@ struct WorkerNode {
     // Runtime state.
     int                                  pid{-1};      // -1 when not running
     std::chrono::steady_clock::time_point last_start{};
+
+    // #429 — per-node status carried on NodeState.flags / ChildState.flags.
+    // Bitmask: bit0 CORE_DUMPED (last exit dumped core), bit1 DEGRADED
+    // (restart budget nearing exhaustion). Cleared on a clean (re)start.
+    uint32_t                             flags{0};
+    // Cumulative restart count + last observed exit code, for NodeState.
+    uint32_t                             restart_count{0};
+    int                                  last_exit_code{0};
     // True while stop_worker() is actively terminating this worker. When
     // set, reap() skips on_child_exit() for this PID — the synchronous
     // stop path owns the wait. Mirrors OTP's {restarting, OldPid} sentinel

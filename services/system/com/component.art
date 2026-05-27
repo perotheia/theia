@@ -3,6 +3,10 @@ package system.services.com
 
 composition Com {
     prototype ComDaemon    com_daemon
-    prototype ProbeDaemon  probe_daemon
+    // World-A gRPC bridge as a first-class runnable node (see package.art).
+    prototype ComGrpcProxy com_grpc_proxy
+    // BACKUP (2026-05): probe parked alongside the ProbeDaemon node in
+    // package.art. Un-comment together with that node + restore the .bak
+    // impl/lib files to bring the test agent back.
+    // prototype ProbeDaemon  probe_daemon
 }
-

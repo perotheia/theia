@@ -9,6 +9,7 @@
 // docs/com-supervisor-transport.md §4-5.
 
 #include "supervisor/control_node.h"
+#include "supervisor/control_server.h"
 #include "supervisor/runtime.h"
 
 #include "ControlRequest.pb.h"   // nanopb
@@ -16,7 +17,15 @@
 #include "TraceConfigList.pb.h"
 #include "TraceConfig.pb.h"
 
+// Standard-transport plumbing. supervisor_codecs.hh brings the RemoteCodec
+// specializations so register_call<> below dispatches by service_id.
+#include "supervisor/supervisor_codecs.hh"
+#include "TipcMux.hh"
+
+#include <chrono>
 #include <cstring>
+#include <future>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -145,12 +154,87 @@ services_supervisor_ControlReply SupervisorControlNode::handle_call(
         SupervisorControlState& st) {
     services_supervisor_ControlReply rep =
         services_supervisor_ControlReply_init_zero;
-    if (st.sup) {
-        st.sup->dispatch_control_nanopb(&req, &rep);
-    } else {
+    if (!st.sup) {
         rep.status = 14;  // unavailable — no orchestrator bound
+        return rep;
     }
+
+    // #431 — we are on the TipcMux epoll thread. dispatch_control_nanopb
+    // mutates the supervision tree (do_*/apply_*) and may fork; that must run
+    // SINGLE-THREADED on the select() loop, the sole owner of all supervision
+    // state. So: build a closure that runs the dispatch + fulfils a promise,
+    // post it to the loop's command queue (which wakes the loop), and block
+    // here on the future. The req is a fixed nanopb struct — copy it by value
+    // into the closure so it outlives this frame. Bounded wait: a wedged loop
+    // ⇒ status=14 (unavailable) rather than a hung gRPC caller.
+    Supervisor* sup = st.sup;
+    auto prom = std::make_shared<std::promise<services_supervisor_ControlReply>>();
+    auto fut  = prom->get_future();
+    services_supervisor_ControlRequest req_copy = req;  // value capture
+
+    sup->post_command([sup, req_copy, prom]() mutable {
+        services_supervisor_ControlReply r =
+            services_supervisor_ControlReply_init_zero;
+        sup->dispatch_control_nanopb(&req_copy, &r);
+        prom->set_value(r);
+    });
+
+    if (fut.wait_for(std::chrono::seconds(5)) == std::future_status::ready) {
+        return fut.get();
+    }
+    // Timed out — the loop didn't drain the command in time. Return a
+    // unavailable reply rather than block the epoll thread indefinitely.
+    rep.status = 14;
+    rep.correlation_id = req.correlation_id;
+    std::snprintf(rep.message, sizeof(rep.message),
+                  "supervisor command queue timeout");
     return rep;
+}
+
+// ---- ControlServer (pimpl) -----------------------------------------------
+//
+// Owns the TipcMux + the SupervisorControlNode and binds them at the control
+// address. Confined to this TU so the nanopb ControlRequest.pb.h never meets
+// runtime.cpp's libprotobuf one. runtime.cpp drives lifetime via
+// control_server.h's opaque start/stop.
+
+struct ControlServer::Impl {
+    explicit Impl(Supervisor* sup) : node(sup) {}
+
+    demo::runtime::TipcMux mux;
+    SupervisorControlNode  node;
+    bool                   started = false;
+};
+
+ControlServer::ControlServer(Supervisor* sup)
+    : impl_(new Impl(sup)) {}
+
+ControlServer::~ControlServer() { stop(); }
+
+bool ControlServer::start() {
+    if (!impl_ || impl_->started) return impl_ && impl_->started;
+    impl_->node.start();
+    auto* binding = impl_->mux.bind_node(
+        impl_->node, SupervisorControlNode::kTipcType,
+        SupervisorControlNode::kTipcInstance);
+    if (!binding) {
+        // TIPC bind failed; tear the node back down and report inert.
+        impl_->node.stop("bind-failed");
+        return false;
+    }
+    impl_->mux.register_call<services_supervisor_ControlRequest,
+                             services_supervisor_ControlReply>(
+        binding, impl_->node);
+    impl_->mux.start();
+    impl_->started = true;
+    return true;
+}
+
+void ControlServer::stop() {
+    if (!impl_ || !impl_->started) return;
+    impl_->mux.stop();
+    impl_->node.stop("normal");
+    impl_->started = false;
 }
 
 }  // namespace supervisor

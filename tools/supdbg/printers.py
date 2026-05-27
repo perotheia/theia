@@ -34,6 +34,23 @@ def _state_name(s: int) -> str:
     return _STATE_NAMES.get(s, f"?{s}")
 
 
+# ChildState.flags bitfield (NodeFlag.proto): bit0 CORE_DUMPED, bit1 DEGRADED.
+_FLAG_CORE_DUMPED = 1
+_FLAG_DEGRADED = 2
+
+
+def _flags_badge(flags: int) -> str:
+    """Compact per-row health badge from the ChildState.flags bitfield."""
+    if not flags:
+        return "-"
+    tags = []
+    if flags & _FLAG_CORE_DUMPED:
+        tags.append("CD")
+    if flags & _FLAG_DEGRADED:
+        tags.append("DEG")
+    return ",".join(tags) if tags else "-"
+
+
 def _event_name(k: int) -> str:
     return _EVENT_NAMES.get(k, f"?{k}")
 
@@ -55,16 +72,17 @@ def print_snapshot(snap, out: t.IO[str]) -> None:
     if not children:
         return
     hdr = f"{'NAME':<22} {'PARENT':<18} {'STATE':<11} {'PID':>6} " \
-          f"{'UPTIME':>10} {'REST':>5} {'CPU%':>5} {'RSS-MB':>7}"
+          f"{'UPTIME':>10} {'REST':>5} {'CPU%':>5} {'RSS-MB':>7} {'FLAGS':>5}"
     print(hdr, file=out)
     print("-" * len(hdr), file=out)
     for c in sorted(children, key=lambda c: (c.parent_name, c.name)):
         uptime = _fmt_uptime(c.uptime_ms)
         rss_mb = c.rss_kb // 1024 if c.rss_kb else 0
+        badge = _flags_badge(getattr(c, "flags", 0))
         print(
             f"{c.name:<22} {c.parent_name:<18} {_state_name(c.state):<11} "
             f"{c.pid:>6} {uptime:>10} {c.restart_count:>5} "
-            f"{c.cpu_pct:>5} {rss_mb:>7}",
+            f"{c.cpu_pct:>5} {rss_mb:>7} {badge:>5}",
             file=out,
         )
 

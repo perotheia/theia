@@ -3,6 +3,14 @@
 
 #include "supervisor/runtime.h"
 
+// Control surface on the standard Theia transport (#417). ControlServer is a
+// pimpl wrapper that owns the TipcMux + SupervisorControlNode and binds them
+// at the distinct control address. Its header carries NO nanopb / runtime
+// types, so runtime.cpp (which uses the LIBPROTOBUF ControlRequest.pb.h on the
+// legacy path) never sees the nanopb ControlRequest.pb.h — the two same-named
+// headers stay in separate translation units (control_node.cpp owns nanopb).
+#include "supervisor/control_server.h"
+
 // Generated from services/supervisor/system/package.art by
 // `artheia gen-proto` and compiled by protoc via the CMake build.
 #include "ChildSelector.pb.h"
@@ -43,6 +51,7 @@
 #include <sched.h>
 #include <sys/select.h>
 #include <sys/signalfd.h>
+#include <sys/eventfd.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -187,10 +196,22 @@ Supervisor::Supervisor(std::unique_ptr<Node> root,
     if (signal_fd_ < 0) {
         throw std::runtime_error(std::string("signalfd: ") + std::strerror(errno));
     }
+
+    // #431 — command-queue wake. The control node's handle_call (TipcMux epoll
+    // thread) post_command()s a closure + writes this fd; the select() loop
+    // adds it to its fd_set and drains/runs the queued closures on the loop
+    // thread. EFD_NONBLOCK so the loop's drain never blocks; the counter
+    // semantics collapse N pending writes into one readable event (we drain
+    // the whole queue regardless of the counter value).
+    cmd_eventfd_ = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+    if (cmd_eventfd_ < 0) {
+        throw std::runtime_error(std::string("eventfd: ") + std::strerror(errno));
+    }
 }
 
 Supervisor::~Supervisor() {
     if (signal_fd_ >= 0) close(signal_fd_);
+    if (cmd_eventfd_ >= 0) close(cmd_eventfd_);
 }
 
 // ---------------------------------------------------------------------------
@@ -309,6 +330,10 @@ void Supervisor::start_worker(WorkerNode& w) {
     // Parent.
     w.pid = pid;
     w.last_start = std::chrono::steady_clock::now();
+    // #429 — the freshly-(re)started instance hasn't cored; clear CORE_DUMPED.
+    // DEGRADED stays sticky (restart thrashing is about the budget window, not
+    // this single instance) until the window ages out.
+    w.flags &= ~1u;  // clear NodeFlag CORE_DUMPED (bit0)
     emit_event(/*kind=child_started*/0, &w, supervisor_of(w),
                /*exit_code=*/0, std::string{}, std::string{});
     emit_snapshot();
@@ -428,6 +453,10 @@ void Supervisor::on_child_exit(WorkerNode& w, int return_code, pid_t old_pid) {
     if (w.restart == RestartType::Temporary)             return;
     if (w.restart == RestartType::Transient && !abnormal) return;
 
+    // #429 — count this restart; flag DEGRADED if the sliding-window restart
+    // count is at/over the supervisor's budget (the node is restart-thrashing,
+    // one more failure escalates). Surfaced on the NodeState the restart emits.
+    w.restart_count++;
     if (!record_and_check_restart(*sup)) {
         std::ostringstream msg;
         msg << "supervisor " << sup->name << " exceeded restart intensity ("
@@ -435,8 +464,14 @@ void Supervisor::on_child_exit(WorkerNode& w, int return_code, pid_t old_pid) {
             << "s) — escalating";
         log_err(msg.str());
         escalated_ = true;
+        w.flags |= 2u;          // NodeFlag DEGRADED (bit1)
+        cast_node_state(w);     // last gasp before escalation tears down
         shutdown_requested_.store(true);
         return;
+    }
+    // Nearing exhaustion: history is at the budget ceiling.
+    if (static_cast<int>(sup->restart_history.size()) >= sup->max_restarts) {
+        w.flags |= 2u;          // DEGRADED
     }
 
     switch (sup->strategy) {
@@ -521,9 +556,64 @@ void Supervisor::restart_rest(SupervisorNode& sup, WorkerNode& failed) {
 // Main loop
 // ---------------------------------------------------------------------------
 
+// #431 — push a closure onto the command queue and wake the select() loop.
+// Callable from any thread (the control node's TipcMux epoll thread). The
+// closure runs LATER, on the loop thread, in drain_commands().
+void Supervisor::post_command(std::function<void()> fn) {
+    {
+        std::lock_guard<std::mutex> lk(cmd_mutex_);
+        cmd_queue_.push_back(std::move(fn));
+    }
+    // Wake the loop. eventfd write of 1 increments the counter; coalesces
+    // with any other pending writes (we drain the whole queue regardless).
+    if (cmd_eventfd_ >= 0) {
+        uint64_t one = 1;
+        ssize_t n = ::write(cmd_eventfd_, &one, sizeof(one));
+        (void)n;  // best-effort; a full counter still leaves the fd readable
+    }
+}
+
+// #431 — run every queued closure on the LOOP THREAD. Called once per
+// select() iteration before reap/sample/emit, so control dispatch is
+// single-threaded with all other state mutation (no mutex on the tree, no
+// fork-under-lock). We swap the queue out under the lock, then run the
+// closures with the lock released (a closure may itself post_command).
+void Supervisor::drain_commands() {
+    // Drain the eventfd counter (non-blocking) so the loop doesn't spin.
+    if (cmd_eventfd_ >= 0) {
+        uint64_t cnt = 0;
+        ssize_t n = ::read(cmd_eventfd_, &cnt, sizeof(cnt));
+        (void)n;  // EAGAIN when not readable — fine
+    }
+    std::deque<std::function<void()>> batch;
+    {
+        std::lock_guard<std::mutex> lk(cmd_mutex_);
+        batch.swap(cmd_queue_);
+    }
+    for (auto& fn : batch) {
+        if (fn) fn();
+    }
+}
+
 int Supervisor::run() {
     log_info("supervisor starting (root=" + root_->name + ")");
     start_subtree(*root_);
+
+    // #417 — control surface on the STANDARD Theia transport. ControlServer
+    // owns a TipcMux + a SupervisorControlNode gen_server bound at the
+    // distinct control address (0x80020003/0 — NOT the publisher's
+    // 0x80020001, which keeps carrying the firehose). com drives this via
+    // RemoteRef; handle_call thunks into dispatch_control_nanopb (which
+    // guards its own state). The mux runs its own epoll thread; the
+    // orchestrator is shared between that thread and this select() loop via
+    // the node's back-pointer.
+    ControlServer ctl_server(this);
+    if (ctl_server.start()) {
+        log_info("control node bound (TIPC type=0x80020003 instance=0)");
+    } else {
+        log_err("control node TIPC bind failed; nanopb control surface "
+                "disabled (legacy publisher control path still active)");
+    }
 
     // T1: arm the SM startup handshake. Children were just forked; give
     // them a grace window to bind their TIPC sockets, then send_sm_ready()
@@ -532,15 +622,19 @@ int Supervisor::run() {
         std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
 
     while (!shutdown_requested_.load()) {
-        // Wait for signalfd readable; budget 1s so we wake periodically.
+        // Wait for signalfd OR the command-queue eventfd readable; budget 1s
+        // so we wake periodically for heartbeat / snapshot ticks anyway.
         fd_set rfds;
         FD_ZERO(&rfds);
         FD_SET(signal_fd_, &rfds);
+        if (cmd_eventfd_ >= 0) FD_SET(cmd_eventfd_, &rfds);
+        int max_fd = signal_fd_;
+        if (cmd_eventfd_ > max_fd) max_fd = cmd_eventfd_;
         struct timeval tv;
         tv.tv_sec = 1;
         tv.tv_usec = 0;
 
-        int rv = ::select(signal_fd_ + 1, &rfds, nullptr, nullptr, &tv);
+        int rv = ::select(max_fd + 1, &rfds, nullptr, nullptr, &tv);
         if (rv < 0) {
             if (errno == EINTR) continue;
             log_err("select: " + std::string(std::strerror(errno)));
@@ -575,6 +669,13 @@ int Supervisor::run() {
                 }
             }
         }
+
+        // #431 — run any control commands posted by the gen_server's
+        // handle_call (TipcMux epoll thread) FIRST, on this loop thread, so
+        // dispatch_control_nanopb (→ do_*/apply_*) is single-threaded with
+        // reap/sample/emit below. This is the threading-hazard fix: one
+        // writer, no mutex on the tree, no fork-under-lock.
+        drain_commands();
 
         // Reap any exited workers, regardless of whether select returned a
         // signalfd event — we may have missed coalesced SIGCHLDs.
@@ -636,6 +737,10 @@ int Supervisor::run() {
         }
     }
 
+    // Tear down the control surface before the children: stops the mux's
+    // epoll thread + the node's worker thread.
+    ctl_server.stop();
+
     shutdown_subtree(*root_);
     log_info("supervisor exiting");
     // Non-zero exit code if we got here because of escalation: the root
@@ -674,10 +779,21 @@ void Supervisor::reap() {
         const bool was_terminating = w.terminating;
         const pid_t old_pid = w.pid;
         w.pid = -1;  // mark dead before potential re-fork
+        w.last_exit_code = rc;
+
+        // #429 — core_dumped flag: a fatal signal that dumped core. Surfaced
+        // on the next NodeState so the GUI/test can see "this node cored".
+        if (WIFSIGNALED(status) && WCOREDUMP(status)) {
+            w.flags |= 1u;  // NodeFlag CORE_DUMPED (bit0)
+        }
 
         if (was_terminating) {
             // stop_worker() owns this exit; just acknowledge and move on.
             log_info("child " + w.name + " stopped (terminating path)");
+            // The full emit at restart/next-tick reflects state; a lone
+            // NodeState here keeps a coredump visible even if the node won't
+            // be restarted.
+            cast_node_state(w);
             continue;
         }
         on_child_exit(w, rc, old_pid);
@@ -1398,7 +1514,11 @@ void Supervisor::emit_snapshot() {
                     row->set_kind(0);
                     row->set_pid(c->worker.pid);
                     row->set_state(state);
-                    row->set_restart_count(0);
+                    row->set_restart_count(c->worker.restart_count);
+                    row->set_last_exit_code(c->worker.last_exit_code);
+                    // #429 — carry the NodeFlag bitmask on the GetTree
+                    // two-frame ChildState path too (matches NodeState.flags).
+                    row->set_flags(c->worker.flags);
                     row->set_start_cmd(cmd);
                     // Resource samples — taken in sample_procs() above.
                     if (c->worker.pid > 0) {
@@ -1432,6 +1552,11 @@ void Supervisor::emit_snapshot() {
         };
     walk(*root_, "");
 
+    // Legacy firehose publish (kTagSnapshot on the TipcPublisher socket
+    // 0x80020001). RETAINED during the #430 stage as a fallback for the
+    // not-yet-migrated tipc_uplink reader; once com reassembles the #429
+    // topo-pair stream and Subscribe reads from the ComDaemon-fed queue
+    // (#432), this and tipc_uplink retire together.
     publisher_.publish(kTagSnapshot, snap.SerializeAsString());
     etcd_publisher_.publish_tree(snap);
 
@@ -1442,6 +1567,11 @@ void Supervisor::emit_snapshot() {
     for (const auto& ch : snap.children()) {
         etcd_publisher_.publish_child(ch);
     }
+
+    // #429/#430 — the topo-pair firehose stream over the STANDARD transport
+    // to com's ComDaemon. SnapshotBegin → {NodeEdge(ADD)+NodeState} per node
+    // in topological order → SnapshotEnd. Same generation as `snap`.
+    emit_tree_stream();
 }
 
 // ---------------------------------------------------------------------------
@@ -1826,6 +1956,117 @@ std::string encode_trace_control_push(uint32_t kind, bool enabled) {
 // into the GwMessageHeader so the cast lands on the node's handle_cast.
 const char* kTraceControlPushTypeName = "platform_runtime_TraceControlPush";
 
+// ---- #429/#430 topo-pair firehose: hand proto3-wire encoders ------------
+//
+// Same no-nanopb-in-the-libprotobuf-TU rationale as the log/trace pushes
+// above: we hand-encode the four stream messages' proto3 wire bytes and cast
+// them with send_gw_cast_to_tipc_name. com decodes them with nanopb
+// (services_supervisor_NodeEdge etc.), so the bytes must be byte-identical to
+// what libprotobuf/nanopb would write. proto3 OMITS default-zero scalar
+// fields; we follow that (skip a field when its value is 0 / empty) so the
+// wire matches a canonical encode exactly.
+void pb_put_varint(std::string& out, uint64_t v) {
+    while (v >= 0x80) { out.push_back(char((v & 0x7f) | 0x80)); v >>= 7; }
+    out.push_back(char(v));
+}
+void pb_put_tag(std::string& out, uint32_t field, uint32_t wiretype) {
+    pb_put_varint(out, (uint64_t(field) << 3) | wiretype);
+}
+// field, wiretype 0 (varint). Skips default-0 (proto3).
+void pb_put_u(std::string& out, uint32_t field, uint64_t v) {
+    if (v == 0) return;
+    pb_put_tag(out, field, 0);
+    pb_put_varint(out, v);
+}
+// sint32 — zigzag, wiretype 0. Skips default-0.
+void pb_put_s32(std::string& out, uint32_t field, int32_t v) {
+    if (v == 0) return;
+    uint32_t zz = (uint32_t(v) << 1) ^ uint32_t(v >> 31);
+    pb_put_tag(out, field, 0);
+    pb_put_varint(out, zz);
+}
+// string — wiretype 2 (len-delimited). Skips empty (proto3).
+void pb_put_str(std::string& out, uint32_t field, const std::string& s) {
+    if (s.empty()) return;
+    pb_put_tag(out, field, 2);
+    pb_put_varint(out, s.size());
+    out.append(s);
+}
+
+// SnapshotBegin { uint64 generation=1; uint64 timestamp_ms=2 }
+std::string encode_snapshot_begin(uint64_t gen, uint64_t ts_ms) {
+    std::string o;
+    pb_put_u(o, 1, gen);
+    pb_put_u(o, 2, ts_ms);
+    return o;
+}
+// SnapshotEnd { uint64 generation=1 }
+std::string encode_snapshot_end(uint64_t gen) {
+    std::string o;
+    pb_put_u(o, 1, gen);
+    return o;
+}
+// NodeEdge { uint32 op=1; string parent_name=2; string name=3; uint32 kind=4 }
+std::string encode_node_edge(uint32_t op, const std::string& parent,
+                             const std::string& name, uint32_t kind) {
+    std::string o;
+    pb_put_u(o, 1, op);
+    pb_put_str(o, 2, parent);
+    pb_put_str(o, 3, name);
+    pb_put_u(o, 4, kind);
+    return o;
+}
+
+// NodeState — flat per-node state. Field numbers track NodeState.proto:
+//   name=1, pid=2(sint32), tid=3, state=4, flags=5, restart_count=6,
+//   last_exit_code=7(sint32), uptime_ms=8, cpu_pct=9, rss_kb=10, vsz_kb=11,
+//   threads=12, shared_kb=13, data_kb=14.
+struct NodeStateWire {
+    std::string name;
+    int32_t  pid{-1};
+    uint32_t tid{0};
+    uint32_t state{0};
+    uint32_t flags{0};
+    uint32_t restart_count{0};
+    int32_t  last_exit_code{0};
+    uint64_t uptime_ms{0};
+    uint32_t cpu_pct{0};
+    uint64_t rss_kb{0};
+    uint64_t vsz_kb{0};
+    uint32_t threads{0};
+    uint64_t shared_kb{0};
+    uint64_t data_kb{0};
+};
+std::string encode_node_state(const NodeStateWire& n) {
+    std::string o;
+    pb_put_str(o,  1, n.name);
+    pb_put_s32(o,  2, n.pid);
+    pb_put_u  (o,  3, n.tid);
+    pb_put_u  (o,  4, n.state);
+    pb_put_u  (o,  5, n.flags);
+    pb_put_u  (o,  6, n.restart_count);
+    pb_put_s32(o,  7, n.last_exit_code);
+    pb_put_u  (o,  8, n.uptime_ms);
+    pb_put_u  (o,  9, n.cpu_pct);
+    pb_put_u  (o, 10, n.rss_kb);
+    pb_put_u  (o, 11, n.vsz_kb);
+    pb_put_u  (o, 12, n.threads);
+    pb_put_u  (o, 13, n.shared_kb);
+    pb_put_u  (o, 14, n.data_kb);
+    return o;
+}
+
+// com's ComDaemon TIPC name (services/system/com/package.art) — the firehose
+// receiver. The supervisor CASTs the stream here; ComDaemon register_casts
+// the four C type names so the djb2 service_ids match.
+constexpr uint32_t kComTipcType     = 0x80010008u;
+constexpr uint32_t kComTipcInstance = 0u;
+// service_ids — djb2_low16 of the nanopb C type names com computed.
+const char* kNodeEdgeTypeName      = "services_supervisor_NodeEdge";
+const char* kNodeStateTypeName     = "services_supervisor_NodeState";
+const char* kSnapshotBeginTypeName = "services_supervisor_SnapshotBegin";
+const char* kSnapshotEndTypeName   = "services_supervisor_SnapshotEnd";
+
 // Map the operator's level string → LogLevelValue ordinal (matches the
 // platform.runtime LogLevelValue enum + platform::runtime::LogLevel).
 uint32_t log_level_to_value(const std::string& level) {
@@ -1838,6 +2079,110 @@ uint32_t log_level_to_value(const std::string& level) {
 }
 
 }  // namespace
+
+// ---- #429/#430 topo-pair firehose emit -----------------------------------
+
+// Build the NodeStateWire for a worker from its current runtime state + the
+// last /proc sample (filled by sample_procs() in emit_snapshot). pid doubles
+// as the primary thread id (the main thread's tid == pid on Linux), which is
+// what changes on restart.
+void Supervisor::cast_node_state(const WorkerNode& w) {
+    NodeStateWire ns;
+    ns.name           = w.name;
+    ns.pid            = w.pid;
+    ns.tid            = (w.pid > 0) ? static_cast<uint32_t>(w.pid) : 0;
+    ns.state          = (w.pid > 0) ? 2u : 0u;   // running / stopped
+    if (const_cast<WorkerNode&>(w).terminating) ns.state = 3u;  // terminating
+    ns.flags          = w.flags;
+    ns.restart_count  = w.restart_count;
+    ns.last_exit_code = w.last_exit_code;
+    if (w.pid > 0) {
+        ns.uptime_ms = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - w.last_start).count());
+        auto it = sample_.find(w.pid);
+        if (it != sample_.end()) {
+            ns.cpu_pct   = it->second.cpu_pct;
+            ns.rss_kb    = it->second.rss_kb;
+            ns.vsz_kb    = it->second.vsz_kb;
+            ns.threads   = it->second.threads;
+            ns.shared_kb = it->second.shared_kb;
+            ns.data_kb   = it->second.data_kb;
+        }
+    }
+    static const uint16_t svc = djb2_low16(kNodeStateTypeName);
+    send_gw_cast_to_tipc_name(kComTipcType, kComTipcInstance, svc,
+                              encode_node_state(ns));
+}
+
+void Supervisor::emit_tree_stream() {
+    static const uint16_t kSvcBegin = djb2_low16(kSnapshotBeginTypeName);
+    static const uint16_t kSvcEnd   = djb2_low16(kSnapshotEndTypeName);
+    static const uint16_t kSvcEdge  = djb2_low16(kNodeEdgeTypeName);
+    static const uint16_t kSvcState = djb2_low16(kNodeStateTypeName);
+
+    // SnapshotBegin opens the walk under the CURRENT generation (already
+    // bumped by emit_snapshot before this call).
+    send_gw_cast_to_tipc_name(kComTipcType, kComTipcInstance, kSvcBegin,
+                              encode_snapshot_begin(generation_, epoch_ms()));
+
+    // Topological walk — identical shape to emit_snapshot's: root, then each
+    // child under its (already-emitted) parent. For each node: NodeEdge(ADD)
+    // then NodeState. Synthesize the same <worker>_sup bracket row (#364) so
+    // the rebuilt tree on com matches the legacy TreeSnapshot hierarchy.
+    std::function<void(const SupervisorNode&, const std::string&)> walk =
+        [&](const SupervisorNode& sup, const std::string& parent) {
+            // Emit this supervisor's own edge+state (skip the synthetic root,
+            // which has empty parent — it IS the root, emit it as parent="").
+            send_gw_cast_to_tipc_name(
+                kComTipcType, kComTipcInstance, kSvcEdge,
+                encode_node_edge(/*ADD*/0, parent, sup.name, /*kind sup*/1));
+            {
+                NodeStateWire ns;
+                ns.name  = sup.name;
+                ns.pid   = -1;
+                ns.state = 2;  // running (a supervisor is "up" if walked)
+                ns.restart_count =
+                    static_cast<uint32_t>(sup.restart_history.size());
+                send_gw_cast_to_tipc_name(kComTipcType, kComTipcInstance,
+                                          kSvcState, encode_node_state(ns));
+            }
+
+            for (const auto& c : sup.children) {
+                if (c->is_worker()) {
+                    std::string worker_parent = sup.name;
+                    bool has_reporting = false;
+                    for (const auto& ni : c->worker.nodes) {
+                        if (ni.reporting) { has_reporting = true; break; }
+                    }
+                    if (has_reporting) {
+                        const std::string synth = c->worker.name + "_sup";
+                        send_gw_cast_to_tipc_name(
+                            kComTipcType, kComTipcInstance, kSvcEdge,
+                            encode_node_edge(0, sup.name, synth, 1));
+                        NodeStateWire ns;
+                        ns.name  = synth;
+                        ns.pid   = -1;
+                        ns.state = 2;
+                        send_gw_cast_to_tipc_name(kComTipcType, kComTipcInstance,
+                                                  kSvcState, encode_node_state(ns));
+                        worker_parent = synth;
+                    }
+                    // worker edge (kind=0) + its NodeState.
+                    send_gw_cast_to_tipc_name(
+                        kComTipcType, kComTipcInstance, kSvcEdge,
+                        encode_node_edge(0, worker_parent, c->worker.name, 0));
+                    cast_node_state(c->worker);
+                } else {
+                    walk(c->sup, sup.name);
+                }
+            }
+        };
+    walk(*root_, "");
+
+    send_gw_cast_to_tipc_name(kComTipcType, kComTipcInstance, kSvcEnd,
+                              encode_snapshot_end(generation_));
+}
 
 void Supervisor::apply_trace_config(const std::string& target_node,
                                     const std::string& msg_type,

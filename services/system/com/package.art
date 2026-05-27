@@ -16,6 +16,21 @@ interface senderReceiver LogStream     { }  // from system.services.log
 interface clientServer   PersistencyIf { }  // from system.services.per
 interface senderReceiver SmStateStream { }  // from system.services.sm
 
+// Supervisor surfaces — from system.supervisor. com is the gRPC↔supervisor
+// bridge: ComDaemon CALLS the supervisor's control RPCs (StartChild,
+// ConfigureTrace, …) and SUBSCRIBES to its event firehose (SupervisionEvent
+// / HealthBeacon / TreeSnapshot). Both ride the STANDARD Theia transport
+// (RemoteRef / GwMessageHeader over TIPC) — ComDaemon is already a gen_server
+// on the network, so it reaches the supervisor through the runtime, not a
+// hand-rolled socket (retires services/com/impl/tipc_uplink). Declared here
+// as empty placeholders (com's cross-FC idiom — same as LogStream/SmStateStream
+// above): the real message types (ControlRequest/Reply, SupervisionEvent, …)
+// live in package system.supervisor; the impl uses them via the supervisor
+// RemoteCodecs (platform/supervisor supervisor_codecs.hh, #416). The ports
+// just declare the wiring so the netgraph + transport know the edge exists.
+interface clientServer   SupervisorControlIf { }  // from system.supervisor
+interface senderReceiver SupervisorEventIf   { }  // from system.supervisor
+
 message ComEmpty { }
 
 // Placeholder shape for external gRPC RPCs — the actual wire schema is
@@ -57,7 +72,40 @@ node atomic ComDaemon {
         receiver from_sm  requires SmStateStream
         client   to_per   requires PersistencyIf
         sender   to_log   provides LogStream  best_effort
+        // Supervisor edge (standard transport, replaces the tipc_uplink
+        // socket). `to_sup` = the outbound control client (ComGrpcProxy
+        // forwards gRPC mutators through it as RemoteRef call/send_request to
+        // SupervisorControlNode @ 0x80020001/0). `from_sup` = the inbound
+        // event firehose ComGrpcProxy fans out to gRPC Subscribe streams.
+        client   to_sup   requires SupervisorControlIf
+        receiver from_sup requires SupervisorEventIf
     }
+}
+
+// ---- ComGrpcProxy (the gRPC bridge thread) ------------------------------
+//
+// World-A lives here as a FIRST-CLASS runnable node instead of a
+// hand-written main.cc. com's job is to bridge the external gRPC peers
+// (supervisor-gui / dashboards / rf-theia) to the on-host supervisor:
+// it serves `SupervisorView` over gRPC and forwards control RPCs to the
+// supervisor over the TIPC uplink, passing proto-wire-v3 bytes through
+// unchanged (libprotobuf at the gRPC edge; nanopb on the TIPC wire — the
+// same bytes either way).
+//
+// It is a `runnable`, not an `atomic` gen_server: a gRPC server owns its
+// OWN blocking thread (ServerBuilder::BuildAndStart + a serve loop) — it is
+// not a message-mailbox reactor. GenRunnable is exactly that base: do_start
+// builds + starts the server, do_loop blocks until shutdown, do_stop calls
+// server->Shutdown(). The do_* bodies live in impl/ComGrpcProxy_handlers.cc.
+//
+// reporting=false: this is the World-A proxy edge — it does NOT bind a
+// TipcMux config service nor beat the supervisor watchdog through the
+// runtime (it has no app-message mailbox). Its own distinct TIPC address
+// (0x80010009) keeps it clear of the FC range and of ComDaemon (…08).
+node runnable ComGrpcProxy {
+    tipc type=0x80010009 instance=0
+    reporting = false
+    tag = "COMG"
 }
 
 // ---- Probe (test agent) -------------------------------------------------
@@ -77,6 +125,16 @@ node atomic ComDaemon {
 // OVERRIDES that dispatch so the probe can send/receive arbitrary
 // messages rather than the fixed port schema. The `probe_ctl` port
 // exists only so gen-app materializes the node + its TIPC bind.
+//
+// ===== BACKUP (2026-05): ProbeDaemon parked, NOT deleted. ================
+// The probe (test agent / impersonator, #387/#409) is preserved here while
+// com is reshaped around the ComGrpcProxy runnable. To restore: un-comment
+// the ProbeCtl interface + ProbeDaemon node below and rename the matching
+// `.bak` impl/lib/src files back (impl/ProbeDaemon_handlers.cc,
+// lib/ProbeDaemon*.hh, src/robot_node.cpp, include/com/robot_node.hpp), then
+// re-run `gen-app --kind fc`. Kept block-commented so gen-app does NOT
+// materialize the node, but the wiring stays on record.
+/*
 interface clientServer ProbeCtl {
     operation Ping(in p:ComEmpty) returns ComEmpty
 }
@@ -95,3 +153,4 @@ node atomic ProbeDaemon {
         server probe_ctl provides ProbeCtl
     }
 }
+*/

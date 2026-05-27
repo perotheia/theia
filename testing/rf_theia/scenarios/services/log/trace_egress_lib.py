@@ -50,9 +50,23 @@ for p in (str(_SUPDBG), str(_SUPDBG / "_gen")):
 
 CENTRAL_DIR = _WS / "install" / "central"
 COLLECTOR = CENTRAL_DIR / "services-log"
-COM_BRIDGE = _WS / "services" / "com" / "build" / "services-com"
+COM_BRIDGE = _WS / "bazel-bin" / "services" / "com" / "main" / "com"
 COLLECTOR_ENDPOINT = os.environ.get("THEIA_COLLECTOR_ENDPOINT", "127.0.0.1:7710")
 COM_ENDPOINT = os.environ.get("THEIA_COM_ENDPOINT", "localhost:7700")
+
+# The Bazel-built supervisor links libetcd-cpp-api.so (vendored, not on the
+# default loader path). The launcher must put it on LD_LIBRARY_PATH or the
+# supervisor dies at exec — don't rely on the caller's env. See the matching
+# helper in trace_crash_investigation_lib.py.
+_ETCD_LIB = _WS / "third_party" / "etcd-cpp-apiv3" / "install" / "lib"
+
+
+def _stack_env() -> dict:
+    env = os.environ.copy()
+    env.pop("PYTHONPATH", None)
+    prev = env.get("LD_LIBRARY_PATH", "")
+    env["LD_LIBRARY_PATH"] = f"{_ETCD_LIB}:{prev}" if prev else str(_ETCD_LIB)
+    return env
 
 # TraceKind ordinals (services/log + platform_runtime TraceKind — aligned).
 TK_STATEM = 5
@@ -85,8 +99,7 @@ class TraceEgressLib:
         except OSError as e:
             raise AssertionError(f"AF_TIPC unavailable ({e}); modprobe tipc")
 
-        env = os.environ.copy()
-        env.pop("PYTHONPATH", None)
+        env = _stack_env()
         r = subprocess.run(["bash", "demo/stage_local.sh"], cwd=str(_WS),
                            env=env, capture_output=True, text=True)
         if r.returncode != 0:
@@ -107,7 +120,7 @@ class TraceEgressLib:
         """Launch the services/log[trace] collector (its own gRPC on
         :7710) with the staged netgraph for addr->name rewrite."""
         self._collector_log = Path(f"/tmp/rf_trace_collector_{os.getpid()}.log")
-        env = os.environ.copy(); env.pop("PYTHONPATH", None)
+        env = _stack_env()
         self._collector = subprocess.Popen(
             ["./services-log", "--listen", COLLECTOR_ENDPOINT,
              "--netgraph", "netgraph.json"],
@@ -122,11 +135,13 @@ class TraceEgressLib:
         """Launch the com gRPC bridge (after the supervisor — it connects
         to the supervisor's TIPC at startup). For the control path RPC."""
         if not COM_BRIDGE.exists():
-            raise AssertionError(f"com bridge not built at {COM_BRIDGE}")
+            raise AssertionError(f"com binary not built at {COM_BRIDGE}")
         self._com_log = Path(f"/tmp/rf_trace_com_{os.getpid()}.log")
-        env = os.environ.copy(); env.pop("PYTHONPATH", None)
+        env = _stack_env()
+        # The native com binary takes NO argv; gRPC listen addr from env.
+        env["THEIA_COM_LISTEN"] = "0.0.0.0:7700"
         self._com = subprocess.Popen(
-            [str(COM_BRIDGE), "--listen", "0.0.0.0:7700"],
+            [str(COM_BRIDGE)],
             stdout=open(self._com_log, "w"), stderr=subprocess.STDOUT,
             env=env, preexec_fn=os.setsid)
         self._wait_tcp("localhost:7700", timeout, self._com, self._com_log,

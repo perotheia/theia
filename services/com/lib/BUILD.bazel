@@ -15,8 +15,8 @@ cc_library(
     hdrs = [
         "ComDaemon.hh",
         "ComDaemon_netgraph.hh",
-        "ProbeDaemon.hh",
-        "ProbeDaemon_netgraph.hh",
+        "ComGrpcProxy.hh",
+        "ComGrpcProxy_netgraph.hh",
         "com_codecs.hh",
         "Log.hh",
     ],

@@ -21,7 +21,7 @@ cd "$REPO"
 unset PYTHONPATH
 export PATH="$REPO/.venv/bin:$PATH"
 
-SUP="$REPO/platform/supervisor/build/supervisor"
+SUP="$REPO/bazel-bin/platform/supervisor/supervisor/bin/supervisor"
 BZ="$REPO/bazel-bin/services"
 APPS="$REPO/demo/build"
 

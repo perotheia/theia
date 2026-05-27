@@ -61,6 +61,13 @@ services.supervisor.SocketInfo.local                max_size:48
 services.supervisor.SocketInfo.remote               max_size:48
 services.supervisor.TreeSnapshot.children           max_count:64
 
+# ---- #429 topo-pair firehose stream --------------------------------------
+# Small FIXED structs — NodeState is all scalars; NodeEdge has two 64-char
+# names. Cast over the standard transport to com's ComDaemon.
+services.supervisor.NodeEdge.parent_name            max_size:64
+services.supervisor.NodeEdge.name                   max_size:64
+services.supervisor.NodeState.name                  max_size:64
+
 # ---- events + system info (firehose) -------------------------------------
 services.supervisor.SupervisionEvent.child_name      max_size:64
 services.supervisor.SupervisionEvent.supervisor_name max_size:64

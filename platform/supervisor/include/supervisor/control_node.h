@@ -3,10 +3,10 @@
 //
 // The supervisor stays a bespoke fork/exec orchestrator (the select() loop in
 // Supervisor::run()). This node is its I/O FRONT-END: a GenServer bound on
-// TipcMux at the .art-declared address (0x80020001/0), exposing the control
-// surface over the STANDARD Theia transport (GwMessageHeader + nanopb, the
-// same wire every FC speaks). com drives it with RemoteRef. See
-// docs/com-supervisor-transport.md §5.
+// TipcMux at a DISTINCT control address (0x80020003/0 — NOT the publisher's
+// 0x80020001), exposing the control surface over the STANDARD Theia transport
+// (GwMessageHeader + nanopb, the same wire every FC speaks). com drives it with
+// RemoteRef. See docs/com-supervisor-transport.md §5.
 //
 // register_call<ControlRequest, ControlReply> dispatches an inbound CALL to
 // handle_call(), which thunks straight into the orchestrator via
@@ -36,9 +36,14 @@ class SupervisorControlNode
                                       SupervisorControlState> {
 public:
     static constexpr const char* kNodeName = "supervisor_ctl";
-    // The .art-declared supervisor TIPC address (platform/supervisor/system/
-    // component.art: node Supervisor { tipc type=0x80020001 instance=0 }).
-    static constexpr uint32_t kTipcType     = 0x80020001u;
+    // DISTINCT control TIPC type for the standard-transport control surface.
+    // NOT 0x80020001 — that address stays bound by the legacy TipcPublisher
+    // for the event/health/snapshot firehose (and the two-frame GetTree read).
+    // Binding the control node on a separate type (0x80020003/0) avoids a TIPC
+    // name-collision where an inbound control CALL could route to the
+    // publisher's accepting socket instead of this gen_server. com reaches it
+    // via RemoteRef<SupervisorControlNode, 0x80020003, 0>.
+    static constexpr uint32_t kTipcType     = 0x80020003u;
     static constexpr uint32_t kTipcInstance = 0u;
     // Not a reporting FC node — no heartbeat / watchdog / trace-push for the
     // supervisor's own control node.

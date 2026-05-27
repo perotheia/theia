@@ -14,8 +14,11 @@
 
 #include <atomic>
 #include <chrono>
+#include <deque>
+#include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <sys/types.h>
 #include <vector>
@@ -55,7 +58,22 @@ public:
     // in the header). control_node.cpp passes the real nanopb pointers.
     void dispatch_control_nanopb(const void* req_nanopb, void* rep_nanopb);
 
+    // #431 — command queue (the threading fix). The control node's
+    // handle_call runs on the TipcMux epoll thread, while the select() loop is
+    // the SOLE owner of all supervision state (reap/sample/emit/fork). Both
+    // touching the tree was the #418 hazard. Instead handle_call builds a
+    // closure that, when run, does dispatch_control_nanopb + fulfils the
+    // caller's promise, then post_command()s it and wakes the loop. The loop
+    // drains + runs every queued closure inline — same thread as reap() — so
+    // there is ONE writer, no mutex around the tree, no fork-under-lock. The
+    // closure is a plain std::function<void()> so runtime.h needn't see the
+    // nanopb ControlRequest.pb.h (control_node.cpp builds + captures it).
+    void post_command(std::function<void()> fn);
+
 private:
+    // Drain + run all queued commands on the loop thread. Called once per
+    // select() iteration BEFORE reap/sample/emit.
+    void drain_commands();
     // Subtree traversal.
     std::vector<WorkerNode*> all_workers(SupervisorNode& sup);
     SupervisorNode* supervisor_of(WorkerNode& w);
@@ -84,6 +102,14 @@ private:
     // signalfd descriptor and a self-pipe wake-up fd for portability.
     int                              signal_fd_{-1};
 
+    // #431 — command queue + its eventfd wake. post_command() (any thread)
+    // pushes a closure and writes the eventfd; the select() loop adds the
+    // eventfd to its fd_set, drains it, and runs the closures on the loop
+    // thread. cmd_eventfd_ is EFD_NONBLOCK | EFD_CLOEXEC; a single counter.
+    int                              cmd_eventfd_{-1};
+    std::mutex                       cmd_mutex_;
+    std::deque<std::function<void()>> cmd_queue_;
+
     // TIPC fan-out at the .art-declared address. Hosts both the
     // outbound publish path (events / health / snapshots) and the
     // inbound dispatch hook for ControlRequest (phase 3) /
@@ -110,6 +136,14 @@ private:
                     const std::string& detail);
     void emit_health();
     void emit_snapshot();
+
+    // #429/#430 — the topo-pair firehose stream over the standard transport
+    // to com's ComDaemon (TIPC 0x80010008/0). emit_tree_stream() does a FULL
+    // walk: SnapshotBegin → {NodeEdge(ADD)+NodeState} topo-ordered →
+    // SnapshotEnd. cast_node_state() sends one NodeState for an incremental
+    // single-node change (restart/coredump/degraded) with no Begin/End.
+    void emit_tree_stream();
+    void cast_node_state(const WorkerNode& w);
 
     // Inbound TIPC dispatch — called by the publisher's poll() when
     // a client frame lands. Routes by tag into the dedicated handlers

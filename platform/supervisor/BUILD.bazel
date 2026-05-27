@@ -2,7 +2,7 @@
 #
 # `bazel build //platform/supervisor:supervisor` drives the canonical
 # CMakeLists.txt through rules_foreign_cc's cmake() (same hybrid as
-# //supervisor-gui and //services/com:services-com). CMakeLists stays the
+# //supervisor-gui). CMakeLists stays the
 # dev source of truth (`cmake -S . -B build` still works); Bazel produces
 # the same binary into bazel-bin/ for the rig pipeline AND lets the
 # supervisor consume Bazel cc_libraries — notably the platform/runtime
@@ -73,6 +73,17 @@ cmake(
         "//third_party:etcd-cpp-apiv3-install",
         "//third_party:nlohmann_json_hdrs",
     ],
+    # #417 — the standard-transport control surface. control_node.cpp +
+    # ControlServer use the platform/runtime gen_server stack and the nanopb
+    # supervisor control structs. rules_foreign_cc stages these built
+    # cc_libraries into $EXT_BUILD_DEPS (headers under include/, archives
+    # under lib/); CMakeLists picks them up there (the EXT_DEPS branch).
+    # //platform/runtime carries its transitive libgw header dep, so
+    # gw_proto.h / GenServer.hh resolve in the sandbox.
+    deps = [
+        "//platform/runtime:runtime",
+        ":supervisor_nanopb",
+    ],
     # CMake finds protoc + protobuf as host-apt packages (cmake() doesn't
     # sandbox /usr). Only the `supervisor` target — not tombstone demos /
     # tests — is built.
@@ -99,6 +110,9 @@ _SUP_PROTOS = [
     "HeartbeatReport", "LogLevelConfig", "SendTimeoutReport", "SocketInfo",
     "StartChildRequest", "SupervisionEvent", "SystemInfo", "ThreadSample",
     "TraceConfig", "TraceConfigList", "TreeSnapshot",
+    # #429 topo-pair firehose stream (NodeFlag enum stays a plain uint32 on
+    # the wire — NodeState.flags — so its standalone .proto is not compiled).
+    "NodeEdge", "NodeState", "SnapshotBegin", "SnapshotEnd",
 ]
 
 genrule(
@@ -171,6 +185,12 @@ _SUP_NANOPB_CTRL = [
     "ConfigureTraceRequest", "GetTraceConfigRequest", "TraceConfig",
     "TraceConfigList", "ConfigureLogLevelRequest", "LogLevelConfig",
     "ChildSpec", "HeartbeatReport", "SendTimeoutReport",
+    # #429 — the topo-pair firehose stream messages. Small FIXED structs
+    # (NodeState's resource fields are scalars; NodeEdge has two 64-char
+    # strings), so they fit nanopb's 16-bit field descriptors easily — they
+    # CAN compile into the nanopb lib (unlike the monolithic TreeSnapshot).
+    # The supervisor casts these to com; ComDaemon register_casts them.
+    "NodeEdge", "NodeState", "SnapshotBegin", "SnapshotEnd",
 ]
 
 cc_library(
@@ -184,4 +204,21 @@ cc_library(
     # against /usr) and the system nanopb runtime is linked by the final binary
     # via `-l:libprotobuf-nanopb.a` in its linkopts — the same convention as
     # //platform/proto:platform_protos and //platform/runtime.
+)
+
+# ---------------------------------------------------------------------------
+# Header-only RemoteCodec specializations for the supervisor control messages
+# (#416). BOTH ends of the standard-transport control link include this so
+# the supervisor's register_call and com's RemoteRef hash the SAME C type
+# name → SAME service_id. include/ is the root: callers write
+# `#include "supervisor/supervisor_codecs.hh"`. Depends on the nanopb structs
+# (ControlRequest.pb.h etc.) and //platform/runtime for RemoteCodec.hh.
+cc_library(
+    name = "supervisor_codecs_hdr",
+    hdrs = ["include/supervisor/supervisor_codecs.hh"],
+    includes = ["include"],
+    deps = [
+        ":supervisor_nanopb",
+        "//platform/runtime:runtime",
+    ],
 )

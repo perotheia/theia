@@ -45,7 +45,7 @@ for p in (str(_SUPDBG), str(_SUPDBG / "fc")):
         sys.path.insert(0, p)
 
 CENTRAL_DIR = _WS / "install" / "central"
-COM_BRIDGE = _WS / "services" / "com" / "build" / "services-com"
+COM_BRIDGE = _WS / "bazel-bin" / "services" / "com" / "main" / "com"
 
 # SmGate's TIPC name (services/system/sm/package.art) — the gate, NOT the
 # statem node. Lifecycle events arrive here and post_event into the FSM.
@@ -74,8 +74,8 @@ class SmGateLib:
         supervisor's T1 handshake drives sm to RUNNING."""
         if not COM_BRIDGE.exists():
             raise AssertionError(
-                f"com gRPC bridge not built at {COM_BRIDGE} — "
-                f"cmake --build services/com/build")
+                f"com binary not built at {COM_BRIDGE} — "
+                f"bazel build //services/com/main:com")
         try:
             socket.socket(socket.AF_TIPC, socket.SOCK_SEQPACKET).close()
         except OSError as e:
@@ -115,8 +115,10 @@ class SmGateLib:
         the supervisor's TIPC at startup) and wait for :7700."""
         self._com_log = Path(f"/tmp/rf_smgate_com_{os.getpid()}.log")
         env = os.environ.copy(); env.pop("PYTHONPATH", None)
+        # Native com binary takes NO argv; gRPC listen addr from env.
+        env["THEIA_COM_LISTEN"] = "0.0.0.0:7700"
         self._com = subprocess.Popen(
-            [str(COM_BRIDGE), "--listen", "0.0.0.0:7700"],
+            [str(COM_BRIDGE)],
             stdout=open(self._com_log, "w"), stderr=subprocess.STDOUT,
             env=env, preexec_fn=os.setsid)
         deadline = time.time() + timeout

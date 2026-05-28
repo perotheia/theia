@@ -39,14 +39,17 @@ discovers it. It runs on the **workspace `.venv`** — no per-plugin venv.
 
 | Tool | Slash | Trigger phrase | What it does |
 |---|---|---|---|
-| `watch_me` | `/watch-me on\|off\|status` | *"watch me on/off"* | Toggle tracking. **Starts OFF** by default so the plugin is non-intrusive for teammates sharing `.mcp.json`. |
+| `watch_me` | `/watch-me` | *"watch me"* | Start tracking (turn the watcher **on**, fresh checkpoint). **Off by default** so the plugin is non-intrusive for teammates sharing `.mcp.json`. If already on, reports buffered counts. |
 | `check_me` | `/check-me` | *"check me"* | Review file edits + correlated shell commands; gives advice; **clears checkpoint**. |
 | `compare_me` | `/compare-me` | *"compare me" / "diff me"* | Like `check_me` but includes the actual `git diff` of touched files — review sees content, not just paths. **Clears checkpoint**. |
 | `focus_me` | `/focus-me <goal>` | *"focus me on X" / "clear focus"* | Set the one-line session goal; the next `check_me` / `compare_me` uses it as explicit intent. Pass empty to clear. |
-| `ignore_me` | `/ignore-me` | *"ignore me"* | Discard everything since the last checkpoint **without** a review (aborted attempt). |
+| `ignore_me` | `/ignore-me` | *"ignore me"* | Stop tracking + discard everything buffered since the last `watch me` — **no review**, watcher off (aborted attempt). |
 | `undo_me` | `/undo-me` | *"undo me"* | Show diff + `git checkout --` revert hints for touched files. **Non-destructive** (does NOT run any revert); **does NOT clear** the checkpoint. |
 
-Typical loop: `watch me on` → work → `check me` → repeat. `focus me on X` once at the start makes the review goal-aware.
+`watch me` and `ignore me` are the two on/off verbs; the others operate on
+the current session. Typical loop: `watch me` → work → `check me` → repeat.
+`focus me on X` once at the start makes the review goal-aware. `ignore me`
+when an attempt was a dead end.
 
 ## User vs. agent attribution
 

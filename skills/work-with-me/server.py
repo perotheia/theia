@@ -524,17 +524,14 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="watch_me",
             description=(
-                "Toggle the watcher on/off. Starts OFF by default so the plugin is "
-                "non-intrusive for teammates who share .mcp.json. Args: state='on' "
-                "(begin recording file edits + shell commands), 'off' (stop and discard "
-                "what's been buffered), or 'status' (report current state and counts). "
-                "Trigger phrase: 'watch me on' / 'watch me off' / 'watch me' (status)."
+                "Turn the watcher ON: begin recording the user's file edits + shell "
+                "commands for the current session. Starts a fresh checkpoint. Plugin is "
+                "OFF by default so it's non-intrusive for teammates who share .mcp.json — "
+                "say 'watch me' to start a session. If already on, reports current "
+                "buffered counts. Trigger: 'watch me'. (To stop + discard everything, "
+                "use 'ignore me'.)"
             ),
-            inputSchema={
-                "type": "object",
-                "properties": {"state": {"type": "string", "enum": ["on", "off", "status"]}},
-                "required": [],
-            },
+            inputSchema={"type": "object", "properties": {}, "required": []},
         ),
         Tool(
             name="check_me",
@@ -555,9 +552,11 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="ignore_me",
             description=(
-                "Discard all tracked file changes and shell commands since the last "
-                "checkpoint, WITHOUT a review. Use this when the work was exploratory / "
-                "an aborted attempt / not what you want considered. Trigger: 'ignore me'."
+                "Turn the watcher OFF and DISCARD everything buffered since the last "
+                "'watch me' — file changes and shell commands — WITHOUT a review. Use "
+                "this when the work was exploratory / an aborted attempt / not what you "
+                "want considered. Plugin stays quiet until you say 'watch me' again. "
+                "Trigger: 'ignore me'."
             ),
             inputSchema={"type": "object", "properties": {}, "required": []},
         ),
@@ -626,37 +625,24 @@ def _build_checkpoint(*, with_diff: bool) -> tuple[list[dict], list[dict], str]:
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     args = arguments or {}
 
-    # ── watch_me ────────────────────────────────────────────────────────────
+    # ── watch_me ── start tracking (or report status if already on) ─────────
     if name == "watch_me":
-        action = (args.get("state") or "status").strip().lower()
-        if action == "on":
-            was = state.is_enabled()
-            state.set_enabled(True)
-            return [TextContent(type="text", text=(
-                "Watching ON — file edits + shell commands will be tracked from now.\n"
-                f"(Was already on.)" if was else
-                "Watching ON — file edits + shell commands will be tracked from now."
-            ))]
-        if action == "off":
-            state.set_enabled(False)
-            n = changelog.clear()
-            cmds_dropped = shellhist.snapshot_and_advance() if shellhist else []
-            return [TextContent(type="text", text=(
-                f"Watching OFF. Discarded {n} buffered file event(s) and "
-                f"{len(cmds_dropped)} shell command(s). The watcher will stay quiet."
-            ))]
-        if action == "status":
-            on = state.is_enabled()
+        if state.is_enabled():
+            # Already tracking: useful to report current buffer + focus rather
+            # than be a silent no-op. Doesn't drain or restart.
             ne = len(changelog.snapshot())
             nc = len(shellhist.peek()) if shellhist else 0
             focus = state.get_focus()
             focus_line = f"\nFocus: {focus}" if focus else "\nFocus: (none)"
             return [TextContent(type="text", text=(
-                f"Watching: {'ON' if on else 'OFF'}\n"
-                f"Buffered: {ne} file event(s), {nc} shell command(s){focus_line}"
+                f"Already watching. Buffered: {ne} file event(s), "
+                f"{nc} shell command(s){focus_line}\n"
+                f"(`check me` to review, `ignore me` to discard.)"
             ))]
+        state.set_enabled(True)
         return [TextContent(type="text", text=(
-            "watch_me: state must be 'on', 'off', or 'status'."
+            "Watching ON — file edits + shell commands will be tracked from now. "
+            "Fresh checkpoint started. (`check me` to review, `ignore me` to discard.)"
         ))]
 
     # ── check_me ────────────────────────────────────────────────────────────
@@ -704,13 +690,16 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         )
         return [TextContent(type="text", text=prompt)]
 
-    # ── ignore_me ───────────────────────────────────────────────────────────
+    # ── ignore_me ── stop tracking + discard everything buffered ───────────
     if name == "ignore_me":
+        was_on = state.is_enabled()
+        state.set_enabled(False)
         ne = changelog.clear()
         cmds = shellhist.snapshot_and_advance() if shellhist else []
+        prefix = "Watching OFF" if was_on else "Already off"
         return [TextContent(type="text", text=(
-            f"Ignored: {ne} file event(s) and {len(cmds)} shell command(s) "
-            f"discarded without review. Fresh checkpoint started."
+            f"{prefix}. Discarded {ne} file event(s) and {len(cmds)} shell "
+            f"command(s) without review. (`watch me` to start again.)"
         ))]
 
     # ── focus_me ────────────────────────────────────────────────────────────

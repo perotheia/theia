@@ -1,0 +1,8 @@
+# Runtime state belonging to the work-with-me plugin's *sidecar* (under the
+# repo's .claude/work-with-me/ dir, already covered by the project-root
+# .gitignore). Listed here too so that if any of these names ever appear
+# inside the plugin source tree itself — a stray dump from debugging, a
+# misplaced symlink — git refuses to track them.
+state.json
+state.json.tmp
+agent-edits.jsonl

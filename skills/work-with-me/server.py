@@ -336,6 +336,7 @@ class RepoHandler(FileSystemEventHandler):
         if self.agent.is_agent(abs_path):
             return  # Claude's own Edit/Write — not the user's; skip.
         self.log.add(event_type, self._rel(abs_path))
+        _stats_write()                          # throttled — statusline mirror
 
     # -- watchdog callbacks --------------------------------------------------
 
@@ -491,6 +492,87 @@ class State:
 state = State()
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Status sidecar — the tiny JSON the terminal statusline reads
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# The MCP server can't be queried over its stdio transport from outside Claude
+# Code, so the status path needs zero IPC: we mirror the counts into a small
+# JSON file that a shell statusline script reads. Atomic write (tmp + rename)
+# so the reader never sees a half-line; throttled so a fs-event burst doesn't
+# hammer the disk. Format is documented in the README so anyone can write
+# their own statusline; ours lives at skills/work-with-me/statusline.sh.
+
+_STATS_THROTTLE_S = 0.25
+_stats_lock = threading.Lock()
+_stats_last: float = 0.0
+_stats_pending: "threading.Timer | None" = None
+
+
+def _stats_path() -> "Path | None":
+    if state.root is None:
+        return None
+    return state.root / ".claude" / "work-with-me" / "state.json"
+
+
+def _stats_write(*, force: bool = False) -> None:
+    """Refresh the statusline sidecar. Cheap to call; throttled to 250 ms.
+    When force=True (on/off/focus/checkpoint transitions) we bypass the
+    throttle so the statusline reflects them immediately. When a throttled
+    call would be skipped, schedule a trailing flush so the *final* state
+    after a burst lands too — without this, the last few events of a quick
+    burst could be lost between the throttled call and the next real write."""
+    global _stats_last, _stats_pending
+    p = _stats_path()
+    if p is None:
+        return
+    now = time.monotonic()
+    with _stats_lock:
+        if not force and (now - _stats_last) < _STATS_THROTTLE_S:
+            # Throttled — schedule a trailing flush if there isn't one in flight.
+            if _stats_pending is None:
+                delay = _STATS_THROTTLE_S - (now - _stats_last)
+                _stats_pending = threading.Timer(delay, _stats_flush_trailing)
+                _stats_pending.daemon = True
+                _stats_pending.start()
+            return
+        _stats_last = now
+        # We're about to write — cancel any pending trailing flush.
+        if _stats_pending is not None:
+            _stats_pending.cancel()
+            _stats_pending = None
+    try:
+        # cmds count is window-filtered against the current change log, so
+        # the displayed number matches what check_me would actually show.
+        entries = changelog.snapshot()
+        cmds = shellhist.peek() if shellhist else []
+        cmds = _window_filter(cmds, [e["ts"] for e in entries if "ts" in e])
+        payload = {
+            "enabled": state.is_enabled(),
+            "files": len({e["path"] for e in entries}
+                         | {e["dest"] for e in entries if "dest" in e}),
+            "events": len(entries),
+            "cmds": len(cmds),
+            "focus": state.get_focus(),
+            "ts": time.time(),
+        }
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(payload))
+        tmp.replace(p)
+    except OSError:
+        pass     # disk hiccup; better silent than killing the watcher
+
+
+def _stats_flush_trailing() -> None:
+    """Timer callback that lands the FINAL state after a throttled burst —
+    the trailing edge a pure throttle would lose."""
+    global _stats_pending
+    with _stats_lock:
+        _stats_pending = None
+    _stats_write(force=True)
+
+
 def _histfile() -> Path:
     """The shared zsh history file: $HISTFILE, else ~/.zsh_history."""
     env = os.environ.get("HISTFILE")
@@ -601,10 +683,12 @@ async def list_tools() -> list[Tool]:
 def _build_checkpoint(*, with_diff: bool) -> tuple[list[dict], list[dict], str]:
     """Drain the file-change log + correlated shell tail. Returns
     (entries, cmds, files_block) ready for prompt assembly. Used by both
-    check_me (with_diff=False) and compare_me (with_diff=True)."""
+    check_me (with_diff=False) and compare_me (with_diff=True). Also flips
+    the statusline back to me:0/0 since the buffer is now empty."""
     entries = changelog.snapshot_and_clear()
     cmds = shellhist.snapshot_and_advance() if shellhist else []
     cmds = _window_filter(cmds, [e["ts"] for e in entries if "ts" in e])
+    _stats_write(force=True)
 
     files_block = "(no file changes)"
     if entries:
@@ -640,6 +724,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 f"(`check me` to review, `ignore me` to discard.)"
             ))]
         state.set_enabled(True)
+        _stats_write(force=True)
         return [TextContent(type="text", text=(
             "Watching ON — file edits + shell commands will be tracked from now. "
             "Fresh checkpoint started. (`check me` to review, `ignore me` to discard.)"
@@ -696,6 +781,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         state.set_enabled(False)
         ne = changelog.clear()
         cmds = shellhist.snapshot_and_advance() if shellhist else []
+        _stats_write(force=True)
         prefix = "Watching OFF" if was_on else "Already off"
         return [TextContent(type="text", text=(
             f"{prefix}. Discarded {ne} file event(s) and {len(cmds)} shell "
@@ -706,6 +792,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     if name == "focus_me":
         note = (args.get("note") or "").strip()
         state.set_focus(note)
+        _stats_write(force=True)
         if not note:
             return [TextContent(type="text", text="Focus cleared.")]
         return [TextContent(type="text", text=(
@@ -786,6 +873,10 @@ async def main() -> None:
     # Shell-history tail: the checkpoint baseline is "now", so we only ever
     # report commands the user runs after the watcher starts.
     shellhist = ShellHistory(_histfile())
+
+    # Prime the statusline sidecar so the shell script has something to read
+    # immediately (state.json is gitignored under .claude/work-with-me/).
+    _stats_write(force=True)
 
     _observer = Observer()
     _observer.schedule(handler, str(root), recursive=True)

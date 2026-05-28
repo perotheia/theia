@@ -25,7 +25,7 @@ standard Theia transport.
 | S1 | Add `git@cicd.skyway.porsche.com:PG50/odd-path-monitor.git` to `.repo/local_manifests/`, drop the existing `vendor_odd_path_client.xml`, `repo sync` into `vendor/odd_path_monitor/`. | ✓ done (commit 8a7d546) |
 | S2 | Check out the `flexraya_world_source` branch in the new repo; diff against `main` to extract the existing "old approach" gateway-in-process integration as the source of truth for what the new platform layer must replace. | ✓ done (commit 98a209e — see [psp-retirement-s2-integration-map.md](psp-retirement-s2-integration-map.md)) |
 | S3 | Back up `vendor/odd_path_monitor/platform/` to `~/up/`, remove it from the vendor working tree, then author `vendor/odd_path_monitor/system/odd_path_monitor/{package,component}.art`, symlink `system/odd_path_monitor` → real spec, and parse-validate. | ✓ done |
-| S4 | Extend `artheia gen-app` with `--kind lib` (keep `fc` as default; retire `psp`). `--kind lib` emits `<app>/platform/lib/` + `<app>/platform/impl/` from the `.art` spec **and** copies the runtime+proto slice the app needs so the tree is CMake-buildable standalone. Generated nodes are `GenServer` with signals declared by the application. | next |
+| S4 | Extend `artheia gen-app` with `--kind lib` (keep `fc` as default; retire `psp`). `--kind lib` emits `<app>/platform/lib/` + `<app>/platform/impl/` from the `.art` spec **and** copies the runtime+proto slice the app needs so the tree is CMake-buildable standalone. Generated nodes are `GenServer` with signals declared by the application. | ✓ done (artheia commit 6f0a849 on branch gen-app-lib-kind) |
 | S5 | Rewire `odd-path-monitor`'s `main` onto the generated `platform/` (replace the in-process gateway integration with TIPC ingress from the gateway service). | |
 | S6 | Delete the old `psp` arm: `artheia/artheia/generators/cpp_app.py`, `templates/cpp_app/`, the `psp` branch in `cli.py`. Drop `vendor/odd_path_client/`. Update `docs/skills/theia/references/artheia-gen-app.md` (and the gen-app reference) to document `--kind fc|lib`. | |
 
@@ -56,6 +56,61 @@ pero_theia):
   at cluster level — deferred to the vendor rig (S5 territory).
 
 Parse-validates clean via `artheia parse system/odd_path_monitor/component.art`.
+
+## S4 outcome — the generator
+
+`artheia gen-app --kind lib <component.art> --out <app>/platform`
+produces:
+
+```
+<app>/platform/
+├── CMakeLists.txt              top-level standalone build
+├── lib/                        per-node + FC-wide headers
+│   ├── <Node>.hh
+│   ├── <Node>_netgraph.hh
+│   ├── <fc>_codecs.hh
+│   └── Log.hh
+├── impl/                       write-once handler stubs
+│   └── <Node>_handlers.cc
+├── runtime/                    vendored Theia runtime
+│   ├── include/                + libgw/include/ for gw_proto.h etc.
+│   └── src/                    (6 .cc files: Logger, NodeRef, Timer,
+│                                TimerService, TipcMux, Clock)
+└── generated/
+    ├── platform_runtime/runtime.pb.{c,h}   (nanopb-compiled)
+    └── <app-pkg-path>/<leaf>.{proto,pb.c,pb.h}
+```
+
+Builds clean on the host: `cmake -S . -B build && cmake --build build -j`
+produces three static libs (libplatform_runtime.a,
+lib<app>_protos.a, lib<app>_impl.a). The same tree is intended to
+cross-build on the RPi4 target — gateway is delivered separately
+as a .ipk shipping the libgw .so + headers; this tree links against
+that at deploy time.
+
+Node-ownership filter: only nodes referenced as
+`prototype <T> <name>` in a composition declared in this .art get
+C++ emitted. Forward-decl stubs imported from sibling packages
+(e.g. the PSP mega-node referenced to make `requires X_Iface`
+resolve) are kept out of the C++ output.
+
+Default `--kind` flipped from `psp` → `fc` (matches the FC-as-primary
+direction; `psp` stays available for in-flight migrations).
+
+## S4 known limitations (S5 to address)
+
+- **Empty codec header.** When all 18 messages are imported from the
+  PSP (sibling package), `gen-proto-package` only emits messages
+  declared in *this* .art — the app's `.proto` is empty, the
+  `<fc>_codecs.hh` carries no `DEMO_DECLARE_REMOTE_CODEC` lines, and
+  the `protos` static lib is 8 bytes. The forward-decl interfaces in
+  package.art declare no `data`. Cross-package message-type wiring
+  needs a design decision: either rebind the interfaces in the app's
+  package.art (`interface senderReceiver X_Iface { data X record }`,
+  with X imported from the PSP), or extend `gen-proto-package` to
+  follow `requires <Iface>` cross-refs.
+- **AUTO-GENERATED banner** in lib/ files says `--kind fc` because the
+  templates are shared with fc_app. Cosmetic; template refactor.
 
 ## S3 learnings (worth keeping for later)
 

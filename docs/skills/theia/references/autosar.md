@@ -37,20 +37,14 @@ artheia import-dbc  --dbc $PSP/config/dbc/*KCAN*.dbc --bus kcan \
     --out $PSP/system/$AR/kcan --package system.autosar.$AR
 
 # FlexRay — slow (minutes on a real FIBEX); --no-validate skips the round-trip
-artheia import-fibex --fibex $PSP/config/MLBevo_Gen2_Fx_Cluster_*.xml --bus $AR \
-    --out $PSP/system/$AR/fibex --package system.autosar.$AR \
+artheia import-fibex --fibex $PSP/config/MLBevo_Gen2_Fx_Cluster_*.xml --bus flexray \
+    --out $PSP/system/$AR/flexray --package system.autosar.$AR \
     --no-validate
-# KNOWN DRIFT (2026-05): the importer appends --bus to --package, so the
-# above emits `package system.autosar.mlbevo_gen2.mlbevo_gen2`, NOT the
-# `system.autosar.mlbevo_gen2.fibex` that's currently committed. The
-# committed file pre-dates that bus-suffix change in the importer.
-# Leave the .art as-is until the importer's suffix policy is rethought
-# (track in psp-retirement.md or a follow-on task).
 
 # Aggregate per-bus catalogs into one system.art with one mega-node per bus
 artheia gen-autosar-system \
     --catalog $PSP/system/$AR/kcan/catalog.json \
-    --catalog $PSP/system/$AR/fibex/catalog.json \
+    --catalog $PSP/system/$AR/flexray/catalog.json \
     --out     $PSP/system/$AR/system.art \
     --package system.autosar.$AR
 ```
@@ -95,8 +89,7 @@ Each is one-shot regen; commit the output. To see the full surface:
 
 ## Conventions
 
-- **Workspace package prefix is `system.autosar`** — overriding the
-  CLI's `vendor.autosar` default. Always pass `--package
+- **Workspace package prefix is `system.autosar`**. Always pass `--package
   system.autosar.<ar>[.<bus>]` explicitly so the PSP's FQNs line up with
   the rest of the workspace's `system.*` tree.
 - **Generated `.art` is read-only.** Re-run the importer; if the output

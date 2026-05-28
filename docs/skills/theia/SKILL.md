@@ -15,8 +15,11 @@ Read this page to orient. For a specific task, load the matching reference:
 | You're doing… | Read |
 | --- | --- |
 | Writing or editing `.art` files | [references/art-lang-grammar.md](references/art-lang-grammar.md) |
-| Generating / regenerating an aplication C++ (lib/main/impl) | [references/artheia-gen-app.md](references/artheia-gen-app.md) |
-| Regenerating the system: .art → manifests → build → deploy | [references/artheia-gen-system.md](references/artheia-gen-system.md) |
+| Generating / regenerating an application C++ (lib/main/impl) | [references/artheia-gen-app.md](references/artheia-gen-app.md) |
+| Regenerating the system: .art → manifests (stages 1–2) | [references/artheia-gen-system.md](references/artheia-gen-system.md) |
+| Bazel build: rig extension, FC daemons, `.ipk` bundles | [references/build-system.md](references/build-system.md) |
+| Provisioning & orchestration: Puppet, docker compose, Pi 4 push | [references/provision-orchestrate.md](references/provision-orchestrate.md) |
+| AUTOSAR PSP import: DBC/FIBEX → `.art` + netgraph | [references/autosar.md](references/autosar.md) |
 
 Always run artheia with the workspace venv on PATH:
 `PATH="$PWD/.venv/bin:$PATH" artheia …`. It is editable-installed

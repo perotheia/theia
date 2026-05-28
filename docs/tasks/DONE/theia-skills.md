@@ -1,32 +1,44 @@
-# theia skills refresher — DONE (2026-05-27)
+# theia-skills: rename + split references
 
-Restructured the single stale `docs/skills/artheia/SKILL.md` into a
-`docs/skills/theia/` skill tree: a top-level orientation refresher for new
-agents + three reference subskills loaded on demand.
+Done.
 
-```
-docs/skills/theia/
-├── SKILL.md                          ← orientation: abstraction ladder,
-│                                       repo map, FC catalog, runtime,
-│                                       supervisor, pipeline, build cheat
-│                                       sheet, conventions
-└── references/
-    ├── art-lang-grammar.md           ← the .art DSL (grammar + examples)
-    ├── artheia-gen-app.md            ← gen-app --kind fc: lib/main/impl
-    │                                   split, base-class selection,
-    │                                   regen-stability guard
-    └── artheia-gen-system.md         ← .art → manifest-proto (py) → JSON
-                                        manifests → bazel build/dist →
-                                        provision; plus AUTOSAR PSP chain
-```
+## What landed
 
-The build-system, provision-orchestrate, and AUTOSAR areas from the
-original note are folded as sections inside `artheia-gen-system.md` (one
-coherent pipeline doc) rather than separate files.
+1. **`docs/skills/artheia/` → `docs/skills/theia/`** — already in
+   commit `dd63f98` (refresher trim) + `be7abe2` (lean SKILL.md).
+2. **References split** — `artheia-gen-system.md` covered four
+   stages (manifest python, JSON serialization, Bazel, provisioning)
+   plus the PSP chain. Split into:
 
-Retired the old `docs/skills/artheia/SKILL.md` (its content was stale —
-referenced `platform/system/`, `executor.yaml`, the pre-//system layout).
+   ```
+   theia/references/
+   ├─ art-lang-grammar.md          (existing)
+   ├─ artheia-gen-app.md           (existing)
+   ├─ artheia-gen-system.md        TRIMMED — §1 manifest py + §2 JSON
+   │                               + pointers
+   ├─ build-system.md              NEW    — Bazel rig extension, FC
+   │                               daemons, .ipk, regen-stability
+   ├─ provision-orchestrate.md     NEW    — Puppet (prov vs orch),
+   │                               docker compose dev rig, Pi 4 push
+   └─ autosar.md                   NEW    — DBC/FIBEX → catalog →
+                                   .art → netgraph; codec/routing
+                                   generator surface
+   ```
 
-All facts verified against the current tree (grammar `.tx`, gen-app
-`fc_app.py`, the manifest loader/`clusters.py`, and `artheia <cmd> --help`).
-Internal links resolve.
+3. **`SKILL.md` table** grown from 3 → 6 rows.
+
+## Reality fixes folded in while splitting
+
+- PSP path was wrong in the old doc: `autosar/mlbevo_gen2_cmp_psp`
+  → corrected to `vendor/autosar/mlbevo_gen2_cmp_psp` (matches the
+  artheia CLI's `--package vendor.autosar` default).
+- Bazel rig repo targets were stale: doc said `executor_json` /
+  `executor_json_central`; the real names are
+  `@rig_demo//<machine>:image`, `…:executor`, `…:components`,
+  plus top-level `executor_yaml` + `machines_yaml` (and `:all`).
+- Puppet was described as "package-install body still a stub" —
+  no longer true. `deploy/puppet/{provisioning,orchestration}.pp`
+  are real, with a clear blast-radius split (full update vs.
+  day-to-day app push).
+- Docker compose dev rig was missing — added with the
+  end-to-end quick-start from `deploy/README.md`.

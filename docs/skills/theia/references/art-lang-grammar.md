@@ -6,7 +6,7 @@ real examples from the tree — when in doubt, read the `.tx`.
 
 ## File shape
 
-```
+```scala
 Model:
     ('package' name=QualifiedName)?
     imports*=Import
@@ -28,10 +28,10 @@ File-name resolution priority for `import X.Y.*`: the resolver looks under
 the directory mapped from the FQN for `system.art` → `cluster.art` →
 `package.art` → `component.art`.
 
-```
+```scala
 package system.services.exec
 import system.supervisor.*           // imports first, always
-message SupervisionEvent { }         // then declarations
+message SupervisionEvent { }         // then forward declarations
 ```
 
 ## Top-level elements
@@ -41,7 +41,7 @@ message SupervisionEvent { }         // then declarations
 
 ### message / enum (proto3-equivalent)
 
-```
+```scala
 message LogRecord {
     string context
     uint32 level
@@ -58,7 +58,7 @@ reference another `message`/`enum` by name, and may be `repeated`.
 
 ### interface — two flavors
 
-```
+```scala
 // pub/sub, fire-and-forget; one message type per `data`:
 interface senderReceiver LogStream {
     data LogRecord record
@@ -73,7 +73,7 @@ interface clientServer ExecCtl {
 
 ### node — the thread
 
-```
+```scala
 NodeDecl:
     'node' kind=NodeKind name=ID ('extends' base=[NodeDecl|FQN])? '{'
         tipc=TipcAddress
@@ -103,7 +103,7 @@ NodeDecl:
   (no field-level merge). Most "derived" nodes only override `tipc`.
 - **`config Msg`** — the node's etcd-backed config message type.
 
-```
+```scala
 node atomic TraceCollector {
     tipc type=0x80010013 instance=0
     tag = "LOG"
@@ -133,7 +133,7 @@ for log/trace fan-in where a drop must never block the app).
 
 #### params (ROS2-style, etcd-backed)
 
-```
+```scala
 params {
     publish_period_ms : uint32 = 10
     enabled           : bool   = true
@@ -143,7 +143,7 @@ params {
 
 #### statem (gen_statem FSM)
 
-```
+```scala
 statem {
     states [ Idle, Running, Stopping ]
     initial Idle
@@ -160,7 +160,7 @@ Transition arrows are the Unicode `→` (U+2192), not `->`.
 
 ### composition — the process
 
-```
+```scala
 composition VehicleSystem {
     prototype SpeedPublisher    speed_pub
     prototype TorqueController  torque_ctrl
@@ -178,7 +178,7 @@ composition VehicleSystem {
 
 ### cluster — the distribution bundle
 
-```
+```scala
 cluster Services {
     composition Com   com
     composition Log   log
@@ -195,7 +195,7 @@ in-process wiring inside a composition).
 
 ### bus / gateway_route (AUTOSAR PSP)
 
-```
+```scala
 bus kcan kind = can
 gateway_route SpeedPublisher {
     can id=0x42 bus=kcan dlc=8
@@ -213,7 +213,7 @@ Cross-file references resolve through the **import + forward-decl** pattern:
 declare an empty stub locally so the file parses standalone, and the
 resolver materializes the real definition from the imported package.
 
-```
+```scala
 // system/system.art
 package system
 import system.services.*

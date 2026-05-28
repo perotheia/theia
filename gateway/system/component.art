@@ -1,9 +1,0 @@
-package system.gateway
-
-
-composition GatewayBridge {
-    prototype Mlbevo_Gen2_Bus mlbevo_gen2_bus
-    prototype Kcan_Bus        kcan_bus
-    prototype Gateway         gw
-}
-

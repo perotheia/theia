@@ -100,3 +100,33 @@ Parse-validates clean via `artheia parse system/odd_path_monitor/component.art`.
 
 These get answered in S3–S4 once we see the actual `flexraya_world_source`
 diff.
+
+## Side-fix: autosar layout collapse (between S3 and S4)
+
+Two side-by-side `vendor/autosar/{mlbevo_gen2, mlbevo_gen2_cmp_psp}/`
+dirs (both checkouts of the same GitLab repo
+`PG50/ccstheia/mlbevo_gen2_cmp_psp`, content-identical at HEAD but
+the `_cmp_psp/` working tree had an uncommitted regenerated
+`system/mlbevo_gen2/system.art` — the AUTOSAR mega-node) caused
+confusion: the package decls inside use `mlbevo_gen2` (no
+`_cmp_psp` suffix), so the directory should match.
+
+Done:
+- Backed up the uncommitted `system.art` to
+  `~/up/autosar-mega-node-system.art.backup.<ts>` (preserved the
+  regen artifact, which `repo sync` would otherwise have ignored).
+- Deleted the stale `vendor/autosar/mlbevo_gen2/` (it was the
+  outdated of the two — no mega-node `system.art`, came from an
+  earlier checkout before the local-manifest path was changed).
+- Renamed `vendor/autosar/mlbevo_gen2_cmp_psp/` →
+  `vendor/autosar/mlbevo_gen2/` (preserving the uncommitted
+  `system.art` along the way).
+- Fixed the comment in `.repo/local_manifests/psp.xml` (the path
+  attr already said `mlbevo_gen2` — only the prose was stale).
+- Updated `.repo/project.list` to match the new path.
+- `repo sync` verified the new layout end-to-end.
+- Repointed pero_theia's `system/autosar` symlink:
+  `../vendor/autosar/mlbevo_gen2_cmp_psp/system` →
+  `../vendor/autosar/mlbevo_gen2/system`.
+- Re-validated `artheia parse system/odd_path_monitor/component.art`
+  and `artheia parse system/system.art` — both clean.

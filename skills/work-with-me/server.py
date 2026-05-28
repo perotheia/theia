@@ -28,6 +28,7 @@ import asyncio
 import bisect
 import json
 import os
+import subprocess
 import threading
 import time
 from datetime import datetime, timezone
@@ -327,7 +328,9 @@ class RepoHandler(FileSystemEventHandler):
             return abs_path
 
     def _record(self, event_type: str, abs_path: str) -> None:
-        """Log an event unless it's ignored or agent-authored."""
+        """Log an event unless tracking is off, it's ignored, or agent-authored."""
+        if not state.is_enabled():
+            return  # 'watch me off' (default) — non-intrusive.
         if self._ignored(abs_path):
             return
         if self.agent.is_agent(abs_path):
@@ -454,94 +457,246 @@ shellhist: "ShellHistory | None" = None   # set in main() once HISTFILE is known
 _observer: "Observer | None" = None
 
 
+class State:
+    """Tracking on/off + the optional focus note.
+
+    enabled=False is the project-friendly default: the watcher runs (so the
+    moment the user says 'watch me on' nothing has to spin up) but events are
+    dropped at _record, and the shell tail's offset is advanced rather than
+    accumulated. Non-intrusive for teammates who share .mcp.json."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.enabled: bool = False
+        self.focus: str = ""
+        self.root: Path = Path.cwd()
+
+    def set_enabled(self, on: bool) -> None:
+        with self._lock:
+            self.enabled = on
+
+    def is_enabled(self) -> bool:
+        with self._lock:
+            return self.enabled
+
+    def set_focus(self, note: str) -> None:
+        with self._lock:
+            self.focus = note.strip()
+
+    def get_focus(self) -> str:
+        with self._lock:
+            return self.focus
+
+
+state = State()
+
+
 def _histfile() -> Path:
     """The shared zsh history file: $HISTFILE, else ~/.zsh_history."""
     env = os.environ.get("HISTFILE")
     return Path(env).expanduser() if env else Path.home() / ".zsh_history"
 
 
+def _git_diff(paths: list[str], *, cwd: Path) -> str:
+    """`git diff -- <paths>` against working tree (vs HEAD). Returns the diff
+    text or a short note. Bounded to a reasonable size so the prompt stays
+    manageable; if any path isn't tracked, `git diff` simply omits it."""
+    if not paths:
+        return "(no paths)"
+    try:
+        out = subprocess.run(
+            ["git", "diff", "--no-color", "--", *paths],
+            cwd=str(cwd), capture_output=True, text=True, timeout=10,
+        ).stdout
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return f"(git diff failed: {e})"
+    if not out.strip():
+        return "(no diff vs HEAD — either staged, new untracked, or unchanged)"
+    MAX = 60_000
+    if len(out) > MAX:
+        out = out[:MAX] + f"\n… (truncated at {MAX} chars)\n"
+    return out
+
+
 @app.list_tools()
 async def list_tools() -> list[Tool]:
     return [
+        Tool(
+            name="watch_me",
+            description=(
+                "Toggle the watcher on/off. Starts OFF by default so the plugin is "
+                "non-intrusive for teammates who share .mcp.json. Args: state='on' "
+                "(begin recording file edits + shell commands), 'off' (stop and discard "
+                "what's been buffered), or 'status' (report current state and counts). "
+                "Trigger phrase: 'watch me on' / 'watch me off' / 'watch me' (status)."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {"state": {"type": "string", "enum": ["on", "off", "status"]}},
+                "required": [],
+            },
+        ),
         Tool(
             name="check_me",
             description=(
                 "Review the USER's file modifications since the last checkpoint for "
                 "consistency with the current session, ALONGSIDE the shell commands they "
-                "ran (tailed from the shared zsh history — what they built/ran/debugged). "
-                "(Edits made by the agent's own Edit/Write tools are excluded — this "
-                "reviews the human's manual changes.) Use the commands as intent signal "
-                "and cross-check against the edits. Identify: incomplete edits, missing "
-                "counterpart changes (call site updated but not the definition, or vice "
-                "versa), broken imports, type / signature mismatches, logic gaps, or edits "
-                "inconsistent with what the commands imply. Provide actionable advice. "
-                "Clears the change log + shell tail (starts a fresh checkpoint). "
-                "Call this tool when the user says 'check me'."
+                "ran (tailed from the shared zsh history, time-correlated to the file "
+                "edits — commands from other terminals doing unrelated work are dropped). "
+                "Agent Edit/Write/MultiEdit/NotebookEdit calls are excluded. If a FOCUS "
+                "is set, it appears as the explicit goal of the session. Identify: "
+                "incomplete edits, missing counterpart changes, broken imports, type / "
+                "signature drift, logic gaps, or edits inconsistent with what the "
+                "commands or focus imply. Provide actionable advice. Clears the change "
+                "log + shell tail (starts a fresh checkpoint). Trigger: 'check me'."
             ),
             inputSchema={"type": "object", "properties": {}, "required": []},
         ),
         Tool(
-            name="get_changes",
+            name="ignore_me",
             description=(
-                "Return the accumulated USER file-change log AND the shell commands run "
-                "since the last checkpoint, without clearing. A quick peek at what has "
-                "changed and what the user has been running."
+                "Discard all tracked file changes and shell commands since the last "
+                "checkpoint, WITHOUT a review. Use this when the work was exploratory / "
+                "an aborted attempt / not what you want considered. Trigger: 'ignore me'."
             ),
             inputSchema={"type": "object", "properties": {}, "required": []},
         ),
         Tool(
-            name="clear_changes",
-            description="Manually reset the file change log and start a fresh checkpoint.",
+            name="focus_me",
+            description=(
+                "Set the one-line goal for the current session. The next check_me / "
+                "compare_me embeds it as the explicit intent (e.g. 'am I still on track "
+                "for X?'). Pass note='' (empty) to clear the focus. Trigger: 'focus me on "
+                "<note>' / 'set focus to <note>' / 'clear focus'."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {"note": {"type": "string"}},
+                "required": [],
+            },
+        ),
+        Tool(
+            name="compare_me",
+            description=(
+                "Like check_me, but instead of just listing the touched paths, include "
+                "the actual `git diff` of those files (working tree vs HEAD) so the "
+                "review sees the change CONTENT — catches typos, broken refs, signature "
+                "drift the file list can't. Clears the checkpoint. Trigger: 'compare me' "
+                "/ 'diff me'."
+            ),
+            inputSchema={"type": "object", "properties": {}, "required": []},
+        ),
+        Tool(
+            name="undo_me",
+            description=(
+                "Report the unstaged diff for the files the USER touched since the last "
+                "checkpoint, with a `git checkout -- <path>` revert hint per file. A "
+                "non-destructive 'I made a mess, what did I change?' lifeline — does NOT "
+                "run any revert itself. Does NOT clear the checkpoint. Trigger: 'undo me'."
+            ),
             inputSchema={"type": "object", "properties": {}, "required": []},
         ),
     ]
 
 
+def _build_checkpoint(*, with_diff: bool) -> tuple[list[dict], list[dict], str]:
+    """Drain the file-change log + correlated shell tail. Returns
+    (entries, cmds, files_block) ready for prompt assembly. Used by both
+    check_me (with_diff=False) and compare_me (with_diff=True)."""
+    entries = changelog.snapshot_and_clear()
+    cmds = shellhist.snapshot_and_advance() if shellhist else []
+    cmds = _window_filter(cmds, [e["ts"] for e in entries if "ts" in e])
+
+    files_block = "(no file changes)"
+    if entries:
+        grouped = _group_by_path(entries)
+        files_touched = "\n".join(
+            f"  {path}  ({', '.join(ops)})" for path, ops in grouped.items()
+        )
+        files_block = f"{files_touched}\n\n**Full event log:**\n{_render_log(entries)}"
+        if with_diff:
+            paths = sorted({e["path"] for e in entries} |
+                           {e["dest"] for e in entries if "dest" in e})
+            diff = _git_diff(paths, cwd=state.root)
+            files_block += f"\n\n**git diff (working tree vs HEAD):**\n```diff\n{diff}\n```"
+    return entries, cmds, files_block
+
+
 @app.call_tool()
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
+    args = arguments or {}
+
+    # ── watch_me ────────────────────────────────────────────────────────────
+    if name == "watch_me":
+        action = (args.get("state") or "status").strip().lower()
+        if action == "on":
+            was = state.is_enabled()
+            state.set_enabled(True)
+            return [TextContent(type="text", text=(
+                "Watching ON — file edits + shell commands will be tracked from now.\n"
+                f"(Was already on.)" if was else
+                "Watching ON — file edits + shell commands will be tracked from now."
+            ))]
+        if action == "off":
+            state.set_enabled(False)
+            n = changelog.clear()
+            cmds_dropped = shellhist.snapshot_and_advance() if shellhist else []
+            return [TextContent(type="text", text=(
+                f"Watching OFF. Discarded {n} buffered file event(s) and "
+                f"{len(cmds_dropped)} shell command(s). The watcher will stay quiet."
+            ))]
+        if action == "status":
+            on = state.is_enabled()
+            ne = len(changelog.snapshot())
+            nc = len(shellhist.peek()) if shellhist else 0
+            focus = state.get_focus()
+            focus_line = f"\nFocus: {focus}" if focus else "\nFocus: (none)"
+            return [TextContent(type="text", text=(
+                f"Watching: {'ON' if on else 'OFF'}\n"
+                f"Buffered: {ne} file event(s), {nc} shell command(s){focus_line}"
+            ))]
+        return [TextContent(type="text", text=(
+            "watch_me: state must be 'on', 'off', or 'status'."
+        ))]
 
     # ── check_me ────────────────────────────────────────────────────────────
     if name == "check_me":
-        entries = changelog.snapshot_and_clear()
-        cmds = shellhist.snapshot_and_advance() if shellhist else []
-        # Correlate commands to THIS repo's file activity by time, so a shared
-        # history full of other-terminal commands doesn't pile up.
-        cmds = _window_filter(cmds, [e["ts"] for e in entries if "ts" in e])
-
+        if not state.is_enabled():
+            return [TextContent(type="text", text=(
+                "Watching is OFF — nothing has been tracked.\n"
+                "Say 'watch me on' to start a session, then 'check me' to review."
+            ))]
+        entries, cmds, files_block = _build_checkpoint(with_diff=False)
         if not entries and not cmds:
-            return [TextContent(
-                type="text",
-                text=(
-                    "No USER file changes or correlated shell commands since the last "
-                    "checkpoint.\n(Agent edits are tracked separately and excluded.)\n"
-                    "The change log is now cleared — fresh checkpoint started."
-                ),
-            )]
+            return [TextContent(type="text", text=(
+                "No USER file changes or correlated shell commands since the last "
+                "checkpoint.\n(Agent edits are tracked separately and excluded.)\n"
+                "The change log is now cleared — fresh checkpoint started."
+            ))]
 
-        files_block = "(no file changes)"
-        if entries:
-            grouped = _group_by_path(entries)
-            files_touched = "\n".join(
-                f"  {path}  ({', '.join(ops)})" for path, ops in grouped.items()
-            )
-            files_block = f"{files_touched}\n\n**Full event log:**\n{_render_log(entries)}"
+        focus = state.get_focus()
+        focus_block = f"\n**Session focus (explicit goal):** {focus}\n" if focus else ""
 
         prompt = (
-            "## work-with-me checkpoint\n\n"
+            "## work-with-me checkpoint\n"
+            f"{focus_block}\n"
             f"**Files the USER touched since last checkpoint:**\n{files_block}\n\n"
             f"**Shell commands time-correlated to those edits (zsh history):**\n"
             f"{_render_shell(cmds)}\n\n"
             "---\n"
             "Please review the user's changes above in the context of this session.\n"
             "Use the shell commands as intent signal — what they were building, "
-            "running, or debugging — and cross-check it against the file edits.\n\n"
-            "Check for:\n"
+            "running, or debugging — and cross-check it against the file edits"
+            + (" and the stated focus" if focus else "")
+            + ".\n\nCheck for:\n"
             "- Incomplete edits (a rename/refactor applied in one place but not others)\n"
             "- Missing counterpart changes (call site updated but not the function, or vice versa)\n"
             "- Import / export mismatches introduced by file additions or deletions\n"
             "- Type / signature drift\n"
             "- Deleted files that are still referenced\n"
-            "- Edits inconsistent with what the shell commands suggest they intended\n"
+            "- Edits inconsistent with what the shell commands"
+            + (" or the focus" if focus else "")
+            + " suggest they intended\n"
             "- A command that failed or implies a step not yet done\n\n"
             "Give concrete, actionable advice for each issue found. "
             "If everything looks consistent, say so.\n\n"
@@ -549,33 +704,78 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         )
         return [TextContent(type="text", text=prompt)]
 
-    # ── get_changes ─────────────────────────────────────────────────────────
-    elif name == "get_changes":
-        entries = changelog.snapshot()
-        cmds = shellhist.peek() if shellhist else []
-        if not entries and not cmds:
-            return [TextContent(type="text", text="No user changes or shell commands recorded yet.")]
-        return [TextContent(
-            type="text",
-            text=(
-                f"## Current user-change log ({len(entries)} events)\n\n"
-                f"{_render_log(entries)}\n\n"
-                f"## Shell commands since checkpoint ({len(cmds)})\n\n"
-                f"{_render_shell(cmds)}"
-            ),
-        )]
+    # ── ignore_me ───────────────────────────────────────────────────────────
+    if name == "ignore_me":
+        ne = changelog.clear()
+        cmds = shellhist.snapshot_and_advance() if shellhist else []
+        return [TextContent(type="text", text=(
+            f"Ignored: {ne} file event(s) and {len(cmds)} shell command(s) "
+            f"discarded without review. Fresh checkpoint started."
+        ))]
 
-    # ── clear_changes ────────────────────────────────────────────────────────
-    elif name == "clear_changes":
-        n = changelog.clear()
-        cmds = shellhist.snapshot_and_advance() if shellhist else []  # advance past
-        return [TextContent(
-            type="text",
-            text=(
-                f"Change log cleared ({n} file events, {len(cmds)} shell commands "
-                f"discarded). Fresh checkpoint started."
-            ),
-        )]
+    # ── focus_me ────────────────────────────────────────────────────────────
+    if name == "focus_me":
+        note = (args.get("note") or "").strip()
+        state.set_focus(note)
+        if not note:
+            return [TextContent(type="text", text="Focus cleared.")]
+        return [TextContent(type="text", text=(
+            f"Focus set: {note}\n(check_me / compare_me will include this as the "
+            f"explicit goal until cleared.)"
+        ))]
+
+    # ── compare_me ──────────────────────────────────────────────────────────
+    if name == "compare_me":
+        if not state.is_enabled():
+            return [TextContent(type="text", text=(
+                "Watching is OFF — nothing has been tracked. Say 'watch me on' first."
+            ))]
+        entries, cmds, files_block = _build_checkpoint(with_diff=True)
+        if not entries and not cmds:
+            return [TextContent(type="text", text=(
+                "No USER changes to compare. Checkpoint cleared."
+            ))]
+
+        focus = state.get_focus()
+        focus_block = f"\n**Session focus (explicit goal):** {focus}\n" if focus else ""
+
+        prompt = (
+            "## work-with-me compare\n"
+            f"{focus_block}\n"
+            f"**Files + diff:**\n{files_block}\n\n"
+            f"**Correlated shell commands:**\n{_render_shell(cmds)}\n\n"
+            "---\n"
+            "Review the diff above against the user's intent (the shell commands"
+            + (" and the stated focus" if focus else "")
+            + "). Comment line-by-line where it matters: bugs, typos, broken refs, "
+            "signature drift, incomplete edits, contradictions with the goal.\n\n"
+            "_Checkpoint cleared._"
+        )
+        return [TextContent(type="text", text=prompt)]
+
+    # ── undo_me ─────────────────────────────────────────────────────────────
+    if name == "undo_me":
+        # Peek (don't clear): undo_me is a lifeline, not a checkpoint event.
+        entries = changelog.snapshot()
+        if not entries:
+            return [TextContent(type="text", text=(
+                "No tracked user changes to undo. Use `git status` to see anything "
+                "outside the current checkpoint."
+            ))]
+        paths = sorted({e["path"] for e in entries} |
+                       {e["dest"] for e in entries if "dest" in e})
+        diff = _git_diff(paths, cwd=state.root)
+        revert = "\n".join(f"  git checkout -- {p}" for p in paths)
+        text = (
+            "## undo_me — what you changed (and how to revert)\n\n"
+            f"**Touched files ({len(paths)}):**\n"
+            + "\n".join(f"  {p}" for p in paths) + "\n\n"
+            f"**Diff vs HEAD:**\n```diff\n{diff}\n```\n\n"
+            "**To revert any of them (does NOT run; copy what you want):**\n"
+            f"```sh\n{revert}\n```\n\n"
+            "_Checkpoint NOT cleared._"
+        )
+        return [TextContent(type="text", text=text)]
 
     return [TextContent(type="text", text=f"Unknown tool: {name}")]
 
@@ -588,6 +788,7 @@ async def main() -> None:
     global _observer, shellhist
 
     root = find_repo_root(Path.cwd())
+    state.root = root
     sidecar = root / ".claude" / "work-with-me" / "agent-edits.jsonl"
     sidecar.parent.mkdir(parents=True, exist_ok=True)
     agent = AgentEdits(sidecar)

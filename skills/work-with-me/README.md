@@ -37,13 +37,16 @@ discovers it. It runs on the **workspace `.venv`** — no per-plugin venv.
     terminal doing unrelated work — are dropped. Fails open: with no edits to
     anchor against, or a history line with no timestamp, the command is kept.
 
-| Tool | Trigger phrase | What it does |
-|---|---|---|
-| `check_me` | *"check me"* | Reviews your changes vs. session context, gives advice, **clears log** |
-| `get_changes` | *"get changes"* | Shows the user-change log without clearing |
-| `clear_changes` | *"clear changes"* | Manually resets the log |
+| Tool | Slash | Trigger phrase | What it does |
+|---|---|---|---|
+| `watch_me` | `/watch-me on\|off\|status` | *"watch me on/off"* | Toggle tracking. **Starts OFF** by default so the plugin is non-intrusive for teammates sharing `.mcp.json`. |
+| `check_me` | `/check-me` | *"check me"* | Review file edits + correlated shell commands; gives advice; **clears checkpoint**. |
+| `compare_me` | `/compare-me` | *"compare me" / "diff me"* | Like `check_me` but includes the actual `git diff` of touched files — review sees content, not just paths. **Clears checkpoint**. |
+| `focus_me` | `/focus-me <goal>` | *"focus me on X" / "clear focus"* | Set the one-line session goal; the next `check_me` / `compare_me` uses it as explicit intent. Pass empty to clear. |
+| `ignore_me` | `/ignore-me` | *"ignore me"* | Discard everything since the last checkpoint **without** a review (aborted attempt). |
+| `undo_me` | `/undo-me` | *"undo me"* | Show diff + `git checkout --` revert hints for touched files. **Non-destructive** (does NOT run any revert); **does NOT clear** the checkpoint. |
 
-`check_me` is the main loop: work → say "check me" → get advice → repeat.
+Typical loop: `watch me on` → work → `check me` → repeat. `focus me on X` once at the start makes the review goal-aware.
 
 ## User vs. agent attribution
 

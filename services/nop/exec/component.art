@@ -19,13 +19,11 @@ package system.services.exec
 import system.supervisor.*
 
 // ---- forward-decl: supervisor node EXEC is realized by ------------------
-// Mirrors system.supervisor's `node atomic Supervisor` (tipc 0x80020001) so
-// the prototype below resolves when this file is parsed standalone. The
-// grammar requires a tipc on every node, so the stub carries the real one;
-// the resolver materializes the full node (ports/params) from the import.
-node atomic Supervisor {
-    tipc type=0x80020001 instance=0
-}
+// `extern` marks this a forward declaration — the real `node atomic
+// Supervisor` (tipc 0x80020001, with ports/params) lives in
+// system.supervisor and is pulled in via the import above. No fake tipc:
+// the scope provider materializes the full node from the import.
+extern node atomic Supervisor { }
 
 composition Exec {
     prototype Supervisor exec

@@ -1,4 +1,4 @@
-// platform::runtime::RuntimeContext
+// theia::runtime::RuntimeContext
 //
 // The bundle passed into every app's Inputs. Holds shared resources
 // the app didn't construct itself: the Logger, the Clock, the
@@ -16,7 +16,7 @@
 #include "Logger.hh"
 #include "Timer.hh"
 
-namespace platform {
+namespace theia {
 namespace runtime {
 
 struct Context {
@@ -26,4 +26,4 @@ struct Context {
 };
 
 }  // namespace runtime
-}  // namespace platform
+}  // namespace theia

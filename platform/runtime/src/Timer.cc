@@ -10,7 +10,7 @@
 #include <chrono>
 #include <thread>
 
-namespace platform {
+namespace theia {
 namespace runtime {
 
 namespace {
@@ -60,4 +60,4 @@ std::shared_ptr<TimerFactoryInterface> MakeThreadTimerFactory() noexcept {
 }
 
 }  // namespace runtime
-}  // namespace platform
+}  // namespace theia

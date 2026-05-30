@@ -27,7 +27,7 @@
 
 namespace test_statem {
 
-namespace rt = demo::runtime;
+namespace rt = theia::runtime;
 
 // ---- TrafficLight ------------------------------------------------------
 

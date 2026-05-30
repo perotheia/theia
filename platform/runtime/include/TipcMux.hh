@@ -12,12 +12,12 @@
 //     via register_cast<T> / register_call<Req,Reply>; later codegen
 //     emits this table.
 //
-// Reply-side demux (GW_MSG_GEN_CALL_REPLY frames travelling back to
+// Reply-side demux (::theia::runtime::kMsgGenCallReply frames travelling back to
 // THIS process from outbound calls we made via RemoteRef::send_request_)
 // is handled separately — see RemoteRef::on_reply_(). The mux delegates
 // to the appropriate RemoteRef via a reply-fd → RemoteRef* table.
 //
-// This is the multi-node generalization of libgw's GwTipcServer.
+// This is the multi-node generalization of a per-node TIPC server.
 
 #pragma once
 
@@ -38,11 +38,9 @@
 // users (p*_main.cc) instantiate the template.
 #include <sys/socket.h>
 
-extern "C" {
-#include "gw_proto.h"
-}
+#include "TheiaMsgHeader.hh"   // theia::runtime::TheiaMsgHeader + msg-type consts
 
-namespace demo {
+namespace theia {
 namespace runtime {
 
 // One entry in a node's inbound dispatch table.
@@ -52,7 +50,7 @@ namespace runtime {
 // info; the registry sees only this opaque function pointer.
 //
 // For a CALL, the closure also encodes the typed reply and sends a
-// GW_MSG_GEN_CALL_REPLY back on the originating fd. The mux passes the
+// ::theia::runtime::kMsgGenCallReply back on the originating fd. The mux passes the
 // fd + correlation_id so the closure can build the reply frame.
 struct InboundEntry {
     enum class Kind { Cast, Call };
@@ -96,10 +94,10 @@ public:
             // Inbound trace: Recv with the wire-level corr_id (which
             // is 0 for casts). Payload is the encoded request bytes
             // already in our hands — no extra pb_encode needed.
-            auto& tr = ::demo::runtime::tracer_for(NodeT::kNodeName);
+            auto& tr = ::theia::runtime::tracer_for(NodeT::kNodeName);
             if (tr.enabled()) {
-                tr.emit(::demo::runtime::TraceEvent::Recv,
-                        ::demo::runtime::msg_type_name<Msg>(),
+                tr.emit(::theia::runtime::TraceEvent::Recv,
+                        ::theia::runtime::msg_type_name<Msg>(),
                         corr, payload, len);
             }
             Msg msg{};
@@ -107,16 +105,16 @@ public:
             if (!pb_decode(&is, RemoteCodec<Msg>::fields(), &msg)) return;
             node.enqueue([msg = std::move(msg), corr](GenServerBase* base) {
                 auto* self = static_cast<NodeT*>(base);
-                auto& tr2 = ::demo::runtime::tracer_for(NodeT::kNodeName);
+                auto& tr2 = ::theia::runtime::tracer_for(NodeT::kNodeName);
                 if (tr2.enabled()) {
-                    tr2.emit(::demo::runtime::TraceEvent::Dispatch,
-                             ::demo::runtime::msg_type_name<Msg>(),
+                    tr2.emit(::theia::runtime::TraceEvent::Dispatch,
+                             ::theia::runtime::msg_type_name<Msg>(),
                              corr, nullptr, 0);
                 }
                 self->handle_cast(msg, self->state());
                 if (tr2.enabled()) {
-                    tr2.emit(::demo::runtime::TraceEvent::DispatchDone,
-                             ::demo::runtime::msg_type_name<Msg>(),
+                    tr2.emit(::theia::runtime::TraceEvent::DispatchDone,
+                             ::theia::runtime::msg_type_name<Msg>(),
                              corr, nullptr, 0);
                 }
             });
@@ -138,10 +136,10 @@ public:
             // Inbound trace: Recv on the mux thread (with corr from
             // the wire header — paired with the sender's Send and the
             // eventual SendReply).
-            auto& tr = ::demo::runtime::tracer_for(NodeT::kNodeName);
+            auto& tr = ::theia::runtime::tracer_for(NodeT::kNodeName);
             if (tr.enabled()) {
-                tr.emit(::demo::runtime::TraceEvent::Recv,
-                        ::demo::runtime::msg_type_name<Req>(),
+                tr.emit(::theia::runtime::TraceEvent::Recv,
+                        ::theia::runtime::msg_type_name<Req>(),
                         corr, payload, len);
             }
             Req req{};
@@ -151,16 +149,16 @@ public:
             node.enqueue([req = std::move(req), reply_fd, corr](
                               GenServerBase* base) mutable {
                 auto* self = static_cast<NodeT*>(base);
-                auto& tr2 = ::demo::runtime::tracer_for(NodeT::kNodeName);
+                auto& tr2 = ::theia::runtime::tracer_for(NodeT::kNodeName);
                 if (tr2.enabled()) {
-                    tr2.emit(::demo::runtime::TraceEvent::Dispatch,
-                             ::demo::runtime::msg_type_name<Req>(),
+                    tr2.emit(::theia::runtime::TraceEvent::Dispatch,
+                             ::theia::runtime::msg_type_name<Req>(),
                              corr, nullptr, 0);
                 }
                 Reply reply = self->handle_call(req, self->state());
                 if (tr2.enabled()) {
-                    tr2.emit(::demo::runtime::TraceEvent::DispatchDone,
-                             ::demo::runtime::msg_type_name<Req>(),
+                    tr2.emit(::theia::runtime::TraceEvent::DispatchDone,
+                             ::theia::runtime::msg_type_name<Req>(),
                              corr, nullptr, 0);
                 }
 
@@ -170,24 +168,24 @@ public:
                     return;
 
                 if (tr2.enabled()) {
-                    tr2.emit(::demo::runtime::TraceEvent::SendReply,
-                             ::demo::runtime::msg_type_name<Reply>(),
+                    tr2.emit(::theia::runtime::TraceEvent::SendReply,
+                             ::theia::runtime::msg_type_name<Reply>(),
                              corr, buf, (uint16_t)os.bytes_written);
                 }
 
-                GwMessageHeader rh{};
-                rh.bus_type            = GW_BUS_TYPE_RPC;
-                rh.msg_type            = GW_MSG_GEN_CALL_REPLY;
+                TheiaMsgHeader rh{};
+                rh.bus_type            = ::theia::runtime::kBusTypeRpc;
+                rh.msg_type            = ::theia::runtime::kMsgGenCallReply;
                 rh.proto_len           = (uint16_t)os.bytes_written;
                 rh.rpc.service_id      = RemoteCodec<Reply>::service_id;
                 rh.rpc.method_id       = 0;
                 rh.rpc.correlation_id  = corr;
-                uint8_t framebuf[sizeof(GwMessageHeader) + 256];
-                std::memcpy(framebuf, &rh, sizeof(GwMessageHeader));
-                std::memcpy(framebuf + sizeof(GwMessageHeader), buf,
+                uint8_t framebuf[sizeof(TheiaMsgHeader) + 256];
+                std::memcpy(framebuf, &rh, sizeof(TheiaMsgHeader));
+                std::memcpy(framebuf + sizeof(TheiaMsgHeader), buf,
                             os.bytes_written);
                 ::send(reply_fd, framebuf,
-                       sizeof(GwMessageHeader) + os.bytes_written,
+                       sizeof(TheiaMsgHeader) + os.bytes_written,
                        MSG_NOSIGNAL);
             });
         };
@@ -196,7 +194,7 @@ public:
 
     // Tell the mux about a RemoteRef whose outbound TIPC client is
     // expecting reply frames. The mux watches the client fd's read
-    // side and routes incoming GW_MSG_GEN_CALL_REPLY frames to the
+    // side and routes incoming ::theia::runtime::kMsgGenCallReply frames to the
     // RemoteRef via its on_reply_() member.
     template <typename T, uint32_t TT, uint32_t TI>
     void watch_remote_ref(RemoteRef<T, TT, TI>& ref) {
@@ -204,6 +202,16 @@ public:
             [&ref](uint32_t corr, const uint8_t* data, uint16_t len) {
                 ref.on_reply_(corr, data, len);
             });
+    }
+
+    // Public reply-fd registration for an ad-hoc RemoteRef (created in a
+    // handler, not at startup). Adds the fd to this mux's epoll loop and
+    // routes its call-replies to `sink`. Used by the free watch_reply_fd()
+    // below via process_mux().
+    void watch_reply_fd(
+        int fd,
+        std::function<void(uint32_t, const uint8_t*, uint16_t)> sink) {
+        watch_fd_for_replies_(fd, std::move(sink));
     }
 
     void start();
@@ -229,5 +237,17 @@ private:
         std::function<void(uint32_t, const uint8_t*, uint16_t)>> reply_sinks_;
 };
 
+// ---- process-wide TipcMux accessor ---------------------------------------
+//
+// There is ONE TipcMux (epoll/select loop) per app process — it accepts
+// inbound node connections AND demuxes our own RemoteRef call-replies.
+// Publishing it here (mirrors process_logger / process_timers) lets a
+// handler's ad-hoc RemoteRef register its reply fd with the single loop
+// via process_mux()->watch_remote_ref(ref), so a synchronous call(ref,...)
+// made from inside a handler actually gets its reply pumped. main sets
+// this once, before nodes start. Non-owning pointer (main owns the mux).
+void      set_process_mux(TipcMux* mux) noexcept;
+TipcMux*  process_mux() noexcept;   // nullptr if unset (caller checks)
+
 }  // namespace runtime
-}  // namespace demo
+}  // namespace theia

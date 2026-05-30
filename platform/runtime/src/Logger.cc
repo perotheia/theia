@@ -5,7 +5,7 @@
 #include <cstdio>
 #include <string>
 
-namespace platform {
+namespace theia {
 namespace runtime {
 
 namespace {
@@ -90,4 +90,4 @@ Logger& process_logger() noexcept {
 }
 
 }  // namespace runtime
-}  // namespace platform
+}  // namespace theia

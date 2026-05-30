@@ -1,4 +1,4 @@
-// demo::runtime::GenRunnable<Derived>
+// theia::runtime::GenRunnable<Derived>
 //
 // The third node base, beside GenServer<Derived,State> (reactive, mailbox)
 // and GenStateM<Derived,…> (FSM). GenRunnable is for a FREE RUNNABLE: a
@@ -58,7 +58,7 @@
 #include <string>
 #include <thread>
 
-namespace demo {
+namespace theia {
 namespace runtime {
 
 template <typename Derived>
@@ -133,4 +133,4 @@ private:
 };
 
 }  // namespace runtime
-}  // namespace demo
+}  // namespace theia

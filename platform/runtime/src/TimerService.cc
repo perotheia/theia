@@ -1,6 +1,6 @@
 #include "TimerService.hh"
 
-namespace demo {
+namespace theia {
 namespace runtime {
 
 TimerService::TimerService() {
@@ -142,5 +142,34 @@ void TimerService::loop_() {
     }
 }
 
+// ---- process-wide TimerService accessor (mirrors process_logger) ---------
+
+namespace {
+// Non-owning. Set once on the main thread before nodes start; read from
+// node threads via process_timers(). Set-once, so no lock needed.
+TimerService*& process_timers_slot() noexcept {
+    static TimerService* slot = nullptr;
+    return slot;
+}
+}  // namespace
+
+void set_process_timers(TimerService* timers) noexcept {
+    process_timers_slot() = timers;
+}
+
+TimerService& process_timers() noexcept {
+    TimerService* slot = process_timers_slot();
+    // A node that uses timers without main publishing one is a wiring
+    // bug (the generated main publishes whenever any node requires_timers).
+    // Abort loudly rather than UB-deref a null.
+    if (!slot) {
+        std::fprintf(stderr,
+            "[runtime] FATAL: process_timers() before set_process_timers() "
+            "— a requires_timers node ran without a published TimerService\n");
+        std::abort();
+    }
+    return *slot;
+}
+
 }  // namespace runtime
-}  // namespace demo
+}  // namespace theia

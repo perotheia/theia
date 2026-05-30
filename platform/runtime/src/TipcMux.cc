@@ -10,7 +10,7 @@
 #include <utility>
 #include <vector>
 
-namespace demo {
+namespace theia {
 namespace runtime {
 
 static constexpr int kBacklog   = 16;
@@ -136,12 +136,12 @@ void TipcMux::loop_() {
             }
             if (reply_sink) {
                 ssize_t n = ::recv(fd, buf, sizeof(buf), 0);
-                if (n < (ssize_t)sizeof(GwMessageHeader)) continue;
-                GwMessageHeader hdr{};
-                std::memcpy(&hdr, buf, sizeof(GwMessageHeader));
-                if (hdr.msg_type == GW_MSG_GEN_CALL_REPLY) {
+                if (n < (ssize_t)sizeof(TheiaMsgHeader)) continue;
+                TheiaMsgHeader hdr{};
+                std::memcpy(&hdr, buf, sizeof(TheiaMsgHeader));
+                if (hdr.msg_type == ::theia::runtime::kMsgGenCallReply) {
                     reply_sink(hdr.rpc.correlation_id,
-                                buf + sizeof(GwMessageHeader),
+                                buf + sizeof(TheiaMsgHeader),
                                 hdr.proto_len);
                 }
                 continue;
@@ -166,38 +166,34 @@ void TipcMux::loop_() {
                 }
                 continue;
             }
-            if (n < (ssize_t)sizeof(GwMessageHeader)) continue;
+            if (n < (ssize_t)sizeof(TheiaMsgHeader)) continue;
 
-            GwMessageHeader hdr{};
-            std::memcpy(&hdr, buf, sizeof(GwMessageHeader));
-            if (hdr.bus_type != GW_BUS_TYPE_RPC) continue;
-            if (hdr.msg_type != GW_MSG_GEN_CAST &&
-                hdr.msg_type != GW_MSG_GEN_CALL) continue;
+            TheiaMsgHeader hdr{};
+            std::memcpy(&hdr, buf, sizeof(TheiaMsgHeader));
+            if (hdr.bus_type != ::theia::runtime::kBusTypeRpc) continue;
+            if (hdr.msg_type != ::theia::runtime::kMsgGenCast &&
+                hdr.msg_type != ::theia::runtime::kMsgGenCall) continue;
 
-            const uint8_t* payload = buf + sizeof(GwMessageHeader);
+            const uint8_t* payload = buf + sizeof(TheiaMsgHeader);
+            (void)payload;
             auto eit = binding->entries.find(hdr.rpc.service_id);
             if (eit == binding->entries.end()) {
-                // Fall-through (#409): no registered codec claimed this
-                // service_id. Hand the raw frame to the bound node's
-                // handle_info(const InfoMsg&, State&) on its OWN thread —
-                // the test probe consumes arbitrary traffic; every other
-                // node hits the GenServer CRITICAL default (an unrouted
-                // message means the netgraph and running wiring disagree).
-                // Copy the bytes: payload points into this loop's recv
-                // buffer, but the dispatch is async on the node thread.
-                std::vector<uint8_t> bytes(payload, payload + hdr.proto_len);
-                InfoMsg info;
-                info.service_id    = hdr.rpc.service_id;
-                info.len           = hdr.proto_len;
-                info.dst_tipc_type = binding->tipc_type;
-                info.msg_type      = hdr.msg_type;
-                info.corr_id       = hdr.rpc.correlation_id;
-                info.reply_fd      = fd;
-                binding->node->enqueue(
-                    [bytes = std::move(bytes), info](GenServerBase* base) mutable {
-                        info.data = bytes.data();
-                        base->dispatch_unknown(info);
-                    });
+                // No registered codec claimed this service_id. The
+                // wire-info fall-through (synthesize an InfoMsg, deliver
+                // the raw bytes to handle_info(const InfoMsg&, State&)) was
+                // removed: cross-node traffic is exclusively typed cast /
+                // call with a registered RemoteCodec, and an unrouted frame
+                // means the running wiring received a message the netgraph
+                // says it should never get — a HARD invariant violation.
+                // Log CRITICAL and drop; the missing handler is a codegen /
+                // netgraph reconciliation bug, not runtime data to deliver.
+                std::fprintf(stderr,
+                    "[TipcMux] CRITICAL: unrouted inbound frame "
+                    "service_id=0x%04X msg_type=0x%02X len=%u on node "
+                    "tipc=0x%08X — no register_cast/register_call claimed "
+                    "it. Netgraph consistency compromised; dropping.\n",
+                    hdr.rpc.service_id, hdr.msg_type, hdr.proto_len,
+                    binding->tipc_type);
                 continue;
             }
             eit->second.dispatch(payload, hdr.proto_len, fd,
@@ -206,5 +202,28 @@ void TipcMux::loop_() {
     }
 }
 
+// ---- process-wide TipcMux accessor (mirrors process_logger/_timers) ------
+
+namespace {
+TipcMux*& process_mux_slot() noexcept {
+    static TipcMux* slot = nullptr;
+    return slot;
+}
+}  // namespace
+
+void set_process_mux(TipcMux* mux) noexcept { process_mux_slot() = mux; }
+TipcMux* process_mux() noexcept { return process_mux_slot(); }
+
+// Free hook (declared in NodeRef.hh) — registers a RemoteRef's reply fd
+// with the process mux. No-op when no mux is published (a cast-only
+// caller never needs reply demux; a unit test may run without a mux).
+void watch_reply_fd(
+    int fd,
+    std::function<void(uint32_t, const uint8_t*, uint16_t)> sink) {
+    if (TipcMux* mux = process_mux()) {
+        mux->watch_reply_fd(fd, std::move(sink));
+    }
+}
+
 }  // namespace runtime
-}  // namespace demo
+}  // namespace theia

@@ -11,7 +11,7 @@
 #include <cstdio>
 #include <thread>
 
-namespace demo {
+namespace theia {
 namespace runtime {
 
 TipcClient::~TipcClient() { disconnect(); }
@@ -53,19 +53,19 @@ void TipcClient::disconnect() {
     if (fd_ >= 0) { ::close(fd_); fd_ = -1; }
 }
 
-bool TipcClient::send_frame(const GwMessageHeader& hdr,
+bool TipcClient::send_frame(const TheiaMsgHeader& hdr,
                              const uint8_t* payload, uint16_t proto_len) {
     if (fd_ < 0) return false;
-    uint8_t buf[sizeof(GwMessageHeader) + 256];
-    size_t total = sizeof(GwMessageHeader) + proto_len;
+    uint8_t buf[sizeof(TheiaMsgHeader) + 256];
+    size_t total = sizeof(TheiaMsgHeader) + proto_len;
     if (total > sizeof(buf)) return false;
-    std::memcpy(buf, &hdr, sizeof(GwMessageHeader));
+    std::memcpy(buf, &hdr, sizeof(TheiaMsgHeader));
     if (proto_len > 0 && payload) {
-        std::memcpy(buf + sizeof(GwMessageHeader), payload, proto_len);
+        std::memcpy(buf + sizeof(TheiaMsgHeader), payload, proto_len);
     }
     ssize_t sent = ::send(fd_, buf, total, MSG_NOSIGNAL);
     return sent == static_cast<ssize_t>(total);
 }
 
 }  // namespace runtime
-}  // namespace demo
+}  // namespace theia

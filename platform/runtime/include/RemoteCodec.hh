@@ -14,11 +14,9 @@
 #include <pb.h>
 #include <pb_encode.h>
 
-extern "C" {
-#include "gw_proto.h"
-}
+#include "TheiaMsgHeader.hh"   // theia::runtime::TheiaMsgHeader + msg-type consts
 
-namespace demo {
+namespace theia {
 namespace runtime {
 
 // Specialize per message type sent over the wire (or traced).
@@ -39,7 +37,7 @@ constexpr uint16_t hash_msg_type_(const char* s) {
 // Convenience macro: emit a RemoteCodec specialization + a
 // msg_type_name specialization for type T at once.
 #define DEMO_DECLARE_REMOTE_CODEC(T)                                \
-    namespace demo { namespace runtime {                            \
+    namespace theia { namespace runtime {                           \
     template <>                                                     \
     struct RemoteCodec<T> {                                         \
         static constexpr uint16_t service_id = hash_msg_type_(#T);  \
@@ -82,4 +80,4 @@ typename std::enable_if<!has_remote_codec_<T>::value, uint16_t>::type
 encode_for_trace(const T&, uint8_t*, uint16_t) noexcept { return 0; }
 
 }  // namespace runtime
-}  // namespace demo
+}  // namespace theia

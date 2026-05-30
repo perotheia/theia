@@ -1,4 +1,4 @@
-// demo::runtime::GenStateM<Derived, StateT, DataT>
+// theia::runtime::GenStateM<Derived, StateT, DataT>
 //
 // C++17 take on Erlang's gen_statem (handle_event_function callback
 // mode). Modeled on up/otp/lib/stdlib/src/gen_statem.erl, layered on
@@ -65,7 +65,7 @@
 #include <utility>
 #include <vector>
 
-namespace demo {
+namespace theia {
 namespace runtime {
 
 // ---- EventResult -------------------------------------------------------
@@ -227,9 +227,9 @@ public:
             auto& h    = self->state();   // Holder&
             h.state = self->init(h.data);
             h.initialized = true;
-            auto& tr = ::demo::runtime::tracer_for(Derived::kNodeName);
+            auto& tr = ::theia::runtime::tracer_for(Derived::kNodeName);
             if (tr.enabled()) {
-                tr.emit(::demo::runtime::TraceEvent::StateTransition,
+                tr.emit(::theia::runtime::TraceEvent::StateTransition,
                         "<init>", /*corr=*/0, nullptr, 0);
             }
             self->on_enter(h.state, h.state, h.data);
@@ -237,6 +237,14 @@ public:
     }
 
 private:
+    // Suppress the GenServer OTP init/1 hook for FSM nodes. A GenStateM's
+    // `init(DataT&) -> StateT` is the FSM initial-state callback with a
+    // DIFFERENT signature, and it's run explicitly from start_statem()
+    // (enqueued so it lands after on_enter wiring). Letting
+    // GenServerBase::loop_ call GenServer::dispatch_init_ -> init(Holder&)
+    // would both mis-route (wrong arg type) and double-run. No-op here.
+    void dispatch_init_() override {}
+
     TimerService* timer_svc_{nullptr};
 };
 
@@ -254,29 +262,29 @@ void post_state_timeout_msg(GenStateM<Derived, StateT, DataT>& server,
 
 template <typename Derived, typename StateT, typename DataT, typename Msg>
 void post_event(GenStateM<Derived, StateT, DataT>& server, Msg msg) {
-    auto& tr = ::demo::runtime::tracer_for(Derived::kNodeName);
+    auto& tr = ::theia::runtime::tracer_for(Derived::kNodeName);
     uint32_t corr = tr.enabled()
-        ? ::demo::runtime::next_trace_corr_id() : 0;
+        ? ::theia::runtime::next_trace_corr_id() : 0;
     if (tr.enabled()) {
         uint8_t scratch[256];
-        uint16_t n = ::demo::runtime::encode_for_trace(
+        uint16_t n = ::theia::runtime::encode_for_trace(
             msg, scratch, static_cast<uint16_t>(sizeof(scratch)));
-        tr.emit(::demo::runtime::TraceEvent::Send,
-                ::demo::runtime::msg_type_name<Msg>(), corr, scratch, n);
+        tr.emit(::theia::runtime::TraceEvent::Send,
+                ::theia::runtime::msg_type_name<Msg>(), corr, scratch, n);
     }
     server.enqueue([m = std::move(msg), corr](GenServerBase* base) mutable {
         auto* self = static_cast<Derived*>(base);
         auto& h    = self->state();
-        auto& tr2  = ::demo::runtime::tracer_for(Derived::kNodeName);
-        const char* mname = ::demo::runtime::msg_type_name<Msg>();
+        auto& tr2  = ::theia::runtime::tracer_for(Derived::kNodeName);
+        const char* mname = ::theia::runtime::msg_type_name<Msg>();
 
         if (tr2.enabled()) {
             uint8_t scratch[256];
-            uint16_t n = ::demo::runtime::encode_for_trace(
+            uint16_t n = ::theia::runtime::encode_for_trace(
                 m, scratch, static_cast<uint16_t>(sizeof(scratch)));
-            tr2.emit(::demo::runtime::TraceEvent::Recv,  mname, corr,
+            tr2.emit(::theia::runtime::TraceEvent::Recv,  mname, corr,
                      scratch, n);
-            tr2.emit(::demo::runtime::TraceEvent::Dispatch, mname, corr,
+            tr2.emit(::theia::runtime::TraceEvent::Dispatch, mname, corr,
                      nullptr, 0);
         }
 
@@ -300,7 +308,7 @@ void post_event(GenStateM<Derived, StateT, DataT>& server, Msg msg) {
             h.expected_cookie++;
             h.state = r.new_state;
             if (tr2.enabled()) {
-                tr2.emit(::demo::runtime::TraceEvent::StateTransition,
+                tr2.emit(::theia::runtime::TraceEvent::StateTransition,
                          mname, corr, nullptr, 0);
             }
             while (!h.postponed.empty()) {
@@ -319,11 +327,11 @@ void post_event(GenStateM<Derived, StateT, DataT>& server, Msg msg) {
                               GenServerBase* base2) mutable {
                 auto* self2 = static_cast<Derived*>(base2);
                 auto& h2    = self2->state();
-                auto& tr3   = ::demo::runtime::tracer_for(
+                auto& tr3   = ::theia::runtime::tracer_for(
                     Derived::kNodeName);
-                const char* mn = ::demo::runtime::msg_type_name<Msg>();
+                const char* mn = ::theia::runtime::msg_type_name<Msg>();
                 if (tr3.enabled()) {
-                    tr3.emit(::demo::runtime::TraceEvent::Dispatch,
+                    tr3.emit(::theia::runtime::TraceEvent::Dispatch,
                              mn, corr_replay, nullptr, 0);
                 }
                 StateT before2 = h2.state;
@@ -339,7 +347,7 @@ void post_event(GenStateM<Derived, StateT, DataT>& server, Msg msg) {
                     h2.expected_cookie++;
                     h2.state = rr.new_state;
                     if (tr3.enabled()) {
-                        tr3.emit(::demo::runtime::TraceEvent::
+                        tr3.emit(::theia::runtime::TraceEvent::
                                      StateTransition,
                                  mn, corr_replay, nullptr, 0);
                     }
@@ -350,7 +358,7 @@ void post_event(GenStateM<Derived, StateT, DataT>& server, Msg msg) {
                     }
                 }
                 if (tr3.enabled()) {
-                    tr3.emit(::demo::runtime::TraceEvent::DispatchDone,
+                    tr3.emit(::theia::runtime::TraceEvent::DispatchDone,
                              mn, corr_replay, nullptr, 0);
                 }
             };
@@ -361,7 +369,7 @@ void post_event(GenStateM<Derived, StateT, DataT>& server, Msg msg) {
         case K::HaltWithError: {
             int code = (r.kind == K::HaltWithError) ? 1 : 0;
             if (tr2.enabled()) {
-                tr2.emit(::demo::runtime::TraceEvent::Terminate,
+                tr2.emit(::theia::runtime::TraceEvent::Terminate,
                          r.halt_reason.c_str(), corr, nullptr, 0);
             }
             self->terminate(r.halt_reason.c_str(), h);
@@ -372,7 +380,7 @@ void post_event(GenStateM<Derived, StateT, DataT>& server, Msg msg) {
         }
 
         if (tr2.enabled()) {
-            tr2.emit(::demo::runtime::TraceEvent::DispatchDone, mname,
+            tr2.emit(::theia::runtime::TraceEvent::DispatchDone, mname,
                      corr, nullptr, 0);
         }
     });
@@ -406,9 +414,9 @@ void post_state_timeout_msg(GenStateM<Derived, StateT, DataT>& server,
         if (cookie != h.expected_cookie) {
             return;   // stale timer — state moved on
         }
-        auto& tr2 = ::demo::runtime::tracer_for(Derived::kNodeName);
+        auto& tr2 = ::theia::runtime::tracer_for(Derived::kNodeName);
         if (tr2.enabled()) {
-            tr2.emit(::demo::runtime::TraceEvent::StateTimeout,
+            tr2.emit(::theia::runtime::TraceEvent::StateTimeout,
                      "<state_timeout>", /*corr=*/0, nullptr, 0);
         }
         StateTimeoutMsg<StateT> stm{armed_for, cookie};
@@ -431,7 +439,7 @@ void post_state_timeout_msg(GenStateM<Derived, StateT, DataT>& server,
             h.expected_cookie++;
             h.state = r.new_state;
             if (tr2.enabled()) {
-                tr2.emit(::demo::runtime::TraceEvent::StateTransition,
+                tr2.emit(::theia::runtime::TraceEvent::StateTransition,
                          "<state_timeout>", /*corr=*/0, nullptr, 0);
             }
             while (!h.postponed.empty()) {
@@ -464,4 +472,4 @@ void post_state_timeout_msg(GenStateM<Derived, StateT, DataT>& server,
 }
 
 }  // namespace runtime
-}  // namespace demo
+}  // namespace theia

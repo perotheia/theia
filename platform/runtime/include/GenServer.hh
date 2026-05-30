@@ -1,4 +1,4 @@
-// demo::runtime::GenServer<Derived, State>
+// theia::runtime::GenServer<Derived, State>
 //
 // C++14 take on Erlang's gen_server. Modeled directly on
 // up/otp/lib/stdlib/src/gen_server.erl:
@@ -11,17 +11,13 @@
 //     Act> the caller pattern-matches on (or runs through
 //     call_and_dispatch to hit the right handle_call_result overload).
 //   * cast(server, Req) is async fire-and-forget.
-//   * handle_info has TWO clauses, both "other messages" in OTP terms:
-//       - handle_info(const char*, State&) — internal string notes
-//         posted via post_info(). Default is a benign no-op; this is a
-//         deliberate in-process signal, not unrecognized traffic.
-//       - handle_info(const InfoMsg&, State&) — an inbound TIPC frame
-//         whose service_id matched NO register_cast/register_call entry
-//         (TipcMux fall-through). InfoMsg carries the raw bytes + sender
-//         attribution. The framework DEFAULT is a CRITICAL ERROR: for a
-//         normal node an unrouted message means the netgraph and the
-//         running wiring disagree. Only a node that legitimately handles
-//         arbitrary traffic (the test probe) overrides this clause.
+//   * handle_info(const char*, State&) — internal string notes posted
+//     via post_info() (timer loops, self-ticks). LOCAL-ONLY: `info` is an
+//     opaque in-process signal and never crosses the wire. Default is a
+//     benign no-op. (Wire-info — delivering an unrouted inbound frame as
+//     untyped bytes — was removed: cross-node traffic is exclusively
+//     typed cast/call with a registered RemoteCodec; an unrouted frame is
+//     dropped with a CRITICAL log in TipcMux, not delivered here.)
 //   * handle_call_result / handle_call_error / handle_call_timeout
 //     are the caller-side counterparts: when a node makes a call,
 //     it writes overloads to consume the result, and the framework
@@ -54,6 +50,7 @@
 #include <functional>
 #include <future>
 #include <memory>
+#include <type_traits>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -62,7 +59,7 @@
 #include <vector>
 
 // Codec for the supervisor→node control push (#386). Declared at global
-// scope (the macro opens demo::runtime itself) and here — not in an
+// scope (the macro opens theia::runtime itself) and here — not in an
 // app's _codecs.hh — because GenServer's base config handler below is
 // the universal receiver: every node that binds a config service
 // register_cast<>'s this type, so the codec belongs with the framework.
@@ -72,7 +69,7 @@ DEMO_DECLARE_REMOTE_CODEC(platform_runtime_LogLevelPush)
 // Same framework-universal codec rationale as LogLevelPush above.
 DEMO_DECLARE_REMOTE_CODEC(platform_runtime_TraceControlPush)
 
-namespace demo {
+namespace theia {
 namespace runtime {
 
 // ---- CallResult ----------------------------------------------------------
@@ -105,24 +102,12 @@ template <typename Reply, typename Server, typename Req, typename Act>
 RequestId<Reply, Act> send_request(
     Server&, Req, Act, std::shared_ptr<NotifyHook> = nullptr);
 
-// ---- InfoMsg -------------------------------------------------------------
-
-// An inbound TIPC frame that matched NO registered codec on the node it
-// was delivered to (TipcMux fall-through, see TipcMux.cc). Carries the
-// raw protobuf bytes plus enough header attribution for a handler to
-// decide what to do — the test probe decodes/forwards arbitrary traffic;
-// a normal node CRITICAL-ERRORs. The bytes point into the mux's recv
-// buffer and are only valid for the duration of the handle_info call, so
-// a handler that needs them later must copy.
-struct InfoMsg {
-    uint16_t       service_id   = 0;  // djb2_low16 of the sender's msg-type name
-    const uint8_t* data         = nullptr;
-    uint16_t       len          = 0;
-    uint32_t       dst_tipc_type = 0;  // the bound node this landed on
-    uint8_t        msg_type     = 0;   // GW_MSG_GEN_CAST | GW_MSG_GEN_CALL
-    uint32_t       corr_id      = 0;   // CALL correlation id (0 for CAST)
-    int            reply_fd     = -1;  // fd to reply on for a CALL; -1 for CAST
-};
+// Wire-info (the InfoMsg / handle_info(const InfoMsg&) fall-through path) was
+// removed: an unrouted inbound frame is no longer delivered as untyped bytes.
+// TipcMux now logs a CRITICAL and drops it (see TipcMux.cc). `info` is a
+// LOCAL-only opaque string (post_info → handle_info(const char*, State&));
+// it never crosses the wire. Cross-node traffic is exclusively typed cast /
+// call with a registered RemoteCodec.
 
 // ---- GenServerBase -------------------------------------------------------
 
@@ -188,28 +173,30 @@ public:
     // runs.
     void dispatch_info(const char* info) { dispatch_info_(info); }
 
-    // Public forwarder used by the TipcMux fall-through: an inbound frame
-    // that matched no registered codec is enqueued on this node, then
-    // delivered here on the node thread. Thunks through the virtual
-    // dispatch_unknown_ to Derived::handle_info(const InfoMsg&, State&).
-    void dispatch_unknown(const InfoMsg& m) { dispatch_unknown_(m); }
-
 protected:
     // Override in Derived (via GenServer<Derived, State>) to forward
     // a const-char* "info" message to the typed handle_info(...) on
     // Derived. The mailbox is type-erased so it can't do this directly.
     virtual void dispatch_info_(const char* info) = 0;
 
-    // Override in Derived to forward an unrouted inbound frame to the
-    // typed handle_info(const InfoMsg&, State&) on Derived.
-    virtual void dispatch_unknown_(const InfoMsg& m) = 0;
-
     // Override in Derived to call Derived::terminate(reason, state).
     // Default no-op so apps that don't need cleanup can skip it.
     virtual void dispatch_terminate_(const char* /*reason*/) {}
 
+    // Override in Derived to call Derived::init(state). Runs ONCE on the
+    // node's own thread before any mailbox item is handled — the OTP
+    // gen_server:init/1 callback. Default no-op; the GenServer<Derived,
+    // State> override forwards to Derived::init(state_) (which gen-app
+    // emits — empty by default — into every node's impl).
+    virtual void dispatch_init_() {}
+
 private:
     void loop_() {
+        // OTP init/1: post-construction startup hook, on the node thread,
+        // before the first message. A node bootstraps its work loop here
+        // (e.g. post_info(*this, ...)) — the items it enqueues land in the
+        // mailbox below in order.
+        dispatch_init_();
         while (true) {
             MailboxFn fn;
             {
@@ -270,33 +257,20 @@ public:
     // default otherwise. Same trick we use for handle_info default.
     void terminate(const char* /*reason*/, StateT& /*s*/) noexcept {}
 
+    // Default init is a no-op (OTP init/1). Derived shadows it with
+    //   void init(State& state);
+    // gen-app emits an init() body into every node's impl (empty by
+    // default, the bootstrap body for self-driving nodes). The default
+    // here keeps EXISTING (un-regenerated) FCs compiling against the new
+    // runtime — name-hiding picks Derived's init() once it's emitted.
+    void init(StateT& /*s*/) {}
+
     // ---- handle_info defaults -------------------------------------------
     //
     // String clause — internal post_info() notes. Benign no-op default;
     // a deliberate in-process signal is not an error. Derived may shadow
     // with void handle_info(const char*, State&).
     void handle_info(const char* /*info*/, StateT& /*s*/) noexcept {}
-
-    // Byte+sender clause — an inbound TIPC frame that matched no
-    // registered codec on this node (TipcMux fall-through). For a normal
-    // node this is a HARD invariant violation: the running wiring received
-    // a message the netgraph says it should never get, so trace
-    // attribution, routing, and the supervision model are all suspect.
-    // We log a CRITICAL and abort — the supervisor observes the crash and
-    // a human reconciles the .art/netgraph. A node that legitimately
-    // accepts arbitrary traffic (the test probe) shadows this overload
-    // with its own handle_info(const InfoMsg&, State&) and never reaches
-    // here.
-    [[noreturn]] void handle_info(const InfoMsg& m, StateT& /*s*/) {
-        std::fprintf(stderr,
-            "[%s] CRITICAL: unrouted inbound frame service_id=0x%04X "
-            "msg_type=0x%02X len=%u on node tipc=0x%08X — netgraph "
-            "consistency compromised (no register_cast/register_call "
-            "claimed this message). Aborting.\n",
-            Derived::kNodeName, m.service_id, m.msg_type, m.len,
-            m.dst_tipc_type);
-        std::abort();
-    }
 
     // ---- Config service: LogLevelPush (#386) ----------------------------
     //
@@ -312,11 +286,11 @@ public:
     // template), it never implements the handler.
     void handle_cast(const platform_runtime_LogLevelPush& push,
                      StateT& /*s*/) noexcept {
-        auto lvl = static_cast<platform::runtime::LogLevel>(push.level);
-        platform::runtime::process_logger().set_level(lvl);
+        auto lvl = static_cast<theia::runtime::LogLevel>(push.level);
+        theia::runtime::process_logger().set_level(lvl);
         std::fprintf(stderr, "[%s] log level -> %s (supervisor push)\n",
                      Derived::kNodeName,
-                     platform::runtime::log_level_name(lvl));
+                     theia::runtime::log_level_name(lvl));
     }
 
     // ---- Config service: TraceControlPush (#403) ------------------------
@@ -327,14 +301,14 @@ public:
     // register_cast<platform_runtime_TraceControlPush>'s it, the cast
     // lands here on the node thread, and we flip the node's Tracer kind
     // filter. The runtime TraceKind ordinals (TK_*) are aligned with
-    // demo::runtime::TraceKind, so it's a static_cast. enabled toggles the
+    // theia::runtime::TraceKind, so it's a static_cast. enabled toggles the
     // kind bit; an empty kind mask means "all kinds" (master on).
     void handle_cast(const platform_runtime_TraceControlPush& push,
                      StateT& /*s*/) noexcept {
-        auto& tr = ::demo::runtime::tracer_for(Derived::kNodeName);
+        auto& tr = ::theia::runtime::tracer_for(Derived::kNodeName);
         tr.enable(true);  // master on — the kind mask narrows from here
         tr.trace_enable_kind(
-            static_cast<::demo::runtime::TraceKind>(push.kind),
+            static_cast<::theia::runtime::TraceKind>(push.kind),
             push.enabled);
         std::fprintf(stderr,
             "[%s] trace kind %d -> %s (supervisor push)\n",
@@ -344,52 +318,49 @@ public:
 
 protected:
     void dispatch_info_(const char* info) override {
-        auto& tr = ::demo::runtime::tracer_for(Derived::kNodeName);
+        auto& tr = ::theia::runtime::tracer_for(Derived::kNodeName);
         if (tr.enabled()) {
-            tr.emit(::demo::runtime::TraceEvent::Info, info,
+            tr.emit(::theia::runtime::TraceEvent::Info, info,
                     /*corr_id=*/0, nullptr, 0);
         }
         static_cast<Derived*>(this)->handle_info(info, state_);
     }
-    void dispatch_unknown_(const InfoMsg& m) override {
-        // An unrouted inbound frame. Trace it as an Info event (raw bytes
-        // + corr) for the reporting nodes that have tracing on, then hand
-        // it to Derived's handle_info(const InfoMsg&, State&) IF Derived
-        // overrides it (the probe), else the framework CRITICAL default.
-        //
-        // We pick the target by SFINAE rather than plain overload
-        // resolution: a Derived that declares handle_info(const char*,…)
-        // (every gen-app node may) would otherwise name-HIDE the InfoMsg
-        // overload, and an unqualified call wouldn't compile. Detecting
-        // the override explicitly means nodes never need a `using`-decl.
-        auto& tr = ::demo::runtime::tracer_for(Derived::kNodeName);
-        if (tr.enabled()) {
-            tr.emit(::demo::runtime::TraceEvent::Info, "unrouted",
-                    m.corr_id, m.data, m.len);
-        }
-        dispatch_unknown_impl_<Derived>(m, 0);
-    }
-
-    // Derived overrides handle_info(const InfoMsg&, State&) → call it.
-    template <typename D>
-    auto dispatch_unknown_impl_(const InfoMsg& m, int)
-        -> decltype(std::declval<D&>().handle_info(m, std::declval<State&>()),
-                    void()) {
-        static_cast<D*>(this)->handle_info(m, state_);
-    }
-    // No override → the framework CRITICAL default (logs + aborts).
-    template <typename D>
-    void dispatch_unknown_impl_(const InfoMsg& m, ...) {
-        this->handle_info(m, state_);   // GenServer base [[noreturn]] default
-    }
     void dispatch_terminate_(const char* reason) override {
-        auto& tr = ::demo::runtime::tracer_for(Derived::kNodeName);
+        auto& tr = ::theia::runtime::tracer_for(Derived::kNodeName);
         if (tr.enabled()) {
-            tr.emit(::demo::runtime::TraceEvent::Terminate,
+            tr.emit(::theia::runtime::TraceEvent::Terminate,
                     reason, /*corr_id=*/0, nullptr, 0);
         }
         static_cast<Derived*>(this)->terminate(reason, state_);
     }
+
+    // OTP init/1: forward to Derived::init(state) on the node thread,
+    // once, before the first message (called from GenServerBase::loop_).
+    // gen-app emits Derived::init(State&) into every node's impl (empty
+    // by default), so this resolves to a real method.
+    //
+    // Guarded with `if constexpr`: a GenStateM-derived node's `init` has
+    // a DIFFERENT signature (init(DataT&) -> StateT, the FSM initial
+    // state) and is run from start_statem(), not here — GenStateM also
+    // overrides dispatch_init_ to no-op, but this base body is still
+    // instantiated (it's a virtual), so it must stay well-formed when
+    // Derived::init(State&) isn't callable.
+    void dispatch_init_() override {
+        // Detect a callable `derived.init(StateT&)` via a SFINAE call
+        // expression (robust to overloaded init names, unlike taking
+        // &Derived::init). False for GenStateM's init(DataT&) -> StateT.
+        if constexpr (_has_state_init<Derived>(0)) {
+            static_cast<Derived*>(this)->init(state_);
+        }
+    }
+
+    template <typename D>
+    static constexpr auto _has_state_init(int)
+        -> decltype(std::declval<D&>().init(std::declval<StateT&>()), true) {
+        return true;
+    }
+    template <typename D>
+    static constexpr bool _has_state_init(...) { return false; }
 
     // Reporting gate (#401): tell this node-type's Tracer whether it's a
     // reporting node, so emit() only submits to the collector bus for
@@ -406,7 +377,7 @@ protected:
     template <typename D>
     static bool reporting_of_(...) { return false; }
     void mark_reporting_() {
-        ::demo::runtime::tracer_for(Derived::kNodeName)
+        ::theia::runtime::tracer_for(Derived::kNodeName)
             .set_reporting(reporting_of_<Derived>(0));
     }
 
@@ -428,37 +399,37 @@ protected:
 // pb_encode is only run when the tracer is enabled.
 template <typename Server, typename Msg>
 void cast(Server& server, Msg msg) {
-    auto& tr = ::demo::runtime::tracer_for(Server::kNodeName);
+    auto& tr = ::theia::runtime::tracer_for(Server::kNodeName);
     // Synthetic correlation id pairs Send (producer side) with Recv/
     // Dispatch/DispatchDone (consumer side) for this one cast. The
     // lambda captures `corr` so the consumer-side events use the same id.
     uint32_t corr = tr.enabled()
-        ? ::demo::runtime::next_trace_corr_id() : 0;
+        ? ::theia::runtime::next_trace_corr_id() : 0;
     if (tr.enabled()) {
         uint8_t scratch[256];
-        uint16_t n = ::demo::runtime::encode_for_trace(msg, scratch,
+        uint16_t n = ::theia::runtime::encode_for_trace(msg, scratch,
             static_cast<uint16_t>(sizeof(scratch)));
-        tr.emit(::demo::runtime::TraceEvent::Send,
-                ::demo::runtime::msg_type_name<Msg>(), corr, scratch, n);
+        tr.emit(::theia::runtime::TraceEvent::Send,
+                ::theia::runtime::msg_type_name<Msg>(), corr, scratch, n);
     }
     server.enqueue([m = std::move(msg), corr](GenServerBase* base) {
         auto* self = static_cast<Server*>(base);
-        auto& tr2 = ::demo::runtime::tracer_for(Server::kNodeName);
+        auto& tr2 = ::theia::runtime::tracer_for(Server::kNodeName);
         if (tr2.enabled()) {
             uint8_t scratch[256];
-            uint16_t n = ::demo::runtime::encode_for_trace(m, scratch,
+            uint16_t n = ::theia::runtime::encode_for_trace(m, scratch,
                 static_cast<uint16_t>(sizeof(scratch)));
-            tr2.emit(::demo::runtime::TraceEvent::Recv,
-                     ::demo::runtime::msg_type_name<Msg>(),
+            tr2.emit(::theia::runtime::TraceEvent::Recv,
+                     ::theia::runtime::msg_type_name<Msg>(),
                      corr, scratch, n);
-            tr2.emit(::demo::runtime::TraceEvent::Dispatch,
-                     ::demo::runtime::msg_type_name<Msg>(),
+            tr2.emit(::theia::runtime::TraceEvent::Dispatch,
+                     ::theia::runtime::msg_type_name<Msg>(),
                      corr, nullptr, 0);
         }
         self->handle_cast(m, self->state());
         if (tr2.enabled()) {
-            tr2.emit(::demo::runtime::TraceEvent::DispatchDone,
-                     ::demo::runtime::msg_type_name<Msg>(),
+            tr2.emit(::theia::runtime::TraceEvent::DispatchDone,
+                     ::theia::runtime::msg_type_name<Msg>(),
                      corr, nullptr, 0);
         }
     });
@@ -539,15 +510,15 @@ template <typename Reply, typename Server, typename Req, typename Act>
 RequestId<Reply, Act> send_request(
     Server& server, Req req, Act act,
     std::shared_ptr<NotifyHook> hook) {
-    auto& tr = ::demo::runtime::tracer_for(Server::kNodeName);
+    auto& tr = ::theia::runtime::tracer_for(Server::kNodeName);
     uint32_t corr = tr.enabled()
-        ? ::demo::runtime::next_trace_corr_id() : 0;
+        ? ::theia::runtime::next_trace_corr_id() : 0;
     if (tr.enabled()) {
         uint8_t scratch[256];
-        uint16_t n = ::demo::runtime::encode_for_trace(
+        uint16_t n = ::theia::runtime::encode_for_trace(
             req, scratch, static_cast<uint16_t>(sizeof(scratch)));
-        tr.emit(::demo::runtime::TraceEvent::Send,
-                ::demo::runtime::msg_type_name<Req>(), corr, scratch, n);
+        tr.emit(::theia::runtime::TraceEvent::Send,
+                ::theia::runtime::msg_type_name<Req>(), corr, scratch, n);
     }
     auto promise = std::make_shared<std::promise<Reply>>();
     auto future  = promise->get_future();
@@ -555,23 +526,23 @@ RequestId<Reply, Act> send_request(
                         GenServerBase* base) {
         try {
             auto* self = static_cast<Server*>(base);
-            auto& tr2 = ::demo::runtime::tracer_for(Server::kNodeName);
+            auto& tr2 = ::theia::runtime::tracer_for(Server::kNodeName);
             if (tr2.enabled()) {
                 uint8_t scratch[256];
-                uint16_t n = ::demo::runtime::encode_for_trace(
+                uint16_t n = ::theia::runtime::encode_for_trace(
                     req, scratch,
                     static_cast<uint16_t>(sizeof(scratch)));
-                tr2.emit(::demo::runtime::TraceEvent::Recv,
-                         ::demo::runtime::msg_type_name<Req>(),
+                tr2.emit(::theia::runtime::TraceEvent::Recv,
+                         ::theia::runtime::msg_type_name<Req>(),
                          corr, scratch, n);
-                tr2.emit(::demo::runtime::TraceEvent::Dispatch,
-                         ::demo::runtime::msg_type_name<Req>(),
+                tr2.emit(::theia::runtime::TraceEvent::Dispatch,
+                         ::theia::runtime::msg_type_name<Req>(),
                          corr, nullptr, 0);
             }
             Reply r = self->handle_call(req, self->state());
             if (tr2.enabled()) {
-                tr2.emit(::demo::runtime::TraceEvent::DispatchDone,
-                         ::demo::runtime::msg_type_name<Req>(),
+                tr2.emit(::theia::runtime::TraceEvent::DispatchDone,
+                         ::theia::runtime::msg_type_name<Req>(),
                          corr, nullptr, 0);
             }
             promise->set_value(std::move(r));
@@ -724,7 +695,7 @@ public:
     template <typename Server, typename Req>
     void send_request(Server& server, Req req, Act act) {
         ids_.push_back(
-            ::demo::runtime::send_request<Reply>(
+            ::theia::runtime::send_request<Reply>(
                 server, std::move(req), std::move(act), hook_));
     }
 
@@ -828,25 +799,25 @@ CallResult<Reply, Act> call(Server& server,
                              Req req,
                              Act act,
                              int timeout_ms) {
-    auto& tr = ::demo::runtime::tracer_for(Server::kNodeName);
+    auto& tr = ::theia::runtime::tracer_for(Server::kNodeName);
     // CallWait/CallResume pair the sync-caller's block on the future
     // with its unblock. The collector reads the trace stream and
     // computes wait time = resume.ts - wait.ts. Independent of the
     // send_request's own Send/Recv corr_id (that pair traces the
     // request lifecycle; this pair traces the CALLER's wait).
     uint32_t wait_corr = tr.enabled()
-        ? ::demo::runtime::next_trace_corr_id() : 0;
+        ? ::theia::runtime::next_trace_corr_id() : 0;
     if (tr.enabled()) {
-        tr.emit(::demo::runtime::TraceEvent::CallWait,
-                ::demo::runtime::msg_type_name<Req>(),
+        tr.emit(::theia::runtime::TraceEvent::CallWait,
+                ::theia::runtime::msg_type_name<Req>(),
                 wait_corr, nullptr, 0);
     }
     auto result = receive_response(
         send_request<Reply>(server, std::move(req), std::move(act)),
         timeout_ms);
     if (tr.enabled()) {
-        tr.emit(::demo::runtime::TraceEvent::CallResume,
-                ::demo::runtime::msg_type_name<Req>(),
+        tr.emit(::theia::runtime::TraceEvent::CallResume,
+                ::theia::runtime::msg_type_name<Req>(),
                 wait_corr, nullptr, 0);
     }
     return result;
@@ -882,4 +853,4 @@ void call_and_dispatch(Caller& caller,
 }
 
 }  // namespace runtime
-}  // namespace demo
+}  // namespace theia

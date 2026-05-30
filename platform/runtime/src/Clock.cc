@@ -1,6 +1,6 @@
 #include "Clock.hh"
 
-namespace platform {
+namespace theia {
 namespace runtime {
 
 Clock::time_point SteadyClock::now() const noexcept {
@@ -12,4 +12,4 @@ std::shared_ptr<Clock> MakeSteadyClock() noexcept {
 }
 
 }  // namespace runtime
-}  // namespace platform
+}  // namespace theia

@@ -1,4 +1,4 @@
-// platform::runtime::Timer
+// theia::runtime::Timer
 //
 // Periodic callback scheduler. The app asks the runtime for a Timer,
 // registers a callback + period, then forgets about it; the runtime
@@ -11,7 +11,7 @@
 #include <functional>
 #include <memory>
 
-namespace platform {
+namespace theia {
 namespace runtime {
 
 class Timer {
@@ -42,4 +42,4 @@ class TimerFactoryInterface {
 std::shared_ptr<TimerFactoryInterface> MakeThreadTimerFactory() noexcept;
 
 }  // namespace runtime
-}  // namespace platform
+}  // namespace theia

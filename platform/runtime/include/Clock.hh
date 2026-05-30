@@ -1,4 +1,4 @@
-// platform::runtime::Clock
+// theia::runtime::Clock
 //
 // Time source the app uses to make timing decisions. Wrapped in an
 // interface so tests can substitute a MockClock that advances on demand.
@@ -8,7 +8,7 @@
 #include <chrono>
 #include <memory>
 
-namespace platform {
+namespace theia {
 namespace runtime {
 
 class Clock {
@@ -32,4 +32,4 @@ class SteadyClock : public Clock {
 std::shared_ptr<Clock> MakeSteadyClock() noexcept;
 
 }  // namespace runtime
-}  // namespace platform
+}  // namespace theia

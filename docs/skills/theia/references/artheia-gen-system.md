@@ -91,14 +91,20 @@ load-bearing; others you'll meet:
 | command | purpose |
 | --- | --- |
 | `parse` | full-tree resolve (validation) — `artheia parse system/system.art` |
-| `gen-netgraph` / `gen-host-netgraph` | symbolic port → TIPC LUT |
-| `gen-proto` / `gen-proto-package` / `gen-manifest-proto` | `.proto` emission from `.art` |
-| `gen-trace-decoder-subset` | per-rig trace-decoder `.cc` |
+| `gen-netgraph` | nodes + compositions → JSON netgraph (symbolic port → TIPC LUT) |
+| `gen-proto` | `.proto` emission from `.art` (one file per message; the supervisor's CMake re-runs it for its standalone proto) |
+| `gen-manifest` | system `.art` → the FC manifest **Python** module (`services/manifest/service.py`); not a `.proto` |
+| `gen-app` | the C++ app scaffold (lib + main + impl) — the single C++-from-`.art` path |
 | `gen-rig` | bootstrap a vendor `rig.py` from a top-level `.art` |
 | `audit-manifest` | `.art` ↔ `rig.py` drift check |
 | `rig-deps` | the JSON the Bazel rig extension consumes |
 | `gen-etcd` | etcd seed schema for all node params |
-| `gen-cpp-stubs` | C++ callback-style header stubs |
+
+Retired (do not look for them): `gen-host-netgraph` (use `gen-netgraph`),
+`gen-proto-package` (gen-app emits per-package `.proto` internally),
+`gen-cpp-stubs` (conflicted with `gen-app`, which emits the
+GenServer/GenStateM daemon directly), `gen-trace-decoder-subset` (unused; the
+trace decoder is built as a dependency).
 
 For the AUTOSAR PSP-side generators (`gen-can-codec`,
 `gen-fibex-codec`, `gen-psp-netgraph`, etc.), see

@@ -583,7 +583,13 @@ resolved on the spot; otherwise they appear with `"unresolved": true`.
 The seed schema described in §7. Flat dict keyed by etcd path; one entry
 per param across all nodes.
 
-### `artheia gen-cpp-stubs`
+### `artheia gen-cpp-stubs` — RETIRED
+
+> **Removed.** `gen-cpp-stubs` conflicted with `gen-app`, which now emits the
+> GenServer / GenStateM daemon (including the statem `StateMBase`) directly
+> from the same `.art`. There is a single C++-from-`.art` path:
+> `artheia gen-app --kind fc`. The section below is kept for historical
+> context only; the command no longer exists.
 
 Callback-style free-function header stubs, one file per node. No classes,
 no inheritance, no run loop. The runtime target for Artheia is C++; the

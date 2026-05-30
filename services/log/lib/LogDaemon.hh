@@ -12,6 +12,13 @@
 #include "Log.hh"      // sibling — per-FC ContextLogger + kLogTag
 #include "log_codecs.hh"   // FC-wide inbound RemoteCodecs (#387)
 #include "system/services/log/log.pb.h"
+// State held by the daemon — FIELDS are APP-OWNED (node behaviour, not
+// derived from the .art), so the struct lives in a WRITE-ONCE impl header
+// (seeded empty, never clobbered without --force) that the user fills in.
+// Included at GLOBAL scope (the header opens its own `namespace
+// ara::log`) so it isn't nested under this file's
+// namespace block — bound as the GenServer State type below.
+#include "impl/LogDaemon_state.hh"
 
 #include <algorithm>
 #include <cstdint>
@@ -30,9 +37,9 @@ namespace ara::log {
 
 // Local-namespace aliases over the nanopb C structs. The nanopb
 // generator prefixes types with the libc-safe proto package
-// (services_services_log_*); aliasing them here keeps callers'
+// (system_services_log_*); aliasing them here keeps callers'
 // signatures readable.
-using LogRecord = services_services_log_LogRecord;
+using LogRecord = system_services_log_LogRecord;
 
 
 
@@ -41,15 +48,7 @@ using LogRecord = services_services_log_LogRecord;
 // gRPC. Subscribers MUST be best-effort.
 
 
-// State held by the daemon — kept minimal; per-handler scratch
-// goes in impl. Future iterations push more here once the FC has
-// real persistent state needs.
-struct LogDaemonState {
-    
-    int  reserved{0};
-};
-
-class LogDaemon : public demo::runtime::GenServer<LogDaemon, LogDaemonState> {
+class LogDaemon : public ::theia::runtime::GenServer<LogDaemon, LogDaemonState> {
 public:
     static constexpr const char* kNodeName = "log_daemon";
     static constexpr uint32_t kTipcType     = 0x80010003u;
@@ -68,7 +67,7 @@ public:
     // overload by name, so register_cast<LogLevelPush> wouldn't
     // resolve. This using-decl keeps both visible; overload resolution
     // then picks the right one per message type.
-    using demo::runtime::GenServer<LogDaemon, LogDaemonState>::handle_cast;
+    using ::theia::runtime::GenServer<LogDaemon, LogDaemonState>::handle_cast;
 
     // ---- Trace config (reporting=true only) -----------------------
     //
@@ -82,15 +81,15 @@ public:
     // consults the same filter inside Tracer; non-listed types are
     // dropped on the disabled fast path.
     void trace_enable(const char* msg_type, bool enabled) {
-        ::demo::runtime::tracer_for(kNodeName).trace_enable(
+        ::theia::runtime::tracer_for(kNodeName).trace_enable(
             msg_type, enabled);
     }
     bool trace_enabled(const char* msg_type) const {
-        return ::demo::runtime::tracer_for(kNodeName)
+        return ::theia::runtime::tracer_for(kNodeName)
             .trace_filter_passes(msg_type);
     }
     void trace_clear_all() {
-        ::demo::runtime::tracer_for(kNodeName).trace_clear_all();
+        ::theia::runtime::tracer_for(kNodeName).trace_clear_all();
     }
 
 
@@ -99,19 +98,15 @@ public:
 
     // ---- GenServer plumbing: terminate default
     //
-    // handle_info is NOT declared here on purpose. The GenServer base
-    // provides both clauses:
-    //   * handle_info(const char*, State&) — benign no-op for post_info().
-    //   * handle_info(const InfoMsg&, State&) — an inbound TIPC frame that
-    //     matched no register_cast/register_call: the base default is a
-    //     CRITICAL ERROR (an unrouted message ⇒ the netgraph and the
-    //     running wiring disagree). A node that legitimately handles
-    //     arbitrary traffic (the test probe) shadows the InfoMsg clause in
-    //     its impl; a normal FC node must NOT — letting an unknown message
-    //     through silently is exactly the bug this guards against.
     // terminate keeps an inline no-op default; impl may shadow it.
+    //
+    // There is NO handle_info(const InfoMsg&) clause: the wire-info path
+    // was removed. An inbound TIPC frame that matched no register_cast/
+    // register_call is dropped with a CRITICAL log in TipcMux — never
+    // delivered as untyped bytes. Cross-node traffic is exclusively typed
+    // cast/call. The only handle_info is the LOCAL string clause below
+    // (post_info / self-tick).
     void terminate(const char* /*reason*/, LogDaemonState& /*s*/) noexcept {}
-
 
     // ---- handle_cast / handle_call — declared here, body in impl
     //
@@ -124,6 +119,22 @@ public:
     void handle_cast(const LogRecord& msg, LogDaemonState& s);
 
 
+
+    // ---- OTP init/1 — body in impl (LogDaemon_handlers.cc) ----------
+    //
+    // Called ONCE by the runtime on this node's thread after start(),
+    // before the first mailbox item (GenServer::dispatch_init_). A
+    // self-driving node bootstraps its work loop here (e.g.
+    // ::theia::runtime::post_info(*this, "tick")); a passive node leaves it
+    // empty. Emitted for every node so the hook is always visible.
+    void init(LogDaemonState& s);
+
+    // ---- string handle_info — body in impl ----------------------------
+    //
+    // The post_info()/send_after() string-message path (timer loops,
+    // internal ticks). LOCAL-ONLY opaque signal — never crosses the wire.
+    // Declared so a node can override the GenServer base no-op in its impl.
+    void handle_info(const char* info, LogDaemonState& s);
 
     // ---- send helpers — bodies in impl (the broadcast fan-out)
 

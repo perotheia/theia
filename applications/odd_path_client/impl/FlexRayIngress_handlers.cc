@@ -161,7 +161,11 @@ void FlexRayIngress::handle_cast(const BV2_Linien_Ego_Doppel& /*msg*/,
                  kNodeName);
 }
 
-
-
+// OTP init/1 + local string handle_info — empty (this node is driven by
+// inbound FlexRay receiver-port casts, no startup work or self-tick).
+// Present to satisfy the lib decls gen-app emits for every node.
+void FlexRayIngress::init(FlexRayIngressState& /*s*/) {}
+void FlexRayIngress::handle_info(const char* /*info*/,
+                                 FlexRayIngressState& /*s*/) {}
 
 }  // namespace ara::odd_path_monitor

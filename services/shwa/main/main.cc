@@ -42,12 +42,12 @@ int main() {
     // push (#386) via process_logger().set_level on the node thread.
     auto logger = MakeContextLogger();
     if (const char* lvl = std::getenv("THEIA_LOG_LEVEL")) {
-        logger->set_level(::platform::runtime::parse_log_level(lvl));
+        logger->set_level(::theia::runtime::parse_log_level(lvl));
     }
-    ::platform::runtime::set_process_logger(logger);
+    ::theia::runtime::set_process_logger(logger);
     (void)logger;  // available for user handlers via RuntimeContext
 
-    demo::runtime::TimerService timers;
+    theia::runtime::TimerService timers;
     (void)timers;  // wired into the daemon if it needs send_after
 
     // Config-service receiver (#386). A reporting node binds its TIPC
@@ -55,7 +55,7 @@ int main() {
     // lands in GenServer's base handle_cast(LogLevelPush) on the node
     // thread. Same standard GwMessageHeader path as any app message —
     // no bespoke control frame.
-    demo::runtime::TipcMux config_mux;
+    theia::runtime::TipcMux config_mux;
 
 
     ShwaDaemon shwa_daemon;

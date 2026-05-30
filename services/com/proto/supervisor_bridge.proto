@@ -73,7 +73,7 @@ message GetTraceConfigCall {}
 // Encode is host-side: the test builds `payload` with the standard
 // Python protobuf lib (SmRequest(...).SerializeToString()), wire-
 // identical to nanopb on-target. `msg_type` is the nanopb C type name
-// (e.g. "services_services_sm_SmRequest") so its djb2 service_id
+// (e.g. "system_services_sm_SmRequest") so its djb2 service_id
 // matches what the target node's register_cast/register_call computed.
 // `src` is the impersonated sender name (trace attribution only;
 // routing is by the held socket, like real port→node routing).
@@ -176,7 +176,7 @@ service SupervisorView {
 // ---------------------------------------------------------------------------
 
 // One trace record observed at the log[trace] fanout. Mirrors the
-// services_services_log_TraceRecord nanopb struct produced by the FC
+// system_services_log_TraceRecord nanopb struct produced by the FC
 // runtime (platform/runtime/include/Tracer.hh emits it).
 //
 // FIELD NUMBERS MUST TRACK log.proto EXACTLY — both stacks read the
@@ -186,7 +186,7 @@ service SupervisorView {
 // `kind` is a plain uint32 here, NOT a redeclared enum: don't duplicate
 // the enum decl across stacks. Proto enums varint-encode identically to
 // uint32, so the wire is byte-compatible; com casts to/from the
-// services_services_log_TraceKind value at the boundary. The .art-derived
+// system_services_log_TraceKind value at the boundary. The .art-derived
 // log.proto holds the single source-of-truth enum.
 message TraceRecord {
     string node_name = 1;   // emitting node = src (e.g. "SmDaemon")

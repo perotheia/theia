@@ -1,0 +1,66 @@
+// User handler bodies for ObserverNode.
+//
+// Polls CounterNode.Get every 200ms (cross-PROCESS call — Observer is its
+// own process; Counter lives in P1). Migrated from the retired
+// demo/nodes/observer_node.{hh,tcc} onto the gen-app --kind fc shape —
+// the call goes through the generated netgraph RemoteRef (peer address
+// from the cluster connect observer.counter_call -> counter.srv); timers
+// via process_timers(), logger via process_logger().
+
+#include "lib/ObserverNode.hh"
+#include "lib/ObserverNode_netgraph.hh"   // netgraph::CounterNodeRef
+
+#include "Logger.hh"
+#include "TimerService.hh"
+
+#include <cstring>
+#include <string>
+
+namespace demo {
+
+namespace {
+struct ObserverAct {
+    uint32_t request_id = 0;
+};
+}
+
+// OTP init/1: start the poll loop (was kick_off()).
+void ObserverNode::init(ObserverNodeState& /*s*/) {
+    theia::runtime::post_info(*this, "poll");
+}
+
+void ObserverNode::handle_info(const char* info, ObserverNodeState& s) {
+    if (std::strcmp(info, "poll") != 0) return;
+
+    // One RemoteRef for the node's lifetime would be ideal; the demo
+    // reconnects per poll (low frequency) to keep the handler self-
+    // contained. connect() is idempotent-cheap for a live peer.
+    demo::netgraph::CounterNodeRef counter;
+    if (counter.connect(/*timeout_ms=*/500)) {
+        ObserverAct act{static_cast<uint32_t>(++s.polls_issued)};
+        auto r = theia::runtime::call<GetReply>(counter, Get{}, act,
+                                               /*timeout_ms=*/500);
+        switch (r.tag) {
+            case theia::runtime::CallTag::Reply:
+                s.last_value = r.reply.value;
+                ++s.replies_ok;
+                ::theia::runtime::process_logger().info(
+                    "[observer] poll #" + std::to_string(r.act.request_id) +
+                    " value=" + std::to_string(r.reply.value));
+                break;
+            case theia::runtime::CallTag::Timeout:
+                ::theia::runtime::process_logger().error(
+                    "[observer] timeout req_id=" +
+                    std::to_string(r.act.request_id));
+                break;
+            case theia::runtime::CallTag::Error:
+                ::theia::runtime::process_logger().error(
+                    std::string("[observer] error: ") + r.error);
+                break;
+        }
+    }
+    theia::runtime::send_after(theia::runtime::process_timers(), 200, *this,
+                              "poll");
+}
+
+}  // namespace demo

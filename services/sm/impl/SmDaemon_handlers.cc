@@ -32,7 +32,7 @@ void SmDaemon::on_enter(SmDaemonState new_s,
     // because the .art's statem block declared `data SmStateMsg`). So
     // mutating d here updates the broadcast payload + the FSM's
     // persistent data in one move.
-    d.state = static_cast<services_services_sm_SmState>(new_s);
+    d.state = static_cast<system_services_sm_SmState>(new_s);
     d.ts_ns = now_ns_();
 
     // Diagnostic — the supervisor's per-child log capture surfaces
@@ -63,15 +63,15 @@ void SmDaemon::on_enter(SmDaemonState new_s,
 // stderr log so misuse is observable.
 SmEmpty SmDaemon::handle_call(
         const SmRequest& req,
-        demo::runtime::GenStateMHolder<SmDaemonState, SmDaemonData>& /*h*/) {
+        theia::runtime::GenStateMHolder<SmDaemonState, SmDaemonData>& /*h*/) {
     switch (req.target) {
-    case services_services_sm_SmState_SHUTDOWN:
-        demo::runtime::post_event(*this, ShutdownRequest{});
+    case system_services_sm_SmState_SmState_SHUTDOWN:
+        theia::runtime::post_event(*this, ShutdownRequest{});
         break;
-    case services_services_sm_SmState_UPDATE:
-        demo::runtime::post_event(*this, UpdateRequest{});
+    case system_services_sm_SmState_SmState_UPDATE:
+        theia::runtime::post_event(*this, UpdateRequest{});
         break;
-    case services_services_sm_SmState_RUNNING:
+    case system_services_sm_SmState_SmState_RUNNING:
         std::fprintf(stderr,
             "[%s] RequestMode(RUNNING) — RUNNING is reached via "
             "internal events; request ignored\n", kNodeName);

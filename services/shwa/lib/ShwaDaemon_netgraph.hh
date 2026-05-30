@@ -30,7 +30,7 @@
 
 #pragma once
 
-#include "NodeRef.hh"   // demo::runtime::TipcAddr + cast(Daemon&, Msg, TipcAddr)
+#include "NodeRef.hh"   // theia::runtime::TipcAddr + cast(Daemon&, Msg, TipcAddr)
 
 namespace ara::shwa::netgraph {
 

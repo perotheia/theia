@@ -16,6 +16,17 @@
 namespace ara::ucm {
 
 
+// ---- OTP init/1 — runs once on the node thread after start(), before
+//      the first message. Bootstrap a self-driving node's work loop here
+//      (e.g. ::theia::runtime::post_info(*this, "tick")); leave empty for a
+//      passive node. State fields live in impl/UcmDaemon_state.hh.
+void UcmDaemon::init(UcmDaemonState& /*s*/) {
+}
+
+// ---- string handle_info — the post_info()/send_after() tick path.
+void UcmDaemon::handle_info(const char* /*info*/, UcmDaemonState& /*s*/) {
+}
+
 
 
 

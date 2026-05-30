@@ -1,11 +1,16 @@
 """Robot library for the FC regen-stability selftest.
 
-The contract: every committed FC under services/<short>/{lib,main,impl}
-MUST match what `artheia gen-app --kind fc` emits when run against the
-spec at services/<short>/system/<short>/package.art. Hand-edits to
-generated files (lib/, main/, and the BUILD.bazel in impl/) are
-forbidden — they cause silent drift and break the gen → build
-dependency that the rest of the toolchain assumes.
+The contract: every committed FC's {lib,main,impl} MUST match what
+`artheia gen-app --kind fc` emits when run against its `.art` spec.
+Hand-edits to generated files (lib/, main/, and the BUILD.bazel in
+impl/) are forbidden — they cause silent drift and break the gen →
+build dependency that the rest of the toolchain assumes.
+
+gen-app is path-agnostic: an FC can live ANYWHERE (services/, demo/,
+platform/, applications/), and the generated cross-slice Bazel labels
+are derived from --out. This harness mirrors that — each FC carries an
+explicit out-path (and optional --composition), NOT a hardcoded
+services/<short> shape.
 
 This test regenerates each FC into /tmp, diff'ing every lib + main
 file (including BUILD.bazel) byte-for-byte against the in-tree
@@ -13,32 +18,71 @@ committed version. The impl/<Daemon>_handlers.cc file is excluded
 from the diff (it's user-owned business logic), but impl/BUILD.bazel
 IS checked — it carries no business logic.
 
-Drives all 5 FCs that exist today: sm, com, per, ucm, log.
+Drives the daemon FCs (sm, com, per, ucm, log) AND the non-services
+FCs (the demo compositions, the gateway, odd_path_client) — proving
+gen-app stays byte-stable regardless of where the FC lives.
 """
 from __future__ import annotations
 
 import os
 import shutil
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 from robot.api.deco import keyword, library
 
 
-# FCs that should regenerate byte-identically. Each entry is
-# (short, spec_path, namespace). spec_path is the .art that
-# `artheia gen-app` should be invoked against.
+@dataclass(frozen=True)
+class FcSpec:
+    """One FC the regen-stability contract covers.
+
+    short:       test key (also the gen-app fc-short for services FCs).
+    spec:        the .art passed to gen-app (workspace-relative).
+    ns:          --ns C++ namespace.
+    out:         --out tree, workspace-relative. The committed FC lives
+                 here (or here/<composition> when composition is set —
+                 gen-app appends it verbatim). NOT assumed to be
+                 services/<short>; an FC lives anywhere.
+    composition: --composition for a multi-composition spec (the demo);
+                 None for a single-app FC.
+    """
+    short: str
+    spec: str
+    ns: str
+    out: str
+    composition: Optional[str] = None
+
+    @property
+    def in_tree(self) -> str:
+        """The committed FC directory, workspace-relative."""
+        return f"{self.out}/{self.composition}" if self.composition else self.out
+
+
+# FCs that should regenerate byte-identically. gen-app derives its
+# cross-slice Bazel labels from --out, so the in-tree location is the
+# single source of truth — services/ is no longer privileged.
 FC_SPECS = [
-    # The 6 daemon FCs colocate spec with impl at
-    # services/<short>/system/<short>/package.art (the //system tree
-    # aggregates them via symlink). The log FC spec carries BOTH the
-    # LogDaemon (syslog sink) and TraceCollector (trace fan-out) nodes in
-    # one package.
-    ("sm",  "services/sm/system/sm/package.art",   "ara::sm"),
-    ("com", "services/com/system/com/package.art", "ara::com"),
-    ("per", "services/per/system/per/package.art", "ara::per"),
-    ("ucm", "services/ucm/system/ucm/package.art", "ara::ucm"),
-    ("log", "services/log/system/log/package.art", "ara::log"),
+    # Daemon FCs under services/. The log FC spec carries BOTH the
+    # LogDaemon (syslog sink) and TraceCollector (trace fan-out) nodes.
+    FcSpec("sm",  "services/sm/system/sm/package.art",   "ara::sm",  "services/sm"),
+    FcSpec("com", "services/com/system/com/package.art", "ara::com", "services/com"),
+    FcSpec("per", "services/per/system/per/package.art", "ara::per", "services/per"),
+    FcSpec("ucm", "services/ucm/system/ucm/package.art", "ara::ucm", "services/ucm"),
+    FcSpec("log", "services/log/system/log/package.art", "ara::log", "services/log"),
+    # Non-services FCs — same generator, different homes. These prove
+    # gen-app's path-agnostic label derivation (//<out>/lib:<short>_lib).
+    # The demo is one spec with three process-compositions; each is its
+    # own app dir via --composition (appended to --out verbatim).
+    FcSpec("demo_p1", "demo/system/demo/component.art", "demo", "demo", "Demo3WayP1"),
+    FcSpec("demo_p2", "demo/system/demo/component.art", "demo", "demo", "Demo3WayP2"),
+    FcSpec("demo_p3", "demo/system/demo/component.art", "demo", "demo", "Demo3WayP3"),
+    FcSpec("gateway", "platform/gateway/system/package.art",
+           "ara::gateway", "platform/gateway"),
+    FcSpec("odd_path",
+           "vendor/odd_path_monitor/system/odd_path_monitor/component.art",
+           "ara::odd_path_monitor", "applications/odd_path_client"),
 ]
 
 
@@ -63,28 +107,39 @@ class FcRegenLib:
         impl/BUILD.bazel against the in-tree committed version.
         impl/<Daemon>_handlers.cc is excluded (user-owned)."""
         assert self._workspace is not None
-        spec_path = next(
-            (s, n) for k, s, n in FC_SPECS if k == short
-        )
-        spec, ns = spec_path
+        fc = next((f for f in FC_SPECS if f.short == short), None)
+        if fc is None:
+            raise AssertionError(f"unknown FC short {short!r}")
 
         scratch = Path("/tmp") / f"fc_regen_{short}"
         if scratch.exists():
             shutil.rmtree(scratch)
         scratch.mkdir(parents=True)
 
+        # The cross-slice Bazel labels gen-app emits are derived from the
+        # --out STRING (//<out>/lib:<short>_lib), so to reproduce the
+        # committed FC byte-for-byte we must pass the SAME workspace-
+        # relative --out the real invocation uses (e.g. `demo`, not an
+        # absolute /tmp path). We run with cwd=scratch and an ABSOLUTE
+        # spec path, so the relative --out writes into scratch while the
+        # baked-in labels stay `//<fc.out>/...`. --composition is appended
+        # exactly as the real invocation does (gen-app appends it to --out
+        # both for the filesystem and the label prefix).
+        cmd = [
+            "artheia", "gen-app", "--kind", "fc",
+            str(self._workspace / fc.spec),
+            "--out", fc.out,                       # workspace-relative — drives labels
+            "--proto-out", "proto",
+            "--ns", fc.ns,
+        ]
+        if fc.composition:
+            cmd += ["--composition", fc.composition]
+
         env = os.environ.copy()
         env["PATH"] = f"{self._workspace}/.venv/bin:{env.get('PATH', '')}"
         env.pop("PYTHONPATH", None)
         result = subprocess.run(
-            [
-                "artheia", "gen-app", "--kind", "fc",
-                str(self._workspace / spec),
-                "--out", str(scratch),
-                "--proto-out", str(scratch / "proto"),
-                "--ns", ns,
-            ],
-            cwd=str(self._workspace), env=env,
+            cmd, cwd=str(scratch), env=env,     # write into scratch, labels stay relative
             capture_output=True, text=True, check=False,
         )
         if result.returncode != 0:
@@ -93,7 +148,10 @@ class FcRegenLib:
                 f"stdout: {result.stdout}\nstderr: {result.stderr}"
             )
 
-        in_tree = self._workspace / "services" / short
+        # gen-app wrote to scratch/<fc.in_tree>; the committed copy is at
+        # <workspace>/<fc.in_tree>.
+        regen_dir = scratch / fc.in_tree
+        in_tree = self._workspace / fc.in_tree
         # Diff every regenerable file. Note we skip the source-path
         # comment because that's a cosmetic /tmp vs services/ path
         # difference, not real drift.
@@ -103,7 +161,7 @@ class FcRegenLib:
             ("impl", "BUILD.bazel"),                  # only BUILD
         ]
         for slice_, filter_ in regenerable:
-            tmp_slice = scratch / slice_
+            tmp_slice = regen_dir / slice_
             in_tree_slice = in_tree / slice_
             for tmp_f in tmp_slice.iterdir():
                 if filter_ and tmp_f.name != filter_:
@@ -124,12 +182,13 @@ class FcRegenLib:
                 tmp_text = self._strip_source_comment(tmp_f.read_text())
                 in_tree_text = self._strip_source_comment(in_tree_f.read_text())
                 if tmp_text != in_tree_text:
+                    comp = f" --composition {fc.composition}" if fc.composition else ""
                     raise AssertionError(
                         f"{short}: {slice_}/{tmp_f.name} drift — "
                         f"the committed file diverges from gen-app output. "
-                        f"Run `artheia gen-app --kind fc {spec} "
-                        f"--out services/{short}/ --proto-out platform/proto/ "
-                        f"--ns {ns} --force` and commit the diff."
+                        f"Run `artheia gen-app --kind fc {fc.spec} "
+                        f"--out {fc.out}/ --proto-out platform/proto/ "
+                        f"--ns {fc.ns}{comp} --force` and commit the diff."
                     )
 
     @staticmethod

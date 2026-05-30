@@ -2,7 +2,7 @@
 // source: services/system/exec/package.art
 
 syntax = "proto3";
-package services_services_exec;
+package system_services_exec;
 
 enum FgState {
     IDLE = 0;

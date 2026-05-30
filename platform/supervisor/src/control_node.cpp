@@ -201,7 +201,7 @@ services_supervisor_ControlReply SupervisorControlNode::handle_call(
 struct ControlServer::Impl {
     explicit Impl(Supervisor* sup) : node(sup) {}
 
-    demo::runtime::TipcMux mux;
+    theia::runtime::TipcMux mux;
     SupervisorControlNode  node;
     bool                   started = false;
 };

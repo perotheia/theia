@@ -31,23 +31,23 @@ namespace services_com {
 namespace {
 
 template <typename Msg, typename Sink>
-void install(demo::runtime::NodeBinding* b, Sink sink) {
-    demo::runtime::InboundEntry e;
-    e.kind = demo::runtime::InboundEntry::Kind::Cast;
+void install(theia::runtime::NodeBinding* b, Sink sink) {
+    theia::runtime::InboundEntry e;
+    e.kind = theia::runtime::InboundEntry::Kind::Cast;
     e.dispatch = [sink](const uint8_t* payload, uint16_t len,
                         int /*reply_fd*/, uint32_t /*corr*/) {
         Msg msg{};
         pb_istream_t is = pb_istream_from_buffer(payload, len);
-        if (!pb_decode(&is, demo::runtime::RemoteCodec<Msg>::fields(), &msg))
+        if (!pb_decode(&is, theia::runtime::RemoteCodec<Msg>::fields(), &msg))
             return;
         sink(msg);
     };
-    b->entries[demo::runtime::RemoteCodec<Msg>::service_id] = std::move(e);
+    b->entries[theia::runtime::RemoteCodec<Msg>::service_id] = std::move(e);
 }
 
 }  // namespace
 
-void register_firehose_casts(demo::runtime::NodeBinding* b) {
+void register_firehose_casts(theia::runtime::NodeBinding* b) {
     if (!b) return;
     auto& fh = SupFirehose::instance();
 

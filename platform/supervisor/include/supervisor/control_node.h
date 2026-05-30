@@ -32,7 +32,7 @@ struct SupervisorControlState {
 };
 
 class SupervisorControlNode
-    : public demo::runtime::GenServer<SupervisorControlNode,
+    : public theia::runtime::GenServer<SupervisorControlNode,
                                       SupervisorControlState> {
 public:
     static constexpr const char* kNodeName = "supervisor_ctl";

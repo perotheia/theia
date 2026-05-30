@@ -39,6 +39,25 @@ load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
 
 package(default_visibility = ["//visibility:public"])
 
+# State structs (write-once, app-owned). A leaf header-only target so BOTH
+# the lib (which #includes "impl/<Node>_state.hh" as the GenServer State
+# type) and the impl can depend on it WITHOUT a lib<->impl cycle:
+#   com_state  ←  lib  ←  impl
+# gen-app's template emits this target on a stock FC; com's BUILD is
+# HAND-OWNED, so we carry it here by hand (matching the template shape).
+cc_library(
+    name = "com_state",
+    hdrs = [
+        "ComDaemon_state.hh",
+        "ComGrpcProxy_state.hh",
+    ],
+    # The lib #includes these as "impl/<Node>_state.hh", so the include
+    # root is the FC out_dir (one above impl/).
+    includes = [".."],
+    copts = ["-std=c++17", "-fPIC"],
+    deps = ["//platform/runtime:runtime"],
+)
+
 # #432 — the reassembler, its OWN cc_library: libprotobuf TreeSnapshot only
 # (NO grpc, NO nanopb). Its plain-scalar sink API (sup_firehose.hpp) is what
 # the nanopb decode side (sup_firehose_register) feeds and what com_impl's gRPC

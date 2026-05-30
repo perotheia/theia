@@ -15,8 +15,8 @@
 #include "lib/SmGate.hh"
 #include "lib/SmDaemon.hh"
 
-#include "GenStateM.hh"   // demo::runtime::post_event
-#include "NodeRef.hh"     // demo::runtime::LocalRef
+#include "GenStateM.hh"   // theia::runtime::post_event
+#include "NodeRef.hh"     // theia::runtime::LocalRef
 
 #include <cstdio>
 
@@ -24,7 +24,7 @@ namespace ara::sm {
 
 // The statem peer, wired by main.cc after both nodes are constructed.
 // Defined in main.cc (the only place that holds both instances).
-demo::runtime::LocalRef<SmDaemon>& sm_statem_ref();
+theia::runtime::LocalRef<SmDaemon>& sm_statem_ref();
 
 namespace {
 
@@ -38,7 +38,7 @@ void forward_to_statem(const char* node, const char* name, Evt evt) {
         return;
     }
     std::fprintf(stderr, "[%s] %s → post_event to SmDaemon FSM\n", node, name);
-    demo::runtime::post_event(ref.target(), std::move(evt));
+    theia::runtime::post_event(ref.target(), std::move(evt));
 }
 
 }  // namespace
@@ -70,5 +70,11 @@ void SmGate::handle_cast(const RetryStartup& msg, SmGateState& /*s*/) {
 void SmGate::handle_cast(const PowerOff& msg, SmGateState& /*s*/) {
     forward_to_statem(kNodeName, "PowerOff", msg);
 }
+
+// OTP init/1 + local string handle_info — empty (the gate does no startup
+// work and no self-tick; it only forwards inbound lifecycle casts into the
+// FSM). Present to satisfy the lib decls gen-app emits for every node.
+void SmGate::init(SmGateState& /*s*/) {}
+void SmGate::handle_info(const char* /*info*/, SmGateState& /*s*/) {}
 
 }  // namespace ara::sm

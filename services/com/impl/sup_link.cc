@@ -40,7 +40,7 @@ struct SupervisorCtlTag {
     static constexpr const char* kNodeName = "supervisor_ctl";
 };
 
-using SupRef = demo::runtime::RemoteRef<SupervisorCtlTag,
+using SupRef = theia::runtime::RemoteRef<SupervisorCtlTag,
                                         kSupCtlTipcType, kSupCtlTipcInstance>;
 
 void set_str(char* dst, size_t cap, const std::string& s) {
@@ -50,7 +50,7 @@ void set_str(char* dst, size_t cap, const std::string& s) {
 }  // namespace
 
 struct SupLink::Impl {
-    demo::runtime::TipcMux  mux;        // reply pump for ref's client fd
+    theia::runtime::TipcMux  mux;        // reply pump for ref's client fd
     SupRef                  ref;
     bool                    started = false;
     std::mutex              call_mu;    // serialize call(); RemoteRef demuxes
@@ -62,9 +62,9 @@ struct SupLink::Impl {
     bool do_call(const services_supervisor_ControlRequest& req,
                  SupReply& out, int timeout_ms) {
         auto result =
-            demo::runtime::call<services_supervisor_ControlReply>(
+            theia::runtime::call<services_supervisor_ControlReply>(
                 ref, req, /*act=*/0, timeout_ms);
-        if (result.tag != demo::runtime::CallTag::Reply) return false;
+        if (result.tag != theia::runtime::CallTag::Reply) return false;
         const auto& rep = result.reply;
         out.status     = rep.status;
         out.message    = rep.message;

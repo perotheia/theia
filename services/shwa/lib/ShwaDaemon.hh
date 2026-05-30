@@ -27,9 +27,9 @@ namespace ara::shwa {
 
 // Local-namespace aliases over the nanopb C structs. The nanopb
 // generator prefixes types with the libc-safe proto package
-// (services_services_shwa_*); aliasing them here keeps callers'
+// (system_services_shwa_*); aliasing them here keeps callers'
 // signatures readable.
-using GpuSample = services_services_shwa_GpuSample;
+using GpuSample = system_services_shwa_GpuSample;
 
 
 
@@ -48,7 +48,7 @@ struct ShwaDaemonState {
     int  reserved{0};
 };
 
-class ShwaDaemon : public demo::runtime::GenServer<ShwaDaemon, ShwaDaemonState> {
+class ShwaDaemon : public theia::runtime::GenServer<ShwaDaemon, ShwaDaemonState> {
 public:
     static constexpr const char* kNodeName = "shwa_daemon";
     static constexpr uint32_t kTipcType     = 0x80010012u;
@@ -67,7 +67,7 @@ public:
     // overload by name, so register_cast<LogLevelPush> wouldn't
     // resolve. This using-decl keeps both visible; overload resolution
     // then picks the right one per message type.
-    using demo::runtime::GenServer<ShwaDaemon, ShwaDaemonState>::handle_cast;
+    using theia::runtime::GenServer<ShwaDaemon, ShwaDaemonState>::handle_cast;
 
     // ---- Trace config (reporting=true only) -----------------------
     //
@@ -81,15 +81,15 @@ public:
     // consults the same filter inside Tracer; non-listed types are
     // dropped on the disabled fast path.
     void trace_enable(const char* msg_type, bool enabled) {
-        ::demo::runtime::tracer_for(kNodeName).trace_enable(
+        ::theia::runtime::tracer_for(kNodeName).trace_enable(
             msg_type, enabled);
     }
     bool trace_enabled(const char* msg_type) const {
-        return ::demo::runtime::tracer_for(kNodeName)
+        return ::theia::runtime::tracer_for(kNodeName)
             .trace_filter_passes(msg_type);
     }
     void trace_clear_all() {
-        ::demo::runtime::tracer_for(kNodeName).trace_clear_all();
+        ::theia::runtime::tracer_for(kNodeName).trace_clear_all();
     }
 
 

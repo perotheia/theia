@@ -15,6 +15,7 @@ Commands:
     theia orchestrate     puppet apply  — Phase 2 (app rollout, no restart)
     theia dist            bazel build the per-machine .ipk bundles
     theia install         bazel run //:install — local install into /install
+    theia compdb          regen compile_commands.json from bazel (for clangd)
 
 Extra args after the verb pass through (e.g. `theia rig up central`,
 `theia install --destdir /tmp/out`).
@@ -97,12 +98,93 @@ def cmd_install(args: list[str]) -> int:
     return _run(["bazel", "run", "//:install", "--", *extra])
 
 
+# Default scope for the compile DB: the in-tree, LINUX-buildable C++ trees
+# clangd needs to index. Kept explicit (not `//...`) so the aquery doesn't
+# drag in (a) vendor 3pp / external repos with their own build systems, or
+# (b) //gateway/firmware (the Hercules TMS570 firmware — a different
+# toolchain, --config=ti_arm_cgt_18, that fails under --config=linux). Only
+# the linux gateway libs (//gateway/libs) belong here. Override by passing
+# target patterns after the verb (e.g. `theia compdb //services/...`).
+_COMPDB_TARGETS = [
+    "//services/...",
+    "//platform/...",
+    "//demo/...",
+    "//gateway/libs/...",
+]
+
+
+def cmd_compdb(args: list[str]) -> int:
+    """Regenerate compile_commands.json from Bazel (for clangd).
+
+    Runs `bazel aquery mnemonic(CppCompile, <targets>)` and writes the
+    {file, arguments, directory} entries to compile_commands.json at the
+    workspace root. Pass target patterns to narrow the scope; default
+    covers services/platform/demo/gateway. Pass `--config=<x>` (or any
+    bazel flag starting with -) and it's forwarded to the aquery.
+    """
+    import json
+    import shlex
+
+    targets = [a for a in args if not a.startswith("-")] or _COMPDB_TARGETS
+    bazel_flags = [a for a in args if a.startswith("-")]
+    if not any(f.startswith("--config") for f in bazel_flags):
+        bazel_flags.append("--config=linux")
+
+    pattern = " union ".join(targets)
+    aquery = [
+        "bazel", "aquery", *bazel_flags,
+        f'mnemonic("CppCompile", {pattern})',
+        "--output=jsonproto",
+        "--include_artifacts=false",  # we read the source from the args
+    ]
+    print(f"$ {' '.join(shlex.quote(a) for a in aquery)}", file=sys.stderr)
+    try:
+        proc = subprocess.run(aquery, capture_output=True, text=True)
+    except FileNotFoundError as e:
+        print(f"theia: {e}", file=sys.stderr)
+        return 127
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stderr)
+        return proc.returncode
+
+    try:
+        data = json.loads(proc.stdout)
+    except json.JSONDecodeError as e:
+        print(f"theia: aquery produced no/invalid jsonproto: {e}",
+              file=sys.stderr)
+        return 1
+
+    _SRC_EXT = (".cc", ".cpp", ".cxx", ".c", ".c++")
+    seen: set[str] = set()
+    entries: list[dict] = []
+    for act in data.get("actions", []):
+        argv = act.get("arguments", [])
+        # The source operand is the first non-output translation unit in
+        # the compile args (outputs end in .o / .pic.o).
+        src = next((a for a in argv
+                    if a.endswith(_SRC_EXT) and not a.endswith(".o")), None)
+        if not src or src in seen:
+            continue
+        seen.add(src)
+        entries.append({
+            "file": src,
+            "arguments": argv,
+            "directory": str(WORKSPACE),
+        })
+
+    out = WORKSPACE / "compile_commands.json"
+    out.write_text(json.dumps(entries, indent=1) + "\n")
+    print(f"theia: wrote {len(entries)} entries to {out}", file=sys.stderr)
+    return 0
+
+
 COMMANDS = {
     "rig":         (cmd_rig,         "docker compose {up|down} the deploy stack"),
     "provision":   (cmd_provision,   "puppet apply — Phase 1 (os pkgs + .ipk)"),
     "orchestrate": (cmd_orchestrate, "puppet apply — Phase 2 (app rollout)"),
     "dist":        (cmd_dist,        "bazel build per-machine .ipk bundles"),
     "install":     (cmd_install,     f"bazel run //:install → {INSTALL_DESTDIR}"),
+    "compdb":      (cmd_compdb,      "regen compile_commands.json from bazel (clangd)"),
 }
 
 

@@ -75,12 +75,11 @@ interface clientServer ExecCtl {
 
 ```scala
 NodeDecl:
-    'node' kind=NodeKind name=ID ('extends' base=[NodeDecl|FQN])? '{'
-        tipc=TipcAddress
-        (kick_off?='kick_off')?
+    extern?='extern'
+    'node' kind=NodeKind name=ID ('prototype' base=[NodeDecl|FQN])? '{'
+        (tipc=TipcAddress)?
         (requires_timers?='requires_timers')?
         ('reporting' '=' reporting=BoolLit)?
-        ('fallthrough' '=' fallthrough=BoolLit)?
         ('tag' '=' tag=STRING)?
         ('config' config=[MessageDecl|FQN])?
         ('ports' '{' ports*=PortDecl '}')?
@@ -91,17 +90,33 @@ NodeDecl:
 
 - **`kind`** is `atomic` (a `GenServer`, or `GenStateM` if a `statem` block
   is present) or `runnable` (a `GenRunnable` free worker — no `statem`).
-- **`tipc type=0x… instance=0`** is mandatory on every node (the network
-  address; one per node). Even a forward-decl stub needs one.
-- **`tag = "LOG"`** — short context id for log lines.
-- **`reporting = true|false`** — whether the supervisor can address this
-  node for heartbeat / trace-config push (defaults true).
-- **`fallthrough = true`** — route unmatched TIPC frames to `handle_info`
-  instead of aborting. **Test probes only**; production nodes must not set it.
-- **`extends Base`** — prototype inheritance: the derived node absorbs the
-  base's ports/params/statem/config wholesale unless it re-declares them
-  (no field-level merge). Most "derived" nodes only override `tipc`.
+- **`extern`** marks a FORWARD declaration — the symbol exists, defined
+  elsewhere (another package, resolved by the import-following scope
+  provider). An `extern` node MUST have an empty body (no `tipc`, no ports);
+  it's the explicit replacement for the old empty-body-is-a-stub heuristic.
+- **`tipc type=0x… instance=0`** — the network address. Grammar-optional but
+  loader-REQUIRED for a real (non-`extern`) node, UNLESS a `prototype <Base>`
+  supplies it via inheritance. An `extern` node carries none.
+- **`requires_timers`** — the node uses `process_timers()` (send_after /
+  cancel_timer). Always-on in practice; the flag lets `main` publish the
+  process `TimerService`.
+- **`tag = "LOG"`** — short context id for log lines (defaults to the node
+  name when omitted).
+- **`reporting = true|false`** — whether the supervisor watchdogs this node
+  and can push heartbeat / trace / log-level config to it (defaults true).
+- **`prototype Base`** — attribute-REPLACEMENT inheritance (deliberately NOT
+  `extends`): the derived node inherits the base's ports / statem / config /
+  params / requires_timers unless it re-declares them (no field-level merge).
+  The common case is overriding only `tipc`:
+  `node atomic FooZonal prototype Foo { tipc type=0x… instance=0 }`.
 - **`config Msg`** — the node's etcd-backed config message type.
+
+There is no `kick_off` (retired — a node's post-construction startup work is
+the OTP `init(State&)` callback the runtime invokes on the node thread) and no
+`fallthrough` (retired — an unrouted inbound frame is dropped with a CRITICAL
+log in `TipcMux`; cross-node traffic is exclusively typed `cast`/`call`, so a
+test probe declares a typed receiver port per message instead). Tracing has no
+annotation: every node is runtime-traceable, flipped by the supervisor.
 
 ```scala
 node atomic TraceCollector {
@@ -207,11 +222,17 @@ gateway_route SpeedPublisher {
 `direction = in|out`. These appear in the generated AUTOSAR mega-node
 specs, not in hand-written FC specs.
 
-## Forward declarations
+## Forward declarations (`extern`)
 
-Cross-file references resolve through the **import + forward-decl** pattern:
-declare an empty stub locally so the file parses standalone, and the
-resolver materializes the real definition from the imported package.
+Cross-file references resolve through the **import + `extern` forward-decl**
+pattern: declare the symbol locally with the `extern` keyword and an EMPTY
+body so the file parses standalone, and the import-following scope provider
+materializes the real definition from the imported package.
+
+`extern` is the explicit replacement for the old empty-body-is-a-stub
+heuristic — an empty body is no longer magic. Say `extern` when you mean a
+forward declaration. It prefixes a node, composition, cluster, or interface
+(a message is never `extern` — `message Name { }` is its own forward decl).
 
 ```scala
 // system/system.art
@@ -219,18 +240,29 @@ package system
 import system.services.*
 import system.supervisor.*
 
-cluster Services         { }   // stub → real def in system.services
-composition Supervisor   { }   // stub → real def in system.supervisor
+extern cluster Services { }            // real def in system.services
+extern composition Supervisor { }      // real def in system.supervisor
 cluster Platform {
     composition Supervisor sup
 }
 ```
 
-A stub node still needs a `tipc` (grammar requires it); mirror the real
-one. A stub message is just `message Name { }`. This is exactly how
-`services/nop/exec/` references `system.supervisor`'s `Supervisor` node and
-`SupervisionEvent` message — see that FC and `system/services/cluster.art`
-for worked examples.
+The empty `{ }` is still required — the keyword precedes the name and the
+braces stay (`extern node atomic FlexRayIngress { }`,
+`extern interface senderReceiver EML_01_Iface { }`).
+
+Rules the loader enforces:
+
+- An `extern` decl MUST have an empty body — no `tipc` / ports on a node, no
+  members on a composition/cluster/interface. (Contrast the old rule, which
+  made you mirror the real node's `tipc` on a stub; an `extern` node carries
+  none.)
+- A non-`extern` `node` is loader-REQUIRED to have a `tipc`, unless a
+  `prototype <Base>` supplies it.
+
+A node may also be specialized rather than forward-declared:
+`node atomic FooZonal prototype Foo { tipc … }` inherits Foo's body and
+overrides only what it re-declares (see `prototype` above).
 
 ## Validate
 
@@ -240,7 +272,8 @@ PATH="$PWD/.venv/bin:$PATH" artheia parse <file.art>
 
 Resolves imports recursively and prints the merged tree, or exits non-zero
 on the first error. Common errors: an `import` placed after a declaration;
-a `node` missing its `tipc`; `→` typed as `->`; a `provides`/`requires`
-pointing at the wrong interface flavor. The LSP (`artheia-lsp --stdio`,
-VS Code extension under `artheia/vscode-extension/`) gives the same
-diagnostics live, plus go-to-definition across the forward-decl boundary.
+a non-`extern` `node` missing its `tipc`; a non-empty `extern` body; `→`
+typed as `->`; a `provides`/`requires` pointing at the wrong interface
+flavor. The LSP (`artheia-lsp --stdio`, VS Code extension under
+`artheia/vscode-extension/`) gives the same diagnostics live, plus
+go-to-definition across the forward-decl boundary.

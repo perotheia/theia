@@ -30,9 +30,9 @@ namespace ara::com {
 
 // Local-namespace aliases over the nanopb C structs. The nanopb
 // generator prefixes types with the libc-safe proto package
-// (services_services_com_*); aliasing them here keeps callers'
+// (system_services_com_*); aliasing them here keeps callers'
 // signatures readable.
-using ComEmpty = services_services_com_ComEmpty;
+using ComEmpty = system_services_com_ComEmpty;
 
 
 

@@ -4,7 +4,7 @@ A Claude Code MCP plugin that watches **your** (the human's) file changes
 and lets you ask Claude to review them for consistency at any point during a
 session.
 
-The plugin source is tracked under `skills/work-with-me/`; it is linked into
+The plugin source is tracked under `docs/skills/work-with-me/`; it is linked into
 `.claude/plugins/work-with-me` (a local, gitignored symlink) so Claude Code
 discovers it. It runs on the **workspace `.venv`** — no per-plugin venv.
 
@@ -41,15 +41,18 @@ discovers it. It runs on the **workspace `.venv`** — no per-plugin venv.
 |---|---|---|---|
 | `watch_me` | `/watch-me` | *"watch me"* | Start tracking (turn the watcher **on**, fresh checkpoint). **Off by default** so the plugin is non-intrusive for teammates sharing `.mcp.json`. If already on, reports buffered counts. |
 | `check_me` | `/check-me` | *"check me"* | Review file edits + correlated shell commands; gives advice; **clears checkpoint**. |
+| `fix_me` | `/fix-me` | *"fix me"* | Same review surface as `check_me`, but the agent ALSO applies the fixes (Edit/Write), not just reports. Use when you know the recent edits broke something. **Clears checkpoint**. |
 | `compare_me` | `/compare-me` | *"compare me" / "diff me"* | Like `check_me` but includes the actual `git diff` of touched files — review sees content, not just paths. **Clears checkpoint**. |
 | `focus_me` | `/focus-me <goal>` | *"focus me on X" / "clear focus"* | Set the one-line session goal; the next `check_me` / `compare_me` uses it as explicit intent. Pass empty to clear. |
 | `ignore_me` | `/ignore-me` | *"ignore me"* | Stop tracking + discard everything buffered since the last `watch me` — **no review**, watcher off (aborted attempt). |
 | `undo_me` | `/undo-me` | *"undo me"* | Show diff + `git checkout --` revert hints for touched files. **Non-destructive** (does NOT run any revert); **does NOT clear** the checkpoint. |
+| `list_me` | `/list-me` | *"list me" / "show me"* | Passive listing of the current buffer (file events + correlated shell commands). **No analysis, no diff, no clear.** Glance before picking `check_me` / `compare_me` / `undo_me` / `ignore_me`. |
 
 `watch me` and `ignore me` are the two on/off verbs; the others operate on
 the current session. Typical loop: `watch me` → work → `check me` → repeat.
 `focus me on X` once at the start makes the review goal-aware. `ignore me`
-when an attempt was a dead end.
+when an attempt was a dead end. `list me` when you just want to peek at the
+buffer without committing to a verb.
 
 ## User vs. agent attribution
 
@@ -74,14 +77,14 @@ attributed to the user (the original, un-disambiguated behavior).
 Deps go in the workspace venv:
 
 ```sh
-.venv/bin/pip install -r skills/work-with-me/requirements.txt
+.venv/bin/pip install -r docs/skills/work-with-me/requirements.txt
 ```
 
 Link the plugin into `.claude/` (local, gitignored):
 
 ```sh
 mkdir -p .claude/plugins
-ln -sfn ../../skills/work-with-me .claude/plugins/work-with-me
+ln -sfn ../../docs/skills/work-with-me .claude/plugins/work-with-me
 ```
 
 Register the MCP server — merge `mcp.json.example` into the repo-root

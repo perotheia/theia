@@ -20,6 +20,7 @@ not bracketed by an agent edit is attributed to the user and logged.
 Tools
 -----
 check_me      Review + clear the user-change log. Trigger: "check me".
+fix_me        Same surface as check_me, but the agent applies the fixes.
 get_changes   Peek at the log without clearing it.
 clear_changes Manually reset the log.
 """
@@ -28,6 +29,7 @@ import asyncio
 import bisect
 import json
 import os
+import re
 import subprocess
 import threading
 import time
@@ -47,6 +49,20 @@ from watchdog.observers import Observer
 # fsync lag). Generous enough to swallow the agent's write, short enough
 # that a real user edit seconds later still lands in the log.
 AGENT_WINDOW_S = 4.0
+
+# The PostToolUse hook can arrive *after* the inotify event has already been
+# processed by the watchdog thread (the rename hits the kernel before the
+# tool driver invokes the hook). When a hook record finally lands we
+# retroactively drop matching change-log entries up to AGENT_BACK_WINDOW_S
+# old. Kept small so a user's own edit a moment earlier isn't eaten.
+AGENT_BACK_WINDOW_S = 2.0
+
+# Claude Code's Write tool implements atomic writes as:
+#     open("<file>.tmp.<pid>.<hex>") ; write ; rename → <file>
+# Watchdog surfaces the rename as a MOVED event with both sides visible, and
+# the tmp path also draws its own CREATE+MODIFY events. None of those are
+# user-authored — drop them on sight, independent of the hook race.
+_AGENT_TMP_RE = re.compile(r"\.tmp\.\d+\.[0-9a-f]+$")
 
 # Cap how many shell commands a checkpoint reports, so a huge history burst
 # can't blow up the check_me payload.
@@ -108,6 +124,11 @@ class AgentEdits:
         # path -> most-recent agent-edit monotonic deadline
         self._recent: dict[str, float] = {}
         self._pos = 0  # byte offset already consumed
+        # Paths whose hook record arrived AFTER we'd already logged the fs
+        # event. Drained by drain_late_agent_paths() and used to scrub the
+        # change log retroactively. Keyed by absolute path → list of (ts,
+        # epoch-of-hook-record) we still need to scrub.
+        self._late: list[str] = []
 
     def _ingest(self) -> None:
         """Pull any new lines from the sidecar into _recent. Cheap to call
@@ -141,6 +162,18 @@ class AgentEdits:
             # so stamp the window from when WE observe the record. The hook
             # fires right after the agent's write, so this is tight enough.
             self._recent[path] = now + AGENT_WINDOW_S
+            # Newly-learned path → may already have a log entry we need to
+            # scrub. Queue it for the next drain_late_agent_paths() call.
+            self._late.append(path)
+
+    def drain_late_agent_paths(self) -> list[str]:
+        """Return + clear the paths whose hook record arrived too late to
+        suppress the corresponding inotify event. Caller uses these to
+        retroactively scrub the change log."""
+        with self._lock:
+            self._ingest()
+            late, self._late = self._late, []
+            return late
 
     def is_agent(self, abs_path: str) -> bool:
         """True if `abs_path` was edited by the agent within the window.
@@ -292,6 +325,24 @@ class ChangeLog:
             self._entries.clear()
             return n
 
+    def scrub_recent_path(self, rel_path: str, max_age_s: float) -> int:
+        """Drop log entries whose path (or dest) matches rel_path and whose
+        timestamp is within the last max_age_s seconds. Used by the hook-
+        race fix: when a PostToolUse record arrives after we've already
+        logged the fs event for that path, retract it. Returns the number
+        of entries dropped."""
+        cutoff = time.time() - max_age_s
+        with self._lock:
+            before = len(self._entries)
+            self._entries = [
+                e for e in self._entries
+                if not (
+                    e["ts"] >= cutoff
+                    and (e["path"] == rel_path or e.get("dest") == rel_path)
+                )
+            ]
+            return before - len(self._entries)
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Watchdog event handler
@@ -314,6 +365,13 @@ class RepoHandler(FileSystemEventHandler):
             self._spec = load_gitignore_spec(self.root)
 
     def _ignored(self, abs_path: str) -> bool:
+        # Drop Claude's Write-tool atomic-write artifacts unconditionally —
+        # the basename ends in ".tmp.<pid>.<hex>" only when produced by the
+        # tool's write+rename, never by user actions. Filtering here also
+        # collapses MOVED events (tmp → final) to a single agent-attributed
+        # touch on the final path.
+        if _AGENT_TMP_RE.search(os.path.basename(abs_path)):
+            return True
         try:
             rel = Path(abs_path).relative_to(self.root)
         except ValueError:
@@ -331,12 +389,24 @@ class RepoHandler(FileSystemEventHandler):
         """Log an event unless tracking is off, it's ignored, or agent-authored."""
         if not state.is_enabled():
             return  # 'watch me off' (default) — non-intrusive.
+        # First drain any late hook records — a previously-logged event for
+        # an agent path that the hook has only just told us about gets
+        # retracted here (the race fix).
+        self._scrub_late_agent_paths()
         if self._ignored(abs_path):
             return
         if self.agent.is_agent(abs_path):
             return  # Claude's own Edit/Write — not the user's; skip.
         self.log.add(event_type, self._rel(abs_path))
         _stats_write()                          # throttled — statusline mirror
+
+    def _scrub_late_agent_paths(self) -> None:
+        """Pull paths whose hook record arrived after the inotify event and
+        retract their matching change-log entries (within the back-window).
+        Cheap; usually no-ops because the queue is empty."""
+        for abs_path in self.agent.drain_late_agent_paths():
+            rel = self._rel(abs_path)
+            self.log.scrub_recent_path(rel, AGENT_BACK_WINDOW_S)
 
     # -- watchdog callbacks --------------------------------------------------
 
@@ -359,7 +429,20 @@ class RepoHandler(FileSystemEventHandler):
     def on_moved(self, event):
         if event.is_directory:
             return
+        if not state.is_enabled():
+            return
         src, dst = str(event.src_path), str(event.dest_path)
+        # An atomic-write rename `<f>.tmp.<pid>.<hex> → <f>` is the Claude
+        # Write tool's signature. Drop the MOVED event outright — the hook
+        # already records the destination as agent-authored, and the tmp
+        # source isn't a real file the user cares about.
+        src_tmp = bool(_AGENT_TMP_RE.search(os.path.basename(src)))
+        dst_tmp = bool(_AGENT_TMP_RE.search(os.path.basename(dst)))
+        if src_tmp or dst_tmp:
+            return
+        # Retroactive scrub before reading is_agent, so a hook that has just
+        # landed for either side suppresses the entry instead of leaking.
+        self._scrub_late_agent_paths()
         src_ign, dst_ign = self._ignored(src), self._ignored(dst)
         if src_ign and dst_ign:
             return
@@ -456,6 +539,8 @@ app = Server("work-with-me")
 changelog = ChangeLog()
 shellhist: "ShellHistory | None" = None   # set in main() once HISTFILE is known
 _observer: "Observer | None" = None
+_handler: "RepoHandler | None" = None     # set in main() — lets checkpoints flush
+                                          # the agent-sidecar's late-paths queue.
 
 
 class State:
@@ -501,7 +586,7 @@ state = State()
 # JSON file that a shell statusline script reads. Atomic write (tmp + rename)
 # so the reader never sees a half-line; throttled so a fs-event burst doesn't
 # hammer the disk. Format is documented in the README so anyone can write
-# their own statusline; ours lives at skills/work-with-me/statusline.sh.
+# their own statusline; ours lives at docs/skills/work-with-me/statusline.sh.
 
 _STATS_THROTTLE_S = 0.25
 _stats_lock = threading.Lock()
@@ -632,6 +717,18 @@ async def list_tools() -> list[Tool]:
             inputSchema={"type": "object", "properties": {}, "required": []},
         ),
         Tool(
+            name="fix_me",
+            description=(
+                "Same review surface as check_me — the USER's file modifications since the "
+                "last checkpoint plus time-correlated shell commands — but instructs the "
+                "agent to ALSO FIX the issues it finds, not just report them. Use this "
+                "when you know the recent edits broke something and you want the agent to "
+                "diagnose + repair in one shot. Clears the change log + shell tail "
+                "(starts a fresh checkpoint). Trigger: 'fix me'."
+            ),
+            inputSchema={"type": "object", "properties": {}, "required": []},
+        ),
+        Tool(
             name="ignore_me",
             description=(
                 "Turn the watcher OFF and DISCARD everything buffered since the last "
@@ -677,6 +774,18 @@ async def list_tools() -> list[Tool]:
             ),
             inputSchema={"type": "object", "properties": {}, "required": []},
         ),
+        Tool(
+            name="list_me",
+            description=(
+                "List the currently-buffered file events + time-correlated shell commands "
+                "without analysis and WITHOUT clearing the checkpoint. A passive 'what's "
+                "in the cache right now?' view — no review prompt, no diff, no advice. "
+                "Useful when you want to glance at what's been tracked before deciding "
+                "between check_me / compare_me / undo_me / ignore_me. "
+                "Trigger: 'list me' / 'show me' / 'what's buffered'."
+            ),
+            inputSchema={"type": "object", "properties": {}, "required": []},
+        ),
     ]
 
 
@@ -685,6 +794,13 @@ def _build_checkpoint(*, with_diff: bool) -> tuple[list[dict], list[dict], str]:
     (entries, cmds, files_block) ready for prompt assembly. Used by both
     check_me (with_diff=False) and compare_me (with_diff=True). Also flips
     the statusline back to me:0/0 since the buffer is now empty."""
+    # Flush any agent-sidecar records that haven't been applied yet — the
+    # PostToolUse hook can land after an fs event has already been logged
+    # (race between the kernel rename and the tool driver's hook call).
+    # Without this, a write that finishes microseconds before the user
+    # types 'check me' would survive into the report.
+    if _handler is not None:
+        _handler._scrub_late_agent_paths()
     entries = changelog.snapshot_and_clear()
     cmds = shellhist.snapshot_and_advance() if shellhist else []
     cmds = _window_filter(cmds, [e["ts"] for e in entries if "ts" in e])
@@ -775,6 +891,55 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         )
         return [TextContent(type="text", text=prompt)]
 
+    # ── fix_me ── same review surface as check_me, but the agent fixes ─────
+    if name == "fix_me":
+        if not state.is_enabled():
+            return [TextContent(type="text", text=(
+                "Watching is OFF — nothing has been tracked.\n"
+                "Say 'watch me' to start a session, then 'fix me' to repair."
+            ))]
+        entries, cmds, files_block = _build_checkpoint(with_diff=False)
+        if not entries and not cmds:
+            return [TextContent(type="text", text=(
+                "No USER file changes or correlated shell commands since the last "
+                "checkpoint — nothing to fix.\n(Agent edits are tracked separately "
+                "and excluded.)\nThe change log is now cleared — fresh checkpoint started."
+            ))]
+
+        focus = state.get_focus()
+        focus_block = f"\n**Session focus (explicit goal):** {focus}\n" if focus else ""
+
+        prompt = (
+            "## work-with-me FIX\n"
+            f"{focus_block}\n"
+            f"**Files the USER touched since last checkpoint:**\n{files_block}\n\n"
+            f"**Shell commands time-correlated to those edits (zsh history):**\n"
+            f"{_render_shell(cmds)}\n\n"
+            "---\n"
+            "The user is asking you to FIX the bugs introduced by their recent edits — "
+            "not just report them. Use the shell commands as intent signal — what they "
+            "were building, running, or debugging — and cross-check it against the "
+            "file edits"
+            + (" and the stated focus" if focus else "")
+            + ".\n\nDiagnose the same way check_me does:\n"
+            "- Incomplete edits (a rename/refactor applied in one place but not others)\n"
+            "- Missing counterpart changes (call site updated but not the function, or vice versa)\n"
+            "- Import / export mismatches introduced by file additions or deletions\n"
+            "- Type / signature drift\n"
+            "- Deleted files that are still referenced\n"
+            "- Edits inconsistent with what the shell commands"
+            + (" or the focus" if focus else "")
+            + " suggest they intended\n"
+            "- A command that failed or implies a step not yet done\n\n"
+            "Then APPLY the fixes with Edit/Write. After each fix, briefly state what "
+            "you changed and why. If a fix needs the user to make a judgment call "
+            "(scope, design choice, ambiguous intent), surface the choice instead of "
+            "guessing. If something looks consistent / already correct, say so and "
+            "skip it — don't manufacture fixes.\n\n"
+            "_Change log + shell tail cleared — next checkpoint starts now._"
+        )
+        return [TextContent(type="text", text=prompt)]
+
     # ── ignore_me ── stop tracking + discard everything buffered ───────────
     if name == "ignore_me":
         was_on = state.is_enabled()
@@ -853,6 +1018,57 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         )
         return [TextContent(type="text", text=text)]
 
+    # ── list_me ─────────────────────────────────────────────────────────────
+    if name == "list_me":
+        # Apply the same late-paths scrub as the checkpoint path so a recent
+        # agent-write that raced ahead of its hook doesn't leak into the
+        # listing. Peek-only: no snapshot_and_clear, no shellhist advance.
+        if _handler is not None:
+            _handler._scrub_late_agent_paths()
+        entries = changelog.snapshot()
+        cmds_all = shellhist.peek() if shellhist else []
+        # Time-window the shell tail to this repo's file activity — same
+        # filter check_me uses, so what you see here matches what a future
+        # check_me would actually include.
+        cmds = _window_filter(cmds_all, [e["ts"] for e in entries if "ts" in e])
+
+        if not state.is_enabled() and not entries and not cmds:
+            return [TextContent(type="text", text=(
+                "Watching is OFF and the buffer is empty. "
+                "Say 'watch me' to start a session."
+            ))]
+        if not entries and not cmds:
+            return [TextContent(type="text", text=(
+                "Nothing in the buffer yet. (`check me` would also report this.)"
+            ))]
+
+        focus = state.get_focus()
+        focus_line = f"**Focus:** {focus}\n" if focus else ""
+        state_line = "Watching: ON" if state.is_enabled() else "Watching: OFF"
+        files_block = (
+            "(none)" if not entries
+            else "\n".join(
+                f"  {p}  ({', '.join(ops)})"
+                for p, ops in _group_by_path(entries).items()
+            )
+        )
+        # NO review prompt — just the listing. The trailer documents the
+        # next-step verbs so the user doesn't have to remember them, but
+        # doesn't instruct the agent to do anything.
+        text = (
+            "## work-with-me — buffer listing (no clear)\n"
+            f"{state_line}\n"
+            f"{focus_line}"
+            f"\n**Files buffered ({len(entries)} event(s)):**\n{files_block}\n\n"
+            f"**Event log:**\n{_render_log(entries)}\n\n"
+            f"**Shell commands (time-correlated, {len(cmds)} of {len(cmds_all)}):**\n"
+            f"{_render_shell(cmds)}\n\n"
+            "_Buffer NOT cleared. Verbs: `check me` (review+clear) · "
+            "`compare me` (diff+clear) · `undo me` (revert hints, no clear) · "
+            "`ignore me` (drop everything)._"
+        )
+        return [TextContent(type="text", text=text)]
+
     return [TextContent(type="text", text=f"Unknown tool: {name}")]
 
 
@@ -861,7 +1077,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 # ──────────────────────────────────────────────────────────────────────────────
 
 async def main() -> None:
-    global _observer, shellhist
+    global _observer, shellhist, _handler
 
     root = find_repo_root(Path.cwd())
     state.root = root
@@ -869,6 +1085,7 @@ async def main() -> None:
     sidecar.parent.mkdir(parents=True, exist_ok=True)
     agent = AgentEdits(sidecar)
     handler = RepoHandler(root, changelog, agent)
+    _handler = handler
 
     # Shell-history tail: the checkpoint baseline is "now", so we only ever
     # report commands the user runs after the watcher starts.

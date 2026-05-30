@@ -3,7 +3,7 @@
 Do not edit by hand. Edit the ``cluster`` declarations in the source
 ``.art`` and regenerate:
 
-    artheia gen-manifest-proto services/system/system.art <this file>
+    artheia gen-manifest services/system/system.art <this file>
 
 ARA manifest sections (see docs/autosar/manifest.md):
 

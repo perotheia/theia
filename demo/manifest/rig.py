@@ -191,7 +191,7 @@ DemoHost = CentralHost
 # ---------------------------------------------------------------------------
 #
 # `demo/manifest/applications.py` is GENERATED from `cluster Applications`
-# in demo/system/demo/component.art by `artheia gen-manifest-proto`. It
+# in demo/system/demo/component.art by `artheia gen-manifest`. It
 # carries one SwComponent / Executable / Process per cluster member, with
 # every path derived from the (base_dir=demo, ident) directory convention
 # (app dir demo/<ident>, bazel //demo/<ident>:<ident>, start_cmd bin/<ident>)

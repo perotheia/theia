@@ -30,7 +30,7 @@
 
 #pragma once
 
-#include "NodeRef.hh"   // demo::runtime::TipcAddr + cast(Daemon&, Msg, TipcAddr)
+#include "NodeRef.hh"   // TipcAddr + cast(Daemon&,Msg,TipcAddr); RemoteRef<>
 
 namespace ara::log::netgraph {
 

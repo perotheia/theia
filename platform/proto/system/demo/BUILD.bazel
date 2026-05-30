@@ -1,0 +1,23 @@
+# Generated nanopb sources for the system.demo package (the gen_server
+# API demo's message set: Inc / Get / GetReply). .pb.{c,h} are produced
+# by the genrule from demo.proto; not committed.
+
+package(default_visibility = ["//visibility:public"])
+
+genrule(
+    name = "demo_pb",
+    srcs = ["demo.proto"],
+    outs = [
+        "demo.pb.c",
+        "demo.pb.h",
+    ],
+    cmd = "set -e;"
+        + " in_dir=$$(dirname $(location demo.proto));"
+        + " out_dir=$$(dirname $(location demo.pb.c));"
+        + " nanopb_generator -I $$in_dir -D $$out_dir demo.proto;",
+    local = True,
+)
+
+filegroup(name = "demo_pb_c", srcs = ["demo.pb.c"])
+filegroup(name = "demo_pb_h", srcs = ["demo.pb.h"])
+filegroup(name = "demo_proto", srcs = ["demo.proto"])

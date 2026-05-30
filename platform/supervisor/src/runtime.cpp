@@ -2381,9 +2381,9 @@ void Supervisor::send_sm_ready() {
     constexpr uint32_t kSmTipcType     = 0x8001001Du;
     constexpr uint32_t kSmTipcInstance = 0u;
     static const uint16_t kSystemBootSvcId =
-        djb2_low16("services_services_sm_SystemBoot");
+        djb2_low16("system_services_sm_SystemBoot");
     static const uint16_t kStartupCompleteSvcId =
-        djb2_low16("services_services_sm_StartupComplete");
+        djb2_low16("system_services_sm_StartupComplete");
 
     const std::string empty;  // both messages have no fields
     const bool b1 = send_gw_cast_to_tipc_name(

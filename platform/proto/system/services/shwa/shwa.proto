@@ -2,7 +2,7 @@
 // source: services/system/shwa/package.art
 
 syntax = "proto3";
-package services_services_shwa;
+package system_services_shwa;
 
 message GpuSample {
     string device = 1;

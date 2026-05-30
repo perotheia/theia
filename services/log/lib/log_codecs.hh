@@ -14,6 +14,12 @@
 // declared exactly once even though main.cc includes both node
 // headers. Each node header #includes this (guarded by #pragma once),
 // so a node header used standalone still has its codecs.
+//
+// A codec keys its service_id on the proto type name in the message's
+// DEFINING package — so an inbound type imported from another package
+// (e.g. a PSP bus PDU) declares its codec under that package's name,
+// matching the sender. The #include set below covers every defining
+// package an inbound type comes from.
 
 #pragma once
 
@@ -21,7 +27,9 @@
 #include "system/services/log/log.pb.h"
 
 
-DEMO_DECLARE_REMOTE_CODEC(services_services_log_LogRecord)
-DEMO_DECLARE_REMOTE_CODEC(services_services_log_TraceConfigRequest)
-DEMO_DECLARE_REMOTE_CODEC(services_services_log_TraceEmpty)
-DEMO_DECLARE_REMOTE_CODEC(services_services_log_TraceRecord)
+
+
+DEMO_DECLARE_REMOTE_CODEC(system_services_log_LogRecord)
+DEMO_DECLARE_REMOTE_CODEC(system_services_log_TraceConfigRequest)
+DEMO_DECLARE_REMOTE_CODEC(system_services_log_TraceEmpty)
+DEMO_DECLARE_REMOTE_CODEC(system_services_log_TraceRecord)

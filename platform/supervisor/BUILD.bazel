@@ -78,8 +78,9 @@ cmake(
     # supervisor control structs. rules_foreign_cc stages these built
     # cc_libraries into $EXT_BUILD_DEPS (headers under include/, archives
     # under lib/); CMakeLists picks them up there (the EXT_DEPS branch).
-    # //platform/runtime carries its transitive libgw header dep, so
-    # gw_proto.h / GenServer.hh resolve in the sandbox.
+    # //platform/runtime is self-contained (its wire header is
+    # TheiaMsgHeader.hh, no libgw dep), so its headers resolve in the
+    # sandbox.
     deps = [
         "//platform/runtime:runtime",
         ":supervisor_nanopb",

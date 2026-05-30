@@ -2,7 +2,7 @@
 // source: vendor/autosar/mlbevo_gen2/system/mlbevo_gen2/flexray/package.art
 
 syntax = "proto3";
-package services_autosar_mlbevo_gen2_flexray;
+package system_autosar_mlbevo_gen2_flexray;
 
 message ACC_06 {
     uint32 ACC_06_CRC = 1;

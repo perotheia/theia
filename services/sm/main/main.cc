@@ -11,7 +11,7 @@
 #include "lib/SmGate.hh"
 
 #include "Logger.hh"     // parse_log_level / process_logger
-#include "NodeRef.hh"    // demo::runtime::LocalRef
+#include "NodeRef.hh"    // theia::runtime::LocalRef
 
 #include "TipcMux.hh"    // config-service receiver for reporting nodes (#386)
 
@@ -29,8 +29,8 @@ namespace ara::sm {
 // `LocalRef<SmDaemon>& sm_statem_ref();` and calls post_event on its
 // target; we define it here as a function-local static so the gate and
 // main share one reference. main wires its target once SmDaemon exists.
-demo::runtime::LocalRef<SmDaemon>& sm_statem_ref() {
-    static demo::runtime::LocalRef<SmDaemon> ref;
+theia::runtime::LocalRef<SmDaemon>& sm_statem_ref() {
+    static theia::runtime::LocalRef<SmDaemon> ref;
     return ref;
 }
 
@@ -58,17 +58,17 @@ int main() {
     // push (#386) via process_logger().set_level on the node thread.
     auto logger = MakeContextLogger();
     if (const char* lvl = std::getenv("THEIA_LOG_LEVEL")) {
-        logger->set_level(::platform::runtime::parse_log_level(lvl));
+        logger->set_level(::theia::runtime::parse_log_level(lvl));
     }
-    ::platform::runtime::set_process_logger(logger);
+    ::theia::runtime::set_process_logger(logger);
     (void)logger;
 
-    demo::runtime::TimerService timers;
+    theia::runtime::TimerService timers;
     (void)timers;  // wired into statem nodes' send_after
 
     // Config-service receiver (#386): reporting nodes register_cast the
     // supervisor's LogLevelPush, applied by GenServer's base handler.
-    demo::runtime::TipcMux config_mux;
+    theia::runtime::TipcMux config_mux;
 
 
     SmDaemon sm_daemon;
@@ -80,7 +80,7 @@ int main() {
 
     // Publish the statem peer so SmGate's handlers can post_event into
     // the FSM in-process. Must be wired before SmGate starts receiving.
-    sm_statem_ref() = demo::runtime::LocalRef<SmDaemon>(sm_daemon);
+    sm_statem_ref() = theia::runtime::LocalRef<SmDaemon>(sm_daemon);
 
     if (auto* sm_daemon_cfg = config_mux.bind_node(
             sm_daemon, SmDaemon::kTipcType,

@@ -65,7 +65,6 @@ node atomic CounterNode {
 // Needs auto-kickoff and a TimerService for its phase 3 cancel test.
 node atomic DriverNode {
     tipc type=0xd0010002 instance=0
-    kick_off
     requires_timers
     ports {
         sender inc_out      provides IncIface
@@ -76,7 +75,6 @@ node atomic DriverNode {
 // Periodic "tick" string via handle_info — self-schedules via send_after.
 node atomic TickerNode {
     tipc type=0xd0010003 instance=0
-    kick_off
     requires_timers
     ports {
     }
@@ -88,7 +86,6 @@ node atomic TickerNode {
 // Observer: polls counter.Get every 200ms.
 node atomic ObserverNode {
     tipc type=0xd0010004 instance=0
-    kick_off
     requires_timers
     ports {
         client counter_call requires CounterSrv
@@ -98,7 +95,6 @@ node atomic ObserverNode {
 // Incrementer: every 300ms casts Inc{2} at counter.
 node atomic IncrementerNode {
     tipc type=0xd0010005 instance=0
-    kick_off
     requires_timers
     ports {
         sender inc_out provides IncIface

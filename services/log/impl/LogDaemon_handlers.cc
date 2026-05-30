@@ -16,6 +16,17 @@
 namespace ara::log {
 
 
+// ---- OTP init/1 — runs once on the node thread after start(), before
+//      the first message. Bootstrap a self-driving node's work loop here
+//      (e.g. ::theia::runtime::post_info(*this, "tick")); leave empty for a
+//      passive node. State fields live in impl/LogDaemon_state.hh.
+void LogDaemon::init(LogDaemonState& /*s*/) {
+}
+
+// ---- string handle_info — the post_info()/send_after() tick path.
+void LogDaemon::handle_info(const char* /*info*/, LogDaemonState& /*s*/) {
+}
+
 
 void LogDaemon::handle_cast(const LogRecord& /*msg*/,
                                  LogDaemonState& /*s*/) {

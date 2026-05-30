@@ -10,7 +10,7 @@
 
 #pragma once
 
-namespace demo { namespace runtime { struct NodeBinding; } }
+namespace theia { namespace runtime { struct NodeBinding; } }
 
 namespace services_com {
 
@@ -18,6 +18,6 @@ namespace services_com {
 // SnapshotEnd on `b` (ComDaemon's binding). Each decodes the nanopb struct on
 // the mux epoll thread and feeds SupFirehose::instance(). Idempotent per
 // binding (overwrites any prior entry for the same service_id).
-void register_firehose_casts(demo::runtime::NodeBinding* b);
+void register_firehose_casts(theia::runtime::NodeBinding* b);
 
 }  // namespace services_com

@@ -679,17 +679,25 @@ composition Demo3Way {
 }
 ```
 
-Run:
+Run (once per composition — each is one process):
 
 ```sh
-artheia gen-app-composition demo/system/package.art \
-    --composition Demo3Way \
-    --out applications/demo_composition
+artheia gen-app --kind fc demo/system/demo/component.art \
+    --composition Demo3WayP1 \
+    --out demo/Demo3Way_P1 \
+    --proto-out platform/proto/ --ns demo
 ```
 
-You get one project per process under `applications/demo_composition/`,
-each with a generated `main.cc` doing the wiring. Your job is the
-node implementation files.
+You get a per-composition app dir (`demo/Demo3Way_P1/{lib,impl,main}`)
+that builds on Bazel (`//demo/Demo3Way_P1/main:demo`). The runtime drives
+each node's OTP `init(State&)` after start (self-driving nodes bootstrap
+their loop there); cross-node messaging uses the generated netgraph
+(`cast(*this, msg, netgraph::<peer>)` and a `RemoteRef` alias for sync
+`call`). Your job is the handler bodies + State in the write-once
+`impl/<Node>_{state.hh,handlers.cc}`.
+
+(The older `gen-app-composition` — which emitted only `main.cc` over a
+hand-written node runtime — was retired in favour of this.)
 
 The annotations the generator reads:
 

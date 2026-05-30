@@ -2,15 +2,15 @@
 // source: services/log/system/log/package.art
 
 syntax = "proto3";
-package services_services_log;
+package system_services_log;
 
 enum TraceKind {
-    OTHER = 0;
-    CAST_OUT = 1;
-    CAST_IN = 2;
-    CALL_OUT = 3;
-    CALL_IN = 4;
-    STATEM = 5;
+    TraceKind_OTHER = 0;
+    TraceKind_CAST_OUT = 1;
+    TraceKind_CAST_IN = 2;
+    TraceKind_CALL_OUT = 3;
+    TraceKind_CALL_IN = 4;
+    TraceKind_STATEM = 5;
 }
 
 message LogRecord {

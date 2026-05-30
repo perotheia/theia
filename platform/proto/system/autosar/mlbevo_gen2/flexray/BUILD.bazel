@@ -2,7 +2,7 @@
 # package (the FlexRay bus PDU catalog). .pb.{c,h} are produced by the
 # genrule from flexray.proto; not committed. Consumed by apps that bind
 # FlexRay receivers (e.g. odd_path_client / odd_path_monitor) so their
-# RemoteCodec<services_autosar_mlbevo_gen2_flexray_*> resolve.
+# RemoteCodec<system_autosar_mlbevo_gen2_flexray_*> resolve.
 
 package(default_visibility = ["//visibility:public"])
 

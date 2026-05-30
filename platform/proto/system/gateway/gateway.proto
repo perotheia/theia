@@ -2,7 +2,7 @@
 // source: platform/gateway/system/package.art
 
 syntax = "proto3";
-package services_gateway;
+package system_gateway;
 
 message StatusReport {
     uint32 uptime_ms = 1;

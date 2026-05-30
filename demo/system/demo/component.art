@@ -47,6 +47,6 @@ cluster Applications {
     composition Demo3WayP2 p2
     composition Demo3WayP3 p3
 
-    connect observer.counter_call    to counter.srv
+    connect observer.counter_call    to counter.srv  // FIXME: duplication
     connect incrementer.inc_out      to counter.inc_in
 }

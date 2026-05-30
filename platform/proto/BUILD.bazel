@@ -13,7 +13,9 @@ cc_library(
     name = "platform_protos",
     srcs = [
         "//platform/proto/gateway/system:status_pb_c",
+        "//platform/proto/system/autosar/mlbevo_gen2/flexray:flexray_pb_c",
         "//platform/proto/system/gateway:gateway_pb_c",
+        "//platform/proto/system/odd_path_monitor:odd_path_monitor_pb_c",
         "//platform/proto/system/services/com:com_pb_c",
         "//platform/proto/system/services/exec:exec_pb_c",
         "//platform/proto/system/services/log:log_pb_c",
@@ -24,7 +26,9 @@ cc_library(
     ],
     hdrs = [
         "//platform/proto/gateway/system:status_pb_h",
+        "//platform/proto/system/autosar/mlbevo_gen2/flexray:flexray_pb_h",
         "//platform/proto/system/gateway:gateway_pb_h",
+        "//platform/proto/system/odd_path_monitor:odd_path_monitor_pb_h",
         "//platform/proto/system/services/com:com_pb_h",
         "//platform/proto/system/services/exec:exec_pb_h",
         "//platform/proto/system/services/log:log_pb_h",

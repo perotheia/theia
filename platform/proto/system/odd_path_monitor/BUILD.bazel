@@ -1,0 +1,22 @@
+# Generated nanopb sources for the system.odd_path_monitor package.
+# .pb.{c,h} are produced by the genrule from odd_path_monitor.proto; not committed.
+
+package(default_visibility = ["//visibility:public"])
+
+genrule(
+    name = "odd_path_monitor_pb",
+    srcs = ["odd_path_monitor.proto"],
+    outs = [
+        "odd_path_monitor.pb.c",
+        "odd_path_monitor.pb.h",
+    ],
+    cmd = "set -e;"
+        + " in_dir=$$(dirname $(location odd_path_monitor.proto));"
+        + " out_dir=$$(dirname $(location odd_path_monitor.pb.c));"
+        + " nanopb_generator -I $$in_dir -D $$out_dir odd_path_monitor.proto;",
+    local = True,
+)
+
+filegroup(name = "odd_path_monitor_pb_c", srcs = ["odd_path_monitor.pb.c"])
+filegroup(name = "odd_path_monitor_pb_h", srcs = ["odd_path_monitor.pb.h"])
+filegroup(name = "odd_path_monitor_proto", srcs = ["odd_path_monitor.proto"])

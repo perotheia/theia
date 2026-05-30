@@ -45,7 +45,7 @@
 #include <vector>
 
 using namespace test;
-namespace rt = demo::runtime;
+namespace rt = theia::runtime;
 
 // ---- trace capture: decode the proto3 TraceRecord the producer submits --
 //
@@ -505,7 +505,7 @@ namespace {
 struct TipcCounterState { int32_t counter = 0; };
 
 class TipcCounter
-    : public demo::runtime::GenServer<TipcCounter, TipcCounterState> {
+    : public theia::runtime::GenServer<TipcCounter, TipcCounterState> {
 public:
     static constexpr const char* kNodeName = "TipcCounter";
     platform_runtime_test_GetReply handle_call(const platform_runtime_test_Get&,
@@ -528,7 +528,7 @@ public:
 static std::string case_tipc_concurrent_calls() {
     if (::access("/proc/sys/net/tipc", F_OK) != 0) return {};
 
-    namespace rt = demo::runtime;
+    namespace rt = theia::runtime;
 
     TipcCounter server;
     server.start();
@@ -588,7 +588,7 @@ static std::string case_tipc_concurrent_calls() {
 static std::string case_tipc_trace_correlation() {
     if (::access("/proc/sys/net/tipc", F_OK) != 0) return {};
 
-    namespace rt = demo::runtime;
+    namespace rt = theia::runtime;
 
     TraceCapture cap;
 
@@ -740,7 +740,7 @@ static std::string run_3process_(const char* p1_name,
 // lines appear iff Tracer was enabled.
 static std::string case_tracer_runtime_toggle() {
     using namespace test;
-    namespace rt = demo::runtime;
+    namespace rt = theia::runtime;
 
     TraceCapture cap;
 
@@ -808,7 +808,7 @@ static std::string case_tracer_runtime_toggle() {
 //   (2) filter set to {Foo} + enabled → emit("Foo", ...) fires, emit("Bar", ...) drops.
 //   (3) trace_clear_all → returns to subcase (1) behavior.
 static std::string case_tracer_msg_type_filter() {
-    namespace rt = demo::runtime;
+    namespace rt = theia::runtime;
 
     TraceCapture cap;
 

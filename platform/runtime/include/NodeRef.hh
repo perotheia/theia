@@ -10,7 +10,7 @@
 //                                          to a peer process hosting T.
 //                                          cast/call nanopb-encode the
 //                                          message and send a
-//                                          GW_MSG_GEN_CAST / _CALL frame.
+//                                          ::theia::runtime::kMsgGenCast / _CALL frame.
 //                                          The reply (for call) demuxes
 //                                          on correlation_id, same as
 //                                          the Status RPC we already
@@ -48,7 +48,7 @@
 
 #include <pb_decode.h>
 
-namespace demo {
+namespace theia {
 namespace runtime {
 
 
@@ -97,12 +97,24 @@ public:
     int  fd() const noexcept { return fd_; }
 
     // Send a full frame: 24-byte header + proto_len bytes of payload.
-    bool send_frame(const GwMessageHeader& hdr,
+    bool send_frame(const TheiaMsgHeader& hdr,
                      const uint8_t* payload, uint16_t proto_len);
 
 private:
     int fd_ = -1;
 };
+
+
+// Register a RemoteRef's reply fd with the ONE process TipcMux (the
+// per-app epoll loop) so its call-replies get demuxed there. Type-erased
+// (fd + sink) to avoid a NodeRef<->TipcMux include cycle — defined in
+// TipcMux.cc, a no-op when no process mux was published. Called from
+// RemoteRef::connect() so a synchronous call(ref,...) from inside a
+// handler actually gets pumped.
+void watch_reply_fd(
+    int fd,
+    std::function<void(uint32_t /*corr*/, const uint8_t* /*data*/,
+                       uint16_t /*len*/)> sink);
 
 
 // ---- RemoteRef<T, tipc_type, tipc_instance> ----------------------------
@@ -119,12 +131,22 @@ public:
 
     RemoteRef() = default;
 
-    // Eager connect; must be called once before first cast/call.
+    // Eager connect; must be called once before first cast/call. Also
+    // registers this ref's reply fd with the process TipcMux so a
+    // synchronous call() from inside a handler gets its reply pumped by
+    // the one per-app epoll loop (no-op if no process mux is published —
+    // e.g. a cast-only caller, or a test without a mux).
     bool connect(int timeout_ms = 3000) {
-        return client_.connect(TipcType, TipcInstance, timeout_ms);
+        if (!client_.connect(TipcType, TipcInstance, timeout_ms))
+            return false;
+        watch_reply_fd(client_.fd(),
+            [this](uint32_t corr, const uint8_t* data, uint16_t len) {
+                this->on_reply_(corr, data, len);
+            });
+        return true;
     }
 
-    // Sends a GW_MSG_GEN_CAST frame carrying Msg.
+    // Sends a ::theia::runtime::kMsgGenCast frame carrying Msg.
     // Trace: tagged with the TARGET node's kNodeName (NodeType::kNodeName)
     // so the trace stream stays symmetric with the inbound Recv (also
     // tagged with the target's name). corr_id is the wire-level value,
@@ -136,16 +158,16 @@ public:
         uint8_t buf[256];
         pb_ostream_t os = pb_ostream_from_buffer(buf, sizeof(buf));
         if (!pb_encode(&os, Codec::fields(), &msg)) return false;
-        auto& tr = ::demo::runtime::tracer_for(NodeType::kNodeName);
+        auto& tr = ::theia::runtime::tracer_for(NodeType::kNodeName);
         if (tr.enabled()) {
-            tr.emit(::demo::runtime::TraceEvent::Send,
-                    ::demo::runtime::msg_type_name<Msg>(),
+            tr.emit(::theia::runtime::TraceEvent::Send,
+                    ::theia::runtime::msg_type_name<Msg>(),
                     /*corr_id=*/0,
                     buf, (uint16_t)os.bytes_written);
         }
-        GwMessageHeader hdr{};
-        hdr.bus_type            = GW_BUS_TYPE_RPC;
-        hdr.msg_type            = GW_MSG_GEN_CAST;
+        TheiaMsgHeader hdr{};
+        hdr.bus_type            = ::theia::runtime::kBusTypeRpc;
+        hdr.msg_type            = ::theia::runtime::kMsgGenCast;
         hdr.proto_len           = (uint16_t)os.bytes_written;
         hdr.rpc.service_id      = Codec::service_id;
         hdr.rpc.method_id       = 0;
@@ -153,7 +175,7 @@ public:
         return client_.send_frame(hdr, buf, (uint16_t)os.bytes_written);
     }
 
-    // Sends a GW_MSG_GEN_CALL frame, returns a future for the reply.
+    // Sends a ::theia::runtime::kMsgGenCall frame, returns a future for the reply.
     // The reply demuxer (run by the caller's TipcMux on inbound) wakes
     // this future when the matching correlation_id arrives.
     template <typename Reply, typename Req>
@@ -187,9 +209,9 @@ public:
                 std::runtime_error("pb_encode failed")));
             return fut;
         }
-        GwMessageHeader hdr{};
-        hdr.bus_type           = GW_BUS_TYPE_RPC;
-        hdr.msg_type           = GW_MSG_GEN_CALL;
+        TheiaMsgHeader hdr{};
+        hdr.bus_type           = ::theia::runtime::kBusTypeRpc;
+        hdr.msg_type           = ::theia::runtime::kMsgGenCall;
         hdr.proto_len          = (uint16_t)os.bytes_written;
         hdr.rpc.service_id     = Codec::service_id;
         hdr.rpc.method_id      = 0;
@@ -197,10 +219,10 @@ public:
         // Trace the outbound CALL request. corr is the wire-level id;
         // the matching Recv on the server side and the CallResult on
         // this side will both carry it.
-        auto& tr = ::demo::runtime::tracer_for(NodeType::kNodeName);
+        auto& tr = ::theia::runtime::tracer_for(NodeType::kNodeName);
         if (tr.enabled()) {
-            tr.emit(::demo::runtime::TraceEvent::Send,
-                    ::demo::runtime::msg_type_name<Req>(),
+            tr.emit(::theia::runtime::TraceEvent::Send,
+                    ::theia::runtime::msg_type_name<Req>(),
                     corr, buf, (uint16_t)os.bytes_written);
         }
         if (!client_.send_frame(hdr, buf, (uint16_t)os.bytes_written)) {
@@ -212,7 +234,7 @@ public:
         return fut;
     }
 
-    // Called by the per-process TipcMux when a GW_MSG_GEN_CALL_REPLY
+    // Called by the per-process TipcMux when a ::theia::runtime::kMsgGenCallReply
     // arrives on this RemoteRef's client fd. Looks up the pending
     // promise by correlation_id and fulfills it.
     void on_reply_(uint32_t corr, const uint8_t* data, uint16_t len) {
@@ -220,9 +242,9 @@ public:
         // caller (whoever's holding the future) sees this as the
         // moment "the reply landed on the wire". Paired with the
         // SendReply event emitted by the server-side TipcMux.
-        auto& tr = ::demo::runtime::tracer_for(NodeType::kNodeName);
+        auto& tr = ::theia::runtime::tracer_for(NodeType::kNodeName);
         if (tr.enabled()) {
-            tr.emit(::demo::runtime::TraceEvent::CallResult,
+            tr.emit(::theia::runtime::TraceEvent::CallResult,
                     /*msg_type_name=*/"reply",
                     corr, data, len);
         }
@@ -296,17 +318,17 @@ void cast(Daemon& /*self*/, const Msg& msg, TipcAddr addr) {
     pb_ostream_t os = pb_ostream_from_buffer(buf, sizeof(buf));
     if (!pb_encode(&os, Codec::fields(), &msg)) return;
 
-    auto& tr = ::demo::runtime::tracer_for(Daemon::kNodeName);
+    auto& tr = ::theia::runtime::tracer_for(Daemon::kNodeName);
     if (tr.enabled()) {
-        tr.emit(::demo::runtime::TraceEvent::Send,
-                ::demo::runtime::msg_type_name<Msg>(),
+        tr.emit(::theia::runtime::TraceEvent::Send,
+                ::theia::runtime::msg_type_name<Msg>(),
                 /*corr_id=*/0,
                 buf, (uint16_t)os.bytes_written);
     }
 
-    GwMessageHeader hdr{};
-    hdr.bus_type            = GW_BUS_TYPE_RPC;
-    hdr.msg_type            = GW_MSG_GEN_CAST;
+    TheiaMsgHeader hdr{};
+    hdr.bus_type            = ::theia::runtime::kBusTypeRpc;
+    hdr.msg_type            = ::theia::runtime::kMsgGenCast;
     hdr.proto_len           = (uint16_t)os.bytes_written;
     hdr.rpc.service_id      = Codec::service_id;
     hdr.rpc.method_id       = 0;
@@ -367,4 +389,4 @@ RequestId<Reply, Act> send_request(RemoteRef<T, TT, TI>& ref,
 }
 
 }  // namespace runtime
-}  // namespace demo
+}  // namespace theia

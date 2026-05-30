@@ -1,4 +1,4 @@
-// platform::runtime::Logger
+// theia::runtime::Logger
 //
 // Minimal logging surface. The app receives a shared_ptr<Logger> from
 // the runtime so multiple components can share one sink without
@@ -21,7 +21,7 @@
 #include <memory>
 #include <string>
 
-namespace platform {
+namespace theia {
 namespace runtime {
 
 enum class LogLevel {
@@ -110,4 +110,4 @@ void    set_process_logger(std::shared_ptr<Logger> logger) noexcept;
 Logger& process_logger() noexcept;
 
 }  // namespace runtime
-}  // namespace platform
+}  // namespace theia

@@ -18,7 +18,7 @@
 //     #include "HeartbeatReport.pb.h"        // must be findable via -I
 //     #include "SendTimeoutReport.pb.h"
 //
-//     platform::runtime::HeartbeatPublisher hb("my_node");
+//     theia::runtime::HeartbeatPublisher hb("my_node");
 //     if (hb.open()) hb.start(/*period_ms=*/1000);
 //     // ... rest of node startup ...
 //
@@ -44,7 +44,7 @@
 #include <thread>
 #include <unistd.h>
 
-namespace platform { namespace runtime {
+namespace theia { namespace runtime {
 
 class HeartbeatPublisher {
 public:
@@ -168,4 +168,4 @@ private:
     uint32_t                period_ms_ = 0;
 };
 
-}}  // namespace platform::runtime
+}}  // namespace theia::runtime

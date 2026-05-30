@@ -1,4 +1,4 @@
-// demo::runtime::Tracer — runtime-toggleable per-node-type tracing.
+// theia::runtime::Tracer — runtime-toggleable per-node-type tracing.
 //
 // Producer (the node's framework dispatch points) emits a small trace
 // record on each interesting event. Records are tiny by design: a
@@ -41,9 +41,9 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-#include "gw_proto.h"       // GwMessageHeader / GW_MSG_GEN_CAST framing
+#include "TheiaMsgHeader.hh"  // theia::runtime::TheiaMsgHeader + msg-type consts
 
-namespace demo {
+namespace theia {
 namespace runtime {
 
 // Event kinds. Numeric so the trace record can carry them as a byte
@@ -152,15 +152,15 @@ public:
         test_sink_ = std::move(sink);
     }
 
-    // Frame [GwMessageHeader|GEN_CAST][proto-wire TraceRecord] and send it.
+    // Frame [TheiaMsgHeader|GEN_CAST][proto-wire TraceRecord] and send it.
     // Lossy by design — returns void; any failure is silently dropped.
     void submit(const std::string& record_wire) noexcept {
         std::lock_guard<std::mutex> lk(mu_);
         if (test_sink_) { test_sink_(record_wire); return; }
         if (!ensure_open_locked()) return;
-        GwMessageHeader hdr{};
-        hdr.bus_type           = GW_BUS_TYPE_RPC;
-        hdr.msg_type           = GW_MSG_GEN_CAST;
+        TheiaMsgHeader hdr{};
+        hdr.bus_type           = ::theia::runtime::kBusTypeRpc;
+        hdr.msg_type           = ::theia::runtime::kMsgGenCast;
         hdr.proto_len          = static_cast<uint16_t>(record_wire.size());
         hdr.rpc.service_id     = kRecordServiceId;
         hdr.rpc.method_id      = 0;
@@ -397,7 +397,7 @@ private:
 
 // Mint a synthetic correlation id for local trace points (where no
 // wire-level correlation_id exists). Remote/RPC paths use the real
-// correlation_id from GwMessageHeader instead. Both share the
+// correlation_id from TheiaMsgHeader instead. Both share the
 // 32-bit space; collisions don't matter because the trace stream
 // distinguishes by (corr_id, msg_type) within the same node's events.
 inline uint32_t next_trace_corr_id() noexcept {
@@ -432,4 +432,4 @@ inline Tracer& tracer_for(const char* node_name) {
 }
 
 }  // namespace runtime
-}  // namespace demo
+}  // namespace theia

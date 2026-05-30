@@ -1,4 +1,4 @@
-// platform::runtime::LifecycleInterface
+// theia::runtime::LifecycleInterface
 //
 // The base class generated apps inherit from. The runtime calls OnCreate
 // after constructing the app, OnStart when subscriptions go live, and
@@ -7,7 +7,7 @@
 
 #pragma once
 
-namespace platform {
+namespace theia {
 namespace runtime {
 
 class LifecycleInterface {
@@ -27,4 +27,4 @@ class LifecycleInterface {
 };
 
 }  // namespace runtime
-}  // namespace platform
+}  // namespace theia

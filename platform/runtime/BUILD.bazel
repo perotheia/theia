@@ -9,12 +9,15 @@ the existing OddPathMonitor stack still consumes. Lives at the
 workspace top level because it sits above both applications/ and
 services/.
 
-Wire / serialization helpers (RemoteCodec, encode_for_trace) include
-libgw's gw_proto.h, so this library carries a transitive dep on
-//gateway/libs/libgw:gw.
+Wire / serialization helpers (RemoteCodec, encode_for_trace, TipcMux,
+NodeRef) frame their bytes with the canonical theia::runtime::TheiaMsgHeader
+(include/TheiaMsgHeader.hh) — a self-contained 24-byte RPC header owned by
+the runtime. This library no longer depends on libgw's gw_proto.h; the
+runtime→gateway dependency was severed (TheiaMsgHeader extracted the RPC
+subset the runtime actually used, layout-exact).
 
-Don't put gateway-comms-specific code here (CMP wire framing, FIBEX,
-PSP loading). That stays in gateway/libs/{pero_cmp_lnx, libgw}.
+Don't put gateway-comms-specific code here (CMP wire framing, FIBEX, PSP
+loading, CAN/FlexRay bus framing). That stays in the gateway.
 """
 
 package(default_visibility = ["//visibility:public"])
@@ -56,7 +59,7 @@ cc_library(
         "-std=c++17",   # gen_server stack uses inline-vars + if-constexpr
         "-fPIC",
     ],
-    deps = ["//gateway/libs/libgw:gw"],
+    deps = [],
     linkopts = [
         "-lpthread",
         "-l:libprotobuf-nanopb.a",

@@ -1,4 +1,4 @@
-// demo::runtime::TimerService — erlang:send_after / cancel_timer.
+// theia::runtime::TimerService — erlang:send_after / cancel_timer.
 //
 // send_after IS a (deferred) message send. The Erlang spec literally
 // reads: "after TimeMs ms → send Msg to Dest". When the timer fires,
@@ -42,7 +42,7 @@
 #include <utility>
 #include <vector>
 
-namespace demo {
+namespace theia {
 namespace runtime {
 
 class TimerService;
@@ -252,5 +252,18 @@ void send_request_with_timeout(Server& server,
         [fire_lambda]() { (*fire_lambda)(); });
 }
 
+// ---- process-wide TimerService accessor ----------------------------------
+//
+// Mirrors process_logger(): main constructs the one TimerService and
+// publishes a NON-OWNING pointer here once, before nodes start; any node
+// thread then reaches it via process_timers() to send_after() /
+// cancel_timer() — so a `requires_timers` node needs no ctor injection.
+// (TimerService is non-copyable + owns a thread, hence a pointer, not a
+// lazily-created shared_ptr like the logger.) Calling process_timers()
+// before publish is a wiring bug — the generated main always publishes
+// when any node `requires_timers`.
+void           set_process_timers(TimerService* timers) noexcept;
+TimerService&  process_timers() noexcept;
+
 }  // namespace runtime
-}  // namespace demo
+}  // namespace theia

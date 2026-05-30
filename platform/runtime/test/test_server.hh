@@ -48,7 +48,7 @@ struct TestServerState {
 };
 
 class TestServer
-    : public demo::runtime::GenServer<TestServer, TestServerState> {
+    : public theia::runtime::GenServer<TestServer, TestServerState> {
 public:
     static constexpr const char* kNodeName = "TestServer";
     GetReply handle_call(const Get&, TestServerState& s) {
@@ -90,7 +90,7 @@ struct CallerState {
 // send_request_with_timeout posts back onto its mailbox, which means
 // the typed callbacks run on the caller's own thread.
 class TestCaller
-    : public demo::runtime::GenServer<TestCaller, CallerState> {
+    : public theia::runtime::GenServer<TestCaller, CallerState> {
 public:
     static constexpr const char* kNodeName = "TestCaller";
     void handle_call_result(const GetReply& r, const CallAct& a,

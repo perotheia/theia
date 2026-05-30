@@ -1,0 +1,25 @@
+# FIRST-TIME-ONLY (regenerated with --force). source: system/odd_path_monitor/component.art
+#
+# Impl slice — handler bodies. The user owns this BUILD.bazel after
+# first emit (you may want to add per-FC test_*.cc files; gen-app
+# won't reach in and squash that).
+
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "odd_path_monitor_impl",
+    srcs = [
+        "FlexRayIngress_handlers.cc",
+    ],
+    copts = [
+        "-std=c++17",
+        "-Wall",
+        "-Wextra",
+        "-fPIC",
+    ],
+    deps = [
+        "//applications/odd_path_client/lib:odd_path_monitor_lib",
+    ],
+)

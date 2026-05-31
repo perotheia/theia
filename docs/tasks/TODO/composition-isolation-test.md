@@ -266,6 +266,13 @@ sequenceDiagram
 
 ---
 
-> Status: DESIGN — verify with user across iterations before an implementation
-> plan. Nothing implemented. The Tracer `kRecordServiceId` 0xb17a→0xf45b fix is
-> the one pre-existing regression noted here.
+> Status: IN IMPLEMENTATION.
+> - Step 1 (trace service_id fix) DONE — commit a3bc5ad.
+> - Step 2 (ring-buffer trace hub + remote Subscribe) DONE — commit 112ceb0;
+>   TraceStreamPump (runnable) + TraceCtl (atomic) share a process-global
+>   TraceHub; verified e2e by demo/test/trace_collector_fanout.py. The probe
+>   bind-instance fix is artheia commit 278b52c.
+> - Remaining: Step 3 artheia.observer (Python, libprotobuf+JSON over the
+>   subscribe wire), Step 4 supervisor SuspendChild/ResumeChild (op 12/13 +
+>   held flag), Step 5 tdb TUI. Plus the Cleanup section (gRPC bridge /
+>   ProbeDaemon / SmProbe / TRC-v1 removal).

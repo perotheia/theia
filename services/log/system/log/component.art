@@ -1,9 +1,12 @@
 package system.services.log
 
 
-// Both daemons of the LOG/TRACE FC in one composition: the syslog sink
-// (LogDaemon) and the trace fan-out service (TraceCollector).
+// The LOG/TRACE FC: the syslog sink (LogDaemon) plus the trace hub, which is
+// two nodes sharing a process-global TraceHub — TraceStreamPump (runnable, raw
+// record stream + ring + fan-out) and TraceCtl (atomic, Subscribe/Configure
+// control). All three run in the one log process.
 composition Log {
-    prototype LogDaemon      log_daemon
-    prototype TraceCollector trace_collector
+    prototype LogDaemon       log_daemon
+    prototype TraceStreamPump trace_pump
+    prototype TraceCtl        trace_ctl
 }

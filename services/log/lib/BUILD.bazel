@@ -15,8 +15,10 @@ cc_library(
     hdrs = [
         "LogDaemon.hh",
         "LogDaemon_netgraph.hh",
-        "TraceCollector.hh",
-        "TraceCollector_netgraph.hh",
+        "TraceStreamPump.hh",
+        "TraceStreamPump_netgraph.hh",
+        "TraceCtl.hh",
+        "TraceCtl_netgraph.hh",
         "log_codecs.hh",
         "Log.hh",
     ],

@@ -41,3 +41,10 @@ message TraceEmpty {
     // empty body
 }
 
+message SubscribeReq {
+    uint32 sub_type = 1;
+    uint32 sub_instance = 2;
+    uint32 kind = 3;
+    string target_node = 4;
+}
+

@@ -272,7 +272,10 @@ sequenceDiagram
 >   TraceStreamPump (runnable) + TraceCtl (atomic) share a process-global
 >   TraceHub; verified e2e by demo/test/trace_collector_fanout.py. The probe
 >   bind-instance fix is artheia commit 278b52c.
-> - Remaining: Step 3 artheia.observer (Python, libprotobuf+JSON over the
->   subscribe wire), Step 4 supervisor SuspendChild/ResumeChild (op 12/13 +
->   held flag), Step 5 tdb TUI. Plus the Cleanup section (gRPC bridge /
->   ProbeDaemon / SmProbe / TRC-v1 removal).
+> - Step 3 (artheia.observer) DONE — artheia commit 3484fb0, test 8b900eb.
+>   TraceObserver.from_log_art(...).start()/records()/stop(); resolves TraceCtl
+>   + Subscribe from the log .art; decodes via libprotobuf + JSON. Verified e2e
+>   by demo/test/observer_stream.py.
+> - Remaining: Step 4 supervisor SuspendChild/ResumeChild (op 12/13 + held
+>   flag), Step 5 tdb TUI (over artheia.observer). Plus the Cleanup section
+>   (gRPC bridge / ProbeDaemon / SmProbe / TRC-v1 removal).

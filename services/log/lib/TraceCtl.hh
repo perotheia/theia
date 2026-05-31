@@ -4,7 +4,7 @@
 // Lib slice — message wiring + class declaration for ONE node. An FC
 // may declare several nodes; each gets its own <Node>.hh (this file).
 // Regenerated on every gen-app run. User edits land in
-// impl/TraceCollector_handlers.cc.
+// impl/TraceCtl_handlers.cc.
 
 #pragma once
 
@@ -18,7 +18,7 @@
 // Included at GLOBAL scope (the header opens its own `namespace
 // ara::log`) so it isn't nested under this file's
 // namespace block — bound as the GenServer State type below.
-#include "impl/TraceCollector_state.hh"
+#include "impl/TraceCtl_state.hh"
 
 #include <algorithm>
 #include <cstdint>
@@ -33,7 +33,7 @@
 namespace ara::log {
 
 
-// ---- TraceCollector ----------------------------------------------------------
+// ---- TraceCtl ----------------------------------------------------------
 
 // Local-namespace aliases over the nanopb C structs. The nanopb
 // generator prefixes types with the libc-safe proto package
@@ -41,7 +41,7 @@ namespace ara::log {
 // signatures readable.
 using TraceConfigRequest = system_services_log_TraceConfigRequest;
 using TraceEmpty = system_services_log_TraceEmpty;
-using TraceRecord = system_services_log_TraceRecord;
+using SubscribeReq = system_services_log_SubscribeReq;
 using LogRecord = system_services_log_LogRecord;
 
 
@@ -49,16 +49,14 @@ using LogRecord = system_services_log_LogRecord;
 // One subscriber on every sender-port broadcast. Free-function so
 // the daemon doesn't care whether delivery is in-process, TIPC, or
 // gRPC. Subscribers MUST be best-effort.
-using Stream_outRecSubscriber =
-    std::function<void(const TraceRecord&)>;
 using To_logRecordSubscriber =
     std::function<void(const LogRecord&)>;
 
 
-class TraceCollector : public ::theia::runtime::GenServer<TraceCollector, TraceCollectorState> {
+class TraceCtl : public ::theia::runtime::GenServer<TraceCtl, TraceCtlState> {
 public:
-    static constexpr const char* kNodeName = "trace_collector";
-    static constexpr uint32_t kTipcType     = 0x80010013u;
+    static constexpr const char* kNodeName = "trace_ctl";
+    static constexpr uint32_t kTipcType     = 0x80010014u;
     static constexpr uint32_t kTipcInstance = 0u;
 
     // AUTOSAR Reporting / Non-Reporting flag (per .art `reporting`
@@ -74,7 +72,7 @@ public:
     // overload by name, so register_cast<LogLevelPush> wouldn't
     // resolve. This using-decl keeps both visible; overload resolution
     // then picks the right one per message type.
-    using ::theia::runtime::GenServer<TraceCollector, TraceCollectorState>::handle_cast;
+    using ::theia::runtime::GenServer<TraceCtl, TraceCtlState>::handle_cast;
 
     // ---- Trace config (reporting=true only) -----------------------
     //
@@ -102,11 +100,6 @@ public:
 
     // ---- Subscriber registration ----------------------------------
 
-    // stream_out.rec broadcast subscribers.
-    uint32_t subscribe_stream_out_rec(
-        Stream_outRecSubscriber s);
-    void     unsubscribe_stream_out_rec(uint32_t id);
-
     // to_log.record broadcast subscribers.
     uint32_t subscribe_to_log_record(
         To_logRecordSubscriber s);
@@ -123,7 +116,7 @@ public:
     // delivered as untyped bytes. Cross-node traffic is exclusively typed
     // cast/call. The only handle_info is the LOCAL string clause below
     // (post_info / self-tick).
-    void terminate(const char* /*reason*/, TraceCollectorState& /*s*/) noexcept {}
+    void terminate(const char* /*reason*/, TraceCtlState& /*s*/) noexcept {}
 
     // ---- handle_cast / handle_call — declared here, body in impl
     //
@@ -133,46 +126,36 @@ public:
     // gets emitted once. handle_call/handle_cast dispatch by
     // request type, not by port.
 
-    void handle_cast(const TraceRecord& msg, TraceCollectorState& s);
-
 
     TraceEmpty handle_call(const TraceConfigRequest& req,
-                                            TraceCollectorState& s);
+                                            TraceCtlState& s);
+
+    TraceEmpty handle_call(const SubscribeReq& req,
+                                            TraceCtlState& s);
 
 
-    // ---- OTP init/1 — body in impl (TraceCollector_handlers.cc) ----------
+    // ---- OTP init/1 — body in impl (TraceCtl_handlers.cc) ----------
     //
     // Called ONCE by the runtime on this node's thread after start(),
     // before the first mailbox item (GenServer::dispatch_init_). A
     // self-driving node bootstraps its work loop here (e.g.
     // ::theia::runtime::post_info(*this, "tick")); a passive node leaves it
     // empty. Emitted for every node so the hook is always visible.
-    void init(TraceCollectorState& s);
+    void init(TraceCtlState& s);
 
     // ---- string handle_info — body in impl ----------------------------
     //
     // The post_info()/send_after() string-message path (timer loops,
     // internal ticks). LOCAL-ONLY opaque signal — never crosses the wire.
     // Declared so a node can override the GenServer base no-op in its impl.
-    void handle_info(const char* info, TraceCollectorState& s);
+    void handle_info(const char* info, TraceCtlState& s);
 
     // ---- send helpers — bodies in impl (the broadcast fan-out)
-
-    void broadcast_stream_out_rec(const TraceRecord& msg);
 
     void broadcast_to_log_record(const LogRecord& msg);
 
 
 private:
-
-    struct Stream_outRecEntry {
-        uint32_t id;
-        Stream_outRecSubscriber fn;
-    };
-    std::mutex stream_out_rec_mu_;
-    uint32_t stream_out_rec_next_id_{1};
-    std::vector<Stream_outRecEntry>
-        stream_out_rec_subs_;
 
     struct To_logRecordEntry {
         uint32_t id;
@@ -188,38 +171,7 @@ private:
 // Subscriber registration — defined in the lib slice (not impl) so
 // it stays auto-generated. The user touches handle_* in impl.
 
-inline uint32_t TraceCollector::subscribe_stream_out_rec(
-        Stream_outRecSubscriber s) {
-    std::lock_guard<std::mutex> lk(stream_out_rec_mu_);
-    uint32_t id = stream_out_rec_next_id_++;
-    stream_out_rec_subs_.push_back({id, std::move(s)});
-    return id;
-}
-
-inline void TraceCollector::unsubscribe_stream_out_rec(uint32_t id) {
-    std::lock_guard<std::mutex> lk(stream_out_rec_mu_);
-    auto& v = stream_out_rec_subs_;
-    v.erase(std::remove_if(v.begin(), v.end(),
-              [id](const auto& e) { return e.id == id; }), v.end());
-}
-
-inline void TraceCollector::broadcast_stream_out_rec(const TraceRecord& msg) {
-    std::vector<Stream_outRecEntry> snap;
-    {
-        std::lock_guard<std::mutex> lk(stream_out_rec_mu_);
-        snap = stream_out_rec_subs_;
-    }
-    for (const auto& e : snap) {
-        try { e.fn(msg); }
-        catch (...) {
-            std::fprintf(stderr,
-                "[%s] subscriber %u threw on stream_out.rec — dropping\n",
-                kNodeName, e.id);
-        }
-    }
-}
-
-inline uint32_t TraceCollector::subscribe_to_log_record(
+inline uint32_t TraceCtl::subscribe_to_log_record(
         To_logRecordSubscriber s) {
     std::lock_guard<std::mutex> lk(to_log_record_mu_);
     uint32_t id = to_log_record_next_id_++;
@@ -227,14 +179,14 @@ inline uint32_t TraceCollector::subscribe_to_log_record(
     return id;
 }
 
-inline void TraceCollector::unsubscribe_to_log_record(uint32_t id) {
+inline void TraceCtl::unsubscribe_to_log_record(uint32_t id) {
     std::lock_guard<std::mutex> lk(to_log_record_mu_);
     auto& v = to_log_record_subs_;
     v.erase(std::remove_if(v.begin(), v.end(),
               [id](const auto& e) { return e.id == id; }), v.end());
 }
 
-inline void TraceCollector::broadcast_to_log_record(const LogRecord& msg) {
+inline void TraceCtl::broadcast_to_log_record(const LogRecord& msg) {
     std::vector<To_logRecordEntry> snap;
     {
         std::lock_guard<std::mutex> lk(to_log_record_mu_);

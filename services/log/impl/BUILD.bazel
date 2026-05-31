@@ -16,7 +16,8 @@ cc_library(
     name = "log_state",
     hdrs = [
         "LogDaemon_state.hh",
-        "TraceCollector_state.hh",
+        "TraceCtl_state.hh",
+        # TraceStreamPump is a GenRunnable — no State struct/header.
     ],
     # The lib #includes these as "impl/<Node>_state.hh", so the include
     # root is the FC out_dir (one above impl/).
@@ -29,8 +30,14 @@ cc_library(
     name = "log_impl",
     srcs = [
         "LogDaemon_handlers.cc",
-        "TraceCollector_handlers.cc",
+        "TraceStreamPump_handlers.cc",
+        "TraceCtl_handlers.cc",
     ],
+    # The two trace nodes share the process-global TraceHub (ring +
+    # subscriber registry). `..` so they resolve `#include "impl/trace_hub.hpp"`
+    # from the services/log/ root.
+    hdrs = ["trace_hub.hpp"],
+    includes = [".."],
     copts = [
         "-std=c++17",
         "-Wall",

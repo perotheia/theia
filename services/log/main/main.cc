@@ -6,7 +6,8 @@
 // impl/<Node>_handlers.cc (one per node).
 
 #include "lib/LogDaemon.hh"
-#include "lib/TraceCollector.hh"
+#include "lib/TraceStreamPump.hh"
+#include "lib/TraceCtl.hh"
 
 #include "TimerService.hh"
 #include "Logger.hh"     // parse_log_level / MakeContextLogger / process_logger
@@ -90,30 +91,37 @@ int main() {
     }
 
 
-    TraceCollector trace_collector;
-    trace_collector.start();
-    std::fprintf(stderr, "[trace_collector] up — TIPC type=0x%x instance=%u\n",
-                 TraceCollector::kTipcType, TraceCollector::kTipcInstance);
+    TraceStreamPump trace_stream_pump;
+    trace_stream_pump.start();
+    std::fprintf(stderr, "[trace_stream_pump] up — TIPC type=0x%x instance=%u\n",
+                 TraceStreamPump::kTipcType, TraceStreamPump::kTipcInstance);
 
-    if (auto* trace_collector_cfg = config_mux.bind_node(
-            trace_collector, TraceCollector::kTipcType,
-            TraceCollector::kTipcInstance)) {
+
+    TraceCtl trace_ctl;
+    trace_ctl.start();
+    std::fprintf(stderr, "[trace_ctl] up — TIPC type=0x%x instance=%u\n",
+                 TraceCtl::kTipcType, TraceCtl::kTipcInstance);
+
+    if (auto* trace_ctl_cfg = config_mux.bind_node(
+            trace_ctl, TraceCtl::kTipcType,
+            TraceCtl::kTipcInstance)) {
         config_mux.register_cast<platform_runtime_LogLevelPush>(
-            trace_collector_cfg, trace_collector);
+            trace_ctl_cfg, trace_ctl);
         // Trace control (#403): supervisor pushes TraceControlPush to flip
         // this node's Tracer kind filter — same path as LogLevelPush.
         config_mux.register_cast<platform_runtime_TraceControlPush>(
-            trace_collector_cfg, trace_collector);
+            trace_ctl_cfg, trace_ctl);
         // Receiver ports (#387): register the node's declared inbound
         // types so a real peer — or a robot-test inject via services/com
         // — lands on the same handle_call / handle_cast path. clientServer
         // ops → register_call; senderReceiver `in` data → register_cast.
         config_mux.register_call<TraceConfigRequest, TraceEmpty>(
-            trace_collector_cfg, trace_collector);
-        config_mux.register_cast<TraceRecord>(trace_collector_cfg, trace_collector);
+            trace_ctl_cfg, trace_ctl);
+        config_mux.register_call<SubscribeReq, TraceEmpty>(
+            trace_ctl_cfg, trace_ctl);
     } else {
         std::fprintf(stderr,
-                     "[trace_collector] WARN: config service bind failed; "
+                     "[trace_ctl] WARN: config service bind failed; "
                      "live log-level push + signal inject disabled\n");
     }
 
@@ -132,7 +140,9 @@ int main() {
 
     log_daemon.stop("signal");
 
-    trace_collector.stop("signal");
+    trace_stream_pump.stop("signal");
+
+    trace_ctl.stop("signal");
 
     return 0;
 }

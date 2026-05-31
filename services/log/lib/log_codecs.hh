@@ -30,6 +30,7 @@
 
 
 DEMO_DECLARE_REMOTE_CODEC(system_services_log_LogRecord)
+DEMO_DECLARE_REMOTE_CODEC(system_services_log_TraceRecord)
 DEMO_DECLARE_REMOTE_CODEC(system_services_log_TraceConfigRequest)
 DEMO_DECLARE_REMOTE_CODEC(system_services_log_TraceEmpty)
-DEMO_DECLARE_REMOTE_CODEC(system_services_log_TraceRecord)
+DEMO_DECLARE_REMOTE_CODEC(system_services_log_SubscribeReq)

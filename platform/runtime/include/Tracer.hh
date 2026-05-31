@@ -42,6 +42,7 @@
 #include <unistd.h>
 
 #include "TheiaMsgHeader.hh"  // theia::runtime::TheiaMsgHeader + msg-type consts
+#include "RemoteCodec.hh"     // hash_msg_type_ (derives kRecordServiceId)
 
 namespace theia {
 namespace runtime {
@@ -132,10 +133,16 @@ public:
     static constexpr uint32_t kCollectorTipcInstance = 0u;
 
     // service_id the collector's in_records registers: djb2_low16 of the
-    // nanopb C type name "services_services_log_TraceRecord". The runtime
-    // submits under THAT name (the on-wire contract), regardless of what
-    // it calls the type internally. Keep in sync with RemoteCodec's djb2.
-    static constexpr uint16_t kRecordServiceId = 0xb17au;
+    // nanopb C type name. The runtime submits under THAT name (the on-wire
+    // contract). DERIVED from the name via the same hash RemoteCodec uses, so
+    // it can never drift: when the proto package was renamed services_->system_
+    // the hardcoded 0xb17a (old "services_services_log_TraceRecord") silently
+    // stopped matching the collector's register_cast — deriving it fixes that
+    // and forecloses the whole class of bug.
+    static constexpr const char* kRecordTypeName =
+        "system_services_log_TraceRecord";
+    static constexpr uint16_t kRecordServiceId =
+        ::theia::runtime::hash_msg_type_(kRecordTypeName);
 
     static TraceSubmitter& instance() {
         static TraceSubmitter s;

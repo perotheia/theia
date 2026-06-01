@@ -159,11 +159,20 @@ Landed + verified end-to-end:
 was a misdiagnosis: they were just missing the DEMO_→THEIA_DECLARE_REMOTE_CODEC
 rename in demo/*/lib/demo_codecs.hh, which poisoned the TU parse. Fixed.)
 
-REMAINING for the FULL e2e (S6–S7): build the `tdb` CLI on the probe-backed
-clients (tools/tdb/tdb_client.py — B2 resolved + proven live), wire the firehose
-reassembler (B3: GetTree returns empty, live tree is the NodeEdge/NodeState
-stream), drop tools/supdbg, then `tdb trace <node>` → ConfigureTrace → Subscribe
-→ decode records (S7). All runnable on this host (`modprobe tipc`).
+- **S6 (tdb CLI)** ✅ MOSTLY DONE. tools/tdb/tdb.py — adb-shaped, two modes
+  (one-shot argv + prompt_toolkit REPL). Verbs: ps / supervisor / trace /
+  trace-config / restart / terminate / logcat. Probe-backed. Verified LIVE over
+  TIPC: ps renders the tree, supervisor shows host facts, trace/trace-config
+  round-trip, terminate stop-and-holds.
+- **B3 (GetTree empty)** ✅ RESOLVED server-side: Supervisor::ctl_get_tree()
+  walks the tree into TreeSnapshot.children (no firehose reassembler needed for
+  the snapshot path). `tdb ps` consumes it directly.
+
+REMAINING for the FULL e2e: (S7) `tdb logcat` end-to-end — the TraceClient
+(artheia.observer) path is wired but needs a live `tdb trace X` → records
+flowing test against a real reporting FC (observer_stream proves the wire).
+Then: drop tools/supdbg (tdb supersedes it); wire `logcat -g/-c` (ring
+size/clear). All runnable on this host (`modprobe tipc`).
 
 ## Sequencing reality
 

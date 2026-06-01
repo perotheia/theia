@@ -417,20 +417,6 @@ private:
     // on the first heartbeat after a gap (re-push). No-op when the
     // child has no stored level.
     void push_log_level_to_child(const std::string& child_name);
-
-    // ---- SM startup handshake (T1) ----------------------------------
-    //
-    // Once all children are up and have had a moment to bind their TIPC
-    // sockets, the supervisor tells the state-manager the platform has
-    // booted: it casts SystemBoot (OFF→STARTING) then StartupComplete
-    // (STARTING→RUNNING) to sm's TIPC name — the standard
-    // GwMessageHeader wire shape sm's runtime decodes, same path as the
-    // #386 log-level push. Both are empty messages (zero payload);
-    // service_id = djb2 of the nanopb C type name. Fired ONCE from run()
-    // after a short grace window; sm_ready_sent_ guards re-sends.
-    void send_sm_ready();
-    bool                                  sm_ready_sent_{false};
-    std::chrono::steady_clock::time_point sm_ready_deadline_{};
 };
 
 }  // namespace supervisor

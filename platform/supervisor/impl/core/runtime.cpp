@@ -672,12 +672,6 @@ int Supervisor::run() {
     // op into this engine. No ControlServer / TipcPublisher here any more —
     // this loop is purely the supervision state owner.
 
-    // T1: arm the SM startup handshake. Children were just forked; give
-    // them a grace window to bind their TIPC sockets, then send_sm_ready()
-    // (below, in the loop) casts SystemBoot + StartupComplete to sm.
-    sm_ready_deadline_ =
-        std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
-
     while (!shutdown_requested_.load()) {
         // Wait for signalfd OR the command-queue eventfd readable; budget 1s
         // so we wake periodically for heartbeat / snapshot ticks anyway.
@@ -737,15 +731,6 @@ int Supervisor::run() {
         // Reap any exited workers, regardless of whether select returned a
         // signalfd event — we may have missed coalesced SIGCHLDs.
         reap();
-
-        // T1: once the post-boot grace window elapses, send the SM
-        // startup handshake exactly once (children have had time to bind
-        // their TIPC sockets).
-        if (!sm_ready_sent_ &&
-            std::chrono::steady_clock::now() >= sm_ready_deadline_) {
-            send_sm_ready();
-            sm_ready_sent_ = true;
-        }
 
         // Deferred config re-apply on (re)start. A child armed in
         // start_worker() whose grace window has elapsed gets its stored
@@ -1947,36 +1932,8 @@ void Supervisor::push_log_level_to_child(const std::string& child_name) {
     }
 }
 
-// T1: tell the state-manager the platform has booted. sm's statem is
-// OFF --SystemBoot--> STARTING --StartupComplete--> RUNNING, so we cast
-// both in sequence to sm's TIPC name (0x8001000D:0). Both are empty
-// messages (zero payload); service_id = djb2 of the nanopb C type name,
-// exactly what sm's register_cast<...> hashed. Same GW_MSG_GEN_CAST wire
-// shape as the #386 log push. Fired once; sm_ready_sent_ guards re-send.
-void Supervisor::send_sm_ready() {
-    // Target the SM GATE (0x8001001D), not the statem node — the gate is
-    // the FC's only TIPC-reachable surface for FSM events; it post_events
-    // them into SmDaemon in-process (services/system/sm: SmGate node).
-    constexpr uint32_t kSmTipcType     = 0x8001001Du;
-    constexpr uint32_t kSmTipcInstance = 0u;
-    static const uint16_t kSystemBootSvcId =
-        djb2_low16("system_services_sm_SystemBoot");
-    static const uint16_t kStartupCompleteSvcId =
-        djb2_low16("system_services_sm_StartupComplete");
-
-    const std::string empty;  // both messages have no fields
-    const bool b1 = send_gw_cast_to_tipc_name(
-        kSmTipcType, kSmTipcInstance, kSystemBootSvcId, empty);
-    const bool b2 = send_gw_cast_to_tipc_name(
-        kSmTipcType, kSmTipcInstance, kStartupCompleteSvcId, empty);
-    if (b1 && b2) {
-        log_info("sm startup handshake sent (SystemBoot + StartupComplete)");
-    } else {
-        std::fprintf(stderr,
-            "supervisor: sm startup handshake send failed "
-            "(SystemBoot=%d StartupComplete=%d) — sm not listening yet\n",
-            b1, b2);
-    }
-}
+// (send_sm_ready removed — the SM startup handshake is not part of this e2e
+// and is being re-homed. The supervisor no longer casts SystemBoot/
+// StartupComplete to the sm gate; whoever owns boot sequencing drives it.)
 
 }  // namespace supervisor

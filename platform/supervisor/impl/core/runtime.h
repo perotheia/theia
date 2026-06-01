@@ -107,6 +107,22 @@ struct TraceConfigRow {
     uint32_t    kind{0};   // TraceKind ordinal; enabled is implicit (present)
 };
 
+// One row of the supervisor tree for GetTree (a flat, parent-keyed list — the
+// caller reassembles the hierarchy by name, same shape the firehose streams).
+// kind: 0=worker, 1=supervisor. state: 0=stopped, 2=running, 3=terminating.
+struct TreeRow {
+    std::string name;
+    std::string parent_name;
+    uint32_t    kind{0};
+    int32_t     pid{-1};
+    uint32_t    state{0};
+    uint32_t    restart_count{0};
+    int32_t     last_exit_code{0};
+    uint32_t    flags{0};
+    std::string strategy;       // supervisors only
+    std::string start_cmd;      // workers only
+};
+
 // The outbound emit surface. The FC shell installs these (each forwards to
 // SupervisorCtl's matching `events` broadcast sender); the engine calls them
 // from the loop thread. Any unset callback is a quiet no-op (best-effort).
@@ -182,6 +198,11 @@ public:
 
     // GetTraceConfig read-back: flatten the per-child trace_configs_ table.
     std::vector<TraceConfigRow> ctl_get_trace_config();
+
+    // GetTree: a flat, parent-keyed snapshot of the whole tree (root +
+    // supervisors + workers, synthetic <worker>_sup rows for reporting
+    // workers). The caller (tdb ps / supervisor) rebuilds the hierarchy.
+    std::vector<TreeRow> ctl_get_tree();
 
     // GetSystemInfo: host facts on demand.
     SystemInfoData ctl_get_system_info();

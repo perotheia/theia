@@ -1,0 +1,4 @@
+# tdb (Theia Debug Bridge) runtime deps.
+#   pip install -r tools/tdb/requirements.txt
+# Plus the artheia ADT (the probe transport): pip install -e artheia/
+prompt_toolkit>=3.0

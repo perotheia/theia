@@ -81,11 +81,14 @@ def cmd_orchestrate(args: list[str]) -> int:
 
 
 def cmd_dist(args: list[str]) -> int:
-    """bazel build the per-machine .ipk deploy bundles. Pass machine image
-    labels to narrow; default builds central + compute."""
+    """bazel build the per-machine .ipk deploy bundles for the DISTRIBUTED
+    (2-machine central+compute) deploy — @rig_zonal (demo.manifest.zonal_rig).
+    Pass machine image labels to narrow; default builds central + compute.
+
+    (The single-machine local host bundle is `theia install` → @rig_demo.)"""
     targets = args or [
-        "@rig_demo//central_host:image",
-        "@rig_demo//compute_host:image",
+        "@rig_zonal//central_host:image",
+        "@rig_zonal//compute_host:image",
     ]
     return _run(["bazel", "build", *targets])
 

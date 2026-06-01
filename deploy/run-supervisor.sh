@@ -110,4 +110,10 @@ log "supervisor binary ready: $SUPERVISOR_BIN"
 log "executor.json ready:    $EXECUTOR_JSON"
 log "starting supervisor (foreground)"
 
-exec "$SUPERVISOR_BIN" run "$EXECUTOR_JSON" --root-dir /opt/theia
+# The ara::exec supervisor (gen-app FC) takes NO argv — it reads its manifest
+# + child working-dir root from the environment (THEIA_SUPERVISOR_MANIFEST /
+# THEIA_ROOT_DIR). (The old `run <json> --root-dir` argv was the pre-gen-app
+# CMake binary.) `exec` so docker stop's SIGTERM reaches it directly.
+export THEIA_SUPERVISOR_MANIFEST="$EXECUTOR_JSON"
+export THEIA_ROOT_DIR="/opt/theia"
+exec "$SUPERVISOR_BIN"

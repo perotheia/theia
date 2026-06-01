@@ -46,13 +46,18 @@ alias(
 # packaging them needs a Bazel target for each (follow-up).
 
 # theia/bin — the FC daemon binaries Bazel builds.
+# theia/bin — the supervisor + the FC daemons + demo apps it forks. Mirrors
+# what demo/stage_local.sh stages (com retired: dropped). The supervisor is
+# the gen-app ara::exec binary; children are referenced by `bin/<name>` from
+# the executor.json tree.
 pkg_files(
     name = "install_bin",
     srcs = [
-        "//services/com/main:com",
+        "//platform/supervisor/main:supervisor",
         "//services/log/main:log",
         "//services/per/main:per",
         "//services/sm/main:sm",
+        "//services/shwa/main:shwa",
         "//services/ucm/main:ucm",
     ],
     attributes = pkg_attributes(mode = "0755"),
@@ -86,11 +91,11 @@ pkg_files(
     prefix = "etc/theia",
 )
 
-# Per-machine supervisor trees → install/central/ and install/compute/.
-# The demo rig splits its software onto two TARGET machines: central runs
-# the platform services (minus shwa) + apps p1/p2; compute runs shwa +
-# app p3 under its own srv_sup/app_sup tree. Each machine installs only
-# its own executor.json.
+# Supervisor tree → install/central/. The host install bundle is
+# SINGLE-MACHINE (@rig_demo = demo.manifest.rig, central hosts everything).
+# The 2-machine central+compute split is the distributed Docker/Puppet deploy
+# (@rig_zonal = demo.manifest.zonal_rig), built via `theia dist`, not bundled
+# here.
 pkg_files(
     name = "install_central",
     srcs = ["@rig_demo//:executor_json_central"],
@@ -101,14 +106,6 @@ pkg_files(
     prefix = "central",
 )
 
-pkg_files(
-    name = "install_compute",
-    srcs = ["@rig_demo//:executor_json_compute"],
-    attributes = pkg_attributes(mode = "0644"),
-    strip_prefix = "compute",
-    prefix = "compute",
-)
-
 # Keep the layout's dirs present even when a group is empty.
 pkg_mkdirs(
     name = "install_dirs",
@@ -117,7 +114,6 @@ pkg_mkdirs(
         "theia/lib",
         "etc/theia",
         "central",
-        "compute",
     ],
 )
 
@@ -129,7 +125,6 @@ pkg_install(
         ":install_lib",
         ":install_etc",
         ":install_central",
-        ":install_compute",
         ":install_dirs",
     ],
 )

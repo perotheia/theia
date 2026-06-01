@@ -3,16 +3,20 @@
 #
 # docker-compose.yml bind-mounts ./.staging/<machine>/ipk into
 # /opt/theia/ipk in each container. This script populates .staging/
-# from `bazel-bin/external/+rig_ext+rig_demo/`.
+# from `bazel-bin/external/+rig_ext+rig_zonal/`.
+#
+# The distributed deploy is the 2-machine central+compute split — @rig_zonal
+# (demo.manifest.zonal_rig). (The single-machine local host install is a
+# separate path: `theia install` / demo/stage_local.sh, @rig_demo.)
 #
 # Idempotent — re-running overwrites the staging area cleanly.
 #
 # Usage:  ./deploy/stage.sh [rig_repo_name]
-#         (default: rig_demo)
+#         (default: rig_zonal)
 
 set -euo pipefail
 
-readonly RIG="${1:-rig_demo}"
+readonly RIG="${1:-rig_zonal}"
 readonly DEPLOY_DIR="$(cd "$(dirname "$0")" && pwd)"
 readonly WORKSPACE="$(cd "$DEPLOY_DIR/.." && pwd)"
 readonly BAZEL_RIG_DIR="$WORKSPACE/bazel-bin/external/+rig_ext+${RIG}"
@@ -50,6 +54,7 @@ machines=()
 # extending the case below.
 
 case "$RIG" in
+    rig_zonal) RIG_MODULE="demo.manifest.zonal_rig" ;;
     rig_demo)  RIG_MODULE="demo.manifest.rig" ;;
     *)         RIG_MODULE="" ;;  # unknown rig; skip rig-deps discovery
 esac

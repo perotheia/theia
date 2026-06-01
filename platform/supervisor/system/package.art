@@ -266,6 +266,12 @@ message SystemInfo {
 
 message ChildSelector {
     string  name
+    // TerminateChild only: stop the child and HOLD it down — skip the restart
+    // policy + watchdog escalation — so RF can mock that node's TIPC address
+    // from a probe process. A later StartChild clears the hold. (Replaces the
+    // non-OTP SuspendChild/ResumeChild ops — terminate-with-no-restart IS the
+    // OTP-faithful primitive.) Ignored by RestartChild.
+    bool    no_restart
 }
 
 // Mirror of supervisor::ChildSpec (the runtime data type) on the wire
@@ -337,13 +343,26 @@ message DeleteChildRequest {
 //                   (idempotent disable). Repeated enabled=true for
 //                   the same (target_node, msg_type) collapses to
 //                   one entry.
+// TraceKind — call/cast × in/out, statem. The supervisor OWNS per-node trace
+// config (it survives restart — only the supervisor knows when a child
+// restarts, see feedback-trace-config-ownership). This is the canonical
+// definition moved here from log[trace]; the typed enum (vs a raw uint32) is
+// the superior shape, so TraceConfig below carries TraceKind directly.
+enum TraceKind {
+    OTHER     = 0
+    CAST_OUT  = 1
+    CAST_IN   = 2
+    CALL_OUT  = 3
+    CALL_IN   = 4
+    STATEM    = 5
+}
+
 message TraceConfig {
-    string  target_node
-    string  msg_type
-    bool    enabled
-    uint32  kind         // TraceKind ordinal (call/cast×in/out, statem);
-                         // 0 = all kinds. Pushed to the node's Tracer via
-                         // platform_runtime.TraceControlPush (#403).
+    string    target_node
+    string    msg_type
+    bool      enabled
+    TraceKind kind       // which kind to enable; OTHER(0) = all kinds. Pushed
+                         // to the node's Tracer via platform_runtime.TraceControlPush.
 }
 
 message ConfigureTraceRequest {
@@ -385,55 +404,22 @@ message ControlReply {
     // (StartChild's return needs to confirm the assigned id, for
     // instance — observer's start_child returns {ok, pid} in OTP).
     string  child_name
-    // Correlation id from the originating ControlRequest. Lets the
-    // client pair the reply with the request that emitted it
-    // (multiple in-flight requests on one socket are allowed).
-    uint64  correlation_id
-    // GetTraceConfig (op_kind=10) reply: the serialized TraceConfigList
-    // carried INLINE in the single ControlReply, so the com bridge's
-    // correlation-by-id reply path returns it without a separate tagged
-    // frame (the old two-frame 0x0300 scheme leaked into com's subscriber
-    // fan-out). Empty for every other op_kind. Crash-investigation
-    // read-back: rf → com.GetTraceConfig → supervisor → here.
+    // GetTraceConfig reply: the serialized TraceConfigList carried INLINE
+    // in the single ControlReply (one frame). Empty for every other op.
+    // Crash-investigation read-back: tdb → GetTraceConfig → supervisor → here.
     bytes   trace_config_list
 }
 
-// Envelope for inbound RPC calls on the supervisor's TIPC socket.
-// op_kind selects which sub-message is meaningful:
-//    1 = GetTree            (use get_tree)
-//    2 = GetChild           (use get_child)
-//    3 = StartChild         (use start_child)
-//    4 = DeleteChild        (use delete_child)
-//    5 = RestartChild       (use restart_child / ChildSelector)
-//    6 = TerminateChild     (use terminate_child / ChildSelector)
-//    7 = Stop               (no payload needed)
-//    8 = GetSystemInfo      (use get_system_info, empty payload)
-//    9 = ConfigureTrace     (use configure_trace)
-//   10 = GetTraceConfig     (use get_trace_config, empty payload)
-//   11 = ConfigureLogLevel  (use configure_log_level)
+// NB: there is NO monolithic ControlRequest envelope. Each control op is its
+// own typed message dispatched by the runtime as a separate
+// register_call<Req, Reply> (see the SupervisorControlIf operations below) —
+// the OTP-faithful, gen-app-native shape. The old op_kind/oneof ControlRequest
+// + ControlReply.correlation_id were removed with the com bridge: per-op CALLs
+// correlate at the transport layer, not via an envelope id.
 //
-// The supervisor decodes ControlRequest, dispatches by op_kind, and
-// emits exactly one ControlReply with the matching correlation_id
-// onto the same fd that delivered the request. GetSystemInfo writes one
-// typed SystemInfo payload before the ControlReply (two frames).
-// GetTraceConfig instead carries its TraceConfigList INLINE in
-// ControlReply.trace_config_list (one frame) — the com bridge only
-// correlates the ControlReply, so a separate frame would be lost.
-message ControlRequest {
-    uint32                op_kind
-    uint64                correlation_id
-
-    GetTreeRequest            get_tree
-    GetChildRequest           get_child
-    StartChildRequest         start_child
-    DeleteChildRequest        delete_child
-    ChildSelector             restart_child
-    ChildSelector             terminate_child
-    GetSystemInfoRequest      get_system_info
-    ConfigureTraceRequest     configure_trace
-    GetTraceConfigRequest     get_trace_config
-    ConfigureLogLevelRequest  configure_log_level
-}
+// (SuspendChild/ResumeChild also removed — not OTP-faithful. Stop-and-hold for
+// test mocking is TerminateChild with ChildSelector.no_restart=true; StartChild
+// clears the hold.)
 
 // ---- node→supervisor reports ---------------------------------------------
 
@@ -473,6 +459,9 @@ interface clientServer SupervisorControlIf {
     operation StartChild(in req: StartChildRequest) returns ControlReply
     operation DeleteChild(in req: DeleteChildRequest) returns ControlReply
     operation RestartChild(in sel: ChildSelector) returns ControlReply
+    // TerminateChild with ChildSelector.no_restart=true is the test-harness
+    // stop-and-hold (no restart/escalation) so RF can mock the node from a
+    // probe; StartChild clears the hold. (Replaces SuspendChild/ResumeChild.)
     operation TerminateChild(in sel: ChildSelector) returns ControlReply
     operation Stop() returns ControlReply
     operation GetSystemInfo(in req: GetSystemInfoRequest) returns SystemInfo
@@ -500,7 +489,14 @@ interface clientServer SupervisorControlIf {
 interface senderReceiver SupervisorEventIf {
     data SupervisionEvent event
     data HealthBeacon     health
-    data TreeSnapshot     snapshot
+    // The monolithic TreeSnapshot was removed from the event stream — the
+    // #429 topo-pair firehose (SnapshotBegin / NodeEdge / NodeState /
+    // SnapshotEnd, below) streams the tree as small fixed messages instead.
+    // GetTree still returns a point-in-time TreeSnapshot for a one-shot query.
+    data SnapshotBegin    snap_begin
+    data NodeEdge         edge
+    data NodeState        node_state
+    data SnapshotEnd      snap_end
 }
 
 // Inbound — every running node sends to this receiver. The supervisor

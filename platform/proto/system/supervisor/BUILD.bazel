@@ -1,0 +1,45 @@
+# Generated nanopb sources for the system.supervisor package.
+#
+# .pb.{c,h} are BUILT, not committed: the genrule below invokes
+# nanopb_generator (a system-installed tool) on the .proto. To
+# regenerate manually for inspection, run from the repo root:
+#
+#   nanopb_generator platform/proto/system/supervisor/supervisor.proto
+
+package(default_visibility = ["//visibility:public"])
+
+genrule(
+    name = "supervisor_pb",
+    srcs = [
+        "supervisor.proto",
+        # nanopb_generator auto-loads the same-basename .options next to
+        # the .proto, fixing string/repeated fields to in-struct arrays so
+        # the runtime RemoteCodec can decode/encode them (no pb_callback_t).
+        "supervisor.options",
+    ],
+    outs = [
+        "supervisor.pb.c",
+        "supervisor.pb.h",
+    ],
+    cmd = "set -e;"
+        + " in_dir=$$(dirname $(location supervisor.proto));"
+        + " out_dir=$$(dirname $(location supervisor.pb.c));"
+        + " nanopb_generator -I $$in_dir -D $$out_dir supervisor.proto;",
+    tools = [],
+    local = True,
+)
+
+filegroup(
+    name = "supervisor_pb_c",
+    srcs = ["supervisor.pb.c"],
+)
+
+filegroup(
+    name = "supervisor_pb_h",
+    srcs = ["supervisor.pb.h"],
+)
+
+filegroup(
+    name = "supervisor_proto",
+    srcs = ["supervisor.proto"],
+)

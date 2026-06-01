@@ -1,0 +1,77 @@
+# nanopb field-size constraints for the system.supervisor wire messages.
+# nanopb_generator auto-loads this file because it sits next to
+# supervisor.proto (same basename). Without it every string/repeated
+# field becomes a pb_callback_t — which the runtime RemoteCodec decode
+# path SKIPS (inbound strings are then unreadable in handle_call). Fixing
+# the relevant fields to fixed in-struct arrays (max_size / max_count)
+# makes them plain `char[]` / array members the supervisor can read on
+# decode and fill on encode — no pb_callback_t, no heap.
+#
+# Grammar: "<Fully.Qualified.field>  max_size:N | max_count:N".
+
+# ---- control request / reply (the trace set/get + lifecycle path) --------
+system_supervisor.ControlReply.message            max_size:160
+system_supervisor.ControlReply.child_name         max_size:64
+system_supervisor.ControlReply.trace_config_list  max_size:1024
+system_supervisor.ChildSelector.name              max_size:64
+system_supervisor.DeleteChildRequest.name         max_size:64
+system_supervisor.GetChildRequest.name            max_size:64
+
+# ---- trace config (read-back) --------------------------------------------
+system_supervisor.TraceConfig.target_node         max_size:64
+system_supervisor.TraceConfig.msg_type            max_size:64
+system_supervisor.TraceConfigList.configs         max_count:64
+
+# ---- log level + trace control request bodies ----------------------------
+system_supervisor.LogLevelConfig.target_node      max_size:64
+system_supervisor.LogLevelConfig.level            max_size:16
+
+# ---- child spec (StartChild) ---------------------------------------------
+system_supervisor.ChildSpec.name                  max_size:64
+system_supervisor.ChildSpec.parent_supervisor     max_size:64
+system_supervisor.ChildSpec.start_cmd             max_size:128
+system_supervisor.ChildSpec.start_cmd             max_count:8
+system_supervisor.ChildSpec.modules               max_size:64
+system_supervisor.ChildSpec.modules               max_count:16
+
+# ---- node reports (node -> sup) ------------------------------------------
+system_supervisor.HeartbeatReport.node_name       max_size:64
+system_supervisor.SendTimeoutReport.caller_node   max_size:64
+system_supervisor.SendTimeoutReport.callee_node   max_size:64
+system_supervisor.SendTimeoutReport.iface         max_size:64
+system_supervisor.SendTimeoutReport.method        max_size:64
+
+# ---- event / health firehose (sup -> events subscribers) -----------------
+system_supervisor.SupervisionEvent.child_name      max_size:64
+system_supervisor.SupervisionEvent.supervisor_name max_size:64
+system_supervisor.SupervisionEvent.strategy        max_size:24
+system_supervisor.SupervisionEvent.tombstone_path  max_size:256
+system_supervisor.SupervisionEvent.detail          max_size:256
+
+# ---- topo-pair firehose (NodeEdge / NodeState) ---------------------------
+system_supervisor.NodeEdge.parent_name             max_size:64
+system_supervisor.NodeEdge.name                    max_size:64
+system_supervisor.NodeState.name                   max_size:64
+
+# ---- ChildState / TreeSnapshot -------------------------------------------
+# TreeSnapshot is now only an envelope (generation/timestamp): the live tree
+# rides the NodeEdge/NodeState firehose, not the monolithic children[] payload
+# (retired with com). Keep the inline arrays small so the message fits one
+# 64 kB nanopb buffer without PB_FIELD_32BIT.
+system_supervisor.ChildState.name                  max_size:64
+system_supervisor.ChildState.parent_name           max_size:64
+system_supervisor.ChildState.strategy              max_size:24
+system_supervisor.ChildState.start_cmd             max_size:128
+system_supervisor.ChildState.threads_detail        max_count:8
+system_supervisor.ChildState.sockets               max_count:8
+system_supervisor.TreeSnapshot.children            max_count:8
+system_supervisor.ThreadSample.comm                max_size:16
+system_supervisor.SocketInfo.local                 max_size:48
+system_supervisor.SocketInfo.remote                max_size:48
+
+# ---- SystemInfo (GetSystemInfo reply) ------------------------------------
+system_supervisor.SystemInfo.hostname              max_size:64
+system_supervisor.SystemInfo.kernel                max_size:128
+system_supervisor.SystemInfo.os_pretty_name        max_size:128
+system_supervisor.SystemInfo.theia_git_sha         max_size:64
+system_supervisor.SystemInfo.build_timestamp       max_size:48

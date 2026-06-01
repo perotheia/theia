@@ -1,0 +1,48 @@
+// Wiring layer for the supervisor.
+//
+// package.art holds the schema (messages + interfaces). Here we declare:
+//   - the node TYPE (Supervisor) — its TIPC slot, ports, and params.
+//   - the composition that instantiates it.
+//
+// The wxWidgets observer (repo-root supervisor-gui/) is NOT modelled here:
+// it is external dev tooling, not a platform node. It connects to the
+// supervisor at runtime as an ordinary client (now via com's gRPC bridge),
+// so the supervisor only PROVIDES SupervisorControlIf / SupervisorEventIf —
+// it does not need to know about any particular consumer in the model.
+
+package system.supervisor
+
+// ---- nodes ---------------------------------------------------------------
+
+// TIPC type 0x80020001 — sits above the FC range (0x80010001..0x80010012)
+// in a band reserved for system-level services. Instance 0 because the
+// supervisor is singleton per machine.
+node atomic Supervisor {
+    tipc type=0x80020001 instance=0
+    ports {
+        server   control  provides SupervisorControlIf
+        sender   events   provides SupervisorEventIf
+        receiver reports  requires NodeReportIf
+    }
+    params {
+        // Period of the HealthBeacon emission in ms. The GUI uses this
+        // to compute its "stale connection" threshold.
+        heartbeat_period_ms : uint32 = 1000
+        // Period of the periodic TreeSnapshot broadcast. State-change
+        // events fire snapshots ad-hoc; this one is a safety net.
+        snapshot_period_ms  : uint32 = 5000
+        // Watchdog: terminate a node that misses this many consecutive
+        // expected HeartbeatReports. Combined with the node's emit
+        // period this gives the time-to-kill of a wedged daemon.
+        // Default 3 ≈ 3 × node_heartbeat_period (typically 3s).
+        watchdog_max_missed : uint32 = 3
+    }
+}
+
+// ---- compositions --------------------------------------------------------
+
+// The supervisor standing alone — referenced by `cluster Platform` in
+// platform/system/system.art (composition Supervisor sup).
+composition Supervisor {
+    prototype Supervisor supervisor
+}

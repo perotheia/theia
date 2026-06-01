@@ -37,16 +37,26 @@ def _ctx(repo: str | Path):
     return ArtheiaContext(str(repo / _ART), proto_root=str(repo / _PROTO))
 
 
+def _unique_instance() -> int:
+    """A per-process TIPC source instance so successive/concurrent tdb
+    invocations don't race on TdbSup's single .art-declared address while a
+    previous process's socket drains. PID, masked to a u32-ish range."""
+    import os
+    return os.getpid() & 0x7FFFFFFF
+
+
 class SupervisorClient:
     """Drives SupervisorControlIf from the TdbSup node, via the probe.
 
-    The probe binds TdbSup's address (0x80020101) as the call SOURCE and
-    resolves SupervisorCtl (0x80020001) + its ops from the .art.
+    The probe binds TdbSup's TYPE (0x80020101) as the call SOURCE — but at a
+    per-process INSTANCE (PID) so back-to-back tdb processes don't collide on
+    the fixed instance 0. It resolves SupervisorCtl (0x80020001) + its ops from
+    the .art.
     """
 
     def __init__(self, ctx) -> None:
         self.ctx = ctx
-        self.probe = ctx.probe("TdbSup").start()
+        self.probe = ctx.probe("TdbSup", instance=_unique_instance()).start()
 
     @classmethod
     def from_workspace(cls, repo: str | Path) -> "SupervisorClient":

@@ -46,7 +46,7 @@ subscribe to that trace via `tdb → log[trace]`.
   path. tdb must be built (or the existing `artheia.observer` / a TIPC client
   extended) before steps 6–7 can run.
 
-- **B2 — supervisor control client over TIPC.** ✅ RESOLVED via .art + probe.
+- **B2 — supervisor control client over TIPC.** ✅ RESOLVED + PROVEN LIVE.
   `tools/tdb/system/tdb.art` declares two client nodes (TdbSup / TdbTrace) that
   `import system.supervisor.* / system.services.log.*` and reference the real
   interfaces (FQN-qualified to dodge the SupervisorControlIf forward-decl that
@@ -56,9 +56,12 @@ subscribe to that trace via `tdb → log[trace]`.
   TraceClient reusing artheia.observer). NO raw TIPC — transport-swap-safe.
   Probe enhancement landed: ArtheiaContext now follows `extern` forward-decls
   through `import` lines to the real node def (was: extern nodes skipped, so a
-  client .art couldn't address a peer it doesn't define). Only the live TIPC
-  round-trip is untested here (sandbox has no AF_TIPC); resolution + op mapping
-  proven. See feedback-clients-via-art-probe.
+  client .art couldn't address a peer it doesn't define).
+  PROVEN LIVE over real TIPC (`modprobe tipc` — the host has it; the earlier
+  "no AF_TIPC" was just an unloaded module): against a booted supervisor,
+  tdb_client did GetSystemInfo (got real host facts), ConfigureTrace
+  (status=0), and GetTraceConfig (read the stored config back) — full nanopb
+  round-trip incl. readable string fields. See feedback-clients-via-art-probe.
 
 - **B3 — GetTree returns an EMPTY envelope.** The port made GetTree/GetChild
   return empty (the monolithic children[] retired with com); the live tree is
@@ -134,26 +137,33 @@ Landed + verified end-to-end:
   spec; multi-host tests repoint to zonal.
 - **S1** ✅ stage_local.sh rewritten to bazel targets + executor.json + env;
   platform required, demo apps best-effort.
-- **S5** ✅ `stage_local.sh` → install/central; the supervisor boots
-  executor.json and forks all 7 children (sm/per/ucm/shwa + p1/p2/p3), runs
-  the loop, clean shutdown (rc=0). The whole manifest→stage→boot→fork pipeline
-  works on the new ara::exec architecture.
+- **S5** ✅ FULL LIVE SYSTEM RUN over real TIPC. `stage_local.sh` →
+  install/central (clean, all 7 binaries); the supervisor boots executor.json,
+  forks all 7 children, every FC binds its TIPC socket (sm 0x8001000D / sm_gate
+  0x8001001D / per 0x80010007 / ucm 0x8001000E / shwa 0x80010012), the demo
+  apps run real cross-node traffic (DriverNode casts Inc 10×, CounterNode
+  handle_call(Get), ObserverNode polls 0→84, TickerNode 10 ticks), then SIGTERM
+  → clean reverse-order shutdown of all 7, rc=0. ZERO exec failures / abnormal
+  exits. The whole manifest→stage→boot→fork→run→shutdown pipeline works on the
+  new ara::exec architecture.
+- **tdb LIVE** ✅ against the booted supervisor: GetSystemInfo (real host
+  facts), ConfigureTrace (status=0), GetTraceConfig (read the stored config
+  back) — full nanopb round-trip over TIPC via the probe client.
 - **B5** ✅ `artheia executor emit` shape matches load_manifest (spec.cpp)
   exactly (name/strategy/children/start_cmd/.../nodes[]).
 - **log trace-cut** ✅ (unblocked the stage) — log[trace] is subscription-only;
   TraceControl/TraceConfigRequest removed from .art + proto + lib + impl + main;
   //services/log/main builds green (was pre-broken).
 
-Pre-existing breakage still open (NOT on the stage's critical path — staged
-best-effort): the Demo3WayP{1,2,3} apps fail to build (runtime API drift —
-bind_node(GenServerBase&) signature, .start()/.stop(), TickerNode state). Their
-own follow-up; the supervisor + FCs are what the e2e needs.
+(The Demo3WayP{1,2,3} apps build + run fine — the earlier "runtime API drift"
+was a misdiagnosis: they were just missing the DEMO_→THEIA_DECLARE_REMOTE_CODEC
+rename in demo/*/lib/demo_codecs.hh, which poisoned the TU parse. Fixed.)
 
 REMAINING for the FULL e2e (S6–S7): build the `tdb` CLI on the probe-backed
-clients (tools/tdb/tdb_client.py — B2 resolved), wire the firehose reassembler
-(B3: GetTree returns empty, live tree is the NodeEdge/NodeState stream), drop
-tools/supdbg, then `tdb trace <node>` → ConfigureTrace → Subscribe (S7). Needs a
-TIPC host (sandbox has no AF_TIPC).
+clients (tools/tdb/tdb_client.py — B2 resolved + proven live), wire the firehose
+reassembler (B3: GetTree returns empty, live tree is the NodeEdge/NodeState
+stream), drop tools/supdbg, then `tdb trace <node>` → ConfigureTrace → Subscribe
+→ decode records (S7). All runnable on this host (`modprobe tipc`).
 
 ## Sequencing reality
 

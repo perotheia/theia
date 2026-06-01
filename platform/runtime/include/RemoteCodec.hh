@@ -36,7 +36,7 @@ constexpr uint16_t hash_msg_type_(const char* s) {
 
 // Convenience macro: emit a RemoteCodec specialization + a
 // msg_type_name specialization for type T at once.
-#define DEMO_DECLARE_REMOTE_CODEC(T)                                \
+#define THEIA_DECLARE_REMOTE_CODEC(T)                               \
     namespace theia { namespace runtime {                           \
     template <>                                                     \
     struct RemoteCodec<T> {                                         \
@@ -47,7 +47,7 @@ constexpr uint16_t hash_msg_type_(const char* s) {
     }}
 
 // Primary `msg_type_name<T>()`. Returns "?" for types without a
-// DEMO_DECLARE_REMOTE_CODEC. Defined here so GenServer.hh's trace
+// THEIA_DECLARE_REMOTE_CODEC. Defined here so GenServer.hh's trace
 // hooks can call it without dragging RemoteRef/LocalRef in.
 template <typename T>
 const char* msg_type_name() { return "?"; }

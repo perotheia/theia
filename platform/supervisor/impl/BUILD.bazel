@@ -1,0 +1,79 @@
+# FIRST-TIME-ONLY (regenerated with --force). source: platform/supervisor/system/component.art
+#
+# Impl slice — handler bodies. The user owns this BUILD.bazel after
+# first emit (you may want to add per-FC test_*.cc files; gen-app
+# won't reach in and squash that).
+
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+# State structs (write-once, app-owned). A leaf header-only target so
+# BOTH the lib (which #includes "impl/<Node>_state.hh" as the GenServer
+# State type) and the impl can depend on it WITHOUT a lib<->impl cycle:
+#   supervisor_state  ←  lib  ←  impl
+cc_library(
+    name = "supervisor_state",
+    hdrs = [
+        "SupervisorCtl_state.hh",
+        "SupervisorWorker_state.hh",
+    ],
+    # The lib #includes these as "impl/<Node>_state.hh", so the include
+    # root is the FC out_dir (one above impl/).
+    includes = [".."],
+    copts = ["-std=c++17", "-fPIC"],
+    deps = ["//platform/runtime:runtime"],
+)
+
+# The transport-free supervision ENGINE (carried from supervisor.orig,
+# protobuf-stripped). fork/exec/reap/watchdog + the select() loop + the
+# child tree, all behind plain-C++ control primitives + an EmitSink. The
+# gen-app node impls (below) wrap it; the process-global bridge lets the two
+# nodes share one instance.
+cc_library(
+    name = "supervisor_engine",
+    srcs = [
+        "core/bridge.cpp",
+        "core/runtime.cpp",
+        "core/spec.cpp",
+    ],
+    hdrs = [
+        "core/bridge.h",
+        "core/runtime.h",
+        "core/spec.h",
+    ],
+    # Two include roots:
+    #   "core" — the engine's own .cpp write `#include "runtime.h"`.
+    #   "."    — the node handlers (in impl/) write `#include "core/bridge.h"`.
+    includes = [
+        "core",
+        ".",
+    ],
+    copts = [
+        "-std=c++17",
+        "-Wall",
+        "-Wextra",
+        "-fPIC",
+    ],
+    deps = [
+        "//third_party:nlohmann_json",
+    ],
+)
+
+cc_library(
+    name = "supervisor_impl",
+    srcs = [
+        "SupervisorCtl_handlers.cc",
+        "SupervisorWorker_handlers.cc",
+    ],
+    copts = [
+        "-std=c++17",
+        "-Wall",
+        "-Wextra",
+        "-fPIC",
+    ],
+    deps = [
+        ":supervisor_engine",
+        "//platform/supervisor/lib:supervisor_lib",
+    ],
+)

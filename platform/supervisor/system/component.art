@@ -14,10 +14,23 @@ package system.supervisor
 
 // ---- nodes ---------------------------------------------------------------
 
-// TIPC type 0x80020001 — sits above the FC range (0x80010001..0x80010012)
-// in a band reserved for system-level services. Instance 0 because the
-// supervisor is singleton per machine.
-node atomic Supervisor {
+// The supervisor is TWO nodes sharing a process-global, thread-safe
+// SupervisorState (the child tree + watchdog table), like log[trace]'s
+// TraceHub:
+//
+//   SupervisorWorker (runnable) — owns the OS side: fork/exec children, the
+//     SIGCHLD reap loop, the heartbeat watchdog timer, and SIGTERM/SIGINT
+//     handling. No TIPC ports; it works the shared state. The hot/blocking
+//     side, so it's a GenRunnable do_loop.
+//
+//   SupervisorCtl (atomic) — owns the Theia comms: gen_server handle_call for
+//     SupervisorControlIf (Start/Stop/Suspend/Resume/GetTree/ConfigureTrace…),
+//     the SupervisorEventIf push stream, and the NodeReportIf heartbeat
+//     receiver (feeds the shared watchdog table the worker reads).
+
+// TIPC type 0x80020001 — above the FC range, system-services band. The CTL
+// node carries the canonical supervisor address (clients reach it here).
+node atomic SupervisorCtl {
     tipc type=0x80020001 instance=0
     ports {
         server   control  provides SupervisorControlIf
@@ -25,24 +38,26 @@ node atomic Supervisor {
         receiver reports  requires NodeReportIf
     }
     params {
-        // Period of the HealthBeacon emission in ms. The GUI uses this
-        // to compute its "stale connection" threshold.
+        // HealthBeacon emission period (ms) — the GUI's "stale" threshold.
         heartbeat_period_ms : uint32 = 1000
-        // Period of the periodic TreeSnapshot broadcast. State-change
-        // events fire snapshots ad-hoc; this one is a safety net.
+        // Periodic full TreeSnapshot/pair walk (ms); ad-hoc events also fire.
         snapshot_period_ms  : uint32 = 5000
-        // Watchdog: terminate a node that misses this many consecutive
-        // expected HeartbeatReports. Combined with the node's emit
-        // period this gives the time-to-kill of a wedged daemon.
-        // Default 3 ≈ 3 × node_heartbeat_period (typically 3s).
+        // Watchdog: kill a node missing this many consecutive heartbeats.
         watchdog_max_missed : uint32 = 3
     }
 }
 
+// The OS-side worker. tipc 0x80020002 (a slot it doesn't actually bind — it
+// has no TIPC ports — but every node needs a distinct address in the model).
+node runnable SupervisorWorker {
+    tipc type=0x80020002 instance=0
+}
+
 // ---- compositions --------------------------------------------------------
 
-// The supervisor standing alone — referenced by `cluster Platform` in
-// platform/system/system.art (composition Supervisor sup).
+// The supervisor process: both nodes, one executable. Referenced by
+// `cluster Platform` in platform/system/system.art.
 composition Supervisor {
-    prototype Supervisor supervisor
+    prototype SupervisorCtl    supervisor_ctl
+    prototype SupervisorWorker supervisor_worker
 }

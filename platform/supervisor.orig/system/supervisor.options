@@ -1,0 +1,81 @@
+# nanopb field-size constraints for the supervisor's TIPC control + report
+# messages (package services.supervisor). Used by the Bazel nanopb genrule
+# (//platform/supervisor:supervisor_nanopb) so repeated/string fields become
+# FIXED in-struct arrays — no pb_callback_t, no heap — which is what an
+# embedded TIPC transport needs.
+#
+# This is the WIRE binding (com <-> supervisor over GwMessageHeader). The
+# libprotobuf binding (supervisor_proto, for the gRPC/GUI edge + supdbg's
+# future gRPC host) is unconstrained and keeps using protoc.
+#
+# Sizes are deliberate upper bounds. A frame that would exceed them is
+# truncated by nanopb at encode time (logged), never a buffer overrun.
+# Keep TreeSnapshot/ChildState bounds modest — the firehose is the big
+# message and the gen_server frame buffer must hold it.
+#
+# nanopb .options grammar: "<fully.qualified.field>  max_size:N | max_count:N".
+
+# ---- control request / reply (the trace set/get path) --------------------
+services.supervisor.ControlReply.message            max_size:160
+services.supervisor.ControlReply.child_name         max_size:64
+services.supervisor.ControlReply.trace_config_list  max_size:1024
+services.supervisor.ChildSelector.name              max_size:64
+services.supervisor.DeleteChildRequest.name         max_size:64
+services.supervisor.GetChildRequest.name            max_size:64
+
+# ---- trace config (read-back) --------------------------------------------
+services.supervisor.TraceConfig.target_node         max_size:64
+services.supervisor.TraceConfig.msg_type            max_size:64
+services.supervisor.TraceConfigList.configs         max_count:64
+
+# ---- log level + trace control request bodies ----------------------------
+services.supervisor.LogLevelConfig.target_node      max_size:64
+services.supervisor.LogLevelConfig.level            max_size:16
+
+# ---- child spec (StartChild) ---------------------------------------------
+services.supervisor.ChildSpec.name                  max_size:64
+services.supervisor.ChildSpec.parent_supervisor     max_size:64
+services.supervisor.ChildSpec.start_cmd             max_size:128
+services.supervisor.ChildSpec.start_cmd             max_count:8
+services.supervisor.ChildSpec.modules               max_size:64
+services.supervisor.ChildSpec.modules               max_count:16
+
+# ---- node reports (node -> sup) ------------------------------------------
+services.supervisor.HeartbeatReport.node_name       max_size:64
+services.supervisor.SendTimeoutReport.caller_node   max_size:64
+services.supervisor.SendTimeoutReport.callee_node   max_size:64
+services.supervisor.SendTimeoutReport.iface         max_size:64
+services.supervisor.SendTimeoutReport.method        max_size:64
+
+# ---- firehose: ChildState / TreeSnapshot / SocketInfo / ThreadSample -----
+# Kept modest: TreeSnapshot.children x ChildState (with nested
+# threads_detail/sockets) must fit one gen_server frame buffer.
+services.supervisor.ChildState.name                 max_size:64
+services.supervisor.ChildState.parent_name          max_size:64
+services.supervisor.ChildState.strategy             max_size:24
+services.supervisor.ChildState.start_cmd            max_size:128
+services.supervisor.ChildState.threads_detail       max_count:16
+services.supervisor.ChildState.sockets              max_count:16
+services.supervisor.ThreadSample.comm               max_size:16
+services.supervisor.SocketInfo.local                max_size:48
+services.supervisor.SocketInfo.remote               max_size:48
+services.supervisor.TreeSnapshot.children           max_count:64
+
+# ---- #429 topo-pair firehose stream --------------------------------------
+# Small FIXED structs — NodeState is all scalars; NodeEdge has two 64-char
+# names. Cast over the standard transport to com's ComDaemon.
+services.supervisor.NodeEdge.parent_name            max_size:64
+services.supervisor.NodeEdge.name                   max_size:64
+services.supervisor.NodeState.name                  max_size:64
+
+# ---- events + system info (firehose) -------------------------------------
+services.supervisor.SupervisionEvent.child_name      max_size:64
+services.supervisor.SupervisionEvent.supervisor_name max_size:64
+services.supervisor.SupervisionEvent.strategy        max_size:24
+services.supervisor.SupervisionEvent.tombstone_path  max_size:256
+services.supervisor.SupervisionEvent.detail          max_size:160
+services.supervisor.SystemInfo.hostname              max_size:64
+services.supervisor.SystemInfo.kernel                max_size:96
+services.supervisor.SystemInfo.os_pretty_name        max_size:96
+services.supervisor.SystemInfo.theia_git_sha         max_size:48
+services.supervisor.SystemInfo.build_timestamp       max_size:32

@@ -14,6 +14,7 @@ cc_library(
     srcs = [
         "//platform/proto/gateway/system:status_pb_c",
         "//platform/proto/system/autosar/mlbevo_gen2/flexray:flexray_pb_c",
+        "//platform/proto/system/demo:demo_pb_c",
         "//platform/proto/system/gateway:gateway_pb_c",
         "//platform/proto/system/odd_path_monitor:odd_path_monitor_pb_c",
         "//platform/proto/system/services/com:com_pb_c",
@@ -23,10 +24,12 @@ cc_library(
         "//platform/proto/system/services/shwa:shwa_pb_c",
         "//platform/proto/system/services/sm:sm_pb_c",
         "//platform/proto/system/services/ucm:ucm_pb_c",
+        "//platform/proto/system/supervisor:supervisor_pb_c",
     ],
     hdrs = [
         "//platform/proto/gateway/system:status_pb_h",
         "//platform/proto/system/autosar/mlbevo_gen2/flexray:flexray_pb_h",
+        "//platform/proto/system/demo:demo_pb_h",
         "//platform/proto/system/gateway:gateway_pb_h",
         "//platform/proto/system/odd_path_monitor:odd_path_monitor_pb_h",
         "//platform/proto/system/services/com:com_pb_h",
@@ -36,6 +39,7 @@ cc_library(
         "//platform/proto/system/services/shwa:shwa_pb_h",
         "//platform/proto/system/services/sm:sm_pb_h",
         "//platform/proto/system/services/ucm:ucm_pb_h",
+        "//platform/proto/system/supervisor:supervisor_pb_h",
     ],
     # platform/proto is the include root: callers write
     # #include "gateway/system/status.pb.h"

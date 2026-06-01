@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Installed on PATH as `tdb` via a .venv/bin/tdb symlink (see
+# tools/tdb/install.sh), mirroring how `.venv/bin/theia` → theia.py works.
 """tdb — the Theia Debug Bridge (adb for Theia).
 
 Two modes, like adb:

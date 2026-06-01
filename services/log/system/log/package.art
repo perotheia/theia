@@ -131,12 +131,9 @@ message TraceRecord {
 // addressed; the supervisor accepts the request but the push will never
 // reach a non-existent NodeTraceCtl port. Use the legacy Tracer.enable()
 // in-process API to opt-in such nodes manually.
-message TraceConfigRequest {
-    string    target_node
-    string    msg_type
-    bool      enabled
-    TraceKind kind         // which trace kind to enable; OTHER(0) = all kinds
-}
+// (TraceConfigRequest removed — trace CONFIG moved to the supervisor:
+// supervisor.ConfigureTrace owns the typed TraceConfig + survives restart.
+// log[trace] is subscription-only. See feedback-trace-config-ownership.)
 
 message TraceEmpty { }
 
@@ -158,12 +155,8 @@ message SubscribeReq {
 
 // ─── Trace interfaces ─────────────────────────────────────────────────
 
-// Control surface — consumers (supdbg directly, com on behalf of
-// external) request trace configuration changes here. TraceCollector then
-// RELAYS the change to the supervisor's ConfigureTrace operation.
-interface clientServer TraceControl {
-    operation Configure(in r:TraceConfigRequest) returns TraceEmpty
-}
+// (TraceControl interface removed — trace config is supervisor-owned now;
+// log[trace] relays nothing. See feedback-trace-config-ownership.)
 
 // Record stream — broadcast pub/sub. Multiple consumers can attach; each
 // sees the same record sequence. TraceCollector is the SENDER, supdbg /
@@ -250,10 +243,12 @@ node atomic TraceCtl {
     tipc type=0x80010014 instance=0
     tag = "LOG"
     ports {
-        server   ctl_supdbg     provides TraceControl
-        server   ctl_com        provides TraceControl
+        // Subscription-only: trace CONFIG is the supervisor's job now
+        // (tdb → supervisor.ConfigureTrace → node, survives restart). TraceCtl
+        // owns only the observer SUBSCRIPTION. The old ctl_supdbg/ctl_com
+        // (TraceControl.Configure) + to_supervisor relay were dropped — see
+        // feedback-trace-config-ownership.
         server   ctl_sub        provides TraceStreamSub
-        client   to_supervisor  requires SupervisorControlIf
         sender   to_log         provides LogStream  best_effort
     }
 }

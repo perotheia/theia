@@ -134,12 +134,56 @@ CentralHost = MachineManifest(
     opkg_artifacts=list(_PLATFORM_OPKG_ARTIFACTS),
 )
 
-# (ComputeHost + AdminHost moved to demo/manifest/zonal_rig.py — this rig is
-# single-machine: central only.)
+ComputeHost = MachineManifest(
+    name="compute_host",
+    hardware=HardwareResource(
+        cpu=CpuResource(architecture=CpuArchitecture.AARCH64),
+    ),
+    # The compute container exposes a distinct gRPC port so a multi-
+    # machine GUI can talk to both supervisors (one tab per machine).
+    com_endpoint=IpEndpoint(
+        address=IPv4Address("127.0.0.1"),
+        port=7701,
+    ),
+    os_packages=[
+        OsPackage(name="etcd-server", source="opkg"),
+        OsPackage(name="libsystemd0", source="opkg"),
+    ],
+    opkg_artifacts=list(_PLATFORM_OPKG_ARTIFACTS),
+)
+
+# Admin console — runs supervisor-gui + supdbg, no supervisor of
+# its own. Packaged as a .deb (rules/rig.bzl will branch on
+# kind="host"). Its manifest carries the operator's view of the
+# rig: every TARGET machine's com_endpoint + etcd_endpoint, plus
+# the host's own arch (always x86_64 today — operator laptops are
+# all amd64).
+#
+# At install time the .deb's /etc/theia/machines.yaml is generated
+# from this Machine + the rig's TARGET machines so the GUI knows
+# what to connect to without further config.
+AdminHost = MachineManifest(
+    name="admin_host",
+    kind="host",   # MachineKind.HOST.value — string-typed; "target" default elsewhere
+    hardware=HardwareResource(
+        cpu=CpuResource(architecture=CpuArchitecture.X86_64),
+    ),
+    # No com_endpoint of its own; the GUI talks to TARGET machines.
+    # Leave the default — downstream tooling treats a HOST machine's
+    # com_endpoint as "n/a".
+    #
+    # Operator workstation: a Theia .deb is installed via apt, no
+    # opkg, no supervisor/gateway. The .deb itself ships the
+    # supervisor-gui + supdbg binaries and reads
+    # /etc/theia/machines.yaml to find the TARGET endpoints.
+    os_packages=[
+        OsPackage(name="theia-admin", source="apt"),
+    ],
+)
 
 # Legacy alias for any caller that still references DemoHost (the
-# original single-host name). Points at central — the services+gateway side
-# is what most existing tests assert against.
+# original single-host name). Points at central by default — the
+# services+gateway side is what most existing tests assert against.
 DemoHost = CentralHost
 
 # ---------------------------------------------------------------------------
@@ -264,9 +308,9 @@ if DemoRig.applications:
 # compute_host/service.yaml contains shwa alone.
 # ---------------------------------------------------------------------------
 
-# Single-machine rig: every FC lands on central. (The 2-machine split that
-# pins shwa → compute lives in demo/manifest/zonal_rig.py.)
-_FC_HOST_MACHINE: dict[str, str] = {}
+_FC_HOST_MACHINE = {
+    "shwa": ComputeHost.name,
+}
 _DEFAULT_FC_HOST_MACHINE = CentralHost.name
 
 for _sm in DemoRig.service_manifests:
@@ -309,7 +353,7 @@ for _sm in DemoRig.service_manifests:
 from artheia.manifest.machine import ProcessToMachineMapping  # noqa: E402
 
 _PROCESS_HOST_OVERRIDES: dict[str, str] = {
-    # Single-machine: everything on central. (shwa→compute pin is in zonal_rig.)
+    "shwa":       ComputeHost.name,
     "supervisor": CentralHost.name,
     "gateway":    CentralHost.name,
 }
@@ -371,11 +415,13 @@ _PlatformAppOverlay = ApplicationManifest(
     components=list(_PLATFORM_FABRIC_COMPONENTS),
 )
 
-# Single-machine: the demo per-process binaries also land on central
-# (no separate compute app). The 2-machine split lives in zonal_rig.py.
-_CentralDemoApp = ApplicationManifest(
-    name="central_demo_app",
-    host_machine=CentralHost.name,
+_ComputeApp = ApplicationManifest(
+    name="compute_app",
+    host_machine=ComputeHost.name,
+    # Compute hosts only the demo per-process binaries. Platform
+    # fabric (supervisor / gateway) lives in _PlatformAppOverlay
+    # above; FCs (incl. shwa) live in ServicesSoftware → platform_app, with
+    # a PTM entry pinning shwa to compute (see _PTM_ENTRIES).
     components=list(DEMO_BINARIES),
 )
 
@@ -383,10 +429,12 @@ DemoSpecLayer = SoftwareSpecification(
     vehicle=VehicleIdentity(name="demo", make="theia", model="gen_server-demo"),
     machines=cast(set[SetTransformTypes], {
         Append(CentralHost),
+        Append(ComputeHost),
+        Append(AdminHost),
     }),
     applications=cast(set[SetTransformTypes], {
         Append(_PlatformAppOverlay),
-        Append(_CentralDemoApp),
+        Append(_ComputeApp),
     }),
     execution_manifests=cast(set[SetTransformTypes], {
         Append(p) for p in DEMO_PROCESSES
@@ -455,12 +503,21 @@ from services.manifest.service import (  # noqa: E402
     SUPERVISORS as _PLATFORM_SUPERVISORS,
 )
 
-# Single-machine: central hosts EVERYTHING — all FCs + all demo apps. (The
-# compute partition lives in demo/manifest/zonal_rig.py.)
-_central_fc_components = list(_FC_COMPONENTS)
-_central_fc_processes = list(_FC_PROCESSES)
-_central_app_components = list(DEMO_BINARIES)
-_central_app_processes = list(DEMO_PROCESSES)
+# What moves off central onto compute.
+_COMPUTE_FCS = {"shwa"}      # services moved to compute
+_COMPUTE_APPS = {"p3"}       # demo apps moved to compute
+
+# --- partition the shared element lists by machine (reference-move) --------
+_central_fc_components = [c for c in _FC_COMPONENTS if c.name not in _COMPUTE_FCS]
+_central_fc_processes = [p for p in _FC_PROCESSES if p.name not in _COMPUTE_FCS]
+_compute_fc_components = [c for c in _FC_COMPONENTS if c.name in _COMPUTE_FCS]
+_compute_fc_processes = [p for p in _FC_PROCESSES if p.name in _COMPUTE_FCS]
+
+_central_app_components = [c for c in DEMO_BINARIES if c.name not in _COMPUTE_APPS]
+_central_app_processes = [p for p in DEMO_PROCESSES if p.name not in _COMPUTE_APPS]
+_compute_app_components = [c for c in DEMO_BINARIES if c.name in _COMPUTE_APPS]
+_compute_app_processes = [p for p in DEMO_PROCESSES if p.name in _COMPUTE_APPS]
+
 _central_app_shorts = [c.name for c in _central_app_components]
 
 
@@ -473,6 +530,29 @@ _central_supervisors = [
     dataclasses.replace(s, children=list(_central_app_shorts))
     if s.name == "app_sup" else s
     for s in _PLATFORM_SUPERVISORS
+]
+
+
+# --- compute supervisor tree: fresh, machine-local -------------------------
+# root → srv_sup → shwa ; root → app_sup → p3. Small and self-contained;
+# nothing of the platform tree applies on the accelerator box.
+_compute_supervisors = [
+    SupervisorNode(
+        name="root",
+        strategy=RestartStrategy.ONE_FOR_ALL,
+        children=["srv_sup", "app_sup"],
+        tombstone_dir="/tmp/tombstones",
+    ),
+    SupervisorNode(
+        name="srv_sup",
+        strategy=RestartStrategy.ONE_FOR_ONE,
+        children=sorted(_COMPUTE_FCS),
+    ),
+    SupervisorNode(
+        name="app_sup",
+        strategy=RestartStrategy.ONE_FOR_ONE,
+        children=sorted(_COMPUTE_APPS),
+    ),
 ]
 
 
@@ -510,8 +590,29 @@ CentralSoftware: SoftwareSpecification = SoftwareSpecification(
 )
 
 
-# Materialized rig — what `artheia executor emit demo.manifest.rig --rig
-# CentralRig` consumes to write install/central/executor.json. This rig.py is
-# SINGLE-MACHINE (central only); the 2-machine central+compute split is in
-# demo/manifest/zonal_rig.py (ComputeRig + ComputeSoftware live there).
+# --- ComputeSoftware --------------------------------------------------------
+ComputeSoftware: SoftwareSpecification = SoftwareSpecification(
+    vehicle=VehicleIdentity(name="demo", make="theia",
+                            model="gen_server-demo"),
+    machines=cast(set[SetTransformTypes], {Append(ComputeHost)}),
+    applications=cast(set[SetTransformTypes], {
+        Append(_mk_app("compute_app", ComputeHost.name,
+                       _compute_fc_components + _compute_app_components)),
+    }),
+    execution_manifests=cast(set[SetTransformTypes], {
+        Append(p) for p in (_compute_fc_processes + _compute_app_processes)
+    }),
+    service_manifests=cast(set[SetTransformTypes], {
+        Append(_sm) for _sm in DemoRig.service_manifests
+    }),
+    supervisors=cast(set[SetTransformTypes], {
+        Append(s) for s in _compute_supervisors
+    }),
+)
+
+
+# Materialized per-machine rigs — what `artheia executor emit
+# demo.manifest.rig --rig CentralRig` (and ComputeRig) consume to write
+# install/central/executor.json and install/compute/executor.json.
 CentralRig: Rig = CentralSoftware.to_rig()
+ComputeRig: Rig = ComputeSoftware.to_rig()

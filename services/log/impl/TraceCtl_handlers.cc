@@ -32,17 +32,8 @@ void TraceCtl::handle_info(const char* /*info*/, TraceCtlState& /*s*/) {
 
 
 
-TraceEmpty TraceCtl::handle_call(
-        const TraceConfigRequest& /*req*/,
-        TraceCtlState& /*s*/) {
-    // TODO: implement Configure (TraceConfigRequest →
-    //                                 TraceEmpty).
-    // Dispatched by request type; one or more server ports may
-    // expose this operation.
-    std::fprintf(stderr, "[%s] Configure called\n",
-                 kNodeName);
-    return TraceEmpty{};
-}
+// (Configure handler removed — trace CONFIG is the supervisor's job now;
+// TraceCtl is subscription-only. See feedback-trace-config-ownership.)
 
 // ctl_sub: an observer registers for the trace firehose. Hand it to the
 // shared hub, which connects back to the observer's (sub_type,sub_instance),

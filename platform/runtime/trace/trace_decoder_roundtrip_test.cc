@@ -32,14 +32,14 @@ namespace {
 
 // Encode one SmStateMsg via nanopb. Returns bytes written or -1.
 int nanopb_encode_sm_state(uint8_t* out, std::size_t out_cap,
-                           services_services_sm_SmState state,
+                           system_services_sm_SmState state,
                            uint64_t ts_ns) {
-    services_services_sm_SmStateMsg msg = {};
+    system_services_sm_SmStateMsg msg = {};
     msg.state = state;
     msg.ts_ns = ts_ns;
 
     pb_ostream_t stream = pb_ostream_from_buffer(out, out_cap);
-    if (!pb_encode(&stream, services_services_sm_SmStateMsg_fields, &msg)) {
+    if (!pb_encode(&stream, system_services_sm_SmStateMsg_fields, &msg)) {
         return -1;
     }
     return static_cast<int>(stream.bytes_written);
@@ -49,19 +49,19 @@ void test_roundtrip_basic() {
     uint8_t buf[64];
     int n = nanopb_encode_sm_state(
         buf, sizeof(buf),
-        services_services_sm_SmState_RUNNING,
+        system_services_sm_SmState_RUNNING,
         1700000000123456789ULL);
     assert(n > 0);
     std::printf("nanopb wrote %d bytes\n", n);
 
     artheia::trace::Decoder dec;
     // Use the libprotobuf-generated default_instance as the prototype.
-    // The C++ proto's package is "services_services_sm", matching the
-    // nanopb-side `services_services_sm_SmStateMsg_fields` table — so
+    // The C++ proto's package is "system_services_sm", matching the
+    // nanopb-side `system_services_sm_SmStateMsg_fields` table — so
     // the wire-format definitions are byte-identical.
     dec.register_msg(
         "SmStateMsg",
-        &services_services_sm::SmStateMsg::default_instance());
+        &system_services_sm::SmStateMsg::default_instance());
 
     auto result = dec.decode("SmStateMsg", buf, static_cast<std::size_t>(n));
     if (!result.ok) {
@@ -94,7 +94,7 @@ void test_empty_payload_decodes_to_default() {
     artheia::trace::Decoder dec;
     dec.register_msg(
         "SmStateMsg",
-        &services_services_sm::SmStateMsg::default_instance());
+        &system_services_sm::SmStateMsg::default_instance());
 
     auto result = dec.decode("SmStateMsg", nullptr, 0);
     assert(result.ok);

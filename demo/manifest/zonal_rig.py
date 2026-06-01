@@ -98,16 +98,12 @@ from services.manifest.service import ServicesSoftware
 _PLATFORM_OPKG_ARTIFACTS = [
     OpkgArtifact(
         name="supervisor",
-        bazel_target="//platform/supervisor:ipk",
+        bazel_target="//platform/supervisor/main:supervisor",
         target_dir="/opt/theia/supervisor/",
         systemd_unit="/etc/systemd/system/theia-supervisor.service",
     ),
-    OpkgArtifact(
-        name="gateway",
-        bazel_target="//platform/gateway:ipk",
-        target_dir="/opt/theia/gateway/",
-        systemd_unit="/etc/systemd/system/theia-gateway.service",
-    ),
+    # (gateway dropped — stale FC; needs its own gen-app modernization. Re-add
+    # once //platform/gateway/main:gateway builds. See gateway-fc-modernization.)
 ]
 
 CentralHost = MachineManifest(
@@ -223,18 +219,13 @@ from demo.manifest.applications import (  # noqa: E402
 _PLATFORM_FABRIC_COMPONENTS: list[SwComponent] = [
     SwComponent(
         name="supervisor",
-        bazel_target="//platform/supervisor:ipk",
+        bazel_target="//platform/supervisor/main:supervisor",
         owner="platform",
         art_node="system.supervisor/Supervisor",
         bazel_buildable=True,
     ),
-    SwComponent(
-        name="gateway",
-        bazel_target="//platform/gateway:ipk",
-        owner="platform",
-        art_node="system.gateway/GatewayBridge",
-        bazel_buildable=True,
-    ),
+    # (gateway dropped — stale FC; needs its own gen-app modernization. Re-add
+    # once //platform/gateway/main:gateway builds. See gateway-fc-modernization.)
 ]
 
 # DEMO_BINARIES = the demo per-process binaries (compute-bound AAs),

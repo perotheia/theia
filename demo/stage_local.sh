@@ -31,27 +31,18 @@ export PATH="$REPO/.venv/bin:$PATH"
 BB="$REPO/bazel-bin"
 SUP="$BB/platform/supervisor/main/supervisor"
 
-# --- build everything the stage needs --------------------------------------
-# The PLATFORM pieces (supervisor + FCs + collector) are required. The demo
-# apps (p1/p2/p3) are best-effort — if a demo app is mid-refactor and won't
-# build, the stage still produces a bootable install/central (the supervisor
-# logs `exec failed` for the missing child + applies its restart policy, which
-# is itself a valid thing to observe). --keep_going builds what it can.
-echo "building supervisor + FCs + collector (required) ..."
+# --- build everything the stage needs (idempotent) -------------------------
+echo "building supervisor + FCs + demo apps + collector ..."
 bazel build \
     //platform/supervisor/main:supervisor \
     //services/sm/main:sm \
     //services/per/main:per \
     //services/ucm/main:ucm \
     //services/shwa/main:shwa \
-    //services/log/main:log
-
-echo "building demo apps p1/p2/p3 (best-effort) ..."
-bazel build --keep_going \
+    //services/log/main:log \
     //demo/Demo3WayP1/main:demo \
     //demo/Demo3WayP2/main:demo \
-    //demo/Demo3WayP3/main:demo || \
-    echo "WARN: one or more demo apps failed to build — staging what exists" >&2
+    //demo/Demo3WayP3/main:demo
 
 # spec: "<bin-name>:<built-binary-path>" — bin-name is the executor.json
 # start_cmd leaf (bin/<bin-name>); src is the bazel-built binary.

@@ -18,10 +18,10 @@ struct Registrar {
     Registrar() {
         artheia::trace::register_global(
             "SmStateMsg",
-            &services_services_sm::SmStateMsg::default_instance());
+            &system_services_sm::SmStateMsg::default_instance());
         artheia::trace::register_global(
             "SmRequest",
-            &services_services_sm::SmRequest::default_instance());
+            &system_services_sm::SmRequest::default_instance());
     }
 };
 

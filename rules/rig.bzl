@@ -288,12 +288,13 @@ def _rig_repo_impl(ctx):
                 ),
             )
 
-    # 2. Run rig-deps to get the structure.
+    # 2. Run rig-deps to get the structure. `--rig <attr>` selects the spec
+    # when the module exports several (else the resolver's default).
     rig_json = "rig.json"
-    result = ctx.execute(
-        [artheia, "rig-deps", ctx.attr.rig_module, "--out", rig_json],
-        quiet = False,
-    )
+    rig_deps_cmd = [artheia, "rig-deps", ctx.attr.rig_module, "--out", rig_json]
+    if ctx.attr.rig_attr:
+        rig_deps_cmd += ["--rig", ctx.attr.rig_attr]
+    result = ctx.execute(rig_deps_cmd, quiet = False)
     if result.return_code != 0:
         fail("artheia rig-deps {} failed:\n{}\n{}".format(
             ctx.attr.rig_module,
@@ -341,7 +342,7 @@ package(default_visibility = ["//visibility:public"])
 genrule(
     name = "executor_json",
     outs = ["executor.json"],
-    cmd = "bash $(rootpath @pero_theia//tools:artheia_wrapper.sh) executor emit {rig_module} --out $@",
+    cmd = "bash $(rootpath @pero_theia//tools:artheia_wrapper.sh) executor emit {rig_module}{rig_arg} --out $@",
     tools = ["@pero_theia//tools:artheia_wrapper.sh"],
 )
 
@@ -372,7 +373,7 @@ genrule(
 genrule(
     name = "machines_yaml",
     outs = ["machines.yaml"],
-    cmd = "bash $(rootpath @pero_theia//tools:artheia_wrapper.sh) gui emit {rig_module} --out $@",
+    cmd = "bash $(rootpath @pero_theia//tools:artheia_wrapper.sh) gui emit {rig_module}{rig_arg} --out $@",
     tools = ["@pero_theia//tools:artheia_wrapper.sh"],
 )
 
@@ -387,6 +388,7 @@ filegroup(
 )
 '''.format(
         rig_module = ctx.attr.rig_module,
+        rig_arg = (" --rig " + ctx.attr.rig_attr) if ctx.attr.rig_attr else "",
         name = ctx.attr.name,
         machine_image_targets = "\n".join([
             '        "//{name}:image",'.format(name = m["name"])
@@ -401,6 +403,15 @@ rig_repo = repository_rule(
         "rig_module": attr.string(
             mandatory = True,
             doc = "Python dotted import path to the rig module, e.g. demo.manifest.rig.",
+        ),
+        "rig_attr": attr.string(
+            default = "",
+            doc = "Which Rig/SoftwareSpecification export in the module to use " +
+                  "(passed as `--rig`). Empty = the resolver's default " +
+                  "(*Software > *Rig, alphabetical). Set this when a module has " +
+                  "several specs and the alphabetical winner is the wrong one " +
+                  "(e.g. zonal_rig exports CentralSoftware AND DemoSoftware; the " +
+                  "multi-machine one is DemoSoftware).",
         ),
     },
     doc = "Materialize a per-rig synthetic Bazel repo from a Python rig spec.",
@@ -421,6 +432,11 @@ _declare = tag_class(
             mandatory = True,
             doc = "Dotted Python import path to the rig module.",
         ),
+        "rig_attr": attr.string(
+            default = "",
+            doc = "Which Rig/SoftwareSpecification export to use (--rig). " +
+                  "Empty = resolver default. See rig_repo's rig_attr doc.",
+        ),
     },
 )
 
@@ -433,6 +449,7 @@ def _rig_ext_impl(module_ctx):
             rig_repo(
                 name = tag.name,
                 rig_module = tag.rig_module,
+                rig_attr = tag.rig_attr,
             )
 
 

@@ -66,9 +66,13 @@ rig_ext.declare(
 
 # @rig_zonal — the 2-machine central+compute split, from demo.manifest.zonal_rig.
 # Drives the distributed Docker/Puppet deploy (`theia dist` →
-# @rig_zonal//{central_host,compute_host}:image).
+# @rig_zonal//{central_host,compute_host}:image). rig_attr=DemoSoftware: the
+# module exports several *Software specs (CentralSoftware/ComputeSoftware are
+# per-machine intermediates); DemoSoftware is the full multi-machine one (the
+# alphabetical default would wrongly pick CentralSoftware = central-only).
 rig_ext.declare(
     name = "rig_zonal",
     rig_module = "demo.manifest.zonal_rig",
+    rig_attr = "DemoSoftware",
 )
 use_repo(rig_ext, "rig_demo", "rig_zonal")

@@ -2,9 +2,10 @@
 #
 #   source env.sh
 #
-# Activates the workspace .venv (puts `artheia`, `theia`, `bazel`
-# wrappers on PATH) and registers tab completion for `artheia` and
-# `theia`. zsh is the supported shell; bash is handled as a fallback.
+# Activates the workspace .venv (puts `artheia`, `theia`, `tdb`, `bazel`
+# wrappers on PATH), ensures the workspace-CLI symlinks (`theia`, `tdb`)
+# exist in .venv/bin, and registers tab completion for `artheia`, `theia`,
+# and `tdb`. zsh is the supported shell; bash is handled as a fallback.
 #
 # Completion is click's native shell-source (see
 # docs/artheia/completion.md) — no argcomplete / extra deps. For zsh it
@@ -32,6 +33,15 @@ else
     return 1 2>/dev/null || exit 1
 fi
 
+# --- workspace-CLI symlinks (idempotent) ---------------------------------
+# `theia` (workspace dispatcher) and `tdb` (Theia Debug Bridge) are plain
+# script entrypoints, not pip console_scripts — link them into .venv/bin so
+# they're on PATH alongside `artheia`. `ln -sf` makes re-sourcing a no-op.
+# (The .venv is gitignored, so this is where the symlinks get (re)created.)
+ln -sf "$_THEIA_ROOT/theia.py"         "$_THEIA_ROOT/.venv/bin/theia"
+ln -sf "$_THEIA_ROOT/tools/tdb/tdb.py" "$_THEIA_ROOT/.venv/bin/tdb"
+chmod +x "$_THEIA_ROOT/theia.py" "$_THEIA_ROOT/tools/tdb/tdb.py" 2>/dev/null
+
 # --- shell completion ----------------------------------------------------
 if [ -n "${ZSH_VERSION:-}" ]; then
     # zsh: load the completion system once, then source click's snippets.
@@ -41,15 +51,18 @@ if [ -n "${ZSH_VERSION:-}" ]; then
     fi
     # artheia is click-based — use its native completion source.
     eval "$(_ARTHEIA_COMPLETE=zsh_source artheia)"
-    # theia is a plain argparse dispatcher (no click), so complete its fixed
-    # verb set with a small completion function registered via compdef.
-    _theia_complete() { compadd rig provision orchestrate dist install }
+    # theia + tdb are plain argparse/dispatch CLIs (no click), so complete
+    # their fixed verb sets with small functions registered via compdef.
+    _theia_complete() { compadd rig provision orchestrate dist install compdb }
     compdef _theia_complete theia
+    _tdb_complete() { compadd ps supervisor trace trace-config restart terminate logcat help quit }
+    compdef _tdb_complete tdb
 elif [ -n "${BASH_VERSION:-}" ]; then
     # bash fallback (you're on zsh per the project default, but keep this
     # so sourcing from a bash subshell still works).
     eval "$(_ARTHEIA_COMPLETE=bash_source artheia)"
-    complete -W "rig provision orchestrate dist install" theia
+    complete -W "rig provision orchestrate dist install compdb" theia
+    complete -W "ps supervisor trace trace-config restart terminate logcat help quit" tdb
 fi
 
-echo "theia env ready: .venv active, completion for artheia + theia loaded"
+echo "theia env ready: .venv active; theia + tdb linked; completion for artheia + theia + tdb"

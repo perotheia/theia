@@ -30,13 +30,6 @@ message TraceRecord {
     bytes payload = 7;
 }
 
-message TraceConfigRequest {
-    string target_node = 1;
-    string msg_type = 2;
-    bool enabled = 3;
-    TraceKind kind = 4;
-}
-
 message TraceEmpty {
     // empty body
 }

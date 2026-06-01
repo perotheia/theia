@@ -39,9 +39,8 @@ namespace ara::log {
 // generator prefixes types with the libc-safe proto package
 // (system_services_log_*); aliasing them here keeps callers'
 // signatures readable.
-using TraceConfigRequest = system_services_log_TraceConfigRequest;
-using TraceEmpty = system_services_log_TraceEmpty;
 using SubscribeReq = system_services_log_SubscribeReq;
+using TraceEmpty = system_services_log_TraceEmpty;
 using LogRecord = system_services_log_LogRecord;
 
 
@@ -126,9 +125,6 @@ public:
     // gets emitted once. handle_call/handle_cast dispatch by
     // request type, not by port.
 
-
-    TraceEmpty handle_call(const TraceConfigRequest& req,
-                                            TraceCtlState& s);
 
     TraceEmpty handle_call(const SubscribeReq& req,
                                             TraceCtlState& s);

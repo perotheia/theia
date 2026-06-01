@@ -115,8 +115,6 @@ int main() {
         // types so a real peer — or a robot-test inject via services/com
         // — lands on the same handle_call / handle_cast path. clientServer
         // ops → register_call; senderReceiver `in` data → register_cast.
-        config_mux.register_call<TraceConfigRequest, TraceEmpty>(
-            trace_ctl_cfg, trace_ctl);
         config_mux.register_call<SubscribeReq, TraceEmpty>(
             trace_ctl_cfg, trace_ctl);
     } else {

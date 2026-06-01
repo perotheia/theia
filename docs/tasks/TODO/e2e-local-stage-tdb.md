@@ -125,6 +125,36 @@ subscribe to that trace via `tdb → log[trace]`.
   TraceCtl → binary firehose → decode. observer_stream.py already proves the
   wire; tdb is the CLI front-end.
 
+## STATUS — S1–S5 DONE (booting supervisor from a staged install/)
+
+Landed + verified end-to-end:
+- **S2** ✅ gen-app `--manifest-out` removed; manifest is gen-manifest
+  (cluster.art-driven). artheia commit.
+- **S4** ✅ rig.py → single-machine (central); zonal_rig.py = the 2-machine
+  spec; multi-host tests repoint to zonal.
+- **S1** ✅ stage_local.sh rewritten to bazel targets + executor.json + env;
+  platform required, demo apps best-effort.
+- **S5** ✅ `stage_local.sh` → install/central; the supervisor boots
+  executor.json and forks all 7 children (sm/per/ucm/shwa + p1/p2/p3), runs
+  the loop, clean shutdown (rc=0). The whole manifest→stage→boot→fork pipeline
+  works on the new ara::exec architecture.
+- **B5** ✅ `artheia executor emit` shape matches load_manifest (spec.cpp)
+  exactly (name/strategy/children/start_cmd/.../nodes[]).
+- **log trace-cut** ✅ (unblocked the stage) — log[trace] is subscription-only;
+  TraceControl/TraceConfigRequest removed from .art + proto + lib + impl + main;
+  //services/log/main builds green (was pre-broken).
+
+Pre-existing breakage still open (NOT on the stage's critical path — staged
+best-effort): the Demo3WayP{1,2,3} apps fail to build (runtime API drift —
+bind_node(GenServerBase&) signature, .start()/.stop(), TickerNode state). Their
+own follow-up; the supervisor + FCs are what the e2e needs.
+
+REMAINING for the FULL e2e (S6–S7): build the `tdb` CLI on the probe-backed
+clients (tools/tdb/tdb_client.py — B2 resolved), wire the firehose reassembler
+(B3: GetTree returns empty, live tree is the NodeEdge/NodeState stream), drop
+tools/supdbg, then `tdb trace <node>` → ConfigureTrace → Subscribe (S7). Needs a
+TIPC host (sandbox has no AF_TIPC).
+
 ## Sequencing reality
 
 The 7 steps are NOT independent. Hard dependency chain:

@@ -5,7 +5,7 @@
 //
 // register_call / register_cast on a reporting node's config service
 // need a RemoteCodec<T> for every inbound type. This header declares
-// ONE DEMO_DECLARE_REMOTE_CODEC per inbound (receiver-port data /
+// ONE THEIA_DECLARE_REMOTE_CODEC per inbound (receiver-port data /
 // server-op req+rep) type, deduplicated across EVERY node in the FC.
 //
 // It lives in one header — not per-node — so that when two nodes in
@@ -23,13 +23,13 @@
 
 #pragma once
 
-#include "RemoteCodec.hh"   // DEMO_DECLARE_REMOTE_CODEC
+#include "RemoteCodec.hh"   // THEIA_DECLARE_REMOTE_CODEC
 #include "system/services/per/per.pb.h"
 
 
 
 
-DEMO_DECLARE_REMOTE_CODEC(system_services_per_PerKey)
-DEMO_DECLARE_REMOTE_CODEC(system_services_per_PerValue)
-DEMO_DECLARE_REMOTE_CODEC(system_services_per_PerPut)
-DEMO_DECLARE_REMOTE_CODEC(system_services_per_PerEmpty)
+THEIA_DECLARE_REMOTE_CODEC(system_services_per_PerKey)
+THEIA_DECLARE_REMOTE_CODEC(system_services_per_PerValue)
+THEIA_DECLARE_REMOTE_CODEC(system_services_per_PerPut)
+THEIA_DECLARE_REMOTE_CODEC(system_services_per_PerEmpty)

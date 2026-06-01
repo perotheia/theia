@@ -64,10 +64,10 @@
 // the universal receiver: every node that binds a config service
 // register_cast<>'s this type, so the codec belongs with the framework.
 // Emits RemoteCodec<platform_runtime_LogLevelPush> + msg_type_name.
-DEMO_DECLARE_REMOTE_CODEC(platform_runtime_LogLevelPush)
+THEIA_DECLARE_REMOTE_CODEC(platform_runtime_LogLevelPush)
 // Trace control (#403) — the supervisor's per-node trace-kind push.
 // Same framework-universal codec rationale as LogLevelPush above.
-DEMO_DECLARE_REMOTE_CODEC(platform_runtime_TraceControlPush)
+THEIA_DECLARE_REMOTE_CODEC(platform_runtime_TraceControlPush)
 
 namespace theia {
 namespace runtime {

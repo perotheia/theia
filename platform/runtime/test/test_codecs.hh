@@ -9,6 +9,6 @@
 
 #include "platform_runtime_test/messages.pb.h"
 
-DEMO_DECLARE_REMOTE_CODEC(platform_runtime_test_Inc);
-DEMO_DECLARE_REMOTE_CODEC(platform_runtime_test_Get);
-DEMO_DECLARE_REMOTE_CODEC(platform_runtime_test_GetReply);
+THEIA_DECLARE_REMOTE_CODEC(platform_runtime_test_Inc);
+THEIA_DECLARE_REMOTE_CODEC(platform_runtime_test_Get);
+THEIA_DECLARE_REMOTE_CODEC(platform_runtime_test_GetReply);

@@ -238,6 +238,66 @@ std::vector<TraceConfigRow> Supervisor::ctl_get_trace_config() {
     return out;
 }
 
+std::vector<TreeRow> Supervisor::ctl_get_tree() {
+    // Same topological walk as emit_tree_stream, collected into a flat list.
+    // Synthesize the <worker>_sup bracket row for reporting workers (#364) so
+    // the rebuilt tree matches the firehose hierarchy.
+    std::vector<TreeRow> out;
+    std::function<void(const SupervisorNode&, const std::string&)> walk =
+        [&](const SupervisorNode& sup, const std::string& parent) {
+            TreeRow s;
+            s.name          = sup.name;
+            s.parent_name   = parent;
+            s.kind          = 1;   // supervisor
+            s.pid           = -1;
+            s.state         = 2;   // running
+            s.restart_count = static_cast<uint32_t>(sup.restart_history.size());
+            s.strategy      = to_string(sup.strategy);
+            out.push_back(std::move(s));
+
+            for (const auto& c : sup.children) {
+                if (c->is_worker()) {
+                    std::string worker_parent = sup.name;
+                    bool has_reporting = false;
+                    for (const auto& ni : c->worker.nodes) {
+                        if (ni.reporting) { has_reporting = true; break; }
+                    }
+                    if (has_reporting) {
+                        TreeRow synth;
+                        synth.name        = c->worker.name + "_sup";
+                        synth.parent_name = sup.name;
+                        synth.kind        = 1;
+                        synth.pid         = -1;
+                        synth.state       = 2;
+                        synth.strategy    = "one_for_all";
+                        out.push_back(std::move(synth));
+                        worker_parent = c->worker.name + "_sup";
+                    }
+                    const WorkerNode& w = c->worker;
+                    TreeRow r;
+                    r.name           = w.name;
+                    r.parent_name    = worker_parent;
+                    r.kind           = 0;  // worker
+                    r.pid            = w.pid;
+                    r.state          = (w.pid > 0) ? 2u : 0u;
+                    if (w.terminating) r.state = 3u;
+                    r.restart_count  = w.restart_count;
+                    r.last_exit_code = w.last_exit_code;
+                    r.flags          = w.flags;
+                    for (size_t i = 0; i < w.start_cmd.size(); ++i) {
+                        if (i) r.start_cmd += ' ';
+                        r.start_cmd += w.start_cmd[i];
+                    }
+                    out.push_back(std::move(r));
+                } else {
+                    walk(c->sup, sup.name);
+                }
+            }
+        };
+    walk(*root_, "");
+    return out;
+}
+
 SystemInfoData Supervisor::ctl_get_system_info() {
     SystemInfoData info;
     do_get_system_info(info);

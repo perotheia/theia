@@ -201,17 +201,31 @@ void SupervisorCtl::handle_cast(const SendTimeoutReport& msg,
 TreeSnapshot SupervisorCtl::handle_call(
         const GetTreeRequest& /*req*/,
         SupervisorCtlState& /*s*/) {
-    // GetTree is the two-frame read. The topo-pair firehose (events stream) is
-    // the live tree source; a snapshot-on-demand walks via that same path. Here
-    // we return an empty TreeSnapshot envelope (generation only) and let the
-    // caller consume the firehose — the monolithic children[] payload was
-    // retired with the com bridge. (A caller wanting the full tree subscribes
-    // to events.* and triggers a snapshot.)
+    // Point-in-time snapshot for `tdb ps` / `tdb supervisor`: walk the engine's
+    // tree into the flat parent-keyed children[] (the caller rebuilds the
+    // hierarchy by name, same shape the NodeEdge/NodeState firehose streams).
+    auto rows = run_on_engine<std::vector<::supervisor::TreeRow>>(
+        [](::supervisor::Supervisor& e) { return e.ctl_get_tree(); }, {});
     TreeSnapshot snap{};
-    run_on_engine_void([&](::supervisor::Supervisor& /*e*/) {
-        // A snapshot is emitted on the engine's 1 Hz tick; nothing to do
-        // synchronously. Left as a hook for an explicit re-emit if needed.
-    });
+    const pb_size_t cap =
+        static_cast<pb_size_t>(sizeof(snap.children) / sizeof(snap.children[0]));
+    for (const auto& r : rows) {
+        if (snap.children_count >= cap) break;  // truncate (logged on encode)
+        auto& c = snap.children[snap.children_count++];
+        c = ChildState{};
+        std::snprintf(c.name, sizeof(c.name), "%s", r.name.c_str());
+        std::snprintf(c.parent_name, sizeof(c.parent_name), "%s",
+                      r.parent_name.c_str());
+        c.kind           = r.kind;
+        c.pid            = r.pid;
+        c.state          = r.state;
+        c.restart_count  = r.restart_count;
+        c.last_exit_code = r.last_exit_code;
+        c.flags          = r.flags;
+        std::snprintf(c.strategy, sizeof(c.strategy), "%s", r.strategy.c_str());
+        std::snprintf(c.start_cmd, sizeof(c.start_cmd), "%s",
+                      r.start_cmd.c_str());
+    }
     return snap;
 }
 

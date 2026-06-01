@@ -1,0 +1,78 @@
+// tdb — the Theia Debug Bridge (adb-for-Theia). CLIENT-side .art.
+//
+// tdb is external dev tooling, NOT a platform node: it ships no C++ daemon.
+// This .art exists so `artheia.probe` can materialize Python clients for the
+// two services tdb drives — the supervisor and log[trace] — straight from the
+// model. No hand-rolled TIPC: the probe resolves every peer's TIPC address +
+// per-op service_id from the imported interfaces, so if the Theia transport
+// changes we swap the runtime + probe and tdb keeps working unchanged.
+// (See feedback-clients-via-art-probe + docs/tasks/TODO/e2e-local-stage-tdb.md.)
+//
+// Two client nodes, one per service tdb talks to:
+//   TdbSup   — drives the supervisor: CALLs SupervisorControlIf
+//              (GetTree / ConfigureTrace / GetTraceConfig / lifecycle) and
+//              RECEIVES SupervisorEventIf (the NodeEdge/NodeState firehose that
+//              replaces the monolithic GetTree tree).
+//   TdbTrace — subscribes to log[trace]: CALLs TraceStreamSub.Subscribe and
+//              RECEIVES TraceRecordStream (the live decoded-record fan-out).
+//              (artheia.observer.TraceObserver already implements this exact
+//              client; tdb reuses it. Declared here for one coherent model.)
+
+package system.tools.tdb
+
+// Pull the real node + interface definitions into scope. The resolver
+// materializes the extern forward-decls below from these imports (the same
+// mechanism services/nop/exec uses to alias the supervisor node).
+import system.supervisor.*
+import system.services.log.*
+
+// ---- extern peers (materialized from the imports) ------------------------
+//
+// `extern` = forward-decl: the real node (tipc address + ports + ops) lives in
+// the imported package and is substituted at parse time. tdb only needs them
+// resolvable as CALL/receive targets — it instantiates no peer.
+
+// The supervisor control node (tipc 0x80020001) — system.supervisor.
+extern node atomic SupervisorCtl { }
+
+// log[trace]'s subscribe control node (tipc 0x80010014) — system.services.log.
+extern node atomic TraceCtl { }
+
+// ---- tdb client nodes ----------------------------------------------------
+//
+// Each carries its OWN tipc address (the probe binds it as the SOURCE of the
+// casts/calls + as the firehose / trace-record RECEIVER address it advertises
+// to the supervisor / collector). 0x80020100+ is tdb's slot block (adjacent to
+// the supervisor's 0x80020001/0002, clearly "control-plane tooling").
+
+// Supervisor client: makes the SupervisorControlIf calls, receives the
+// SupervisorEventIf firehose.
+node atomic TdbSup {
+    tipc type=0x80020101 instance=0
+    ports {
+        // FQN-qualified: SupervisorControlIf is also forward-declared (empty
+        // stub) in system.services.log, so a bare name is ambiguous — point at
+        // the REAL one in system.supervisor.
+        client   sup_ctl     requires system.supervisor.SupervisorControlIf
+        receiver sup_events  requires system.supervisor.SupervisorEventIf
+    }
+}
+
+// Trace client: calls TraceStreamSub.Subscribe, receives the live record fan-out.
+node atomic TdbTrace {
+    tipc type=0x80020102 instance=0
+    ports {
+        client   trace_sub   requires TraceStreamSub
+        receiver trace_rec    requires TraceRecordStream
+    }
+}
+
+// No composition / cluster: tdb is not deployed as a platform process. The
+// nodes exist purely as probe-resolvable client handles.
+//
+// NOTE: like every cross-importing .art (cf. services/nop/exec), this file
+// resolves ONLY via the canonical `system/` tree path
+// (system/tools/tdb/tdb.art → symlink here), where the import dir-climb
+// mirrors the package FQN. Parsing it at this real path fails the
+// `import system.supervisor.*` resolution — that's expected, not a bug; the
+// probe + build always load it through `system/tools/tdb/`.

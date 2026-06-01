@@ -31,6 +31,13 @@ export PATH="$REPO/.venv/bin:$PATH"
 BB="$REPO/bazel-bin"
 SUP="$BB/platform/supervisor/main/supervisor"
 
+# Wipe the whole install/ tree first — this is a SINGLE-MACHINE local stage
+# (rig.py is central-only), so a fresh install/ should contain only central/.
+# Clearing the lot stops stale machine dirs (compute/, or an old etc//theia/
+# layout) from lingering after the rig was trimmed.
+rm -rf "$REPO/install"
+mkdir -p "$REPO/install"
+
 # --- build everything the stage needs (idempotent) -------------------------
 echo "building supervisor + FCs + demo apps + collector ..."
 bazel build \

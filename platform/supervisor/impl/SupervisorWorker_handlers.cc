@@ -85,12 +85,11 @@ std::unique_ptr<::supervisor::Supervisor> g_engine;
     // it must not touch TIPC transport. SupervisorCtl (a runtime-backed
     // GenServer) installs the forwarder and does the actual cast of the runtime
     // TraceControlPush / LogLevelPush — same defer pattern as on_event/on_health.
-    s.on_trace_push = [](uint32_t type, uint32_t instance,
-                         uint32_t kind, bool enabled) {
-        if (auto fn = emit_forwarder().on_trace_push) fn(type, instance, kind, enabled);
+    s.set_trace = [](const std::string& child, uint32_t kind, bool enabled) {
+        if (auto fn = emit_forwarder().set_trace) fn(child.c_str(), kind, enabled);
     };
-    s.on_log_push = [](uint32_t type, uint32_t instance, uint32_t level) {
-        if (auto fn = emit_forwarder().on_log_push) fn(type, instance, level);
+    s.set_log_level = [](const std::string& child, uint32_t level) {
+        if (auto fn = emit_forwarder().set_log_level) fn(child.c_str(), level);
     };
     return s;
 }

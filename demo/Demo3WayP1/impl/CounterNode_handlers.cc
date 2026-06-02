@@ -20,7 +20,7 @@ void CounterNode::init(CounterNodeState& /*s*/) {
 // handle_info: a periodic "tick" logs the cumulative counter.
 void CounterNode::handle_info(const char* info, CounterNodeState& s) {
     if (std::strcmp(info, "tick") == 0) {
-        ::theia::runtime::process_logger().info(
+        ::theia::runtime::process_logger().debug(
             "[counter] tick — counter=" + std::to_string(s.counter));
     }
 }
@@ -32,7 +32,7 @@ void CounterNode::handle_cast(const Inc& msg, CounterNodeState& s) {
 
 // Get — call, replies with the current counter.
 GetReply CounterNode::handle_call(const Get& /*req*/, CounterNodeState& s) {
-    ::theia::runtime::process_logger().info(
+    ::theia::runtime::process_logger().debug(
         "[counter] handle_call(Get) -> " + std::to_string(s.counter));
     GetReply reply{};
     reply.value = s.counter;

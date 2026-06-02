@@ -1325,6 +1325,20 @@ WorkerNode* Supervisor::find_worker_by_name(const std::string& name) {
     return nullptr;
 }
 
+// Resolve a NODE-type name ("DriverNode") to the worker hosting it plus that
+// node's NodeInfo. Lets trace config target an individual node, not just the
+// worker (whose first-reporting-node address would otherwise be used). Returns
+// {nullptr, nullptr} if no hosted node matches.
+std::pair<WorkerNode*, const NodeInfo*>
+Supervisor::find_node_by_name(const std::string& name) {
+    for (auto* w : all_workers(*root_)) {
+        for (const auto& ni : w->nodes) {
+            if (ni.name == name) return {w, &ni};
+        }
+    }
+    return {nullptr, nullptr};
+}
+
 SupervisorNode* Supervisor::find_supervisor_by_name(const std::string& name) {
     std::vector<SupervisorNode*> stack{root_};
     while (!stack.empty()) {
@@ -1866,33 +1880,46 @@ void Supervisor::push_trace_config_to_child(const std::string& child_name) {
     auto cfg_it = trace_configs_.find(child_name);
     if (cfg_it == trace_configs_.end()) return;  // nothing to push
 
-    // Find the worker's NodeInfo to learn the NodeTraceCtl TIPC addr.
-    // For Phase 1 of #361 we look up the worker by NAME and use its
-    // first reporting node's tipc_{type,instance}. A future iteration
-    // could route per-msg-type to different node threads, but the
-    // executor.yaml today places one node per worker for FCs that
-    // use trace.
-    WorkerNode* w = find_worker_by_name(child_name);
-    if (!w) {
-        std::fprintf(stderr,
-            "supervisor: trace push: no worker named '%s' yet\n",
-            child_name.c_str());
-        return;
-    }
-    if (w->nodes.empty()) {
-        std::fprintf(stderr,
-            "supervisor: trace push: worker '%s' has no NodeInfo "
-            "(reporting=false?) — skipping push\n",
-            child_name.c_str());
-        return;
-    }
-
-    // Use the first reporting node's TIPC addr. Hex string → u32.
+    // Resolve the target to a specific node's TIPC addr. The target name is
+    // EITHER a worker name ("p1", "sm") OR a node-type name ("DriverNode",
+    // "SmGate"):
+    //   - worker name → push to the worker's first reporting node (the
+    //     coarse "trace this process" intent).
+    //   - node name   → push to THAT node's own address, so the per-node
+    //     Tracer enable lands on the right node thread (e.g. DriverNode, not
+    //     just p1's first node CounterNode).
     const NodeInfo* target = nullptr;
-    for (const auto& ni : w->nodes) {
-        if (ni.reporting) { target = &ni; break; }
+    if (WorkerNode* w = find_worker_by_name(child_name)) {
+        if (w->nodes.empty()) {
+            std::fprintf(stderr,
+                "supervisor: trace push: worker '%s' has no NodeInfo "
+                "(reporting=false?) — skipping push\n",
+                child_name.c_str());
+            return;
+        }
+        for (const auto& ni : w->nodes) {
+            if (ni.reporting) { target = &ni; break; }
+        }
+    } else {
+        // Not a worker name — try resolving it as a node-type name.
+        auto [host, ni] = find_node_by_name(child_name);
+        if (host && ni) {
+            if (!ni->reporting) {
+                std::fprintf(stderr,
+                    "supervisor: trace push: node '%s' is non-reporting "
+                    "— cannot push (use the legacy in-proc enable)\n",
+                    child_name.c_str());
+                return;
+            }
+            target = ni;
+        }
     }
-    if (!target) return;
+    if (!target) {
+        std::fprintf(stderr,
+            "supervisor: trace push: no worker or node named '%s' yet\n",
+            child_name.c_str());
+        return;
+    }
 
     uint32_t type, instance;
     try {

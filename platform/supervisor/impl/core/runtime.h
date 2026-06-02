@@ -27,6 +27,7 @@
 #include <mutex>
 #include <string>
 #include <sys/types.h>
+#include <utility>
 #include <vector>
 
 namespace supervisor {
@@ -287,6 +288,9 @@ private:
     // OTP semantics require, returning a status ordinal. No envelope: the
     // SupervisorCtl gen_server dispatches one typed CALL per op.
     WorkerNode*     find_worker_by_name(const std::string& name);
+    // Resolve a node-type name to {hosting worker, that node's NodeInfo}.
+    std::pair<WorkerNode*, const NodeInfo*>
+                    find_node_by_name(const std::string& name);
     SupervisorNode* find_supervisor_by_name(const std::string& name);
 
     // OTP start_child / delete_child: hot-add and hot-remove. Both

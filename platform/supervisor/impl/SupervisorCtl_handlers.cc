@@ -6,11 +6,14 @@
 // lib/SupervisorCtl.hh.
 //
 // SupervisorCtl is the control front-end: it receives the nanopb control
-// surface on TipcMux (bound in main.cc) and bridges each op into the shared
-// supervision engine (impl/core/runtime.*) via post_command + a std::promise
-// (so the gen_server CALL gets a real reply). It also installs the bridge's
-// EmitForwarder in init() — the engine's EmitSink fans events back out through
-// this node's `events` broadcast senders.
+// surface on TipcMux (bound in main.cc) and DIRECTLY drives the shared
+// supervision engine (impl/core/runtime.*) — each handler calls eng->ctl_*()
+// straight, no loop-marshal. The engine serializes those calls against its own
+// loop tick with state_mu_ (recursive), so a CALL gets its reply synchronously
+// on the TipcMux thread. SupervisorCtl also installs the bridge's EmitForwarder
+// in init() — the engine's EmitSink fans events back out through this node's
+// `events` broadcast senders, and the engine's restart re-push asks control (by
+// child NAME) to resolve + cast the typed trace/log config.
 
 #include "lib/SupervisorCtl.hh"
 
@@ -23,7 +26,6 @@
 #include <cstdio>
 #include <cstring>
 #include <functional>
-#include <future>
 #include <string>
 #include <vector>
 
@@ -31,32 +33,13 @@ namespace ara::exec {
 
 namespace {
 
-// Run `fn(engine)` on the engine's loop thread (via post_command) and block
-// until it completes, returning fn's result. If the engine isn't up yet,
-// returns `dflt`. T must be default-constructible / movable.
-template <typename T>
-T run_on_engine(std::function<T(::supervisor::Supervisor&)> fn, T dflt) {
-    auto* eng = ::supervisor::supervisor_instance();
-    if (!eng) return dflt;
-    std::promise<T> p;
-    auto fut = p.get_future();
-    eng->post_command([eng, &fn, &p]() {
-        p.set_value(fn(*eng));
-    });
-    return fut.get();
-}
-
-// void variant.
-void run_on_engine_void(std::function<void(::supervisor::Supervisor&)> fn) {
-    auto* eng = ::supervisor::supervisor_instance();
-    if (!eng) return;
-    std::promise<void> p;
-    auto fut = p.get_future();
-    eng->post_command([eng, &fn, &p]() {
-        fn(*eng);
-        p.set_value();
-    });
-    fut.get();
+// DIRECT control. SupervisorCtl's handlers call the engine's ctl_* methods
+// straight (eng->ctl_*()), no run_on_engine loop-marshal / lambda / future. The
+// engine serializes these against its loop tick with state_mu_ (see
+// impl/core/runtime.*). `engine()` is the published pointer or nullptr before
+// the worker constructs it.
+::supervisor::Supervisor* engine() {
+    return ::supervisor::supervisor_instance();
 }
 
 // Copy a fixed nanopb char[] field into a std::string (already NUL-terminated
@@ -228,24 +211,17 @@ void SupervisorCtl::handle_info(const char* /*info*/, SupervisorCtlState& /*s*/)
 
 void SupervisorCtl::handle_cast(const HeartbeatReport& msg,
                                  SupervisorCtlState& /*s*/) {
-    const std::string node = s(msg.node_name);
-    const int32_t pid = msg.pid;
-    const uint64_t seq = msg.seq;
-    run_on_engine_void([=](::supervisor::Supervisor& e) {
-        e.ctl_on_heartbeat(node, static_cast<pid_t>(pid), seq);
-    });
+    if (auto* e = engine())
+        e->ctl_on_heartbeat(s(msg.node_name), static_cast<pid_t>(msg.pid),
+                            msg.seq);
 }
 
 void SupervisorCtl::handle_cast(const SendTimeoutReport& msg,
                                  SupervisorCtlState& /*s*/) {
-    const std::string caller = s(msg.caller_node);
-    const std::string callee = s(msg.callee_node);
-    const std::string iface  = s(msg.iface);
-    const std::string method = s(msg.method);
-    const uint32_t budget = msg.budget_ms, observed = msg.observed_ms;
-    run_on_engine_void([=](::supervisor::Supervisor& e) {
-        e.ctl_on_send_timeout(caller, callee, iface, method, budget, observed);
-    });
+    if (auto* e = engine())
+        e->ctl_on_send_timeout(s(msg.caller_node), s(msg.callee_node),
+                               s(msg.iface), s(msg.method),
+                               msg.budget_ms, msg.observed_ms);
 }
 
 
@@ -256,8 +232,8 @@ TreeSnapshot SupervisorCtl::handle_call(
     // Point-in-time snapshot for `tdb ps` / `tdb supervisor`: walk the engine's
     // tree into the flat parent-keyed children[] (the caller rebuilds the
     // hierarchy by name, same shape the NodeEdge/NodeState firehose streams).
-    auto rows = run_on_engine<std::vector<::supervisor::TreeRow>>(
-        [](::supervisor::Supervisor& e) { return e.ctl_get_tree(); }, {});
+    auto* eng = engine();
+    auto rows = eng ? eng->ctl_get_tree() : std::vector<::supervisor::TreeRow>{};
     TreeSnapshot snap{};
     const pb_size_t cap =
         static_cast<pb_size_t>(sizeof(snap.children) / sizeof(snap.children[0]));
@@ -303,11 +279,10 @@ ControlReply SupervisorCtl::handle_call(
     const int shutdown = spec.shutdown;
     const int type = static_cast<int>(spec.type);
 
-    uint32_t status = run_on_engine<uint32_t>(
-        [=](::supervisor::Supervisor& e) {
-            return e.ctl_start_child(parent, name, cmd, restart, shutdown,
-                                     type, mods);
-        }, /*dflt=*/4 /*invalid_request when no engine*/);
+    auto* eng = engine();
+    uint32_t status = eng
+        ? eng->ctl_start_child(parent, name, cmd, restart, shutdown, type, mods)
+        : 4 /*invalid_request when no engine*/;
     ControlReply rep;
     set_reply(rep, status, name);
     return rep;
@@ -317,9 +292,8 @@ ControlReply SupervisorCtl::handle_call(
         const DeleteChildRequest& req,
         SupervisorCtlState& /*s*/) {
     const std::string name = s(req.name);
-    uint32_t status = run_on_engine<uint32_t>(
-        [=](::supervisor::Supervisor& e) { return e.ctl_delete_child(name); },
-        4);
+    auto* eng = engine();
+    uint32_t status = eng ? eng->ctl_delete_child(name) : 4;
     ControlReply rep;
     set_reply(rep, status, name);
     return rep;
@@ -336,11 +310,10 @@ ControlReply SupervisorCtl::handle_call(
         SupervisorCtlState& /*s*/) {
     const std::string name = s(req.name);
     const bool hold = req.no_restart;
-    uint32_t status = run_on_engine<uint32_t>(
-        [=](::supervisor::Supervisor& e) {
-            return hold ? e.ctl_suspend_child(name)   // terminate + hold
-                        : e.ctl_restart_child(name);  // stop then start
-        }, 4);
+    auto* eng = engine();
+    uint32_t status = !eng ? 4
+                     : hold ? eng->ctl_suspend_child(name)   // terminate + hold
+                            : eng->ctl_restart_child(name);   // stop then start
     ControlReply rep;
     set_reply(rep, status, name);
     return rep;
@@ -349,7 +322,7 @@ ControlReply SupervisorCtl::handle_call(
 ControlReply SupervisorCtl::handle_call(
         const Stop& /*req*/,
         SupervisorCtlState& /*s*/) {
-    run_on_engine_void([](::supervisor::Supervisor& e) { e.request_shutdown(); });
+    if (auto* eng = engine()) eng->request_shutdown();
     ControlReply rep;
     set_reply(rep, 0, "", "shutting down");
     return rep;
@@ -358,9 +331,9 @@ ControlReply SupervisorCtl::handle_call(
 SystemInfo SupervisorCtl::handle_call(
         const GetSystemInfoRequest& /*req*/,
         SupervisorCtlState& /*s*/) {
-    ::supervisor::SystemInfoData info = run_on_engine<::supervisor::SystemInfoData>(
-        [](::supervisor::Supervisor& e) { return e.ctl_get_system_info(); },
-        ::supervisor::SystemInfoData{});
+    auto* eng = engine();
+    ::supervisor::SystemInfoData info =
+        eng ? eng->ctl_get_system_info() : ::supervisor::SystemInfoData{};
     SystemInfo m{};
     std::snprintf(m.hostname, sizeof(m.hostname), "%s", info.hostname.c_str());
     std::snprintf(m.kernel, sizeof(m.kernel), "%s", info.kernel.c_str());
@@ -403,9 +376,9 @@ ControlReply SupervisorCtl::handle_call(
 TraceConfigList SupervisorCtl::handle_call(
         const GetTraceConfigRequest& /*req*/,
         SupervisorCtlState& /*s*/) {
-    auto rows = run_on_engine<std::vector<::supervisor::TraceConfigRow>>(
-        [](::supervisor::Supervisor& e) { return e.ctl_get_trace_config(); },
-        {});
+    auto* eng = engine();
+    auto rows = eng ? eng->ctl_get_trace_config()
+                    : std::vector<::supervisor::TraceConfigRow>{};
     TraceConfigList list{};
     list.configs_count = 0;
     for (const auto& r : rows) {

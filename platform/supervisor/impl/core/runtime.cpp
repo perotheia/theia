@@ -182,9 +182,10 @@ void Supervisor::request_shutdown() {
 }
 
 // ---------------------------------------------------------------------------
-// Control-surface wrappers (SupervisorCtl::handle_call posts these via
-// post_command, so the bodies run on the loop thread). They delegate to the
-// existing do_*/apply_* primitives — single-writer, no extra locking.
+// Control-surface wrappers. SupervisorCtl::handle_call now calls these DIRECTLY
+// from its TipcMux thread (no run_on_engine loop-marshal), so each takes
+// state_mu_ to serialize fork/mutate against the loop's reap/sample/emit (which
+// also take it). The loop is no longer the sole writer; the lock is.
 // ---------------------------------------------------------------------------
 
 uint32_t Supervisor::ctl_start_child(const std::string& parent_sup,
@@ -192,6 +193,7 @@ uint32_t Supervisor::ctl_start_child(const std::string& parent_sup,
                                      const std::vector<std::string>& start_cmd,
                                      int restart, int shutdown, int type,
                                      const std::vector<std::string>& modules) {
+    std::lock_guard<std::recursive_mutex> lk(state_mu_);
     uint32_t status = 0;
     do_start_child(parent_sup, name, start_cmd, restart, shutdown, type,
                    modules, status);
@@ -199,25 +201,30 @@ uint32_t Supervisor::ctl_start_child(const std::string& parent_sup,
 }
 
 uint32_t Supervisor::ctl_delete_child(const std::string& name) {
+    std::lock_guard<std::recursive_mutex> lk(state_mu_);
     return do_delete_child(name);
 }
 uint32_t Supervisor::ctl_restart_child(const std::string& name) {
+    std::lock_guard<std::recursive_mutex> lk(state_mu_);
     return do_restart_child(name);
 }
 uint32_t Supervisor::ctl_terminate_child(const std::string& name) {
+    std::lock_guard<std::recursive_mutex> lk(state_mu_);
     return do_terminate_child(name);
 }
 uint32_t Supervisor::ctl_suspend_child(const std::string& name) {
+    std::lock_guard<std::recursive_mutex> lk(state_mu_);
     return do_suspend_child(name);
 }
 uint32_t Supervisor::ctl_resume_child(const std::string& name) {
+    std::lock_guard<std::recursive_mutex> lk(state_mu_);
     return do_resume_child(name);
 }
 
 // Resolve a target name → child TIPC address. Pure read; SupervisorCtl calls
 // it directly and casts the control message itself.
 Supervisor::NodeAddr Supervisor::resolve_node(const std::string& name) {
-    std::lock_guard<std::mutex> lk(state_mu_);
+    std::lock_guard<std::recursive_mutex> lk(state_mu_);
     NodeAddr a;
     a.ok = resolve_trace_target(name, a.type, a.instance);
     return a;
@@ -225,7 +232,7 @@ Supervisor::NodeAddr Supervisor::resolve_node(const std::string& name) {
 
 bool Supervisor::ctl_configure_trace(const std::string& target_node,
                                      bool enabled, uint32_t kind) {
-    std::lock_guard<std::mutex> lk(state_mu_);
+    std::lock_guard<std::recursive_mutex> lk(state_mu_);
     // Validate the target resolves to a real worker/node BEFORE storing, so a
     // typo'd / stale / non-reporting name fails the control reply instead of
     // silently "succeeding". STORE ONLY — SupervisorCtl does the cast.
@@ -239,7 +246,7 @@ bool Supervisor::ctl_configure_trace(const std::string& target_node,
 
 bool Supervisor::ctl_configure_log_level(const std::string& target_node,
                                          uint32_t level) {
-    std::lock_guard<std::mutex> lk(state_mu_);
+    std::lock_guard<std::recursive_mutex> lk(state_mu_);
     uint32_t t, i;
     if (!resolve_trace_target(target_node, t, i)) {
         return false;
@@ -263,6 +270,7 @@ std::vector<TraceConfigRow> Supervisor::ctl_get_trace_config() {
 }
 
 std::vector<TreeRow> Supervisor::ctl_get_tree() {
+    std::lock_guard<std::recursive_mutex> lk(state_mu_);
     // Same topological walk as emit_tree_stream, collected into a flat list.
     // Synthesize the <worker>_sup bracket row for reporting workers (#364) so
     // the rebuilt tree matches the firehose hierarchy.
@@ -359,6 +367,7 @@ SystemInfoData Supervisor::ctl_get_system_info() {
 // first beat after a gap (#361).
 void Supervisor::ctl_on_heartbeat(const std::string& node_name, pid_t pid,
                                   uint64_t seq) {
+    std::lock_guard<std::recursive_mutex> lk(state_mu_);
     auto now = std::chrono::steady_clock::now();
     auto& s = heartbeats_[pid];
     s.last_seen = now;
@@ -385,6 +394,7 @@ void Supervisor::ctl_on_send_timeout(const std::string& caller,
                                      const std::string& iface,
                                      const std::string& method,
                                      uint32_t budget_ms, uint32_t observed_ms) {
+    std::lock_guard<std::recursive_mutex> lk(state_mu_);
     std::ostringstream detail;
     detail << caller << " → " << callee << " " << iface << "." << method
            << " budget=" << budget_ms << "ms observed=" << observed_ms << "ms";
@@ -837,6 +847,11 @@ int Supervisor::run() {
         // below. This is the threading-hazard fix: one writer, no mutex on the
         // tree, no fork-under-lock.
         drain_commands();
+
+        // Per-tick tree work runs under state_mu_ so it's serialized against
+        // SupervisorCtl's DIRECT ctl_* calls (reap-vs-fork, etc.). The lock is
+        // recursive: config_repush below re-enters via ctl_set_* → resolve_node.
+        std::lock_guard<std::recursive_mutex> tick_lk(state_mu_);
 
         // Reap any exited workers, regardless of whether select returned a
         // signalfd event — we may have missed coalesced SIGCHLDs.

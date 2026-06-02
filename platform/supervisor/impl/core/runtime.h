@@ -282,11 +282,14 @@ private:
     int                              cmd_eventfd_{-1};
     std::mutex                       cmd_mutex_;
 
-    // Guards the config tables (trace_configs_/log_levels_) + tree reads done
-    // by resolve_node / ctl_configure_* when SupervisorCtl calls them DIRECTLY
-    // from its own (TipcMux) thread — not via the loop. The loop thread also
-    // takes it where it touches the same state (apply on restart re-emit).
-    std::mutex                       state_mu_;
+    // Guards ALL engine state (the tree + config tables). SupervisorCtl's
+    // handlers now call ctl_* DIRECTLY from its TipcMux thread (no
+    // run_on_engine loop-marshal), so every mutating ctl_* takes this, and the
+    // loop's per-tick tree work (reap / config re-push / emit_snapshot /
+    // check_heartbeats) takes it too — serializing fork/reap against direct
+    // control. RECURSIVE because the locked re-push path (config_repush →
+    // ctl_set_* → resolve_node) re-enters it on the same thread.
+    std::recursive_mutex             state_mu_;
     std::deque<std::function<void()>> cmd_queue_;
 
     // Outbound emit surface — installed by the FC shell via set_emit_sink();

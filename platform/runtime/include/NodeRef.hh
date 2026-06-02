@@ -116,6 +116,12 @@ void watch_reply_fd(
     std::function<void(uint32_t /*corr*/, const uint8_t* /*data*/,
                        uint16_t /*len*/)> sink);
 
+// Counterpart to watch_reply_fd — drop the fd from the process mux's reply
+// demux (epoll + reply_sinks_). Called from ~RemoteRef BEFORE the socket
+// closes, so a per-call ad-hoc RemoteRef doesn't leak a sink + epoll entry
+// every invocation. No-op when no process mux was published.
+void unwatch_reply_fd(int fd);
+
 
 // ---- RemoteRef<T, tipc_type, tipc_instance> ----------------------------
 //
@@ -131,6 +137,21 @@ public:
 
     RemoteRef() = default;
 
+    // Unregister this ref's reply fd from the process mux BEFORE ~TipcClient
+    // closes the socket — otherwise each per-call ad-hoc RemoteRef leaks its
+    // sink + epoll entry (the driver→counter Get-per-tick path piled up
+    // hundreds of stale fds and spun the loop). Mirrors connect()'s
+    // watch_reply_fd.
+    ~RemoteRef() {
+        if (watched_fd_ >= 0) {
+            unwatch_reply_fd(watched_fd_);
+            watched_fd_ = -1;
+        }
+    }
+
+    RemoteRef(const RemoteRef&) = delete;
+    RemoteRef& operator=(const RemoteRef&) = delete;
+
     // Eager connect; must be called once before first cast/call. Also
     // registers this ref's reply fd with the process TipcMux so a
     // synchronous call() from inside a handler gets its reply pumped by
@@ -139,7 +160,8 @@ public:
     bool connect(int timeout_ms = 3000) {
         if (!client_.connect(TipcType, TipcInstance, timeout_ms))
             return false;
-        watch_reply_fd(client_.fd(),
+        watched_fd_ = client_.fd();
+        watch_reply_fd(watched_fd_,
             [this](uint32_t corr, const uint8_t* data, uint16_t len) {
                 this->on_reply_(corr, data, len);
             });
@@ -265,6 +287,7 @@ public:
 
 private:
     TipcClient client_;
+    int        watched_fd_{-1};  // fd registered with the process mux (-1 = none)
     uint32_t   next_corr_{1};
     std::mutex pending_mu_;
     std::unordered_map<uint32_t,

@@ -17,9 +17,8 @@
 #include "core/runtime.h"
 #include "core/spec.h"
 
-#include "NodeRef.hh"          // theia::runtime::cast(self, msg, TipcAddr)
-#include "GenServer.hh"        // THEIA_DECLARE_REMOTE_CODEC for the runtime msgs
-#include "platform_runtime/runtime.pb.h"  // platform_runtime_TraceControlPush etc.
+// No Theia-runtime transport headers here: the worker is a bare thread and only
+// DEFERS config pushes to the forwarder (SupervisorCtl does the actual cast).
 
 #include <cstdint>
 #include <cstdio>
@@ -60,7 +59,7 @@ std::unique_ptr<::supervisor::Supervisor> g_engine;
 // Wire the engine's EmitSink to the bridge's EmitForwarder. Each callback is a
 // best-effort deferral: if SupervisorCtl hasn't installed its forwarder yet
 // (node construction order), the event is dropped.
-::supervisor::EmitSink make_sink(SupervisorWorker& self) {
+::supervisor::EmitSink make_sink() {
     using namespace ::supervisor;
     EmitSink s;
     s.on_event = [](const EventData& e) {
@@ -81,25 +80,17 @@ std::unique_ptr<::supervisor::Supervisor> g_engine;
     s.on_snapshot_end = [](uint64_t gen) {
         if (auto fn = emit_forwarder().on_snapshot_end) fn(gen);
     };
-    // Outbound config push to a child node, as the engine's typed INTENT. The
-    // engine (transport-free) handed us the resolved (type,instance) + the typed
-    // values; here — in the FC shell that links platform/runtime — we build the
-    // REAL platform_runtime_TraceControlPush / LogLevelPush and cast it via the
-    // runtime RemoteCodec (service_id + wire bytes match the child's
-    // register_cast<Msg> by construction). No GwHdrWire, no hand encode.
-    s.on_trace_push = [&self](uint32_t type, uint32_t instance,
-                              uint32_t kind, bool enabled) {
-        platform_runtime_TraceControlPush m{};
-        m.kind = static_cast<platform_runtime_TraceKind>(kind);
-        m.enabled = enabled;
-        // GenRunnable's cast-to-remote override: builds the RemoteRef from the
-        // engine-resolved (executor.json) child address and casts the typed msg.
-        self.cast(m, ::theia::runtime::TipcAddr{type, instance});
+    // Config push to a child — DEFER to the forwarder, do NOT cast here. The
+    // worker is a bare thread (GenRunnable), NOT backed by the Theia runtime, so
+    // it must not touch TIPC transport. SupervisorCtl (a runtime-backed
+    // GenServer) installs the forwarder and does the actual cast of the runtime
+    // TraceControlPush / LogLevelPush — same defer pattern as on_event/on_health.
+    s.on_trace_push = [](uint32_t type, uint32_t instance,
+                         uint32_t kind, bool enabled) {
+        if (auto fn = emit_forwarder().on_trace_push) fn(type, instance, kind, enabled);
     };
-    s.on_log_push = [&self](uint32_t type, uint32_t instance, uint32_t level) {
-        platform_runtime_LogLevelPush m{};
-        m.level = static_cast<platform_runtime_LogLevelValue>(level);
-        self.cast(m, ::theia::runtime::TipcAddr{type, instance});
+    s.on_log_push = [](uint32_t type, uint32_t instance, uint32_t level) {
+        if (auto fn = emit_forwarder().on_log_push) fn(type, instance, level);
     };
     return s;
 }
@@ -118,7 +109,7 @@ void SupervisorWorker::do_start() {
         auto tree = ::supervisor::load_manifest(manifest);
         g_engine  = std::make_unique<::supervisor::Supervisor>(
             std::move(tree), root);
-        g_engine->set_emit_sink(make_sink(*this));
+        g_engine->set_emit_sink(make_sink());
         ::supervisor::set_supervisor(g_engine.get());
         std::fprintf(stderr,
                      "[%s] engine built from %s (root_dir=%s)\n",

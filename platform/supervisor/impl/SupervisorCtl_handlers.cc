@@ -17,6 +17,9 @@
 #include "core/bridge.h"
 #include "core/runtime.h"
 
+#include "NodeRef.hh"          // theia::runtime::cast(self, msg, TipcAddr)
+#include "platform_runtime/runtime.pb.h"  // TraceControlPush / LogLevelPush
+
 #include <cstdio>
 #include <cstring>
 #include <functional>
@@ -152,6 +155,29 @@ void fwd_snapshot_end(uint64_t gen) {
     g_ctl->broadcast_events_snap_end(m);
 }
 
+// Config push to a child — the engine resolved the addr + typed values and
+// deferred here. THIS is where the actual cast happens: from g_ctl (the
+// runtime-backed SupervisorCtl node), via the runtime's addressed cast (a
+// RemoteRef built from the child's executor.json address). The worker runnable
+// never touches transport. Same wire the child's register_cast<Msg> decodes.
+void fwd_trace_push(uint32_t type, uint32_t instance,
+                    uint32_t kind, bool enabled) {
+    if (!g_ctl) return;
+    platform_runtime_TraceControlPush m{};
+    m.kind    = static_cast<platform_runtime_TraceKind>(kind);
+    m.enabled = enabled;
+    ::theia::runtime::cast(*g_ctl, m,
+                           ::theia::runtime::TipcAddr{type, instance});
+}
+
+void fwd_log_push(uint32_t type, uint32_t instance, uint32_t level) {
+    if (!g_ctl) return;
+    platform_runtime_LogLevelPush m{};
+    m.level = static_cast<platform_runtime_LogLevelValue>(level);
+    ::theia::runtime::cast(*g_ctl, m,
+                           ::theia::runtime::TipcAddr{type, instance});
+}
+
 }  // namespace
 
 
@@ -166,6 +192,8 @@ void SupervisorCtl::init(SupervisorCtlState& /*s*/) {
     fwd.on_edge           = &fwd_edge;
     fwd.on_node_state     = &fwd_node_state;
     fwd.on_snapshot_end   = &fwd_snapshot_end;
+    fwd.on_trace_push     = &fwd_trace_push;
+    fwd.on_log_push       = &fwd_log_push;
     ::supervisor::set_emit_forwarder(fwd);
 }
 

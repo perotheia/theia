@@ -1,13 +1,20 @@
 // User do_* bodies for the runnable node TraceStreamPump — the trace hot path.
 //
-// HAND-OWNED. The pump owns its thread + its own AF_TIPC/SOCK_SEQPACKET listen
+// HAND-OWNED. The pump owns its thread + its own AF_TIPC/SOCK_DGRAM receive
 // loop on in_records (0x80010013, the address every node's Tracer submits to).
-// For each inbound TraceRecord frame it pulls the RAW proto-wire payload (never
-// decodes — TraceRecord strings/bytes are nanopb pb_callback fields) and hands
-// it to the process-global TraceHub: ring + fan-out to subscribers. The atomic
-// TraceCtl node feeds the same hub from the Subscribe side.
+// For each inbound TraceRecord datagram it pulls the RAW proto-wire payload
+// (never decodes — TraceRecord strings/bytes are nanopb pb_callback fields) and
+// hands it to the process-global TraceHub: ring + fan-out to subscribers. The
+// atomic TraceCtl node feeds the same hub from the Subscribe side.
 //
-// GenRunnable has no State struct, so the listen fd is a do_loop() local; the
+// SOCK_DGRAM (NOT SEQPACKET): the sender side — Tracer::TraceSubmitter — is a
+// connectionless SOCK_DGRAM that sendto()s the collector's TIPC name per record
+// (lossy-OK firehose, never blocks the dispatch thread). The two MUST agree on
+// socket type — a DGRAM sendto() to a SEQPACKET listener is silently dropped by
+// the kernel (no connection, wrong type), which is exactly why records never
+// arrived. So the pump binds DGRAM and recvfrom()s; no listen/accept.
+//
+// GenRunnable has no State struct, so the bound fd is a do_loop() local; the
 // loop exits cooperatively on stop_requested() (the 100ms select timeout makes
 // it responsive without a wake socket).
 //
@@ -23,7 +30,6 @@
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
-#include <vector>
 
 #include "TheiaMsgHeader.hh"
 #include "impl/trace_hub.hpp"
@@ -33,8 +39,10 @@ namespace ara::log {
 namespace {
 constexpr int kRecvBuf = 4096;
 
-int bind_listen(uint32_t type, uint32_t instance) {
-    int fd = ::socket(AF_TIPC, SOCK_SEQPACKET, 0);
+// Bind the collector's TIPC service name as a connectionless SOCK_DGRAM
+// receiver — matches Tracer::TraceSubmitter's SOCK_DGRAM sendto() sender.
+int bind_dgram(uint32_t type, uint32_t instance) {
+    int fd = ::socket(AF_TIPC, SOCK_DGRAM, 0);
     if (fd < 0) { std::perror("[trace_pump] socket"); return -1; }
     struct sockaddr_tipc addr{};
     addr.family   = AF_TIPC;
@@ -45,9 +53,7 @@ int bind_listen(uint32_t type, uint32_t instance) {
     if (::bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
         std::perror("[trace_pump] bind"); ::close(fd); return -1;
     }
-    if (::listen(fd, 16) < 0) {
-        std::perror("[trace_pump] listen"); ::close(fd); return -1;
-    }
+    // No listen()/accept() — DGRAM is connectionless; recvfrom() on this fd.
     return fd;
 }
 }  // namespace
@@ -58,48 +64,37 @@ void TraceStreamPump::do_start() {
 }
 
 void TraceStreamPump::do_loop() {
-    int listen_fd = bind_listen(kTipcType, kTipcInstance);
-    if (listen_fd < 0) {
+    int fd = bind_dgram(kTipcType, kTipcInstance);
+    if (fd < 0) {
         std::fprintf(stderr, "[%s] FAILED to bind 0x%08x — no traces\n",
                      kNodeName, kTipcType);
         return;
     }
-    std::vector<int> conns;
     uint8_t buf[kRecvBuf];
     while (!stop_requested()) {
         fd_set rfds;
         FD_ZERO(&rfds);
-        FD_SET(listen_fd, &rfds);
-        int maxfd = listen_fd;
-        for (int c : conns) { FD_SET(c, &rfds); if (c > maxfd) maxfd = c; }
+        FD_SET(fd, &rfds);
         timeval tv{0, 100 * 1000};  // 100ms — keeps stop responsive
-        int n = ::select(maxfd + 1, &rfds, nullptr, nullptr, &tv);
+        int n = ::select(fd + 1, &rfds, nullptr, nullptr, &tv);
         if (n < 0) { if (errno == EINTR) continue; break; }
+        if (n == 0 || !FD_ISSET(fd, &rfds)) continue;
 
-        if (FD_ISSET(listen_fd, &rfds)) {
-            int c = ::accept(listen_fd, nullptr, nullptr);
-            if (c >= 0) conns.push_back(c);
-        }
-        for (auto it = conns.begin(); it != conns.end();) {
-            int c = *it;
-            if (!FD_ISSET(c, &rfds)) { ++it; continue; }
-            ssize_t r = ::recv(c, buf, sizeof(buf), 0);
-            if (r <= 0) { ::close(c); it = conns.erase(it); continue; }
-            if (r < (ssize_t)sizeof(::theia::runtime::TheiaMsgHeader)) {
-                ++it; continue;
-            }
-            ::theia::runtime::TheiaMsgHeader hdr{};
-            std::memcpy(&hdr, buf, sizeof(hdr));
-            // Raw record bytes follow the 24-byte header. Forward verbatim.
-            const uint8_t* payload = buf + sizeof(hdr);
-            TraceHub::instance().submit(
-                std::string(reinterpret_cast<const char*>(payload),
-                            hdr.proto_len));
-            ++it;
-        }
+        // One datagram = one record frame: [TheiaMsgHeader][raw proto-wire].
+        ssize_t r = ::recv(fd, buf, sizeof(buf), 0);
+        if (r < (ssize_t)sizeof(::theia::runtime::TheiaMsgHeader)) continue;
+        ::theia::runtime::TheiaMsgHeader hdr{};
+        std::memcpy(&hdr, buf, sizeof(hdr));
+        // Raw record bytes follow the 24-byte header. Forward verbatim — never
+        // decode (TraceRecord strings/bytes are nanopb pb_callback fields).
+        const uint8_t* payload = buf + sizeof(hdr);
+        // Guard proto_len against a short/truncated datagram.
+        size_t avail = static_cast<size_t>(r) - sizeof(hdr);
+        size_t plen  = hdr.proto_len <= avail ? hdr.proto_len : avail;
+        TraceHub::instance().submit(
+            std::string(reinterpret_cast<const char*>(payload), plen));
     }
-    for (int c : conns) ::close(c);
-    ::close(listen_fd);
+    ::close(fd);
     std::fprintf(stderr, "[%s] trace pump loop exiting\n", kNodeName);
 }
 

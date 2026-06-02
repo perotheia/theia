@@ -16,6 +16,16 @@
 namespace ara::shwa {
 
 
+// ---- OTP init/1 — runs once on the node thread after start(), before
+//      the first message. Bootstrap a self-driving node's work loop here
+//      (e.g. ::theia::runtime::post_info(*this, "tick")); leave empty for a
+//      passive node. State fields live in impl/ShwaDaemon_state.hh.
+void ShwaDaemon::init(ShwaDaemonState& /*s*/) {
+}
+
+// ---- string handle_info — the post_info()/send_after() tick path.
+void ShwaDaemon::handle_info(const char* /*info*/, ShwaDaemonState& /*s*/) {
+}
 
 
 

@@ -19,6 +19,9 @@
 
 #include "NodeRef.hh"          // theia::runtime::TipcClient
 #include "TheiaMsgHeader.hh"   // TheiaMsgHeader + kMsgGenCast / kBusTypeRpc
+#include "RemoteCodec.hh"      // RemoteCodec<Msg>::fields()/service_id
+#include "GenServer.hh"        // THEIA_DECLARE_REMOTE_CODEC for the runtime msgs
+#include "platform_runtime/runtime.pb.h"  // platform_runtime_TraceControlPush etc.
 
 #include <cstdint>
 #include <cstdio>
@@ -30,15 +33,20 @@ namespace ara::exec {
 
 namespace {
 
-// Frame an engine-supplied config payload with the runtime's STANDARD
-// TheiaMsgHeader (a GEN_CAST) and send it to a child's config-service receiver
-// over a one-shot TIPC client. The engine already resolved (type,instance) +
-// the service_id (djb2 of the C type name) + the proto3 body; we only do the
-// runtime framing here, keeping the engine transport-free. Best-effort: a child
-// not yet listening just fails the connect/send (re-pushed on its next
-// heartbeat-after-gap).
-void send_config_cast(uint32_t type, uint32_t instance,
-                      uint16_t service_id, const std::string& payload) {
+// Cast a TYPED runtime control message to a child's config-service receiver.
+// The engine handed us the resolved (type,instance) + the typed values; here we
+// build the real platform_runtime_<Msg> and encode it via the SAME
+// RemoteCodec<Msg> the child's register_cast<Msg> uses — so the service_id and
+// wire bytes match by construction (no hand djb2, no hand proto encode). One-
+// shot TIPC client; best-effort (a child not yet listening just fails the
+// connect, re-pushed on its next heartbeat-after-gap).
+template <typename Msg>
+void cast_config_to_child(uint32_t type, uint32_t instance, const Msg& msg) {
+    using Codec = ::theia::runtime::RemoteCodec<Msg>;
+    uint8_t buf[64];
+    pb_ostream_t os = pb_ostream_from_buffer(buf, sizeof(buf));
+    if (!pb_encode(&os, Codec::fields(), &msg)) return;
+
     ::theia::runtime::TipcClient client;
     if (!client.connect(type, instance, /*total_timeout_ms=*/300,
                         /*retry_ms=*/100)) {
@@ -47,13 +55,11 @@ void send_config_cast(uint32_t type, uint32_t instance,
     ::theia::runtime::TheiaMsgHeader hdr{};
     hdr.bus_type           = ::theia::runtime::kBusTypeRpc;
     hdr.msg_type           = ::theia::runtime::kMsgGenCast;
-    hdr.proto_len          = static_cast<uint16_t>(payload.size());
-    hdr.rpc.service_id     = service_id;
+    hdr.proto_len          = static_cast<uint16_t>(os.bytes_written);
+    hdr.rpc.service_id     = Codec::service_id;
     hdr.rpc.method_id      = 0;
     hdr.rpc.correlation_id = 0;  // cast has no reply
-    client.send_frame(hdr,
-                      reinterpret_cast<const uint8_t*>(payload.data()),
-                      static_cast<uint16_t>(payload.size()));
+    client.send_frame(hdr, buf, static_cast<uint16_t>(os.bytes_written));
 }
 
 }  // namespace
@@ -106,16 +112,23 @@ std::unique_ptr<::supervisor::Supervisor> g_engine;
     s.on_snapshot_end = [](uint64_t gen) {
         if (auto fn = emit_forwarder().on_snapshot_end) fn(gen);
     };
-    // Outbound config push to a child node — replaces the engine's old
-    // hand-rolled GwHdrWire socket. The engine handed us a resolved
-    // (type,instance) + service_id + the proto3-encoded payload; we frame it
-    // with the runtime's STANDARD TheiaMsgHeader (a GEN_CAST) and send it over
-    // a one-shot TIPC client. Same wire the child's runtime TipcMux already
-    // decodes for register_cast<T> — no second format, transport in the FC
-    // shell (which links platform/runtime), not the transport-free engine.
-    s.on_config_push = [](uint32_t type, uint32_t instance,
-                          uint16_t service_id, const std::string& payload) {
-        send_config_cast(type, instance, service_id, payload);
+    // Outbound config push to a child node, as the engine's typed INTENT. The
+    // engine (transport-free) handed us the resolved (type,instance) + the typed
+    // values; here — in the FC shell that links platform/runtime — we build the
+    // REAL platform_runtime_TraceControlPush / LogLevelPush and cast it via the
+    // runtime RemoteCodec (service_id + wire bytes match the child's
+    // register_cast<Msg> by construction). No GwHdrWire, no hand encode.
+    s.on_trace_push = [](uint32_t type, uint32_t instance,
+                         uint32_t kind, bool enabled) {
+        platform_runtime_TraceControlPush m{};
+        m.kind = static_cast<platform_runtime_TraceKind>(kind);
+        m.enabled = enabled;
+        cast_config_to_child(type, instance, m);
+    };
+    s.on_log_push = [](uint32_t type, uint32_t instance, uint32_t level) {
+        platform_runtime_LogLevelPush m{};
+        m.level = static_cast<platform_runtime_LogLevelValue>(level);
+        cast_config_to_child(type, instance, m);
     };
     return s;
 }

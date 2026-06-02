@@ -54,6 +54,8 @@
 
 #pragma once
 
+#include "NodeRef.hh"   // theia::runtime::cast(self, msg, TipcAddr) + TipcAddr
+
 #include <atomic>
 #include <string>
 #include <thread>
@@ -95,6 +97,20 @@ public:
     // Whether this runnable is alive (started, not yet stopped). Inverse of
     // stop_requested(); offered for readability inside do_loop().
     bool running() const { return running_.load(); }
+
+    // Cast a typed message to a remote node addressed at runtime (the peer's
+    // TipcAddr resolved at run time, e.g. a supervised child's address read from
+    // executor.json — NOT a compile-time netgraph constant). Thin override of
+    // the runtime's addressed cast: builds a one-shot RemoteRef from `addr`,
+    // encodes via RemoteCodec<Msg> (service_id + wire bytes match the peer's
+    // register_cast<Msg>), and trace-tags the Send with THIS node as src. Lets a
+    // runnable forward control to children via `this->cast(msg, addr)` instead
+    // of the free function. Best-effort fire-and-forget. Public — it's a node→
+    // peer API the FC shell uses (e.g. the supervisor's config push).
+    template <typename Msg>
+    void cast(const Msg& msg, ::theia::runtime::TipcAddr addr) {
+        ::theia::runtime::cast(*static_cast<Derived*>(this), msg, addr);
+    }
 
     // ---- defaults Derived may override --------------------------------
     // do_start / do_stop default to no-ops; do_loop has no default (a

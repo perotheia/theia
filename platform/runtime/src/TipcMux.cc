@@ -146,6 +146,21 @@ void TipcMux::loop_() {
             }
             if (reply_sink) {
                 ssize_t n = ::recv(fd, buf, sizeof(buf), 0);
+                if (n <= 0) {
+                    // Peer closed the reply socket (EOF, n==0). MUST remove the
+                    // fd from epoll + close it — otherwise epoll keeps reporting
+                    // the half-closed fd readable, recv keeps returning 0, and
+                    // this loop hot-spins at 100% CPU. (The client-data path
+                    // below already does this; the reply path used to just
+                    // `continue`, which was the busy-spin bug.)
+                    if (n == 0) {
+                        std::lock_guard<std::mutex> lk(mu_);
+                        reply_sinks_.erase(fd);
+                        ::epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, fd, nullptr);
+                        ::close(fd);
+                    }
+                    continue;
+                }
                 if (n < (ssize_t)sizeof(TheiaMsgHeader)) continue;
                 TheiaMsgHeader hdr{};
                 std::memcpy(&hdr, buf, sizeof(TheiaMsgHeader));

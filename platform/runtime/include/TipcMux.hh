@@ -162,15 +162,22 @@ public:
                              corr, nullptr, 0);
                 }
 
-                uint8_t buf[256];
-                pb_ostream_t os = pb_ostream_from_buffer(buf, sizeof(buf));
+                // Reply encode buffer. Sized for the LARGEST reply any op
+                // returns — the supervisor's TreeSnapshot (up to 64 ChildState
+                // rows) is ~24 KB, so 256 (the old cap) silently dropped it:
+                // pb_encode overflowed → `return` → no reply → the caller timed
+                // out. proto_len is u16 (64 KB ceiling); 48 KB covers every
+                // current reply. Heap, not stack (too big to stack per call).
+                static constexpr size_t kReplyCap = 48 * 1024;
+                std::vector<uint8_t> buf(kReplyCap);
+                pb_ostream_t os = pb_ostream_from_buffer(buf.data(), kReplyCap);
                 if (!pb_encode(&os, RemoteCodec<Reply>::fields(), &reply))
                     return;
 
                 if (tr2.enabled()) {
                     tr2.emit(::theia::runtime::TraceEvent::SendReply,
                              ::theia::runtime::msg_type_name<Reply>(),
-                             corr, buf, (uint16_t)os.bytes_written);
+                             corr, buf.data(), (uint16_t)os.bytes_written);
                 }
 
                 TheiaMsgHeader rh{};
@@ -180,11 +187,12 @@ public:
                 rh.rpc.service_id      = RemoteCodec<Reply>::service_id;
                 rh.rpc.method_id       = 0;
                 rh.rpc.correlation_id  = corr;
-                uint8_t framebuf[sizeof(TheiaMsgHeader) + 256];
-                std::memcpy(framebuf, &rh, sizeof(TheiaMsgHeader));
-                std::memcpy(framebuf + sizeof(TheiaMsgHeader), buf,
-                            os.bytes_written);
-                ::send(reply_fd, framebuf,
+                std::vector<uint8_t> framebuf(sizeof(TheiaMsgHeader)
+                                              + os.bytes_written);
+                std::memcpy(framebuf.data(), &rh, sizeof(TheiaMsgHeader));
+                std::memcpy(framebuf.data() + sizeof(TheiaMsgHeader),
+                            buf.data(), os.bytes_written);
+                ::send(reply_fd, framebuf.data(),
                        sizeof(TheiaMsgHeader) + os.bytes_written,
                        MSG_NOSIGNAL);
             });

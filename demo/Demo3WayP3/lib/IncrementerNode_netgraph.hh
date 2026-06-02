@@ -40,7 +40,7 @@ namespace demo::netgraph {
 //
 // Cast (fire-and-forget): cast(*this, msg, netgraph::counternode).
 inline constexpr ::theia::runtime::TipcAddr counternode = {
-    0xd0010001u, 0u
+    0xd0010001u, 0u, "counter"
 };
 // Call (sync request/reply): a RemoteRef the caller declares + connect()s,
 //   netgraph::CounterNodeRef ref; ref.connect();

@@ -40,7 +40,7 @@ namespace demo::netgraph {
 //
 // Cast (fire-and-forget): cast(*this, msg, netgraph::drivernode).
 inline constexpr ::theia::runtime::TipcAddr drivernode = {
-    0xd0010002u, 0u
+    0xd0010002u, 0u, "driver"
 };
 // Call (sync request/reply): a RemoteRef the caller declares + connect()s,
 //   netgraph::DriverNodeRef ref; ref.connect();
@@ -59,7 +59,7 @@ using DriverNodeRef =
 //
 // Cast (fire-and-forget): cast(*this, msg, netgraph::observernode).
 inline constexpr ::theia::runtime::TipcAddr observernode = {
-    0xd0010004u, 0u
+    0xd0010004u, 0u, "observer"
 };
 // Call (sync request/reply): a RemoteRef the caller declares + connect()s,
 //   netgraph::ObserverNodeRef ref; ref.connect();

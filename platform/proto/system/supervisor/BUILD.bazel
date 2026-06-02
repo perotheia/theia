@@ -16,6 +16,13 @@ genrule(
         # the .proto, fixing string/repeated fields to in-struct arrays so
         # the runtime RemoteCodec can decode/encode them (no pb_callback_t).
         "supervisor.options",
+        # Cross-package import: supervisor.proto embeds
+        # platform.runtime.TraceControlPush / LogLevelValue, so the runtime's
+        # bundled proto must be visible on a second -I include root
+        # (platform/runtime/proto, where "platform_runtime/runtime.proto"
+        # resolves). We only need the .proto here to satisfy the import; the
+        # runtime's own pb.h is built by //platform/runtime.
+        "//platform/runtime:runtime_proto_src",
     ],
     outs = [
         "supervisor.pb.c",
@@ -23,8 +30,13 @@ genrule(
     ],
     cmd = "set -e;"
         + " in_dir=$$(dirname $(location supervisor.proto));"
+        + " rt_proto=$(location //platform/runtime:runtime_proto_src);"
+        # runtime proto lives at <root>/platform_runtime/runtime.proto; the
+        # include root is the dir ABOVE platform_runtime/.
+        + " rt_root=$$(dirname $$(dirname $$rt_proto));"
         + " out_dir=$$(dirname $(location supervisor.pb.c));"
-        + " nanopb_generator -I $$in_dir -D $$out_dir supervisor.proto;",
+        + " nanopb_generator -I $$in_dir -I $$rt_root -D $$out_dir"
+        + " supervisor.proto;",
     tools = [],
     local = True,
 )

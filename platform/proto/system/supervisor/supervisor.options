@@ -18,13 +18,14 @@ system_supervisor.DeleteChildRequest.name         max_size:64
 system_supervisor.GetChildRequest.name            max_size:64
 
 # ---- trace config (read-back) --------------------------------------------
+# TraceConfig now = { target_node; platform_runtime.TraceControlPush trace_ctrl }
+# (msg_type dropped; trace_ctrl is the cross-package runtime message — its own
+# scalar fields need no pin). level is now an enum, not a string.
 system_supervisor.TraceConfig.target_node         max_size:64
-system_supervisor.TraceConfig.msg_type            max_size:64
 system_supervisor.TraceConfigList.configs         max_count:64
 
-# ---- log level + trace control request bodies ----------------------------
+# ---- log level request body ----------------------------------------------
 system_supervisor.LogLevelConfig.target_node      max_size:64
-system_supervisor.LogLevelConfig.level            max_size:16
 
 # ---- child spec (StartChild) ---------------------------------------------
 system_supervisor.ChildSpec.name                  max_size:64

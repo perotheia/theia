@@ -39,6 +39,15 @@ struct EmitForwarder {
     void (*on_edge)(const EdgeData&)           = nullptr;
     void (*on_node_state)(const NodeStateData&) = nullptr;
     void (*on_snapshot_end)(uint64_t)          = nullptr;
+    // Config push to a child (trace/log). The engine resolves the child addr +
+    // the typed value, then defers here; SupervisorCtl (a runtime-backed
+    // GenServer — the ONLY node that may touch Theia transport; the worker
+    // runnable is a bare thread) does the actual cast of the runtime
+    // TraceControlPush / LogLevelPush to the child. type/instance = child addr.
+    void (*on_trace_push)(uint32_t /*type*/, uint32_t /*instance*/,
+                          uint32_t /*kind*/, bool /*enabled*/) = nullptr;
+    void (*on_log_push)(uint32_t /*type*/, uint32_t /*instance*/,
+                        uint32_t /*level*/) = nullptr;
 };
 void set_emit_forwarder(const EmitForwarder& fwd);
 const EmitForwarder& emit_forwarder();

@@ -46,6 +46,10 @@ cc_library(
     # #include "system/services/sm/sm.pb.h"
     includes = ["."],
     copts = ["-fPIC"],
+    # Cross-package: supervisor.pb.h #includes "platform_runtime/runtime.pb.h"
+    # (its TraceConfig embeds platform.runtime.TraceControlPush). Pull in the
+    # lightweight runtime-proto header lib so the nested type resolves.
+    deps = ["//platform/runtime:runtime_proto_cc"],
     # Consumers link the system nanopb runtime via -l:libprotobuf-nanopb.a
     # in their own linkopts (same convention as platform/runtime). Keeping
     # the cc_library dep-free avoids the Bazel @nanopb module which doesn't

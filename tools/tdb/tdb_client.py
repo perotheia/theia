@@ -69,23 +69,30 @@ class SupervisorClient:
     def get_system_info(self, timeout: float = 2.0) -> dict[str, Any]:
         return self.probe.call("SupervisorCtl", "GetSystemInfo", timeout=timeout)
 
-    def configure_trace(self, *, target_node: str, msg_type: str,
+    def configure_trace(self, *, target_node: str, msg_type: str = "",
                         enabled: bool, kind: int = 0,
                         timeout: float = 2.0) -> dict[str, Any]:
-        # ConfigureTrace(in req: ConfigureTraceRequest{ config: TraceConfig })
+        # ConfigureTrace(req{ config: TraceConfig{ target_node;
+        #   platform.runtime.TraceControlPush trace_ctrl } }). msg_type is no
+        # longer carried (kept as an accepted-but-ignored kwarg for callers).
         return self.probe.call(
             "SupervisorCtl", "ConfigureTrace", timeout=timeout,
-            config=dict(target_node=target_node, msg_type=msg_type,
-                        enabled=enabled, kind=kind))
+            config=dict(target_node=target_node,
+                        trace_ctrl=dict(kind=kind, enabled=enabled)))
 
     def get_trace_config(self, timeout: float = 2.0) -> dict[str, Any]:
         return self.probe.call("SupervisorCtl", "GetTraceConfig", timeout=timeout)
 
+    _LEVELS = {"trace": 0, "debug": 1, "info": 2, "warn": 3, "error": 4}
+
     def configure_log_level(self, *, target_node: str, level: str,
                             timeout: float = 2.0) -> dict[str, Any]:
+        # level is now the platform.runtime.LogLevelValue enum (ordinal), not a
+        # string — map the name to its ordinal.
+        lvl = self._LEVELS.get(level.lower(), 2)
         return self.probe.call(
             "SupervisorCtl", "ConfigureLogLevel", timeout=timeout,
-            config=dict(target_node=target_node, level=level))
+            config=dict(target_node=target_node, level=lvl))
 
     def restart_child(self, name: str, timeout: float = 2.0) -> dict[str, Any]:
         return self.probe.call("SupervisorCtl", "RestartChild", timeout=timeout,

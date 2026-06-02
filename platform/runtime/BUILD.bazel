@@ -45,6 +45,29 @@ genrule(
     local = True,  # host-installed nanopb_generator, same as the FC protos
 )
 
+# The bundled runtime .proto, exported so a CROSS-PACKAGE importer (e.g.
+# //platform/proto/system/supervisor, whose supervisor.proto embeds
+# platform.runtime.TraceControlPush) can add it as a second -I include root at
+# generate time. The path is proto/platform_runtime/runtime.proto, so importers
+# use "-I <…>/proto" and `import "platform_runtime/runtime.proto"`.
+filegroup(
+    name = "runtime_proto_src",
+    srcs = ["proto/platform_runtime/runtime.proto"],
+)
+
+# Lightweight cc_library exposing ONLY the runtime proto's nanopb header (+ its
+# .pb.c), for cross-package proto consumers (e.g. //platform/proto's
+# platform_protos, whose supervisor.pb.h #includes "platform_runtime/
+# runtime.pb.h"). Separate from the full :runtime lib so a proto-only consumer
+# doesn't drag in the whole runtime (and to avoid any cycle).
+cc_library(
+    name = "runtime_proto_cc",
+    srcs = ["proto/platform_runtime/runtime.pb.c"],
+    hdrs = ["proto/platform_runtime/runtime.pb.h"],
+    includes = ["proto"],  # so callers #include "platform_runtime/runtime.pb.h"
+    copts = ["-fPIC"],
+)
+
 cc_library(
     name = "runtime",
     srcs = glob(["src/*.cc"]) + ["proto/platform_runtime/runtime.pb.c"],

@@ -330,9 +330,13 @@ ControlReply SupervisorCtl::handle_call(
         SupervisorCtlState& /*s*/) {
     const auto& cfg = req.config;
     const std::string target = s(cfg.target_node);
-    const std::string mtype  = s(cfg.msg_type);
-    const bool enabled = cfg.enabled;
-    const uint32_t kind = static_cast<uint32_t>(cfg.kind);
+    // TraceConfig now carries the runtime's TraceControlPush directly
+    // (cfg.trace_ctrl) — the SAME message the child applies. msg_type was
+    // dropped (the kind enum is the dispatch-class selector); per-msg-type
+    // filtering is not on this wire.
+    const bool enabled     = cfg.trace_ctrl.enabled;
+    const uint32_t kind    = static_cast<uint32_t>(cfg.trace_ctrl.kind);
+    const std::string mtype;  // no longer carried; empty
     const bool ok = run_on_engine<bool>(
         [=](::supervisor::Supervisor& e) {
             return e.ctl_configure_trace(target, mtype, enabled, kind);
@@ -366,9 +370,11 @@ TraceConfigList SupervisorCtl::handle_call(
         c = system_supervisor_TraceConfig{};
         std::snprintf(c.target_node, sizeof(c.target_node), "%s",
                       r.target_node.c_str());
-        std::snprintf(c.msg_type, sizeof(c.msg_type), "%s", r.msg_type.c_str());
-        c.enabled = true;
-        c.kind = static_cast<system_supervisor_TraceKind>(r.kind);
+        // TraceConfig embeds the runtime TraceControlPush now; fill it from the
+        // stored row. (msg_type is no longer carried.)
+        c.has_trace_ctrl   = true;
+        c.trace_ctrl.kind  = static_cast<platform_runtime_TraceKind>(r.kind);
+        c.trace_ctrl.enabled = true;
     }
     return list;
 }
@@ -378,7 +384,16 @@ ControlReply SupervisorCtl::handle_call(
         SupervisorCtlState& /*s*/) {
     const auto& cfg = req.config;
     const std::string target = s(cfg.target_node);
-    const std::string level  = s(cfg.level);
+    // level is now the runtime LogLevelValue enum (LL_TRACE..LL_ERROR), not a
+    // string. Map it to the level name the engine stores (it re-pushes the
+    // saved level on child restart). Ordinals align with LogLevel.
+    static const char* kLevelNames[] = {
+        "trace", "debug", "info", "warn", "error",
+    };
+    const auto lvl = static_cast<unsigned>(cfg.level);
+    const std::string level =
+        (lvl < (sizeof(kLevelNames) / sizeof(kLevelNames[0])))
+            ? kLevelNames[lvl] : "info";
     run_on_engine_void([=](::supervisor::Supervisor& e) {
         e.ctl_configure_log_level(target, level);
     });

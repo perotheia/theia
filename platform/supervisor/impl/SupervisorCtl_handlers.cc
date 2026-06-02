@@ -358,26 +358,27 @@ ControlReply SupervisorCtl::handle_call(
         SupervisorCtlState& /*s*/) {
     const auto& cfg = req.config;
     const std::string target = s(cfg.target_node);
-    // TraceConfig now carries the runtime's TraceControlPush directly
-    // (cfg.trace_ctrl) — the SAME message the child applies. msg_type was
-    // dropped (the kind enum is the dispatch-class selector); per-msg-type
-    // filtering is not on this wire.
-    const bool enabled     = cfg.trace_ctrl.enabled;
-    const uint32_t kind    = static_cast<uint32_t>(cfg.trace_ctrl.kind);
-    const std::string mtype;  // no longer carried; empty
-    const bool ok = run_on_engine<bool>(
-        [=](::supervisor::Supervisor& e) {
-            return e.ctl_configure_trace(target, mtype, enabled, kind);
-        }, /*dflt=*/false /*no engine → treat as failure*/);
+    // TraceConfig carries the runtime's TraceControlPush directly (cfg.trace_ctrl
+    // — the SAME message the child applies). Plain: resolve the node, store the
+    // config in the engine, then cast the control message FROM here (this node
+    // is runtime-backed). No lambda, no future.
     ControlReply rep;
-    if (ok) {
-        set_reply(rep, 0, target, "trace config applied");
-    } else {
-        // Unknown/unresolvable target — report a real failure so tdb doesn't
-        // print a false success for a typo'd or stale node name.
+    auto* eng = ::supervisor::supervisor_instance();
+    if (!eng) { set_reply(rep, 4, target, "engine not up"); return rep; }
+
+    const auto addr = eng->resolve_node(target);
+    if (!addr.ok) {
         set_reply(rep, 4 /*invalid_request*/, target,
                   "no worker or node by that name");
+        return rep;
     }
+    // Store (survives restart). enabled toggles the stored entry.
+    eng->ctl_configure_trace(target, cfg.trace_ctrl.enabled,
+                             static_cast<uint32_t>(cfg.trace_ctrl.kind));
+    // Cast the live update to the child — the exact message off the wire.
+    ::theia::runtime::cast(*this, cfg.trace_ctrl,
+                           ::theia::runtime::TipcAddr{addr.type, addr.instance});
+    set_reply(rep, 0, target, "trace config applied");
     return rep;
 }
 
@@ -412,15 +413,25 @@ ControlReply SupervisorCtl::handle_call(
         SupervisorCtlState& /*s*/) {
     const auto& cfg = req.config;
     const std::string target = s(cfg.target_node);
-    // cfg.level is the platform.runtime LogLevelValue enum — the SAME value
-    // LogLevelPush.level carries. Forward the ordinal verbatim; the engine
-    // stores it + maps to a name only for the spawn env. No enum→string→enum
-    // round-trip.
-    const uint32_t level = static_cast<uint32_t>(cfg.level);
-    run_on_engine_void([=](::supervisor::Supervisor& e) {
-        e.ctl_configure_log_level(target, level);
-    });
+    // Plain: resolve the node, store the level in the engine, then cast the
+    // LogLevelPush FROM here. cfg.level is the platform.runtime LogLevelValue
+    // enum — the SAME value LogLevelPush.level carries, forwarded verbatim.
     ControlReply rep;
+    auto* eng = ::supervisor::supervisor_instance();
+    if (!eng) { set_reply(rep, 4, target, "engine not up"); return rep; }
+
+    const auto addr = eng->resolve_node(target);
+    if (!addr.ok) {
+        set_reply(rep, 4, target, "no worker or node by that name");
+        return rep;
+    }
+    const uint32_t level = static_cast<uint32_t>(cfg.level);
+    eng->ctl_configure_log_level(target, level);   // store (survives restart)
+
+    platform_runtime_LogLevelPush m{};
+    m.level = cfg.level;
+    ::theia::runtime::cast(*this, m,
+                           ::theia::runtime::TipcAddr{addr.type, addr.instance});
     set_reply(rep, 0, target, "log level applied");
     return rep;
 }

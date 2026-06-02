@@ -205,16 +205,27 @@ public:
     uint32_t ctl_suspend_child(const std::string& name);
     uint32_t ctl_resume_child(const std::string& name);
 
-    // ConfigureTrace / ConfigureLogLevel — store + push (survives restart).
+    // A resolved child node TIPC address. ok=false when the name doesn't
+    // resolve to a reporting node (typo / stale / non-reporting).
+    struct NodeAddr {
+        uint32_t type     = 0;
+        uint32_t instance = 0;
+        bool     ok       = false;
+    };
+
+    // Resolve a target name (worker OR node-type) to its TIPC address. A pure
+    // read of the tree — SupervisorCtl calls this directly, then casts the
+    // control message itself. Thread-safe (state_mu_).
+    NodeAddr resolve_node(const std::string& name);
+
+    // ConfigureTrace / ConfigureLogLevel — STORE the config only (survives
+    // restart via the spawn env + the heartbeat-after-gap re-emit). They do NOT
+    // send: SupervisorCtl resolves + casts. Return false when the target
+    // doesn't resolve. level is the platform.runtime LogLevelValue ORDINAL,
+    // carried verbatim from the wire; mapped to a name ONCE for the spawn env.
     bool ctl_configure_trace(const std::string& target_node,
-                             const std::string& msg_type,
                              bool enabled, uint32_t kind);
-    // level is the platform.runtime LogLevelValue ORDINAL (LL_TRACE=0 ..
-    // LL_ERROR=4) — carried verbatim from the wire LogLevelConfig.level enum,
-    // no string round-trip. The engine maps it to a name ONCE for the child's
-    // THEIA_LOG_LEVEL spawn env (a string the child reads at boot); the live
-    // push forwards the ordinal as-is.
-    void ctl_configure_log_level(const std::string& target_node,
+    bool ctl_configure_log_level(const std::string& target_node,
                                  uint32_t level);
 
     // GetTraceConfig read-back: flatten the per-child trace_configs_ table.
@@ -274,6 +285,12 @@ private:
     // thread. cmd_eventfd_ is EFD_NONBLOCK | EFD_CLOEXEC; a single counter.
     int                              cmd_eventfd_{-1};
     std::mutex                       cmd_mutex_;
+
+    // Guards the config tables (trace_configs_/log_levels_) + tree reads done
+    // by resolve_node / ctl_configure_* when SupervisorCtl calls them DIRECTLY
+    // from its own (TipcMux) thread — not via the loop. The loop thread also
+    // takes it where it touches the same state (apply on restart re-emit).
+    std::mutex                       state_mu_;
     std::deque<std::function<void()>> cmd_queue_;
 
     // Outbound emit surface — installed by the FC shell via set_emit_sink();
@@ -442,9 +459,6 @@ private:
     // looked up from the worker's NodeInfo.tipc_{type,instance}.
     // No-op when the child has no entries.
     void push_trace_config_to_child(const std::string& child_name);
-    // Push an explicit TraceControlPush{enabled=false} (disable) to the node —
-    // the config is already erased, so push_trace_config_to_child won't.
-    void push_trace_disable_to_child(const std::string& child_name);
     // Resolve a trace target name (worker OR node-type) to its TIPC addr.
     bool resolve_trace_target(const std::string& child_name,
                               uint32_t& type, uint32_t& instance);

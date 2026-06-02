@@ -214,24 +214,38 @@ uint32_t Supervisor::ctl_resume_child(const std::string& name) {
     return do_resume_child(name);
 }
 
+// Resolve a target name → child TIPC address. Pure read; SupervisorCtl calls
+// it directly and casts the control message itself.
+Supervisor::NodeAddr Supervisor::resolve_node(const std::string& name) {
+    std::lock_guard<std::mutex> lk(state_mu_);
+    NodeAddr a;
+    a.ok = resolve_trace_target(name, a.type, a.instance);
+    return a;
+}
+
 bool Supervisor::ctl_configure_trace(const std::string& target_node,
-                                     const std::string& msg_type,
                                      bool enabled, uint32_t kind) {
-    // Validate the target resolves to a real worker/node BEFORE storing +
-    // pushing, so a typo'd or stale name (e.g. "CounterNode" after the rename
-    // to "counter", or a random string) fails the control reply instead of
-    // silently "succeeding". resolve_trace_target logs the specific reason.
+    std::lock_guard<std::mutex> lk(state_mu_);
+    // Validate the target resolves to a real worker/node BEFORE storing, so a
+    // typo'd / stale / non-reporting name fails the control reply instead of
+    // silently "succeeding". STORE ONLY — SupervisorCtl does the cast.
     uint32_t t, i;
     if (!resolve_trace_target(target_node, t, i)) {
         return false;
     }
-    apply_trace_config(target_node, msg_type, enabled, kind);
+    apply_trace_config(target_node, /*msg_type=*/"", enabled, kind);
     return true;
 }
 
-void Supervisor::ctl_configure_log_level(const std::string& target_node,
+bool Supervisor::ctl_configure_log_level(const std::string& target_node,
                                          uint32_t level) {
+    std::lock_guard<std::mutex> lk(state_mu_);
+    uint32_t t, i;
+    if (!resolve_trace_target(target_node, t, i)) {
+        return false;
+    }
     apply_log_level(target_node, level);
+    return true;
 }
 
 std::vector<TraceConfigRow> Supervisor::ctl_get_trace_config() {
@@ -1782,25 +1796,15 @@ void Supervisor::apply_trace_config(const std::string& target_node,
         by_msg[msg_type] = kind;   // value = TraceKind; presence = enabled
     } else {
         by_msg.erase(msg_type);
-        // Garbage-collect empty entries so iteration in
-        // push_trace_config_to_child stays cheap.
         if (by_msg.empty()) trace_configs_.erase(target_node);
     }
     std::fprintf(stderr,
         "supervisor: trace config %s for %s/%s\n",
         enabled ? "ENABLE" : "DISABLE",
         target_node.c_str(), msg_type.c_str());
-
-    // Push immediately if the child is alive. Stale entries on dead
-    // children are harmless — the next heartbeat-after-gap will fire
-    // a re-push anyway.
-    if (enabled) {
-        push_trace_config_to_child(target_node);
-    } else {
-        // The stored config is gone, so push_trace_config_to_child has nothing
-        // to send. Push an explicit disable so the node actually stops tracing.
-        push_trace_disable_to_child(target_node);
-    }
+    // STORE ONLY. The LIVE cast is done by SupervisorCtl after ctl_configure_*
+    // returns. Restart re-push still routes through the heartbeat-after-gap path
+    // (push_*_to_child → on_*_push → SupervisorCtl forwarder cast).
 }
 
 // Resolve a trace target name (worker OR node-type) to its node's TIPC
@@ -1858,19 +1862,9 @@ bool Supervisor::resolve_trace_target(const std::string& child_name,
     return true;
 }
 
-// Push a single TraceControlPush{enabled=false} to disable tracing on a node
-// the config was just removed for. apply_trace_config(enabled=false) erases the
-// stored entry, so push_trace_config_to_child has nothing to send — without
-// this the node's Tracer would stay ON until restart.
-void Supervisor::push_trace_disable_to_child(const std::string& child_name) {
-    uint32_t type, instance;
-    if (!resolve_trace_target(child_name, type, instance)) return;
-    if (emit_.on_trace_push) {
-        emit_.on_trace_push(type, instance, /*kind=*/0, /*enabled=*/false);
-        std::fprintf(stderr,
-            "supervisor: pushed trace DISABLE to '%s'\n", child_name.c_str());
-    }
-}
+// (push_trace_disable_to_child removed — SupervisorCtl now casts the disable
+// directly from ConfigureTrace's handler, the same plain resolve+cast path as
+// enable.)
 
 void Supervisor::push_trace_config_to_child(const std::string& child_name) {
     auto cfg_it = trace_configs_.find(child_name);
@@ -1922,9 +1916,8 @@ void Supervisor::apply_log_level(const std::string& target_node,
 
     std::fprintf(stderr, "supervisor: log level for %s -> %s\n",
                  target_node.c_str(), log_level_name(level));
-
-    // Push live so a running child picks it up without restart.
-    push_log_level_to_child(target_node);
+    // STORE ONLY. SupervisorCtl casts the live update after ctl_configure_*
+    // returns; the heartbeat-after-gap path re-pushes on restart.
 }
 
 void Supervisor::push_log_level_to_child(const std::string& child_name) {

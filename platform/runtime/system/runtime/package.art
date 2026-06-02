@@ -59,3 +59,16 @@ message TraceControlPush {
     TraceKind kind
     bool      enabled
 }
+
+// The supervisor → child CONTROL plane, as one interface bundling the two
+// fire-and-forget casts the supervisor pushes to every reporting node. The
+// supervisor `requires` it (sends); each child node `provides` it — realized by
+// the universal config-service receiver gen-app injects (register_cast<
+// TraceControlPush> / register_cast<LogLevelPush> → GenServer base handle_cast).
+// senderReceiver (not clientServer): both are casts, no reply. Carried here in
+// the runtime package so a child provides it without depending on the
+// supervisor, and the supervisor requires it without re-declaring the messages.
+interface senderReceiver ChildControlIf {
+    data TraceControlPush trace_ctrl   // turn a node's Tracer on/off per kind
+    data LogLevelPush     log_level    // set a node's live log level
+}

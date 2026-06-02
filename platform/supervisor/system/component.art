@@ -12,6 +12,10 @@
 
 package system.supervisor
 
+// ChildControlIf (the supervisor → child trace/log control plane) lives in the
+// runtime package — see platform/runtime/system/runtime/package.art.
+import platform.runtime.*
+
 // ---- nodes ---------------------------------------------------------------
 
 // The supervisor is TWO nodes sharing a process-global, thread-safe
@@ -33,9 +37,18 @@ package system.supervisor
 node atomic SupervisorCtl {
     tipc type=0x80020001 instance=0
     ports {
-        server   control  provides SupervisorControlIf
-        sender   events   provides SupervisorEventIf
-        receiver reports  requires NodeReportIf
+        server   control   provides SupervisorControlIf
+        sender   events     provides SupervisorEventIf
+        receiver reports    requires NodeReportIf
+        // Outbound trace/log control pushed to each supervised child. Modeled
+        // as a `sender ... provides` of the senderReceiver ChildControlIf (the
+        // supervisor is the SOURCE of the two casts). The address is dynamic
+        // (per child, resolved from executor.json at run time — not a static
+        // netgraph peer), so the runtime emits it via the GenRunnable cast-to-
+        // runtime-addr override; this port models the intent. Each child node
+        // is the receiver side (gen-app's universal config-service
+        // register_cast<TraceControlPush/LogLevelPush>).
+        sender   child_ctrl provides ChildControlIf
     }
     params {
         // HealthBeacon emission period (ms) — the GUI's "stale" threshold.

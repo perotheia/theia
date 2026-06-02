@@ -26,6 +26,7 @@
 #include "RemoteCodec.hh"   // THEIA_DECLARE_REMOTE_CODEC
 #include "system/supervisor/supervisor.pb.h"
 
+#include "platform_runtime/runtime.pb.h"
 
 
 

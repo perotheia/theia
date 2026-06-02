@@ -66,16 +66,21 @@ SUPERVISORS: list[SupervisorNode] = [
     SupervisorNode(
         name="network_sup",
         strategy=RestartStrategy.ONE_FOR_ONE,
-        children=["nm", "com", "osi", "idsm", "diag", "tsync"],
+        children=["nm", "osi", "idsm", "diag", "tsync"],
     ),
     SupervisorNode(
         name="host_svc_sup",
         strategy=RestartStrategy.ONE_FOR_ONE,
-        # "log" is in CLUSTERS for AUTOSAR spec-completeness but has no
-        # daemon — logs go to files/console/syslog directly (no FC needed).
-        # The trace service (forthcoming) lives at services/log/ for
-        # convenience, but is a different facility — declared separately.
-        children=["per", "rds"],
+        # "log" = the log[trace] FC (services/log/): the ring-buffer trace
+        # hub — TraceStreamPump (raw record fan-out, tipc 0x80010013) +
+        # TraceCtl (Subscribe/Configure control plane, tipc 0x80010014).
+        # It MUST be forked: tdb logcat / artheia.observer Subscribe to
+        # TraceCtl, and per-node Tracer records egress to the pump. Without
+        # it, `tdb trace <node>` stores config but nothing receives the
+        # records and Subscribe has no listener. (The earlier "no daemon —
+        # spec-completeness only" note predated the trace hub; the hub now
+        # exists and is exactly this child.)
+        children=["log", "per", "rds"],
     ),
     SupervisorNode(
         name="pltf_sup",

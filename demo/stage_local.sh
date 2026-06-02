@@ -10,8 +10,9 @@
 #     supervisor          — //platform/supervisor/main:supervisor (gen-app FC)
 #     executor.json       — the supervisor tree (artheia executor emit --rig)
 #     bin/<child>         — every start_cmd `bin/<x>` leaf, one per child
-#     services-log        — the log[trace] collector (started separately)
-#     netgraph.json       — addr→component-name map for the collector
+#                           (includes bin/log — the log[trace] hub, now a
+#                            supervised child, not a standalone sidecar)
+#     netgraph.json       — addr→component-name map for the log[trace] hub
 #
 # This rig is SINGLE-MACHINE (central hosts everything: all FCs + p1/p2/p3).
 # The 2-machine central+compute layout lives in demo/manifest/zonal_rig.py;
@@ -79,6 +80,7 @@ stage() {
 }
 
 stage central CentralRig \
+    "log:$BB/services/log/main/log" \
     "sm:$BB/services/sm/main/sm" \
     "per:$BB/services/per/main/per" \
     "ucm:$BB/services/ucm/main/ucm" \
@@ -87,18 +89,20 @@ stage central CentralRig \
     "p2:$BB/demo/Demo3WayP2/main/demo" \
     "p3:$BB/demo/Demo3WayP3/main/demo"
 
-# services/log[trace] collector — the trace EGRESS service. NOT a supervised
-# child (it's the trace hub); launched alongside the supervisor by whoever
-# drives the run (e.g. an rf trace scenario / tdb). It needs the cluster
-# netgraph.json for the src/dst addr→component-name rewrite.
-LOG_BIN="$BB/services/log/main/log"
-if [[ -x "$LOG_BIN" ]]; then
-    cp -f "$LOG_BIN" "$REPO/install/central/services-log"
+# services/log[trace] — the ring-buffer trace hub (TraceStreamPump 0x80010013
+# + TraceCtl 0x80010014). It is now a SUPERVISED CHILD (bin/log, staged above):
+# the rig manifest lists it under host_svc_sup, so the supervisor forks it like
+# any other FC and restart-manages it. tdb logcat / artheia.observer Subscribe to
+# TraceCtl; per-node Tracer records egress to the pump. (Previously staged as a
+# standalone `services-log` sidecar "launched alongside" — but nothing launched
+# it, so logcat had no listener. Now it's in the tree.) It still needs the
+# cluster netgraph.json for the src/dst addr→component-name rewrite.
+if [[ -x "$BB/services/log/main/log" ]]; then
     artheia gen-netgraph -R system/system.art \
         --out "$REPO/install/central/netgraph.json"
-    echo "staged install/central/services-log + netgraph.json"
+    echo "staged install/central/netgraph.json"
 else
-    echo "WARN: $LOG_BIN not built — skipping collector stage"
+    echo "WARN: services/log not built — skipping netgraph stage" >&2
 fi
 
 cat <<EOF

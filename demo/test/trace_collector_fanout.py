@@ -84,8 +84,8 @@ def main() -> int:
         # --- 3) emit a TraceRecord toward the pump ---
         rec_wire = codec.encode(
             LOG_PKG, "system_services_log_TraceRecord",
-            node_name="CounterNode", dst="DriverNode", msg_type="Inc",
-            corr_id=7, ts_ns=123456789, kind=2)  # kind=2 CAST_IN
+            src="CounterNode", dst="DriverNode", msg_type="Inc",
+            corr_id=7, ts_ns=123456789)
         producer = TipcClient(PUMP_TIPC, 0)
         if not producer.connect():
             print("[FAIL] cannot reach TraceStreamPump"); return 1
@@ -94,7 +94,7 @@ def main() -> int:
                            service_id=wire.service_id("system_services_log_TraceRecord"),
                            correlation_id=0)
         producer.send(wire.frame(phdr, rec_wire))
-        print("[obs] emitted TraceRecord{node=CounterNode msg=Inc kind=CAST_IN} to pump")
+        print("[obs] emitted TraceRecord{src=CounterNode msg=Inc} to pump")
 
         # --- 4) confirm fan-out reached us ---
         deadline = time.monotonic() + 3.0
@@ -106,9 +106,9 @@ def main() -> int:
             return 1
         rec = received[0]
         print(f"[obs] received fanned-out record: "
-              f"node={rec.get('node_name')!r} msg={rec.get('msg_type')!r} "
-              f"kind={rec.get('kind')} corr={rec.get('corr_id')}")
-        ok = (rec.get("node_name") == "CounterNode"
+              f"src={rec.get('src')!r} msg={rec.get('msg_type')!r} "
+              f"corr={rec.get('corr_id')}")
+        ok = (rec.get("src") == "CounterNode"
               and rec.get("msg_type") == "Inc"
               and rec.get("corr_id") == 7)
         print(f"[check] fan-out roundtrip -> {'PASS' if ok else 'FAIL'}")

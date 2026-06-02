@@ -60,25 +60,25 @@ def main() -> int:
         print(f"[obs] attached — subscriber 0x{obs._sub_type:08x}/{obs._sub_instance}")
         time.sleep(0.3)  # hub connects back
 
-        # Emit two records (a cast in + a call in) toward the pump.
-        emit_trace(obs.codec, node_name="CounterNode", dst="DriverNode",
-                   msg_type="Inc", corr_id=7, ts_ns=111, kind=2)      # CAST_IN
-        emit_trace(obs.codec, node_name="CounterNode", dst="ObserverNode",
-                   msg_type="Get", corr_id=8, ts_ns=222, kind=4)      # CALL_IN
+        # Emit two records toward the pump.
+        emit_trace(obs.codec, src="CounterNode", dst="DriverNode",
+                   msg_type="Inc", corr_id=7, ts_ns=111)
+        emit_trace(obs.codec, src="CounterNode", dst="ObserverNode",
+                   msg_type="Get", corr_id=8, ts_ns=222)
         print("[obs] emitted 2 TraceRecords to the pump")
 
         recs = []
         for rec in obs.records(timeout=2.0):
             recs.append(rec)
-            print(f"[obs] record: node={rec.node_name!r} msg={rec.msg_type!r} "
-                  f"kind={rec.kind} corr={rec.corr_id} json={rec.json}")
+            print(f"[obs] record: src={rec.src!r} msg={rec.msg_type!r} "
+                  f"corr={rec.corr_id} json={rec.json}")
             if len(recs) >= 2:
                 break
 
         ok = (len(recs) >= 2
-              and recs[0].node_name == "CounterNode" and recs[0].msg_type == "Inc"
-              and recs[0].kind == 2 and recs[0].corr_id == 7
-              and recs[1].msg_type == "Get" and recs[1].kind == 4)
+              and recs[0].src == "CounterNode" and recs[0].msg_type == "Inc"
+              and recs[0].corr_id == 7
+              and recs[1].msg_type == "Get" and recs[1].corr_id == 8)
         json_ok = recs and '"msgType"' in recs[0].json
         print(f"[check] streamed {len(recs)} decoded records -> "
               f"{'PASS' if ok else 'FAIL'}")

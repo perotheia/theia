@@ -306,10 +306,22 @@ public:
     void handle_cast(const platform_runtime_TraceControlPush& push,
                      StateT& /*s*/) noexcept {
         auto& tr = ::theia::runtime::tracer_for(Derived::kNodeName);
-        tr.enable(true);  // master on — the kind mask narrows from here
-        tr.trace_enable_kind(
-            static_cast<::theia::runtime::TraceKind>(push.kind),
-            push.enabled);
+        if (push.enabled) {
+            // Master on; the kind mask narrows from here. kind 0 (the tdb
+            // catch-all) leaves the mask at 0 = "all kinds".
+            tr.enable(true);
+            tr.trace_enable_kind(
+                static_cast<::theia::runtime::TraceKind>(push.kind), true);
+        } else {
+            // Disable. Clear the kind bit; if no kinds remain selected, flip
+            // the master OFF so emit() stops entirely (mask==0 means "all
+            // kinds pass", so just clearing the bit would NOT stop tracing —
+            // the master switch is what actually silences the node).
+            tr.trace_enable_kind(
+                static_cast<::theia::runtime::TraceKind>(push.kind), false);
+            tr.enable(false);
+            tr.trace_clear_kinds();
+        }
         std::fprintf(stderr,
             "[%s] trace kind %d -> %s (supervisor push)\n",
             Derived::kNodeName, static_cast<int>(push.kind),

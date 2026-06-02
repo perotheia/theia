@@ -17,9 +17,7 @@
 #include "core/runtime.h"
 #include "core/spec.h"
 
-#include "NodeRef.hh"          // theia::runtime::TipcClient
-#include "TheiaMsgHeader.hh"   // TheiaMsgHeader + kMsgGenCast / kBusTypeRpc
-#include "RemoteCodec.hh"      // RemoteCodec<Msg>::fields()/service_id
+#include "NodeRef.hh"          // theia::runtime::cast(self, msg, TipcAddr)
 #include "GenServer.hh"        // THEIA_DECLARE_REMOTE_CODEC for the runtime msgs
 #include "platform_runtime/runtime.pb.h"  // platform_runtime_TraceControlPush etc.
 
@@ -32,35 +30,6 @@
 namespace ara::exec {
 
 namespace {
-
-// Cast a TYPED runtime control message to a child's config-service receiver.
-// The engine handed us the resolved (type,instance) + the typed values; here we
-// build the real platform_runtime_<Msg> and encode it via the SAME
-// RemoteCodec<Msg> the child's register_cast<Msg> uses — so the service_id and
-// wire bytes match by construction (no hand djb2, no hand proto encode). One-
-// shot TIPC client; best-effort (a child not yet listening just fails the
-// connect, re-pushed on its next heartbeat-after-gap).
-template <typename Msg>
-void cast_config_to_child(uint32_t type, uint32_t instance, const Msg& msg) {
-    using Codec = ::theia::runtime::RemoteCodec<Msg>;
-    uint8_t buf[64];
-    pb_ostream_t os = pb_ostream_from_buffer(buf, sizeof(buf));
-    if (!pb_encode(&os, Codec::fields(), &msg)) return;
-
-    ::theia::runtime::TipcClient client;
-    if (!client.connect(type, instance, /*total_timeout_ms=*/300,
-                        /*retry_ms=*/100)) {
-        return;
-    }
-    ::theia::runtime::TheiaMsgHeader hdr{};
-    hdr.bus_type           = ::theia::runtime::kBusTypeRpc;
-    hdr.msg_type           = ::theia::runtime::kMsgGenCast;
-    hdr.proto_len          = static_cast<uint16_t>(os.bytes_written);
-    hdr.rpc.service_id     = Codec::service_id;
-    hdr.rpc.method_id      = 0;
-    hdr.rpc.correlation_id = 0;  // cast has no reply
-    client.send_frame(hdr, buf, static_cast<uint16_t>(os.bytes_written));
-}
 
 }  // namespace
 
@@ -91,7 +60,7 @@ std::unique_ptr<::supervisor::Supervisor> g_engine;
 // Wire the engine's EmitSink to the bridge's EmitForwarder. Each callback is a
 // best-effort deferral: if SupervisorCtl hasn't installed its forwarder yet
 // (node construction order), the event is dropped.
-::supervisor::EmitSink make_sink() {
+::supervisor::EmitSink make_sink(SupervisorWorker& self) {
     using namespace ::supervisor;
     EmitSink s;
     s.on_event = [](const EventData& e) {
@@ -118,17 +87,19 @@ std::unique_ptr<::supervisor::Supervisor> g_engine;
     // REAL platform_runtime_TraceControlPush / LogLevelPush and cast it via the
     // runtime RemoteCodec (service_id + wire bytes match the child's
     // register_cast<Msg> by construction). No GwHdrWire, no hand encode.
-    s.on_trace_push = [](uint32_t type, uint32_t instance,
-                         uint32_t kind, bool enabled) {
+    s.on_trace_push = [&self](uint32_t type, uint32_t instance,
+                              uint32_t kind, bool enabled) {
         platform_runtime_TraceControlPush m{};
         m.kind = static_cast<platform_runtime_TraceKind>(kind);
         m.enabled = enabled;
-        cast_config_to_child(type, instance, m);
+        // GenRunnable's cast-to-remote override: builds the RemoteRef from the
+        // engine-resolved (executor.json) child address and casts the typed msg.
+        self.cast(m, ::theia::runtime::TipcAddr{type, instance});
     };
-    s.on_log_push = [](uint32_t type, uint32_t instance, uint32_t level) {
+    s.on_log_push = [&self](uint32_t type, uint32_t instance, uint32_t level) {
         platform_runtime_LogLevelPush m{};
         m.level = static_cast<platform_runtime_LogLevelValue>(level);
-        cast_config_to_child(type, instance, m);
+        self.cast(m, ::theia::runtime::TipcAddr{type, instance});
     };
     return s;
 }
@@ -147,7 +118,7 @@ void SupervisorWorker::do_start() {
         auto tree = ::supervisor::load_manifest(manifest);
         g_engine  = std::make_unique<::supervisor::Supervisor>(
             std::move(tree), root);
-        g_engine->set_emit_sink(make_sink());
+        g_engine->set_emit_sink(make_sink(*this));
         ::supervisor::set_supervisor(g_engine.get());
         std::fprintf(stderr,
                      "[%s] engine built from %s (root_dir=%s)\n",

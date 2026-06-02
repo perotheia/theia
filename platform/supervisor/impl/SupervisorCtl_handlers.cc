@@ -155,27 +155,47 @@ void fwd_snapshot_end(uint64_t gen) {
     g_ctl->broadcast_events_snap_end(m);
 }
 
-// Config push to a child — the engine resolved the addr + typed values and
-// deferred here. THIS is where the actual cast happens: from g_ctl (the
-// runtime-backed SupervisorCtl node), via the runtime's addressed cast (a
-// RemoteRef built from the child's executor.json address). The worker runnable
-// never touches transport. Same wire the child's register_cast<Msg> decodes.
-void fwd_trace_push(uint32_t type, uint32_t instance,
-                    uint32_t kind, bool enabled) {
+// ---- LIFTED: resolve a child + cast a typed control message to it ----------
+//
+// The ONE place "resolve node, then cast" lives. Called BOTH by the handlers
+// (live ConfigureTrace/ConfigureLogLevel) AND by the engine's restart re-push
+// (via the EmitSink set_trace/set_log_level callbacks). The engine asks BY
+// NAME; we resolve the child's address (engine read) and cast the runtime
+// message from g_ctl (the runtime-backed node) — the worker runnable never
+// touches transport. Same wire the child's register_cast<Msg> decodes.
+template <typename Msg>
+void resolve_and_cast(const std::string& child, const Msg& m) {
     if (!g_ctl) return;
+    auto* eng = ::supervisor::supervisor_instance();
+    if (!eng) return;
+    const auto addr = eng->resolve_node(child);
+    if (!addr.ok) return;
+    ::theia::runtime::cast(*g_ctl, m,
+                           ::theia::runtime::TipcAddr{addr.type, addr.instance});
+}
+
+// Typed entry points — the handlers pass the message straight off the wire.
+void ctl_set_trace(const std::string& child,
+                   const platform_runtime_TraceControlPush& m) {
+    resolve_and_cast(child, m);
+}
+void ctl_set_log_level(const std::string& child,
+                       const platform_runtime_LogLevelPush& m) {
+    resolve_and_cast(child, m);
+}
+
+// Ordinal entry points — the engine (protobuf-free) passes plain values; we
+// build the typed message here. Used by the restart re-push.
+void ctl_set_trace(const std::string& child, uint32_t kind, bool enabled) {
     platform_runtime_TraceControlPush m{};
     m.kind    = static_cast<platform_runtime_TraceKind>(kind);
     m.enabled = enabled;
-    ::theia::runtime::cast(*g_ctl, m,
-                           ::theia::runtime::TipcAddr{type, instance});
+    resolve_and_cast(child, m);
 }
-
-void fwd_log_push(uint32_t type, uint32_t instance, uint32_t level) {
-    if (!g_ctl) return;
+void ctl_set_log_level(const std::string& child, uint32_t level) {
     platform_runtime_LogLevelPush m{};
     m.level = static_cast<platform_runtime_LogLevelValue>(level);
-    ::theia::runtime::cast(*g_ctl, m,
-                           ::theia::runtime::TipcAddr{type, instance});
+    resolve_and_cast(child, m);
 }
 
 }  // namespace
@@ -192,8 +212,12 @@ void SupervisorCtl::init(SupervisorCtlState& /*s*/) {
     fwd.on_edge           = &fwd_edge;
     fwd.on_node_state     = &fwd_node_state;
     fwd.on_snapshot_end   = &fwd_snapshot_end;
-    fwd.on_trace_push     = &fwd_trace_push;
-    fwd.on_log_push       = &fwd_log_push;
+    fwd.set_trace         = [](const char* c, uint32_t k, bool e) {
+        ctl_set_trace(c, k, e);
+    };
+    fwd.set_log_level     = [](const char* c, uint32_t l) {
+        ctl_set_log_level(c, l);
+    };
     ::supervisor::set_emit_forwarder(fwd);
 }
 
@@ -358,26 +382,20 @@ ControlReply SupervisorCtl::handle_call(
         SupervisorCtlState& /*s*/) {
     const auto& cfg = req.config;
     const std::string target = s(cfg.target_node);
-    // TraceConfig carries the runtime's TraceControlPush directly (cfg.trace_ctrl
-    // — the SAME message the child applies). Plain: resolve the node, store the
-    // config in the engine, then cast the control message FROM here (this node
-    // is runtime-backed). No lambda, no future.
     ControlReply rep;
     auto* eng = ::supervisor::supervisor_instance();
     if (!eng) { set_reply(rep, 4, target, "engine not up"); return rep; }
 
-    const auto addr = eng->resolve_node(target);
-    if (!addr.ok) {
+    // Store (survives restart) — returns false if the target doesn't resolve.
+    if (!eng->ctl_configure_trace(target, cfg.trace_ctrl.enabled,
+                                  static_cast<uint32_t>(cfg.trace_ctrl.kind))) {
         set_reply(rep, 4 /*invalid_request*/, target,
                   "no worker or node by that name");
         return rep;
     }
-    // Store (survives restart). enabled toggles the stored entry.
-    eng->ctl_configure_trace(target, cfg.trace_ctrl.enabled,
-                             static_cast<uint32_t>(cfg.trace_ctrl.kind));
-    // Cast the live update to the child — the exact message off the wire.
-    ::theia::runtime::cast(*this, cfg.trace_ctrl,
-                           ::theia::runtime::TipcAddr{addr.type, addr.instance});
+    // Push live — the lifted resolve+cast, cfg.trace_ctrl verbatim. The SAME
+    // function the engine's restart re-push calls (by ordinal).
+    ctl_set_trace(target, cfg.trace_ctrl);
     set_reply(rep, 0, target, "trace config applied");
     return rep;
 }
@@ -413,22 +431,18 @@ ControlReply SupervisorCtl::handle_call(
         SupervisorCtlState& /*s*/) {
     const auto& cfg = req.config;
     const std::string target = s(cfg.target_node);
-    // Plain: resolve the node, store the level in the engine, then cast
-    // cfg.log_level (a platform.runtime.LogLevelPush — the EXACT wire type the
-    // child applies) VERBATIM. No field copy.
     ControlReply rep;
     auto* eng = ::supervisor::supervisor_instance();
     if (!eng) { set_reply(rep, 4, target, "engine not up"); return rep; }
 
-    const auto addr = eng->resolve_node(target);
-    if (!addr.ok) {
+    // Store (survives restart) — returns false if the target doesn't resolve.
+    if (!eng->ctl_configure_log_level(
+            target, static_cast<uint32_t>(cfg.log_level.level))) {
         set_reply(rep, 4, target, "no worker or node by that name");
         return rep;
     }
-    eng->ctl_configure_log_level(target,
-                                 static_cast<uint32_t>(cfg.log_level.level));
-    ::theia::runtime::cast(*this, cfg.log_level,
-                           ::theia::runtime::TipcAddr{addr.type, addr.instance});
+    // Push live — the lifted resolve+cast, cfg.log_level verbatim.
+    ctl_set_log_level(target, cfg.log_level);
     set_reply(rep, 0, target, "log level applied");
     return rep;
 }

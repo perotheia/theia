@@ -135,21 +135,17 @@ struct EmitSink {
     std::function<void(const EdgeData&)>      on_edge;
     std::function<void(const NodeStateData&)> on_node_state;
     std::function<void(uint64_t /*generation*/)> on_snapshot_end;
-    // Outbound CONFIG PUSH to a child node, as STRUCTURED INTENT — the engine
-    // owns the config state + resolves the child's TIPC (type,instance) from the
-    // manifest, then calls one of these with the typed values. It does NOT
-    // encode protobuf or touch a socket (no nanopb/djb2/transport in the
-    // engine). SupervisorCtl (which links platform/runtime) builds the real
-    // platform_runtime_TraceControlPush / LogLevelPush and casts it to the
-    // child over the runtime — the SAME message the child's GenServer base
-    // register_cast's. kind is a runtime TraceKind ordinal; level a
-    // LogLevelValue ordinal.
-    std::function<void(uint32_t /*tipc_type*/, uint32_t /*tipc_instance*/,
-                       uint32_t /*kind*/, bool /*enabled*/)>
-        on_trace_push;
-    std::function<void(uint32_t /*tipc_type*/, uint32_t /*tipc_instance*/,
-                       uint32_t /*level*/)>
-        on_log_push;
+    // Ask CONTROL to push a child's trace/log config — BY NAME, with the typed
+    // values. The engine owns the config state but does NOT resolve addresses,
+    // encode protobuf, or touch a socket. SupervisorCtl (the runtime-backed
+    // node) RESOLVES the child + builds + casts platform_runtime_
+    // TraceControlPush / LogLevelPush. kind = TraceKind ordinal; level =
+    // LogLevelValue ordinal. (Used by the restart re-push; the live path is the
+    // handler calling the same SupervisorCtl::set_* directly.)
+    std::function<void(const std::string& /*child*/, uint32_t /*kind*/,
+                       bool /*enabled*/)>            set_trace;
+    std::function<void(const std::string& /*child*/, uint32_t /*level*/)>
+                                                     set_log_level;
 };
 
 class Supervisor {

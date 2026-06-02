@@ -1869,29 +1869,18 @@ bool Supervisor::resolve_trace_target(const std::string& child_name,
 void Supervisor::push_trace_config_to_child(const std::string& child_name) {
     auto cfg_it = trace_configs_.find(child_name);
     if (cfg_it == trace_configs_.end()) return;  // nothing to push
+    if (!emit_.set_trace) return;
 
-    uint32_t type, instance;
-    if (!resolve_trace_target(child_name, type, instance)) return;
-
-    // One trace push per stored kind entry. The engine emits the typed INTENT
-    // (addr + kind + enabled); SupervisorCtl builds the
-    // platform_runtime_TraceControlPush and casts it to the child's config_mux
-    // register_cast<platform_runtime_TraceControlPush> → GenServer base
-    // handle_cast → Tracer kind filter (#403). Entry presence = enabled; value
-    // = TraceKind.
-    if (!emit_.on_trace_push) {
-        std::fprintf(stderr,
-            "supervisor: trace push: no on_trace_push sink installed\n");
-        return;
-    }
+    // Ask CONTROL to set each stored kind on the child BY NAME. The engine does
+    // NOT resolve the address or cast — SupervisorCtl::set_trace does both.
+    // Entry presence = enabled; value = TraceKind.
     int pushed = 0;
     for (const auto& kv : cfg_it->second) {
-        uint32_t kind = kv.second;
-        emit_.on_trace_push(type, instance, kind, /*enabled=*/true);
+        emit_.set_trace(child_name, kv.second, /*enabled=*/true);
         ++pushed;
     }
     std::fprintf(stderr,
-        "supervisor: pushed %d trace config entries to '%s'\n",
+        "supervisor: asked control to set %d trace entries on '%s'\n",
         pushed, child_name.c_str());
 }
 
@@ -1923,51 +1912,13 @@ void Supervisor::apply_log_level(const std::string& target_node,
 void Supervisor::push_log_level_to_child(const std::string& child_name) {
     auto it = log_levels_.find(child_name);
     if (it == log_levels_.end() || it->second == kNoLevel) return;  // nothing to push
-
-    WorkerNode* w = find_worker_by_name(child_name);
-    if (!w) {
-        std::fprintf(stderr,
-            "supervisor: log push: no worker named '%s' yet\n",
-            child_name.c_str());
-        return;
-    }
-    if (w->nodes.empty()) {
-        std::fprintf(stderr,
-            "supervisor: log push: worker '%s' has no NodeInfo "
-            "(reporting=false?) — skipping push\n",
-            child_name.c_str());
-        return;
-    }
-
-    // First reporting node's TIPC addr (same convention as trace).
-    const NodeInfo* target = nullptr;
-    for (const auto& ni : w->nodes) {
-        if (ni.reporting) { target = &ni; break; }
-    }
-    if (!target) return;
-
-    uint32_t type, instance;
-    try {
-        type     = std::stoul(target->tipc_type, nullptr, 0);
-        instance = std::stoul(target->tipc_instance, nullptr, 0);
-    } catch (...) {
-        std::fprintf(stderr,
-            "supervisor: log push: bad tipc addr for '%s'\n",
-            child_name.c_str());
-        return;
-    }
-
-    // Emit the typed INTENT (addr + the stored level ORDINAL, verbatim).
-    // SupervisorCtl builds platform_runtime_LogLevelPush{level} and casts it to
-    // the child's config_mux register_cast<platform_runtime_LogLevelPush> →
-    // GenServer base handle_cast → process_logger().set_level. (#386) No
-    // string round-trip — the ordinal flows wire → store → push unchanged.
-    if (emit_.on_log_push) {
-        emit_.on_log_push(type, instance, it->second);
-        std::fprintf(stderr,
-            "supervisor: pushed log level '%s' to '%s'\n",
-            log_level_name(it->second), child_name.c_str());
-    }
+    if (!emit_.set_log_level) return;
+    // Ask CONTROL to set the stored level on the child BY NAME — SupervisorCtl
+    // resolves the address + casts LogLevelPush. The engine doesn't resolve.
+    emit_.set_log_level(child_name, it->second);
+    std::fprintf(stderr,
+        "supervisor: asked control to set log level '%s' on '%s'\n",
+        log_level_name(it->second), child_name.c_str());
 }
 
 // (send_sm_ready removed — the SM startup handshake is not part of this e2e

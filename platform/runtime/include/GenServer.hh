@@ -307,11 +307,20 @@ public:
                      StateT& /*s*/) noexcept {
         auto& tr = ::theia::runtime::tracer_for(Derived::kNodeName);
         if (push.enabled) {
-            // Master on; the kind mask narrows from here. kind 0 (the tdb
-            // catch-all) leaves the mask at 0 = "all kinds".
+            // Master on. push.kind selects which dispatch class to trace.
+            // kind 0 is the CATCH-ALL sentinel ("all kinds") — it must leave
+            // the mask at 0 (trace_kind_passes: mask==0 → every kind passes).
+            // Setting bit 0 would make the mask 0b1 and filter to ONLY kind 0
+            // (Other) — dropping Recv (which carries the payload), Dispatch,
+            // Send. So for kind 0 we CLEAR the mask; only a non-zero kind
+            // narrows.
             tr.enable(true);
-            tr.trace_enable_kind(
-                static_cast<::theia::runtime::TraceKind>(push.kind), true);
+            auto tk = static_cast<::theia::runtime::TraceKind>(push.kind);
+            if (tk == ::theia::runtime::TraceKind::Other) {
+                tr.trace_clear_kinds();   // catch-all: all kinds pass
+            } else {
+                tr.trace_enable_kind(tk, true);
+            }
         } else {
             // Disable. Clear the kind bit; if no kinds remain selected, flip
             // the master OFF so emit() stops entirely (mask==0 means "all

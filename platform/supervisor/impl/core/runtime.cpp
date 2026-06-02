@@ -213,10 +213,19 @@ uint32_t Supervisor::ctl_resume_child(const std::string& name) {
     return do_resume_child(name);
 }
 
-void Supervisor::ctl_configure_trace(const std::string& target_node,
+bool Supervisor::ctl_configure_trace(const std::string& target_node,
                                      const std::string& msg_type,
                                      bool enabled, uint32_t kind) {
+    // Validate the target resolves to a real worker/node BEFORE storing +
+    // pushing, so a typo'd or stale name (e.g. "CounterNode" after the rename
+    // to "counter", or a random string) fails the control reply instead of
+    // silently "succeeding". resolve_trace_target logs the specific reason.
+    uint32_t t, i;
+    if (!resolve_trace_target(target_node, t, i)) {
+        return false;
+    }
     apply_trace_config(target_node, msg_type, enabled, kind);
+    return true;
 }
 
 void Supervisor::ctl_configure_log_level(const std::string& target_node,

@@ -191,7 +191,7 @@ public:
     uint32_t ctl_resume_child(const std::string& name);
 
     // ConfigureTrace / ConfigureLogLevel — store + push (survives restart).
-    void ctl_configure_trace(const std::string& target_node,
+    bool ctl_configure_trace(const std::string& target_node,
                              const std::string& msg_type,
                              bool enabled, uint32_t kind);
     void ctl_configure_log_level(const std::string& target_node,

@@ -333,11 +333,19 @@ ControlReply SupervisorCtl::handle_call(
     const std::string mtype  = s(cfg.msg_type);
     const bool enabled = cfg.enabled;
     const uint32_t kind = static_cast<uint32_t>(cfg.kind);
-    run_on_engine_void([=](::supervisor::Supervisor& e) {
-        e.ctl_configure_trace(target, mtype, enabled, kind);
-    });
+    const bool ok = run_on_engine<bool>(
+        [=](::supervisor::Supervisor& e) {
+            return e.ctl_configure_trace(target, mtype, enabled, kind);
+        }, /*dflt=*/false /*no engine → treat as failure*/);
     ControlReply rep;
-    set_reply(rep, 0, target, "trace config applied");
+    if (ok) {
+        set_reply(rep, 0, target, "trace config applied");
+    } else {
+        // Unknown/unresolvable target — report a real failure so tdb doesn't
+        // print a false success for a typo'd or stale node name.
+        set_reply(rep, 4 /*invalid_request*/, target,
+                  "no worker or node by that name");
+    }
     return rep;
 }
 

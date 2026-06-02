@@ -110,9 +110,17 @@ def cmd_trace(args, sup, _tf) -> int:
     rep = sup.configure_trace(target_node=node, msg_type=msg_type,
                               enabled=enabled, kind=0, timeout=3.0)
     verb = "on" if enabled else "off"
-    print(f"trace {verb}: {node} {msg_type or '(all)'} -> "
-          f"status={_g(rep, 'status')} {_g(rep, 'message', '')}".rstrip())
-    return 0 if _g(rep, "status") == 0 else 1
+    status = _g(rep, "status")
+    msg = _g(rep, "message", "")
+    if status == 0:
+        print(f"trace {verb}: {node} {msg_type or '(all)'} -> ok"
+              f"{(' (' + msg + ')') if msg else ''}")
+        return 0
+    # Non-zero = the supervisor rejected it (e.g. unknown node name). Report
+    # the supervisor's reason; don't pretend it worked.
+    print(f"trace {verb}: {node} -> FAILED (status={status}): {msg or 'rejected'}",
+          file=sys.stderr)
+    return 1
 
 
 def cmd_trace_config(args, sup, _tf) -> int:

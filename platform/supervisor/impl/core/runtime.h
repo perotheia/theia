@@ -135,6 +135,16 @@ struct EmitSink {
     std::function<void(const EdgeData&)>      on_edge;
     std::function<void(const NodeStateData&)> on_node_state;
     std::function<void(uint64_t /*generation*/)> on_snapshot_end;
+    // Outbound CONFIG PUSH to a child node (trace/log control). The engine
+    // resolves the child's TIPC (type,instance) from the manifest + hand-
+    // encodes the proto3 payload (it stays transport- and protobuf-free), then
+    // calls this; the FC shell's runnable (which links platform/runtime) frames
+    // it with the standard TheiaMsgHeader and casts it over the runtime — NO
+    // more hand-rolled GwHdrWire socket in the engine. service_id =
+    // djb2_low16(C type name), matching the child's register_cast<T>.
+    std::function<void(uint32_t /*tipc_type*/, uint32_t /*tipc_instance*/,
+                       uint16_t /*service_id*/, const std::string& /*payload*/)>
+        on_config_push;
 };
 
 class Supervisor {

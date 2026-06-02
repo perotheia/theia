@@ -17,13 +17,15 @@ adb-shaped verbs:
   supervisor               supervisor host facts (GetSystemInfo)
   trace [off] <node> [mt]  ConfigureTrace node on/off (msgtype "" = all kinds)
   trace-config             show the stored trace config (GetTraceConfig)
-  logcat [-c|-g]           follow the trace firehose (subscribe to log[trace])
+  logcat [--json|-c|-g]    follow the trace firehose (subscribe to log[trace]);
+                           --json = NDJSON (header + decoded inner proto) per line
   restart <name>           RestartChild
   terminate <name>         TerminateChild (stop-and-hold: no_restart=true)
   help / quit
 """
 from __future__ import annotations
 
+import json
 import shlex
 import sys
 from pathlib import Path
@@ -169,10 +171,18 @@ def cmd_logcat(args, _sup, trace_factory) -> int:
     if "-g" in args or "-c" in args:
         print("logcat -g/-c (ring size / clear) — not wired yet", file=sys.stderr)
         return 2
+    # --json: one JSON object per line (NDJSON) — full header + decoded inner
+    # proto — for piping into jq / a log pipeline. No human banner on stdout.
+    as_json = "--json" in args
     trace = trace_factory()
-    print("logcat: following trace firehose (Ctrl-C to stop) ...")
+    if not as_json:
+        print("logcat: following trace firehose (Ctrl-C to stop) ...")
     try:
         for rec in trace.records(timeout=600.0):
+            if as_json:
+                print(json.dumps(rec.to_dict(), separators=(",", ":")),
+                      flush=True)
+                continue
             # Prefer the DECODED inner message ({value: 860}) over the raw
             # base64 payload in the envelope JSON. content is None when the
             # record has no payload (e.g. Dispatch) or the type didn't resolve.
@@ -202,7 +212,7 @@ _HELP = """tdb — Theia Debug Bridge. commands:
   supervisor               supervisor host facts
   trace [off] <node> [mt]  turn tracing on/off for a node/worker
   trace-config             show stored trace config
-  logcat                   follow the trace firehose
+  logcat [--json]          follow the trace firehose (--json = NDJSON)
   restart <name>           restart a child
   terminate <name>         stop-and-hold a child
   help                     this help

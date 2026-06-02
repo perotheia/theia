@@ -58,9 +58,12 @@ def _render_tree(rows) -> str:
         by_parent.setdefault(_g(r, "parent_name", ""), []).append(r)
     out: list[str] = []
 
+    # kind: 1=supervisor, 0=worker (process), 2=node (thread in the process).
+    _KIND = {1: "sup", 0: "proc", 2: "node"}
+
     def walk(parent: str, depth: int) -> None:
         for r in by_parent.get(parent, []):
-            kind = "sup" if _g(r, "kind") == 1 else "node"
+            kind = _KIND.get(_g(r, "kind"), "node")
             pid = _g(r, "pid", -1)
             st = _STATE.get(_g(r, "state", 0), str(_g(r, "state")))
             tag = _g(r, "strategy") or _g(r, "start_cmd") or ""

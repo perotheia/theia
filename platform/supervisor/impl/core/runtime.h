@@ -209,8 +209,13 @@ public:
     bool ctl_configure_trace(const std::string& target_node,
                              const std::string& msg_type,
                              bool enabled, uint32_t kind);
+    // level is the platform.runtime LogLevelValue ORDINAL (LL_TRACE=0 ..
+    // LL_ERROR=4) — carried verbatim from the wire LogLevelConfig.level enum,
+    // no string round-trip. The engine maps it to a name ONCE for the child's
+    // THEIA_LOG_LEVEL spawn env (a string the child reads at boot); the live
+    // push forwards the ordinal as-is.
     void ctl_configure_log_level(const std::string& target_node,
-                                 const std::string& level);
+                                 uint32_t level);
 
     // GetTraceConfig read-back: flatten the per-child trace_configs_ table.
     std::vector<TraceConfigRow> ctl_get_trace_config();
@@ -449,14 +454,16 @@ private:
     // overwrite the child's spawn env THEIA_LOG_LEVEL so a (re)start
     // boots at the new level, and push a LogLevelConfig frame to the
     // child's node for live (no-restart) application. log_levels_ is
-    // keyed by child NAME so it persists across pid changes; an empty
-    // value means "use the default from the manifest env".
-    std::map<std::string, std::string>           log_levels_;
+    // keyed by child NAME so it persists across pid changes. Stores the
+    // LogLevelValue ORDINAL (0..4) the wire carried — forwarded verbatim to
+    // the live push; mapped to a name only for the spawn env. Sentinel kNoLevel
+    // = "no override, use the manifest env default".
+    static constexpr uint32_t kNoLevel = 0xFFFFFFFFu;
+    std::map<std::string, uint32_t>              log_levels_;
 
-    // Apply one LogLevelConfig: store it, update the worker's env map
+    // Apply one LogLevelConfig: store the ordinal, update the worker's env map
     // (so a restart re-applies), and push live. Best-effort push.
-    void apply_log_level(const std::string& target_node,
-                         const std::string& level);
+    void apply_log_level(const std::string& target_node, uint32_t level);
 
     // Push the stored log level to a child's node TIPC server, the
     // same way push_trace_config_to_child does. Called on apply and

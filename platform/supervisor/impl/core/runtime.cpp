@@ -230,7 +230,7 @@ bool Supervisor::ctl_configure_trace(const std::string& target_node,
 }
 
 void Supervisor::ctl_configure_log_level(const std::string& target_node,
-                                         const std::string& level) {
+                                         uint32_t level) {
     apply_log_level(target_node, level);
 }
 
@@ -1663,15 +1663,19 @@ namespace {
 // via the EmitSink as plain EdgeData/NodeStateData structs; SupervisorCtl's
 // `events` broadcast senders do the nanopb encode + TIPC fan-out.)
 
-// Map the operator's level string → LogLevelValue ordinal (matches the
-// platform.runtime LogLevelValue enum + platform::runtime::LogLevel).
-uint32_t log_level_to_value(const std::string& level) {
-    if (level == "trace") return 0;
-    if (level == "debug") return 1;
-    if (level == "info")  return 2;
-    if (level == "warn" || level == "warning") return 3;
-    if (level == "error" || level == "err")    return 4;
-    return 2;  // default Info, same lax policy as parse_log_level
+// Map a LogLevelValue ORDINAL (0..4) → the level NAME the child reads from its
+// THEIA_LOG_LEVEL spawn env at boot. The ONLY ordinal↔string conversion left:
+// the live push forwards the ordinal verbatim; only the restart env needs a
+// name. Matches the platform.runtime LogLevelValue enum / parse_log_level.
+const char* log_level_name(uint32_t level) {
+    switch (level) {
+        case 0:  return "trace";
+        case 1:  return "debug";
+        case 2:  return "info";
+        case 3:  return "warn";
+        case 4:  return "error";
+        default: return "info";  // lax default, same as parse_log_level
+    }
 }
 
 }  // namespace
@@ -1900,23 +1904,24 @@ void Supervisor::push_trace_config_to_child(const std::string& child_name) {
 // ---- #385: per-child log level -------------------------------------------
 
 void Supervisor::apply_log_level(const std::string& target_node,
-                                 const std::string& level) {
+                                 uint32_t level) {
     if (target_node.empty()) {
         log_warn("apply_log_level: empty target_node — dropping");
         return;
     }
-    log_levels_[target_node] = level;
+    log_levels_[target_node] = level;  // store the ordinal verbatim
 
-    // Rewrite the worker's spawn env so a (re)start boots at the new
-    // level (main.cc reads THEIA_LOG_LEVEL once at startup). Survives
-    // restart for free — the spawn path setenvs the whole env map.
+    // Rewrite the worker's spawn env so a (re)start boots at the new level
+    // (main.cc reads THEIA_LOG_LEVEL — a NAME — once at startup). This is the
+    // one place the ordinal becomes a string; the live push forwards the
+    // ordinal as-is.
     WorkerNode* w = find_worker_by_name(target_node);
     if (w) {
-        w->env["THEIA_LOG_LEVEL"] = level;
+        w->env["THEIA_LOG_LEVEL"] = log_level_name(level);
     }
 
     std::fprintf(stderr, "supervisor: log level for %s -> %s\n",
-                 target_node.c_str(), level.c_str());
+                 target_node.c_str(), log_level_name(level));
 
     // Push live so a running child picks it up without restart.
     push_log_level_to_child(target_node);
@@ -1924,7 +1929,7 @@ void Supervisor::apply_log_level(const std::string& target_node,
 
 void Supervisor::push_log_level_to_child(const std::string& child_name) {
     auto it = log_levels_.find(child_name);
-    if (it == log_levels_.end() || it->second.empty()) return;  // nothing to push
+    if (it == log_levels_.end() || it->second == kNoLevel) return;  // nothing to push
 
     WorkerNode* w = find_worker_by_name(child_name);
     if (!w) {
@@ -1959,15 +1964,16 @@ void Supervisor::push_log_level_to_child(const std::string& child_name) {
         return;
     }
 
-    // Emit the typed INTENT (addr + level ordinal); SupervisorCtl builds the
-    // platform_runtime_LogLevelPush and casts it to the child's config_mux
-    // register_cast<platform_runtime_LogLevelPush> → GenServer base handle_cast
-    // → process_logger().set_level. (#386)
+    // Emit the typed INTENT (addr + the stored level ORDINAL, verbatim).
+    // SupervisorCtl builds platform_runtime_LogLevelPush{level} and casts it to
+    // the child's config_mux register_cast<platform_runtime_LogLevelPush> →
+    // GenServer base handle_cast → process_logger().set_level. (#386) No
+    // string round-trip — the ordinal flows wire → store → push unchanged.
     if (emit_.on_log_push) {
-        emit_.on_log_push(type, instance, log_level_to_value(it->second));
+        emit_.on_log_push(type, instance, it->second);
         std::fprintf(stderr,
             "supervisor: pushed log level '%s' to '%s'\n",
-            it->second.c_str(), child_name.c_str());
+            log_level_name(it->second), child_name.c_str());
     }
 }
 

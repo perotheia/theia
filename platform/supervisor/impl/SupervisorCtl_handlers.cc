@@ -384,16 +384,11 @@ ControlReply SupervisorCtl::handle_call(
         SupervisorCtlState& /*s*/) {
     const auto& cfg = req.config;
     const std::string target = s(cfg.target_node);
-    // level is now the runtime LogLevelValue enum (LL_TRACE..LL_ERROR), not a
-    // string. Map it to the level name the engine stores (it re-pushes the
-    // saved level on child restart). Ordinals align with LogLevel.
-    static const char* kLevelNames[] = {
-        "trace", "debug", "info", "warn", "error",
-    };
-    const auto lvl = static_cast<unsigned>(cfg.level);
-    const std::string level =
-        (lvl < (sizeof(kLevelNames) / sizeof(kLevelNames[0])))
-            ? kLevelNames[lvl] : "info";
+    // cfg.level is the platform.runtime LogLevelValue enum — the SAME value
+    // LogLevelPush.level carries. Forward the ordinal verbatim; the engine
+    // stores it + maps to a name only for the spawn env. No enum→string→enum
+    // round-trip.
+    const uint32_t level = static_cast<uint32_t>(cfg.level);
     run_on_engine_void([=](::supervisor::Supervisor& e) {
         e.ctl_configure_log_level(target, level);
     });

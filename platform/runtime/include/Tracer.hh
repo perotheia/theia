@@ -311,7 +311,8 @@ public:
     void emit(TraceEvent kind,
               const char* msg_type_name,
               uint32_t       corr_id,
-              const uint8_t* payload, uint16_t payload_len) noexcept {
+              const uint8_t* payload, uint16_t payload_len,
+              const char* dst = nullptr) noexcept {
         if (!trace_filter_passes(msg_type_name)) return;
         // Kind filter (#403): supervisor's TraceControlPush selects which
         // dispatch classes to trace. Empty mask = all kinds (back-compat).
@@ -319,23 +320,27 @@ public:
         // Reporting gate (#401): non-reporting nodes never reach the bus,
         // even if enabled_ was flipped by the THEIA_TRACE boot switch.
         if (!reporting_.load(std::memory_order_relaxed)) return;
-        auto now = std::chrono::steady_clock::now();
+        // WALL-CLOCK timestamp at the trace point — system_clock epoch
+        // nanoseconds (not steady_clock-from-start), so a consumer renders a
+        // real date and records correlate across nodes/processes. This is the
+        // SENDER/observer-node's clock at the moment of emit.
         uint64_t ts_ns = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(
-                now - start_tp_).count());
+                std::chrono::system_clock::now().time_since_epoch()).count());
 
         // Frame the record as proto3 wire bytes (TraceRecord, fields per
         // services/log/system/package.art) and submit over TIPC. We
         // hand-encode rather than pull nanopb's pb_callback_t machinery
-        // into this hot header (see the BACKLOG design doc). dst is left
-        // empty: only send sites know a peer, and no call site passes one
-        // yet — "" is the .art-sanctioned no-peer value.
+        // into this hot header (see the BACKLOG design doc).
         //   1=node_name(src) 2=dst 3=msg_type 4=corr_id 5=ts_ns
         //   6=kind 7=payload
+        // dst = the PEER node a Send is addressed to (RemoteRef knows the
+        // target's kNodeName); inbound/local events pass nullptr → "".
         std::string rec;
         rec.reserve(64 + payload_len);
         pb_string(rec, 1, name_, name_ ? std::strlen(name_) : 0);
-        // field 2 (dst): omitted — proto3 default "" when absent.
+        if (dst && dst[0])
+            pb_string(rec, 2, dst, std::strlen(dst));
         if (msg_type_name)
             pb_string(rec, 3, msg_type_name, std::strlen(msg_type_name));
         if (corr_id) pb_varint_field(rec, 4, corr_id);

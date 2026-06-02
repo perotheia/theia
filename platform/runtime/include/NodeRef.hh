@@ -163,7 +163,8 @@ public:
             tr.emit(::theia::runtime::TraceEvent::Send,
                     ::theia::runtime::msg_type_name<Msg>(),
                     /*corr_id=*/0,
-                    buf, (uint16_t)os.bytes_written);
+                    buf, (uint16_t)os.bytes_written,
+                    /*dst=*/NodeType::kNodeName);  // the peer this Send targets
         }
         TheiaMsgHeader hdr{};
         hdr.bus_type            = ::theia::runtime::kBusTypeRpc;
@@ -223,7 +224,8 @@ public:
         if (tr.enabled()) {
             tr.emit(::theia::runtime::TraceEvent::Send,
                     ::theia::runtime::msg_type_name<Req>(),
-                    corr, buf, (uint16_t)os.bytes_written);
+                    corr, buf, (uint16_t)os.bytes_written,
+                    /*dst=*/NodeType::kNodeName);  // the peer this CALL targets
         }
         if (!client_.send_frame(hdr, buf, (uint16_t)os.bytes_written)) {
             std::lock_guard<std::mutex> lk(pending_mu_);
@@ -288,6 +290,11 @@ private:
 struct TipcAddr {
     uint32_t type;
     uint32_t instance;
+    // Peer node identity (kNodeName) for trace `dst`. Optional — older
+    // netgraph headers emit {type, instance} only, leaving this nullptr, in
+    // which case the Send's dst is "". The generator now fills it with the
+    // peer's prototype name so addressed casts carry their destination.
+    const char* name = nullptr;
 };
 
 
@@ -306,7 +313,8 @@ void cast(LocalRef<T>& ref, Msg msg) {
 // trace tag (`Daemon::kNodeName`) so the trace stream stays
 // consistent with the existing RemoteRef path.
 template <typename Daemon, typename Msg>
-void cast(Daemon& /*self*/, const Msg& msg, TipcAddr addr) {
+void cast(Daemon& /*self*/, const Msg& msg, TipcAddr addr,
+          const char* dst_name = nullptr) {
     using Codec = RemoteCodec<Msg>;
     // Ad-hoc client — one fresh connection per cast. Fine for low-
     // frequency signals (state broadcasts). A per-peer client cache
@@ -318,12 +326,18 @@ void cast(Daemon& /*self*/, const Msg& msg, TipcAddr addr) {
     pb_ostream_t os = pb_ostream_from_buffer(buf, sizeof(buf));
     if (!pb_encode(&os, Codec::fields(), &msg)) return;
 
+    // Here Daemon::kNodeName is the SENDER (self) — the correct src for this
+    // netgraph-addressed path — and the peer name comes from the TipcAddr the
+    // netgraph LUT resolved (addr.name = the peer's kNodeName); an explicit
+    // dst_name arg overrides it. nullptr → dst "".
+    const char* dst = dst_name ? dst_name : addr.name;
     auto& tr = ::theia::runtime::tracer_for(Daemon::kNodeName);
     if (tr.enabled()) {
         tr.emit(::theia::runtime::TraceEvent::Send,
                 ::theia::runtime::msg_type_name<Msg>(),
                 /*corr_id=*/0,
-                buf, (uint16_t)os.bytes_written);
+                buf, (uint16_t)os.bytes_written,
+                /*dst=*/dst);
     }
 
     TheiaMsgHeader hdr{};

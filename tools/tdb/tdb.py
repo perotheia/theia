@@ -145,6 +145,16 @@ def cmd_terminate(args, sup, _tf) -> int:
     return 0 if _g(rep, "status") == 0 else 1
 
 
+def _fmt_content(content: dict) -> str:
+    """Render a decoded inner message dict as `{k: v, ...}`. bytes → hex so a
+    nested-payload field stays readable; everything else via repr-ish str."""
+    def v(x):
+        if isinstance(x, (bytes, bytearray)):
+            return x.hex() if x else '""'
+        return str(x)
+    return "{" + ", ".join(f"{k}: {v(val)}" for k, val in content.items()) + "}"
+
+
 def cmd_logcat(args, _sup, trace_factory) -> int:
     # -g get ring size / -c clear are firehose-control follow-ups; the default
     # is "follow live records" (subscribe to log[trace], decode + print).
@@ -155,8 +165,12 @@ def cmd_logcat(args, _sup, trace_factory) -> int:
     print("logcat: following trace firehose (Ctrl-C to stop) ...")
     try:
         for rec in trace.records(timeout=600.0):
-            print(f"{rec.ts_ns:>16} {rec.src:>16} {rec.msg_type:<20} "
-                  f"corr={rec.corr_id} {rec.json}")
+            # Prefer the DECODED inner message ({value: 860}) over the raw
+            # base64 payload in the envelope JSON. content is None when the
+            # record has no payload (e.g. Dispatch) or the type didn't resolve.
+            body = _fmt_content(rec.content) if rec.content else ""
+            print(f"{rec.ts_ns:>16} {rec.src:>16} {rec.msg_type:<22} "
+                  f"corr={rec.corr_id}{(' ' + body) if body else ''}")
     except KeyboardInterrupt:
         pass
     finally:

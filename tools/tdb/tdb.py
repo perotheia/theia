@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import shlex
 import sys
+from datetime import datetime
 from pathlib import Path
 
 # tdb_client lives next to this file.
@@ -180,7 +181,13 @@ def cmd_logcat(args, _sup, trace_factory) -> int:
     try:
         for rec in trace.records(timeout=600.0):
             if as_json:
-                print(json.dumps(rec.to_dict(), separators=(",", ":")),
+                # ts_ns is the emitting node's monotonic-from-start clock, not
+                # wall time — stamp the observer's receive time as a readable
+                # ts (DD/MM/YY HH:MM:SS.mmm) for the JSON consumer.
+                now = datetime.now()
+                ts = now.strftime("%d/%m/%y %H:%M:%S.") + \
+                    f"{now.microsecond // 1000:03d}"
+                print(json.dumps(rec.to_dict(ts=ts), separators=(",", ":")),
                       flush=True)
                 continue
             # Prefer the DECODED inner message ({value: 860}) over the raw

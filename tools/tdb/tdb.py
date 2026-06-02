@@ -156,6 +156,15 @@ def cmd_terminate(args, sup, _tf) -> int:
     return 0 if _g(rep, "status") == 0 else 1
 
 
+def _fmt_epoch_ns(ts_ns: int) -> str:
+    """Epoch-nanoseconds (the sender's system_clock at the trace point) →
+    DD/MM/YY HH:MM:SS.mmm local time. 0 → '' (no timestamp)."""
+    if not ts_ns:
+        return ""
+    dt = datetime.fromtimestamp(ts_ns / 1e9)
+    return dt.strftime("%d/%m/%y %H:%M:%S.") + f"{dt.microsecond // 1000:03d}"
+
+
 def _fmt_content(content: dict) -> str:
     """Render a decoded inner message dict as `{k: v, ...}`. bytes → hex so a
     nested-payload field stays readable; everything else via repr-ish str."""
@@ -181,12 +190,10 @@ def cmd_logcat(args, _sup, trace_factory) -> int:
     try:
         for rec in trace.records(timeout=600.0):
             if as_json:
-                # ts_ns is the emitting node's monotonic-from-start clock, not
-                # wall time — stamp the observer's receive time as a readable
-                # ts (DD/MM/YY HH:MM:SS.mmm) for the JSON consumer.
-                now = datetime.now()
-                ts = now.strftime("%d/%m/%y %H:%M:%S.") + \
-                    f"{now.microsecond // 1000:03d}"
+                # ts_ns is the SENDER node's wall-clock at the trace point
+                # (system_clock epoch ns) — format it as DD/MM/YY HH:MM:SS.mmm
+                # so the JSON carries the real event time, not the receive time.
+                ts = _fmt_epoch_ns(rec.ts_ns)
                 print(json.dumps(rec.to_dict(ts=ts), separators=(",", ":")),
                       flush=True)
                 continue

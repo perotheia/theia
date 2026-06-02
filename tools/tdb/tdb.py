@@ -15,7 +15,7 @@ no raw TIPC. See feedback-clients-via-art-probe.
 adb-shaped verbs:
   ps                       list nodes from the supervisor tree
   supervisor               supervisor host facts (GetSystemInfo)
-  trace <node> [msgtype]   ConfigureTrace the node on (msgtype "" = all kinds)
+  trace [off] <node> [mt]  ConfigureTrace node on/off (msgtype "" = all kinds)
   trace-config             show the stored trace config (GetTraceConfig)
   logcat [-c|-g]           follow the trace firehose (subscribe to log[trace])
   restart <name>           RestartChild
@@ -96,15 +96,22 @@ def cmd_supervisor(args, sup, _tf) -> int:
 
 
 def cmd_trace(args, sup, _tf) -> int:
+    # trace <node> [msg_type]        — enable
+    # trace off <node> [msg_type]    — disable
+    enabled = True
+    if args and args[0] in ("off", "on"):
+        enabled = args[0] == "on"
+        args = args[1:]
     if not args:
-        print("usage: trace <node> [msg_type]", file=sys.stderr)
+        print("usage: trace [off] <node> [msg_type]", file=sys.stderr)
         return 2
     node = args[0]
     msg_type = args[1] if len(args) > 1 else ""
     rep = sup.configure_trace(target_node=node, msg_type=msg_type,
-                              enabled=True, kind=0, timeout=3.0)
-    print(f"trace on: {node} {msg_type or '(all)'} -> status={_g(rep, 'status')}"
-          f" {_g(rep, 'message', '')}".rstrip())
+                              enabled=enabled, kind=0, timeout=3.0)
+    verb = "on" if enabled else "off"
+    print(f"trace {verb}: {node} {msg_type or '(all)'} -> "
+          f"status={_g(rep, 'status')} {_g(rep, 'message', '')}".rstrip())
     return 0 if _g(rep, "status") == 0 else 1
 
 
@@ -171,7 +178,7 @@ _COMMANDS = {
 _HELP = """tdb — Theia Debug Bridge. commands:
   ps                       list the supervisor tree
   supervisor               supervisor host facts
-  trace <node> [msgtype]   turn tracing on for a node
+  trace [off] <node> [mt]  turn tracing on/off for a node/worker
   trace-config             show stored trace config
   logcat                   follow the trace firehose
   restart <name>           restart a child

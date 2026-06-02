@@ -422,6 +422,12 @@ private:
     // looked up from the worker's NodeInfo.tipc_{type,instance}.
     // No-op when the child has no entries.
     void push_trace_config_to_child(const std::string& child_name);
+    // Push an explicit TraceControlPush{enabled=false} (disable) to the node —
+    // the config is already erased, so push_trace_config_to_child won't.
+    void push_trace_disable_to_child(const std::string& child_name);
+    // Resolve a trace target name (worker OR node-type) to its TIPC addr.
+    bool resolve_trace_target(const std::string& child_name,
+                              uint32_t& type, uint32_t& instance);
 
     // Per-child log level (#385). supdbg → services/com → here.
     // Same survives-restart contract as trace: store the level,

@@ -1873,21 +1873,27 @@ void Supervisor::apply_trace_config(const std::string& target_node,
     // Push immediately if the child is alive. Stale entries on dead
     // children are harmless — the next heartbeat-after-gap will fire
     // a re-push anyway.
-    push_trace_config_to_child(target_node);
+    if (enabled) {
+        push_trace_config_to_child(target_node);
+    } else {
+        // The stored config is gone, so push_trace_config_to_child has nothing
+        // to send. Push an explicit disable so the node actually stops tracing.
+        push_trace_disable_to_child(target_node);
+    }
 }
 
-void Supervisor::push_trace_config_to_child(const std::string& child_name) {
-    auto cfg_it = trace_configs_.find(child_name);
-    if (cfg_it == trace_configs_.end()) return;  // nothing to push
-
-    // Resolve the target to a specific node's TIPC addr. The target name is
+// Resolve a trace target name (worker OR node-type) to its node's TIPC
+// {type, instance}. Returns false (and logs why) if the name doesn't resolve
+// to a reporting node with a valid address. Shared by the enable push and the
+// disable push so both address the SAME node.
+bool Supervisor::resolve_trace_target(const std::string& child_name,
+                                      uint32_t& type, uint32_t& instance) {
     // EITHER a worker name ("p1", "sm") OR a node-type name ("DriverNode",
     // "SmGate"):
-    //   - worker name → push to the worker's first reporting node (the
-    //     coarse "trace this process" intent).
-    //   - node name   → push to THAT node's own address, so the per-node
-    //     Tracer enable lands on the right node thread (e.g. DriverNode, not
-    //     just p1's first node CounterNode).
+    //   - worker name → the worker's first reporting node (coarse "trace this
+    //     process" intent).
+    //   - node name   → THAT node's own address, so control lands on the right
+    //     node thread (e.g. DriverNode, not just p1's first node CounterNode).
     const NodeInfo* target = nullptr;
     if (WorkerNode* w = find_worker_by_name(child_name)) {
         if (w->nodes.empty()) {
@@ -1895,13 +1901,12 @@ void Supervisor::push_trace_config_to_child(const std::string& child_name) {
                 "supervisor: trace push: worker '%s' has no NodeInfo "
                 "(reporting=false?) — skipping push\n",
                 child_name.c_str());
-            return;
+            return false;
         }
         for (const auto& ni : w->nodes) {
             if (ni.reporting) { target = &ni; break; }
         }
     } else {
-        // Not a worker name — try resolving it as a node-type name.
         auto [host, ni] = find_node_by_name(child_name);
         if (host && ni) {
             if (!ni->reporting) {
@@ -1909,7 +1914,7 @@ void Supervisor::push_trace_config_to_child(const std::string& child_name) {
                     "supervisor: trace push: node '%s' is non-reporting "
                     "— cannot push (use the legacy in-proc enable)\n",
                     child_name.c_str());
-                return;
+                return false;
             }
             target = ni;
         }
@@ -1918,10 +1923,8 @@ void Supervisor::push_trace_config_to_child(const std::string& child_name) {
         std::fprintf(stderr,
             "supervisor: trace push: no worker or node named '%s' yet\n",
             child_name.c_str());
-        return;
+        return false;
     }
-
-    uint32_t type, instance;
     try {
         type     = std::stoul(target->tipc_type, nullptr, 0);
         instance = std::stoul(target->tipc_instance, nullptr, 0);
@@ -1929,8 +1932,36 @@ void Supervisor::push_trace_config_to_child(const std::string& child_name) {
         std::fprintf(stderr,
             "supervisor: trace push: bad tipc addr for '%s'\n",
             child_name.c_str());
-        return;
+        return false;
     }
+    return true;
+}
+
+// Push a single TraceControlPush{enabled=false} to disable tracing on a node
+// the config was just removed for. apply_trace_config(enabled=false) erases the
+// stored entry, so push_trace_config_to_child has nothing to send — without
+// this the node's Tracer would stay ON until restart.
+void Supervisor::push_trace_disable_to_child(const std::string& child_name) {
+    uint32_t type, instance;
+    if (!resolve_trace_target(child_name, type, instance)) return;
+    const uint16_t svc = djb2_low16(kTraceControlPushTypeName);
+    std::string payload = encode_trace_control_push(/*kind=*/0, /*enabled=*/false);
+    if (send_gw_cast_to_tipc_name(type, instance, svc, payload)) {
+        std::fprintf(stderr,
+            "supervisor: pushed trace DISABLE to '%s'\n", child_name.c_str());
+    } else {
+        std::fprintf(stderr,
+            "supervisor: trace disable: send to '%s' failed "
+            "(type=0x%x inst=%u)\n", child_name.c_str(), type, instance);
+    }
+}
+
+void Supervisor::push_trace_config_to_child(const std::string& child_name) {
+    auto cfg_it = trace_configs_.find(child_name);
+    if (cfg_it == trace_configs_.end()) return;  // nothing to push
+
+    uint32_t type, instance;
+    if (!resolve_trace_target(child_name, type, instance)) return;
 
     // One TraceControlPush GW_MSG_GEN_CAST per stored (msg_type → kind)
     // entry — the STANDARD runtime control message, decoded by the node's

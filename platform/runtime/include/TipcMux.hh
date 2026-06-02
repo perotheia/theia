@@ -222,6 +222,14 @@ public:
         watch_fd_for_replies_(fd, std::move(sink));
     }
 
+    // Unregister a reply fd watched via watch_reply_fd() — drop it from epoll
+    // and from reply_sinks_. A RemoteRef MUST call this in its destructor,
+    // BEFORE it closes the socket, or the entry (and the epoll registration)
+    // leaks: per-call ad-hoc RemoteRefs (a handler doing call() on a fresh ref
+    // each invocation) otherwise pile up hundreds of stale sinks and spin the
+    // loop on the reused-then-closed fds. (Defined in TipcMux.cc — epoll there.)
+    void unwatch_reply_fd(int fd);
+
     void start();
     void stop();
 

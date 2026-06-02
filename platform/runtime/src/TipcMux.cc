@@ -89,6 +89,14 @@ void TipcMux::watch_fd_for_replies_(
     reply_sinks_[fd] = std::move(sink);
 }
 
+void TipcMux::unwatch_reply_fd(int fd) {
+    std::lock_guard<std::mutex> lk(mu_);
+    auto it = reply_sinks_.find(fd);
+    if (it == reply_sinks_.end()) return;
+    reply_sinks_.erase(it);
+    ::epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, fd, nullptr);
+}
+
 void TipcMux::start() {
     if (running_.exchange(true)) return;
     thread_ = std::thread([this]{ this->loop_(); });
@@ -147,13 +155,15 @@ void TipcMux::loop_() {
             if (reply_sink) {
                 ssize_t n = ::recv(fd, buf, sizeof(buf), 0);
                 if (n <= 0) {
-                    // Peer closed the reply socket (EOF, n==0). MUST remove the
-                    // fd from epoll + close it — otherwise epoll keeps reporting
-                    // the half-closed fd readable, recv keeps returning 0, and
-                    // this loop hot-spins at 100% CPU. (The client-data path
-                    // below already does this; the reply path used to just
-                    // `continue`, which was the busy-spin bug.)
-                    if (n == 0) {
+                    // Peer closed the reply socket (EOF n==0, or a hard error
+                    // like ECONNRESET n<0). MUST remove the fd from epoll +
+                    // close it — otherwise epoll keeps reporting the dead fd
+                    // readable, recv keeps returning <=0, and this loop
+                    // hot-spins at 100% CPU. Only a transient EAGAIN retries.
+                    bool transient = (n < 0) &&
+                        (errno == EAGAIN || errno == EWOULDBLOCK ||
+                         errno == EINTR);
+                    if (!transient) {
                         std::lock_guard<std::mutex> lk(mu_);
                         reply_sinks_.erase(fd);
                         ::epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, fd, nullptr);
@@ -183,7 +193,14 @@ void TipcMux::loop_() {
 
             ssize_t n = ::recv(fd, buf, sizeof(buf), 0);
             if (n <= 0) {
-                if (n == 0) {
+                // Close on EOF (n==0) AND on a hard error (n<0 that isn't a
+                // spurious EAGAIN/EWOULDBLOCK/EINTR) — a TIPC peer that
+                // disconnects often surfaces as ECONNRESET (n<0), not a clean
+                // EOF. Leaving such an fd registered leaks it + epoll re-fires
+                // it forever (busy-spin). Only a transient EAGAIN may retry.
+                bool transient = (n < 0) &&
+                    (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR);
+                if (!transient) {
                     std::lock_guard<std::mutex> lk(mu_);
                     client_fd_to_binding_.erase(fd);
                     ::epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, fd, nullptr);
@@ -247,6 +264,14 @@ void watch_reply_fd(
     std::function<void(uint32_t, const uint8_t*, uint16_t)> sink) {
     if (TipcMux* mux = process_mux()) {
         mux->watch_reply_fd(fd, std::move(sink));
+    }
+}
+
+// Free hook (declared in NodeRef.hh) — unregister a RemoteRef's reply fd from
+// the process mux. Called from ~RemoteRef before the socket closes.
+void unwatch_reply_fd(int fd) {
+    if (TipcMux* mux = process_mux()) {
+        mux->unwatch_reply_fd(fd);
     }
 }
 

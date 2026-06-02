@@ -44,7 +44,7 @@ void ObserverNode::handle_info(const char* info, ObserverNodeState& s) {
             case theia::runtime::CallTag::Reply:
                 s.last_value = r.reply.value;
                 ++s.replies_ok;
-                ::theia::runtime::process_logger().info(
+                ::theia::runtime::process_logger().debug(
                     "[observer] poll #" + std::to_string(r.act.request_id) +
                     " value=" + std::to_string(r.reply.value));
                 break;

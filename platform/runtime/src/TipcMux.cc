@@ -1,5 +1,7 @@
 #include "TipcMux.hh"
 
+#include "Logger.hh"   // process_logger() — gate the bind/accept chatter at DEBUG
+
 #include <sys/epoll.h>
 #include <sys/socket.h>
 #include <linux/tipc.h>
@@ -47,8 +49,12 @@ int TipcMux::bind_listen_(uint32_t type, uint32_t instance) {
         std::perror("[TipcMux] listen");
         ::close(fd); return -1;
     }
-    std::fprintf(stderr,
-        "[TipcMux] bound {0x%08X, %u} on fd=%d\n", type, instance, fd);
+    {
+        char buf[80];
+        std::snprintf(buf, sizeof(buf),
+            "[TipcMux] bound {0x%08X, %u} on fd=%d", type, instance, fd);
+        process_logger().debug(buf);
+    }
     return fd;
 }
 
@@ -120,9 +126,13 @@ void TipcMux::loop_() {
                     std::lock_guard<std::mutex> lk(mu_);
                     add_to_epoll_(cfd, EPOLLIN);
                     client_fd_to_binding_[cfd] = listener;
-                    std::fprintf(stderr,
-                        "[TipcMux] accept on listen=%d -> client=%d (node tipc=0x%08X)\n",
-                        fd, cfd, listener->tipc_type);
+                    if (process_logger().level() <= LogLevel::Debug) {
+                        char buf[96];
+                        std::snprintf(buf, sizeof(buf),
+                            "[TipcMux] accept on listen=%d -> client=%d "
+                            "(node tipc=0x%08X)", fd, cfd, listener->tipc_type);
+                        process_logger().debug(buf);
+                    }
                 }
                 continue;
             }

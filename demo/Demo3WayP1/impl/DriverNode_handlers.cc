@@ -58,7 +58,7 @@ void DriverNode::handle_info(const char* info, DriverNodeState& s) {
         case theia::runtime::CallTag::Reply:
             s.last_value = r.reply.value;
             ++s.replies_ok;
-            log.info("[driver] handle_call_result(req_id=" +
+            log.debug("[driver] handle_call_result(req_id=" +
                      std::to_string(r.act.request_id) +
                      ") value=" + std::to_string(r.reply.value) +
                      " expected=" + std::to_string(s.expected_value));

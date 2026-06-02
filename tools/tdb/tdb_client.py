@@ -87,12 +87,12 @@ class SupervisorClient:
 
     def configure_log_level(self, *, target_node: str, level: str,
                             timeout: float = 2.0) -> dict[str, Any]:
-        # level is now the platform.runtime.LogLevelValue enum (ordinal), not a
-        # string — map the name to its ordinal.
+        # LogLevelConfig now embeds a LogLevelPush{level} (like TraceConfig
+        # embeds TraceControlPush). level name → LogLevelValue ordinal.
         lvl = self._LEVELS.get(level.lower(), 2)
         return self.probe.call(
             "SupervisorCtl", "ConfigureLogLevel", timeout=timeout,
-            config=dict(target_node=target_node, level=lvl))
+            config=dict(target_node=target_node, log_level=dict(level=lvl)))
 
     def restart_child(self, name: str, timeout: float = 2.0) -> dict[str, Any]:
         return self.probe.call("SupervisorCtl", "RestartChild", timeout=timeout,

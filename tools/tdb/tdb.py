@@ -16,6 +16,7 @@ adb-shaped verbs:
   ps                       list nodes from the supervisor tree
   supervisor               supervisor host facts (GetSystemInfo)
   trace [off] <node> [mt]  ConfigureTrace node on/off (msgtype "" = all kinds)
+  trace off                stop ALL active traces
   trace-config             show the stored trace config (GetTraceConfig)
   logcat [--json|-c|-g]    follow the trace firehose (subscribe to log[trace]);
                            --json = NDJSON (header + decoded inner proto) per line
@@ -100,13 +101,17 @@ def cmd_supervisor(args, sup, _tf) -> int:
 
 def cmd_trace(args, sup, _tf) -> int:
     # trace <node> [msg_type]        — enable
-    # trace off <node> [msg_type]    — disable
+    # trace off <node> [msg_type]    — disable one node
+    # trace off                      — disable ALL active traces
     enabled = True
     if args and args[0] in ("off", "on"):
         enabled = args[0] == "on"
         args = args[1:]
     if not args:
-        print("usage: trace [off] <node> [msg_type]", file=sys.stderr)
+        if not enabled:
+            return _trace_off_all(sup)
+        print("usage: trace [off] <node> [msg_type]   (trace off = stop all)",
+              file=sys.stderr)
         return 2
     node = args[0]
     msg_type = args[1] if len(args) > 1 else ""
@@ -124,6 +129,37 @@ def cmd_trace(args, sup, _tf) -> int:
     print(f"trace {verb}: {node} -> FAILED (status={status}): {msg or 'rejected'}",
           file=sys.stderr)
     return 1
+
+
+def _trace_off_all(sup) -> int:
+    """`trace off` with no node: disable EVERY stored trace config entry.
+
+    Read the supervisor's current trace config (the same read-back
+    `trace-config` shows) and ConfigureTrace(enabled=False) each
+    (target_node, msg_type) pair, so every node the supervisor was pushing
+    trace to gets a disable.
+    """
+    tc = sup.get_trace_config(timeout=3.0)
+    cfgs = list(_g(tc, "configs", []) or [])
+    if not cfgs:
+        print("trace off: nothing active")
+        return 0
+    rc = 0
+    for c in cfgs:
+        node = _g(c, "target_node")
+        mtype = _g(c, "msg_type") or ""
+        if not node:
+            continue
+        rep = sup.configure_trace(target_node=node, msg_type=mtype,
+                                  enabled=False, kind=0, timeout=3.0)
+        status = _g(rep, "status")
+        if status == 0:
+            print(f"trace off: {node} {mtype or '(all)'} -> ok")
+        else:
+            print(f"trace off: {node} -> FAILED (status={status}): "
+                  f"{_g(rep, 'message', 'rejected')}", file=sys.stderr)
+            rc = 1
+    return rc
 
 
 def cmd_trace_config(args, sup, _tf) -> int:
@@ -225,6 +261,7 @@ _HELP = """tdb — Theia Debug Bridge. commands:
   ps                       list the supervisor tree
   supervisor               supervisor host facts
   trace [off] <node> [mt]  turn tracing on/off for a node/worker
+  trace off                stop ALL active traces
   trace-config             show stored trace config
   logcat [--json]          follow the trace firehose (--json = NDJSON)
   restart <name>           restart a child

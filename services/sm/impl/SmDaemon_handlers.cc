@@ -14,10 +14,17 @@
 
 #include "lib/SmDaemon.hh"
 
+#include "NodeRef.hh"   // theia::runtime::LocalRef — publish self to the gate
+
 #include <chrono>
 #include <cstdio>
 
 namespace ara::sm {
+
+// Defined in SmGate_handlers.cc (impl-owned, shared singleton). on_enter
+// publishes this SmDaemon into it so SmGate's handlers can post_event into the
+// FSM in-process — replacing the old hand-wired publish in main.cc.
+theia::runtime::LocalRef<SmDaemon>& sm_statem_ref();
 
 static uint64_t now_ns_() {
     auto now = std::chrono::steady_clock::now().time_since_epoch();
@@ -32,6 +39,14 @@ void SmDaemon::on_enter(SmDaemonState new_s,
     // because the .art's statem block declared `data SmStateMsg`). So
     // mutating d here updates the broadcast payload + the FSM's
     // persistent data in one move.
+    // Publish self to the gate on first entry (idempotent on later
+    // transitions). The initial OFF entry runs during start_statem(), so the
+    // ref is wired before SmGate could receive a forwardable event. This is
+    // the impl-owned replacement for main.cc's old hand-wired publish.
+    if (!sm_statem_ref().valid()) {
+        sm_statem_ref() = theia::runtime::LocalRef<SmDaemon>(*this);
+    }
+
     d.state = static_cast<system_services_sm_SmState>(new_s);
     d.ts_ns = now_ns_();
 

@@ -22,9 +22,17 @@
 
 namespace ara::sm {
 
-// The statem peer, wired by main.cc after both nodes are constructed.
-// Defined in main.cc (the only place that holds both instances).
-theia::runtime::LocalRef<SmDaemon>& sm_statem_ref();
+// The statem peer the gate forwards into. IMPL-OWNED (main.cc is fully
+// generated — no hand-wiring there). A function-local-static singleton both
+// nodes' impls share within this one process: SmDaemon's on_enter publishes
+// `*this` into it on its first state entry (which happens during
+// start_statem(), before any gate event matters), and SmGate's handlers read
+// it via forward_to_statem below. The cross-TU declaration lives in
+// SmDaemon_handlers.cc.
+theia::runtime::LocalRef<SmDaemon>& sm_statem_ref() {
+    static theia::runtime::LocalRef<SmDaemon> ref;
+    return ref;
+}
 
 namespace {
 

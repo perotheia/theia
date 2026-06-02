@@ -26,6 +26,13 @@
 
 package system.supervisor
 
+// Reuse the runtime's control-plane messages — the SAME TraceControlPush /
+// LogLevelValue every FC's GenServer base register_cast's and applies. The
+// supervisor's ConfigureTrace/ConfigureLogLevel embed these so there is ONE
+// canonical definition (was triplicated: log FC + runtime + here). See
+// platform/runtime/system/runtime/package.art.
+import platform.runtime.*
+
 // ---- messages ------------------------------------------------------------
 
 // One row in a tree snapshot. Hierarchy is encoded by parent_name
@@ -343,26 +350,15 @@ message DeleteChildRequest {
 //                   (idempotent disable). Repeated enabled=true for
 //                   the same (target_node, msg_type) collapses to
 //                   one entry.
-// TraceKind — call/cast × in/out, statem. The supervisor OWNS per-node trace
-// config (it survives restart — only the supervisor knows when a child
-// restarts, see feedback-trace-config-ownership). This is the canonical
-// definition moved here from log[trace]; the typed enum (vs a raw uint32) is
-// the superior shape, so TraceConfig below carries TraceKind directly.
-enum TraceKind {
-    OTHER     = 0
-    CAST_OUT  = 1
-    CAST_IN   = 2
-    CALL_OUT  = 3
-    CALL_IN   = 4
-    STATEM    = 5
-}
-
+// Per-node trace config. The supervisor OWNS it (survives restart — only the
+// supervisor knows when a child restarts; see feedback-trace-config-ownership).
+// `trace_ctrl` is the SAME platform.runtime.TraceControlPush the child's
+// GenServer base register_cast's — so SupervisorCtl forwards it to the child
+// verbatim (no re-encode, no duplicated enum). kind=TK_OTHER(0)+enabled = all
+// kinds; enabled=false clears.
 message TraceConfig {
-    string    target_node
-    string    msg_type
-    bool      enabled
-    TraceKind kind       // which kind to enable; OTHER(0) = all kinds. Pushed
-                         // to the node's Tracer via platform_runtime.TraceControlPush.
+    string           target_node
+    TraceControlPush trace_ctrl     // from platform.runtime — forwarded as-is
 }
 
 message ConfigureTraceRequest {
@@ -376,16 +372,18 @@ message TraceConfigList {
     repeated TraceConfig configs
 }
 
-// Per-child log-level config (#385). Same supervisor-mediated path
-// as ConfigureTrace: supdbg → services/com → supervisor TIPC. The
-// supervisor stores log_levels_[child] = level and pushes it down
-// the existing per-child config channel; on every (re)start it
-// re-pushes the saved level, so the change survives restart.
+// Per-child log-level config (#385). Same supervisor-mediated path as
+// ConfigureTrace. The supervisor stores log_levels_[child] = level and forwards
+// it to the child; on every (re)start it re-pushes the saved level, so the
+// change survives restart.
 //   target_node — the supervised child name (e.g. "sm").
-//   level       — one of "trace"|"debug"|"info"|"warn"|"error".
+//   log_level   — the SAME platform.runtime.LogLevelPush the child's GenServer
+//                 base register_cast's. Embedded (like TraceConfig embeds
+//                 TraceControlPush) so SupervisorCtl forwards cfg.log_level to
+//                 the child VERBATIM — no field copy.
 message LogLevelConfig {
-    string  target_node
-    string  level
+    string       target_node
+    LogLevelPush log_level
 }
 
 message ConfigureLogLevelRequest {

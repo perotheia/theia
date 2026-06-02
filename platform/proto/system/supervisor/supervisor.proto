@@ -67,10 +67,9 @@ message SnapshotEnd {
     uint64 generation = 1;
 }
 
-// Request body for the no-arg `operation Stop()`. gen-proto doesn't synthesize
-// an empty request message for a zero-arg operation, but register_call<Stop,
-// ControlReply> + the lib's RemoteCodec alias both need the type to exist —
-// hand-added (see project-gen-app-stop-msg-gap). Empty body.
+// Hand-added: empty request body for the no-arg `operation Stop()` — gen-proto
+// doesn't synthesize it (project-gen-app-stop-msg-gap). register_call<Stop,..>
+// needs the type.
 message Stop {
 }
 
@@ -186,7 +185,7 @@ message TraceConfigList {
 
 message LogLevelConfig {
     string target_node = 1;
-    platform_runtime.LogLevelValue level = 2;
+    platform_runtime.LogLevelPush log_level = 2;
 }
 
 message ConfigureLogLevelRequest {

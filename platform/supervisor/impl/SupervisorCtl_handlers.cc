@@ -413,9 +413,9 @@ ControlReply SupervisorCtl::handle_call(
         SupervisorCtlState& /*s*/) {
     const auto& cfg = req.config;
     const std::string target = s(cfg.target_node);
-    // Plain: resolve the node, store the level in the engine, then cast the
-    // LogLevelPush FROM here. cfg.level is the platform.runtime LogLevelValue
-    // enum — the SAME value LogLevelPush.level carries, forwarded verbatim.
+    // Plain: resolve the node, store the level in the engine, then cast
+    // cfg.log_level (a platform.runtime.LogLevelPush — the EXACT wire type the
+    // child applies) VERBATIM. No field copy.
     ControlReply rep;
     auto* eng = ::supervisor::supervisor_instance();
     if (!eng) { set_reply(rep, 4, target, "engine not up"); return rep; }
@@ -425,12 +425,9 @@ ControlReply SupervisorCtl::handle_call(
         set_reply(rep, 4, target, "no worker or node by that name");
         return rep;
     }
-    const uint32_t level = static_cast<uint32_t>(cfg.level);
-    eng->ctl_configure_log_level(target, level);   // store (survives restart)
-
-    platform_runtime_LogLevelPush m{};
-    m.level = cfg.level;
-    ::theia::runtime::cast(*this, m,
+    eng->ctl_configure_log_level(target,
+                                 static_cast<uint32_t>(cfg.log_level.level));
+    ::theia::runtime::cast(*this, cfg.log_level,
                            ::theia::runtime::TipcAddr{addr.type, addr.instance});
     set_reply(rep, 0, target, "log level applied");
     return rep;

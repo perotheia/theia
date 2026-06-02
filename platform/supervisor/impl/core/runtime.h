@@ -135,16 +135,21 @@ struct EmitSink {
     std::function<void(const EdgeData&)>      on_edge;
     std::function<void(const NodeStateData&)> on_node_state;
     std::function<void(uint64_t /*generation*/)> on_snapshot_end;
-    // Outbound CONFIG PUSH to a child node (trace/log control). The engine
-    // resolves the child's TIPC (type,instance) from the manifest + hand-
-    // encodes the proto3 payload (it stays transport- and protobuf-free), then
-    // calls this; the FC shell's runnable (which links platform/runtime) frames
-    // it with the standard TheiaMsgHeader and casts it over the runtime — NO
-    // more hand-rolled GwHdrWire socket in the engine. service_id =
-    // djb2_low16(C type name), matching the child's register_cast<T>.
+    // Outbound CONFIG PUSH to a child node, as STRUCTURED INTENT — the engine
+    // owns the config state + resolves the child's TIPC (type,instance) from the
+    // manifest, then calls one of these with the typed values. It does NOT
+    // encode protobuf or touch a socket (no nanopb/djb2/transport in the
+    // engine). SupervisorCtl (which links platform/runtime) builds the real
+    // platform_runtime_TraceControlPush / LogLevelPush and casts it to the
+    // child over the runtime — the SAME message the child's GenServer base
+    // register_cast's. kind is a runtime TraceKind ordinal; level a
+    // LogLevelValue ordinal.
     std::function<void(uint32_t /*tipc_type*/, uint32_t /*tipc_instance*/,
-                       uint16_t /*service_id*/, const std::string& /*payload*/)>
-        on_config_push;
+                       uint32_t /*kind*/, bool /*enabled*/)>
+        on_trace_push;
+    std::function<void(uint32_t /*tipc_type*/, uint32_t /*tipc_instance*/,
+                       uint32_t /*level*/)>
+        on_log_push;
 };
 
 class Supervisor {

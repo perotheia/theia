@@ -1645,57 +1645,18 @@ namespace {
 // rides the standard TraceControlPush GW_MSG_GEN_CAST via
 // send_gw_cast_to_tipc_name below, #403.)
 
-// ---- config-push service_id helper ---------------------------------------
+// ---- config push: STRUCTURED INTENT, no wire knowledge --------------------
 //
 // The supervisor pushes trace/log control to a child's config-service receiver
-// (a normal runtime TipcMux on the child). The ENGINE stays transport-free: it
-// resolves the child's (type,instance) + hand-encodes the proto3 payload, then
-// emits via EmitSink.on_config_push; the FC shell's runnable frames it with the
-// standard runtime TheiaMsgHeader and casts it over platform/runtime. (The old
-// hand-rolled GwHdrWire socket — send_gw_cast_to_tipc_name — was removed: no
-// second wire format, no transport in the engine.)
-//
-// djb2_low16 — MUST match platform/runtime/RemoteCodec.hh hash_msg_type_ so the
-// service_id we stamp equals the one register_cast<T> computed for the C type
-// name on the child side.
-uint16_t djb2_low16(const char* s) {
-    uint32_t h = 5381;
-    while (*s) { h = (h * 33) + static_cast<unsigned char>(*s++); }
-    return static_cast<uint16_t>(h & 0xFFFFu);
-}
-
-// Encode a platform_runtime.LogLevelPush { LogLevelValue level = 1 }
-// as proto3 wire bytes by hand (one varint field) — avoids dragging
-// nanopb into the supervisor's libprotobuf build. Field 1, wiretype 0
-// (varint) → tag byte 0x08, then the level as a single-byte varint
-// (values 0..4 all fit in one byte). level 0 (LL_TRACE) is the proto3
-// default and would normally be omitted, but we always emit it so the
-// receiver sees an explicit value.
-std::string encode_log_level_push(uint32_t level) {
-    std::string out;
-    out.push_back('\x08');                          // field 1, varint
-    out.push_back(static_cast<char>(level & 0x7f)); // 0..4 → one byte
-    return out;
-}
-
-// Encode a platform_runtime.TraceControlPush { TraceKind kind = 1; bool
-// enabled = 2 } as proto3 wire bytes by hand (two varint fields) — same
-// no-nanopb rationale as encode_log_level_push. proto3 omits default-0
-// fields, but we always emit both so the receiver sees explicit values.
-// kind 0..5 fits one byte; enabled is 0/1.
-std::string encode_trace_control_push(uint32_t kind, bool enabled) {
-    std::string out;
-    out.push_back('\x08');                          // field 1 (kind), varint
-    out.push_back(static_cast<char>(kind & 0x7f));
-    out.push_back('\x10');                          // field 2 (enabled), varint
-    out.push_back(static_cast<char>(enabled ? 1 : 0));
-    return out;
-}
-
-// service_id the FC's config_mux register_cast<platform_runtime_
-// TraceControlPush> computes — djb2_low16 of that C type name. Stamped
-// into the GwMessageHeader so the cast lands on the node's handle_cast.
-const char* kTraceControlPushTypeName = "platform_runtime_TraceControlPush";
+// (a runtime TipcMux on the child). The ENGINE owns the config STATE + resolves
+// the child's (type,instance), then emits the typed values via
+// EmitSink.on_trace_push / on_log_push. It does NOT encode protobuf, compute a
+// service_id, or open a socket. The FC shell's runnable (which links
+// platform/runtime) builds the real platform_runtime_TraceControlPush /
+// LogLevelPush and casts it via RemoteCodec — service_id + wire bytes match the
+// child's register_cast<Msg> by construction. (The old hand encode_*_push +
+// djb2_low16 + GwHdrWire send_gw_cast_to_tipc_name were all deleted — no nanopb,
+// no transport, no wire knowledge in this TU.)
 
 // (The hand proto3-wire firehose encoders + the com ComDaemon cast target
 // were removed with the com retirement. The topo-pair firehose now leaves
@@ -1900,10 +1861,8 @@ bool Supervisor::resolve_trace_target(const std::string& child_name,
 void Supervisor::push_trace_disable_to_child(const std::string& child_name) {
     uint32_t type, instance;
     if (!resolve_trace_target(child_name, type, instance)) return;
-    const uint16_t svc = djb2_low16(kTraceControlPushTypeName);
-    std::string payload = encode_trace_control_push(/*kind=*/0, /*enabled=*/false);
-    if (emit_.on_config_push) {
-        emit_.on_config_push(type, instance, svc, payload);
+    if (emit_.on_trace_push) {
+        emit_.on_trace_push(type, instance, /*kind=*/0, /*enabled=*/false);
         std::fprintf(stderr,
             "supervisor: pushed trace DISABLE to '%s'\n", child_name.c_str());
     }
@@ -1916,27 +1875,22 @@ void Supervisor::push_trace_config_to_child(const std::string& child_name) {
     uint32_t type, instance;
     if (!resolve_trace_target(child_name, type, instance)) return;
 
-    // One TraceControlPush GW_MSG_GEN_CAST per stored (msg_type → kind)
-    // entry — the STANDARD runtime control message, decoded by the node's
-    // config_mux register_cast<platform_runtime_TraceControlPush> →
-    // GenServer base handle_cast → Tracer kind filter (#403). This
-    // replaces the old kTagTraceApplyConfig=0x0300 [u16 tag] frame, which
-    // no FC ever decoded. Entry presence = enabled; value = TraceKind.
-    const uint16_t svc = djb2_low16(kTraceControlPushTypeName);
+    // One trace push per stored kind entry. The engine emits the typed INTENT
+    // (addr + kind + enabled); SupervisorCtl builds the
+    // platform_runtime_TraceControlPush and casts it to the child's config_mux
+    // register_cast<platform_runtime_TraceControlPush> → GenServer base
+    // handle_cast → Tracer kind filter (#403). Entry presence = enabled; value
+    // = TraceKind.
+    if (!emit_.on_trace_push) {
+        std::fprintf(stderr,
+            "supervisor: trace push: no on_trace_push sink installed\n");
+        return;
+    }
     int pushed = 0;
     for (const auto& kv : cfg_it->second) {
         uint32_t kind = kv.second;
-        std::string payload = encode_trace_control_push(kind, /*enabled=*/true);
-        if (emit_.on_config_push) {
-            emit_.on_config_push(type, instance, svc, payload);
-            ++pushed;
-        } else {
-            std::fprintf(stderr,
-                "supervisor: trace push: no on_config_push sink installed\n");
-            // Don't keep iterating once a single push fails — they'll
-            // all fail too. The next heartbeat-after-gap retries.
-            return;
-        }
+        emit_.on_trace_push(type, instance, kind, /*enabled=*/true);
+        ++pushed;
     }
     std::fprintf(stderr,
         "supervisor: pushed %d trace config entries to '%s'\n",
@@ -2005,17 +1959,12 @@ void Supervisor::push_log_level_to_child(const std::string& child_name) {
         return;
     }
 
-    // Push as a standard GW_MSG_GEN_CAST of platform_runtime.LogLevelPush
-    // (#386) — the SAME wire shape the FC's runtime TipcMux decodes for
-    // any app message. service_id = djb2 of the nanopb C type name, which
-    // is exactly what register_cast<platform_runtime_LogLevelPush> hashed
-    // on the daemon side; GenServer's base handle_cast then applies it.
-    static const uint16_t kLogLevelPushSvcId =
-        djb2_low16("platform_runtime_LogLevelPush");
-    const std::string payload =
-        encode_log_level_push(log_level_to_value(it->second));
-    if (emit_.on_config_push) {
-        emit_.on_config_push(type, instance, kLogLevelPushSvcId, payload);
+    // Emit the typed INTENT (addr + level ordinal); SupervisorCtl builds the
+    // platform_runtime_LogLevelPush and casts it to the child's config_mux
+    // register_cast<platform_runtime_LogLevelPush> → GenServer base handle_cast
+    // → process_logger().set_level. (#386)
+    if (emit_.on_log_push) {
+        emit_.on_log_push(type, instance, log_level_to_value(it->second));
         std::fprintf(stderr,
             "supervisor: pushed log level '%s' to '%s'\n",
             it->second.c_str(), child_name.c_str());

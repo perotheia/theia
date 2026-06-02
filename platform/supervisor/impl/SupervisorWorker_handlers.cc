@@ -17,12 +17,46 @@
 #include "core/runtime.h"
 #include "core/spec.h"
 
+#include "NodeRef.hh"          // theia::runtime::TipcClient
+#include "TheiaMsgHeader.hh"   // TheiaMsgHeader + kMsgGenCast / kBusTypeRpc
+
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
 #include <string>
 
 namespace ara::exec {
+
+namespace {
+
+// Frame an engine-supplied config payload with the runtime's STANDARD
+// TheiaMsgHeader (a GEN_CAST) and send it to a child's config-service receiver
+// over a one-shot TIPC client. The engine already resolved (type,instance) +
+// the service_id (djb2 of the C type name) + the proto3 body; we only do the
+// runtime framing here, keeping the engine transport-free. Best-effort: a child
+// not yet listening just fails the connect/send (re-pushed on its next
+// heartbeat-after-gap).
+void send_config_cast(uint32_t type, uint32_t instance,
+                      uint16_t service_id, const std::string& payload) {
+    ::theia::runtime::TipcClient client;
+    if (!client.connect(type, instance, /*total_timeout_ms=*/300,
+                        /*retry_ms=*/100)) {
+        return;
+    }
+    ::theia::runtime::TheiaMsgHeader hdr{};
+    hdr.bus_type           = ::theia::runtime::kBusTypeRpc;
+    hdr.msg_type           = ::theia::runtime::kMsgGenCast;
+    hdr.proto_len          = static_cast<uint16_t>(payload.size());
+    hdr.rpc.service_id     = service_id;
+    hdr.rpc.method_id      = 0;
+    hdr.rpc.correlation_id = 0;  // cast has no reply
+    client.send_frame(hdr,
+                      reinterpret_cast<const uint8_t*>(payload.data()),
+                      static_cast<uint16_t>(payload.size()));
+}
+
+}  // namespace
 
 namespace {
 
@@ -71,6 +105,17 @@ std::unique_ptr<::supervisor::Supervisor> g_engine;
     };
     s.on_snapshot_end = [](uint64_t gen) {
         if (auto fn = emit_forwarder().on_snapshot_end) fn(gen);
+    };
+    // Outbound config push to a child node — replaces the engine's old
+    // hand-rolled GwHdrWire socket. The engine handed us a resolved
+    // (type,instance) + service_id + the proto3-encoded payload; we frame it
+    // with the runtime's STANDARD TheiaMsgHeader (a GEN_CAST) and send it over
+    // a one-shot TIPC client. Same wire the child's runtime TipcMux already
+    // decodes for register_cast<T> — no second format, transport in the FC
+    // shell (which links platform/runtime), not the transport-free engine.
+    s.on_config_push = [](uint32_t type, uint32_t instance,
+                          uint16_t service_id, const std::string& payload) {
+        send_config_cast(type, instance, service_id, payload);
     };
     return s;
 }

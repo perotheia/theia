@@ -3,12 +3,15 @@
 // select() loop; the gen-app FC shell (SupervisorWorker + SupervisorCtl)
 // wraps it. Mirrors supervisor/runtime.py.
 //
-// No protobuf in this translation unit. Outbound events/health/topo-pairs
-// leave via the EmitSink callbacks (wired by the FC shell to SupervisorCtl's
-// `events` broadcast senders); the nanopb<->engine translation for inbound
-// control ops lives in SupervisorCtl_handlers.cc. The per-node trace/log
-// config push + the SM startup handshake still cast raw GW_MSG_GEN_CAST
-// frames straight to the target's TIPC name (send_gw_cast_to_tipc_name).
+// No protobuf in this translation unit, and NO transport. Outbound
+// events/health/topo-pairs AND the per-node trace/log config push all leave via
+// the EmitSink callbacks (on_event/on_health/on_edge/on_node_state/
+// on_config_push), wired by the FC shell to SupervisorCtl's `events` broadcast
+// senders and (for config push) to the SupervisorWorker runnable's runtime
+// TheiaMsgHeader cast. The nanopb<->engine translation for inbound control ops
+// lives in SupervisorCtl_handlers.cc. The engine resolves a child's TIPC
+// (type,instance) + hand-encodes the proto3 payload, but never opens a socket
+// itself (the old hand-rolled GwHdrWire send_gw_cast_to_tipc_name is gone).
 
 #include "runtime.h"
 
@@ -34,8 +37,6 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <signal.h>
-#include <linux/tipc.h>
-#include <sys/socket.h>
 #include <unistd.h>
 
 namespace supervisor {
@@ -1644,77 +1645,23 @@ namespace {
 // rides the standard TraceControlPush GW_MSG_GEN_CAST via
 // send_gw_cast_to_tipc_name below, #403.)
 
-// ---- #386: standard GwMessageHeader-framed cast to a node ----------------
+// ---- config-push service_id helper ---------------------------------------
 //
-// The config-service receiver on a reporting FC node is a normal
-// runtime TipcMux (platform/runtime/TipcMux.hh): it reads a packed
-// 24-byte GwMessageHeader then dispatches `proto_len` payload bytes by
-// hdr.rpc.service_id. So the supervisor must speak that wire shape, not
-// the bespoke [u16 tag][payload] frame above — no second control
-// format. We don't link libgw here, so mirror the packed header byte-
-// for-byte (static_assert-guarded over there) and the two enum values
-// we need.
-#pragma pack(push, 1)
-struct GwHdrWire {
-    uint8_t  bus_type;        // GW_BUS_TYPE_RPC
-    uint8_t  msg_type;        // GW_MSG_GEN_CAST
-    uint16_t proto_len;       // payload byte count
-    uint64_t timestamp_ns;    // unused for control; 0
-    // union slot — we use the RPC meta (8 bytes): service_id, method_id,
-    // correlation_id.
-    uint16_t service_id;      // djb2_low16 of the nanopb C type name
-    uint16_t method_id;       // 0
-    uint32_t correlation_id;  // 0 — cast has no reply
-    uint16_t tipc_seq;        // GwTipcMeta.sequence_num
-    uint8_t  tipc_rsvd[2];
-};
-#pragma pack(pop)
-static_assert(sizeof(GwHdrWire) == 24, "GwMessageHeader is 24 bytes");
-
-constexpr uint8_t kGwBusTypeRpc  = 2u;     // GW_BUS_TYPE_RPC
-constexpr uint8_t kGwMsgGenCast  = 0x20u;  // GW_MSG_GEN_CAST
-
-// djb2_low16 — MUST match platform/runtime/RemoteCodec.hh hash_msg_type_
-// so the service_id we stamp equals the one register_cast<T> computed
-// for the C type name on the FC side.
+// The supervisor pushes trace/log control to a child's config-service receiver
+// (a normal runtime TipcMux on the child). The ENGINE stays transport-free: it
+// resolves the child's (type,instance) + hand-encodes the proto3 payload, then
+// emits via EmitSink.on_config_push; the FC shell's runnable frames it with the
+// standard runtime TheiaMsgHeader and casts it over platform/runtime. (The old
+// hand-rolled GwHdrWire socket — send_gw_cast_to_tipc_name — was removed: no
+// second wire format, no transport in the engine.)
+//
+// djb2_low16 — MUST match platform/runtime/RemoteCodec.hh hash_msg_type_ so the
+// service_id we stamp equals the one register_cast<T> computed for the C type
+// name on the child side.
 uint16_t djb2_low16(const char* s) {
     uint32_t h = 5381;
     while (*s) { h = (h * 33) + static_cast<unsigned char>(*s++); }
     return static_cast<uint16_t>(h & 0xFFFFu);
-}
-
-// Send a GW_MSG_GEN_CAST frame [GwHdr][proto bytes] to a TIPC NAME.
-// service_id is djb2(C type name); payload is the proto3-wire body.
-// Same one-shot connect/send/close best-effort contract as above.
-bool send_gw_cast_to_tipc_name(uint32_t type, uint32_t instance,
-                               uint16_t service_id,
-                               const std::string& payload) {
-    int fd = ::socket(AF_TIPC, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
-    if (fd < 0) return false;
-    struct sockaddr_tipc addr{};
-    addr.family                  = AF_TIPC;
-    addr.addrtype                = TIPC_ADDR_NAME;
-    addr.addr.name.name.type     = type;
-    addr.addr.name.name.instance = instance;
-    addr.scope                   = TIPC_NODE_SCOPE;
-    if (::connect(fd, reinterpret_cast<struct sockaddr*>(&addr),
-                  sizeof(addr)) < 0) {
-        ::close(fd);
-        return false;
-    }
-    GwHdrWire hdr{};
-    hdr.bus_type   = kGwBusTypeRpc;
-    hdr.msg_type   = kGwMsgGenCast;
-    hdr.proto_len  = static_cast<uint16_t>(payload.size());
-    hdr.service_id = service_id;
-    std::string frame(sizeof(GwHdrWire) + payload.size(), '\0');
-    std::memcpy(&frame[0], &hdr, sizeof(GwHdrWire));
-    if (!payload.empty()) {
-        std::memcpy(&frame[sizeof(GwHdrWire)], payload.data(), payload.size());
-    }
-    ssize_t n = ::send(fd, frame.data(), frame.size(), 0);
-    ::close(fd);
-    return n == static_cast<ssize_t>(frame.size());
 }
 
 // Encode a platform_runtime.LogLevelPush { LogLevelValue level = 1 }
@@ -1955,13 +1902,10 @@ void Supervisor::push_trace_disable_to_child(const std::string& child_name) {
     if (!resolve_trace_target(child_name, type, instance)) return;
     const uint16_t svc = djb2_low16(kTraceControlPushTypeName);
     std::string payload = encode_trace_control_push(/*kind=*/0, /*enabled=*/false);
-    if (send_gw_cast_to_tipc_name(type, instance, svc, payload)) {
+    if (emit_.on_config_push) {
+        emit_.on_config_push(type, instance, svc, payload);
         std::fprintf(stderr,
             "supervisor: pushed trace DISABLE to '%s'\n", child_name.c_str());
-    } else {
-        std::fprintf(stderr,
-            "supervisor: trace disable: send to '%s' failed "
-            "(type=0x%x inst=%u)\n", child_name.c_str(), type, instance);
     }
 }
 
@@ -1983,13 +1927,12 @@ void Supervisor::push_trace_config_to_child(const std::string& child_name) {
     for (const auto& kv : cfg_it->second) {
         uint32_t kind = kv.second;
         std::string payload = encode_trace_control_push(kind, /*enabled=*/true);
-        if (send_gw_cast_to_tipc_name(type, instance, svc, payload)) {
+        if (emit_.on_config_push) {
+            emit_.on_config_push(type, instance, svc, payload);
             ++pushed;
         } else {
             std::fprintf(stderr,
-                "supervisor: trace push: send to '%s' failed "
-                "(type=0x%x inst=%u) — child likely not listening yet\n",
-                child_name.c_str(), type, instance);
+                "supervisor: trace push: no on_config_push sink installed\n");
             // Don't keep iterating once a single push fails — they'll
             // all fail too. The next heartbeat-after-gap retries.
             return;
@@ -2071,17 +2014,11 @@ void Supervisor::push_log_level_to_child(const std::string& child_name) {
         djb2_low16("platform_runtime_LogLevelPush");
     const std::string payload =
         encode_log_level_push(log_level_to_value(it->second));
-    if (send_gw_cast_to_tipc_name(type, instance,
-                                  kLogLevelPushSvcId, payload)) {
+    if (emit_.on_config_push) {
+        emit_.on_config_push(type, instance, kLogLevelPushSvcId, payload);
         std::fprintf(stderr,
             "supervisor: pushed log level '%s' to '%s'\n",
             it->second.c_str(), child_name.c_str());
-    } else {
-        std::fprintf(stderr,
-            "supervisor: log push: send to '%s' failed "
-            "(type=0x%x inst=%u) — child not listening yet; "
-            "env-applied on next restart\n",
-            child_name.c_str(), type, instance);
     }
 }
 

@@ -28,7 +28,7 @@ package(default_visibility = ["//visibility:public"])
 # (receiver, via GenServer's register_cast) link the SAME
 # platform_runtime_LogLevelPush type. .pb.{c,h} are BUILT, not
 # committed — regenerate the .proto with:
-#   artheia gen-proto-package platform/runtime/system/package.art \
+#   artheia gen-proto-package platform/runtime/system/runtime/package.art \
 #       --out platform/runtime/proto
 genrule(
     name = "control_pb",

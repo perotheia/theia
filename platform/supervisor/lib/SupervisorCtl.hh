@@ -62,6 +62,8 @@ using NodeState = system_supervisor_NodeState;
 using SnapshotEnd = system_supervisor_SnapshotEnd;
 using HeartbeatReport = system_supervisor_HeartbeatReport;
 using SendTimeoutReport = system_supervisor_SendTimeoutReport;
+using TraceControlPush = platform_runtime_TraceControlPush;
+using LogLevelPush = platform_runtime_LogLevelPush;
 
 
 
@@ -80,6 +82,10 @@ using EventsNode_stateSubscriber =
     std::function<void(const NodeState&)>;
 using EventsSnap_endSubscriber =
     std::function<void(const SnapshotEnd&)>;
+using Child_ctrlTrace_ctrlSubscriber =
+    std::function<void(const TraceControlPush&)>;
+using Child_ctrlLog_levelSubscriber =
+    std::function<void(const LogLevelPush&)>;
 
 
 class SupervisorCtl : public ::theia::runtime::GenServer<SupervisorCtl, SupervisorCtlState> {
@@ -158,6 +164,16 @@ public:
     uint32_t subscribe_events_snap_end(
         EventsSnap_endSubscriber s);
     void     unsubscribe_events_snap_end(uint32_t id);
+
+    // child_ctrl.trace_ctrl broadcast subscribers.
+    uint32_t subscribe_child_ctrl_trace_ctrl(
+        Child_ctrlTrace_ctrlSubscriber s);
+    void     unsubscribe_child_ctrl_trace_ctrl(uint32_t id);
+
+    // child_ctrl.log_level broadcast subscribers.
+    uint32_t subscribe_child_ctrl_log_level(
+        Child_ctrlLog_levelSubscriber s);
+    void     unsubscribe_child_ctrl_log_level(uint32_t id);
 
 
     // ---- GenServer plumbing: terminate default
@@ -246,6 +262,10 @@ public:
 
     void broadcast_events_snap_end(const SnapshotEnd& msg);
 
+    void broadcast_child_ctrl_trace_ctrl(const TraceControlPush& msg);
+
+    void broadcast_child_ctrl_log_level(const LogLevelPush& msg);
+
 
 private:
 
@@ -302,6 +322,24 @@ private:
     uint32_t events_snap_end_next_id_{1};
     std::vector<EventsSnap_endEntry>
         events_snap_end_subs_;
+
+    struct Child_ctrlTrace_ctrlEntry {
+        uint32_t id;
+        Child_ctrlTrace_ctrlSubscriber fn;
+    };
+    std::mutex child_ctrl_trace_ctrl_mu_;
+    uint32_t child_ctrl_trace_ctrl_next_id_{1};
+    std::vector<Child_ctrlTrace_ctrlEntry>
+        child_ctrl_trace_ctrl_subs_;
+
+    struct Child_ctrlLog_levelEntry {
+        uint32_t id;
+        Child_ctrlLog_levelSubscriber fn;
+    };
+    std::mutex child_ctrl_log_level_mu_;
+    uint32_t child_ctrl_log_level_next_id_{1};
+    std::vector<Child_ctrlLog_levelEntry>
+        child_ctrl_log_level_subs_;
 
 };
 
@@ -489,6 +527,68 @@ inline void SupervisorCtl::broadcast_events_snap_end(const SnapshotEnd& msg) {
         catch (...) {
             std::fprintf(stderr,
                 "[%s] subscriber %u threw on events.snap_end — dropping\n",
+                kNodeName, e.id);
+        }
+    }
+}
+
+inline uint32_t SupervisorCtl::subscribe_child_ctrl_trace_ctrl(
+        Child_ctrlTrace_ctrlSubscriber s) {
+    std::lock_guard<std::mutex> lk(child_ctrl_trace_ctrl_mu_);
+    uint32_t id = child_ctrl_trace_ctrl_next_id_++;
+    child_ctrl_trace_ctrl_subs_.push_back({id, std::move(s)});
+    return id;
+}
+
+inline void SupervisorCtl::unsubscribe_child_ctrl_trace_ctrl(uint32_t id) {
+    std::lock_guard<std::mutex> lk(child_ctrl_trace_ctrl_mu_);
+    auto& v = child_ctrl_trace_ctrl_subs_;
+    v.erase(std::remove_if(v.begin(), v.end(),
+              [id](const auto& e) { return e.id == id; }), v.end());
+}
+
+inline void SupervisorCtl::broadcast_child_ctrl_trace_ctrl(const TraceControlPush& msg) {
+    std::vector<Child_ctrlTrace_ctrlEntry> snap;
+    {
+        std::lock_guard<std::mutex> lk(child_ctrl_trace_ctrl_mu_);
+        snap = child_ctrl_trace_ctrl_subs_;
+    }
+    for (const auto& e : snap) {
+        try { e.fn(msg); }
+        catch (...) {
+            std::fprintf(stderr,
+                "[%s] subscriber %u threw on child_ctrl.trace_ctrl — dropping\n",
+                kNodeName, e.id);
+        }
+    }
+}
+
+inline uint32_t SupervisorCtl::subscribe_child_ctrl_log_level(
+        Child_ctrlLog_levelSubscriber s) {
+    std::lock_guard<std::mutex> lk(child_ctrl_log_level_mu_);
+    uint32_t id = child_ctrl_log_level_next_id_++;
+    child_ctrl_log_level_subs_.push_back({id, std::move(s)});
+    return id;
+}
+
+inline void SupervisorCtl::unsubscribe_child_ctrl_log_level(uint32_t id) {
+    std::lock_guard<std::mutex> lk(child_ctrl_log_level_mu_);
+    auto& v = child_ctrl_log_level_subs_;
+    v.erase(std::remove_if(v.begin(), v.end(),
+              [id](const auto& e) { return e.id == id; }), v.end());
+}
+
+inline void SupervisorCtl::broadcast_child_ctrl_log_level(const LogLevelPush& msg) {
+    std::vector<Child_ctrlLog_levelEntry> snap;
+    {
+        std::lock_guard<std::mutex> lk(child_ctrl_log_level_mu_);
+        snap = child_ctrl_log_level_subs_;
+    }
+    for (const auto& e : snap) {
+        try { e.fn(msg); }
+        catch (...) {
+            std::fprintf(stderr,
+                "[%s] subscriber %u threw on child_ctrl.log_level — dropping\n",
                 kNodeName, e.id);
         }
     }

@@ -289,6 +289,32 @@ std::vector<TreeRow> Supervisor::ctl_get_tree() {
                         r.start_cmd += w.start_cmd[i];
                     }
                     out.push_back(std::move(r));
+
+                    // One leaf row per artheia node hosted in this worker
+                    // (SmDaemon/SmGate, CounterNode/DriverNode/TickerNode, ...).
+                    // kind=2 = node; share the worker's pid (all nodes run as
+                    // threads in the one process). Carry the node's TIPC addr in
+                    // start_cmd (the generic detail field the renderer shows as a
+                    // trailing tag) so `tdb ps` surfaces where each node binds —
+                    // the same address the supervisor pushes trace config to.
+                    for (const auto& ni : w.nodes) {
+                        TreeRow n;
+                        n.name        = ni.name;
+                        n.parent_name = w.name;
+                        n.kind        = 2;  // node
+                        n.pid         = w.pid;
+                        n.state       = (w.pid > 0) ? 2u : 0u;
+                        if (w.terminating) n.state = 3u;
+                        n.flags       = ni.reporting ? 0u : 0x100u;  // non-reporting bit
+                        if (!ni.tipc_type.empty()) {
+                            n.start_cmd = "tipc=" + ni.tipc_type;
+                            if (!ni.tipc_instance.empty() &&
+                                ni.tipc_instance != "0") {
+                                n.start_cmd += ":" + ni.tipc_instance;
+                            }
+                        }
+                        out.push_back(std::move(n));
+                    }
                 } else {
                     walk(c->sup, sup.name);
                 }

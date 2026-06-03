@@ -11,8 +11,6 @@
 
 #include "lib/PerDaemon.hh"
 
-#include <cstdio>
-
 namespace ara::per {
 
 
@@ -37,8 +35,7 @@ PerValue PerDaemon::handle_call(
     //                                 PerValue).
     // Dispatched by request type; one or more server ports may
     // expose this operation.
-    std::fprintf(stderr, "[%s] Get called\n",
-                 kNodeName);
+    this->log().info("Get called");
     return PerValue{};
 }
 
@@ -49,8 +46,7 @@ PerEmpty PerDaemon::handle_call(
     //                                 PerEmpty).
     // Dispatched by request type; one or more server ports may
     // expose this operation.
-    std::fprintf(stderr, "[%s] Put called\n",
-                 kNodeName);
+    this->log().info("Put called");
     return PerEmpty{};
 }
 

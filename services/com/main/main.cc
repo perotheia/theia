@@ -8,8 +8,9 @@
 #include "lib/ComDaemon.hh"
 #include "lib/ComGrpcProxy.hh"
 
+#include "lib/Log.hh"    // per-node MakeContextLogger(tag) — tagged + $THEIA_LOGGER sink
 #include "TimerService.hh"
-#include "Logger.hh"     // parse_log_level / MakeContextLogger / process_logger
+#include "Logger.hh"     // parse_log_level / process_logger / set_process_logger
 
 #include "TipcMux.hh"    // config-service receiver for reporting nodes (#386)
 
@@ -35,18 +36,14 @@ int main() {
 
     using namespace ara::com;
 
-    // Process-wide logger. Pick up THEIA_LOG_LEVEL from the env
-    // (supervisor sets it from executor.json's per-child env map,
-    // sourced from Process.log_level on the rig). Defaults to Info
-    // when unset or unparseable. set_process_logger publishes it so a
-    // reporting node's config service can apply a live ConfigureLogLevel
-    // push (#386) via process_logger().set_level on the node thread.
-    auto logger = MakeContextLogger();
+    // Boot log level — THEIA_LOG_LEVEL from the env (supervisor sets it from
+    // executor.json's per-child env map, sourced from Process.log_level on the
+    // rig). Defaults to Info when unset/unparseable. Applied to every node's
+    // logger below. The SINK kind comes from THEIA_LOGGER (MakeContextLogger).
+    auto boot_level = ::theia::runtime::kDefaultLogLevel;
     if (const char* lvl = std::getenv("THEIA_LOG_LEVEL")) {
-        logger->set_level(::theia::runtime::parse_log_level(lvl));
+        boot_level = ::theia::runtime::parse_log_level(lvl);
     }
-    ::theia::runtime::set_process_logger(logger);
-    (void)logger;  // available for user handlers via RuntimeContext
 
     ::theia::runtime::TimerService timers;
     (void)timers;  // no node requires_timers
@@ -65,9 +62,23 @@ int main() {
 
 
     ComDaemon com_daemon;
+    // Per-node logger: tagged [#com_daemon] (kNodeName, matches `tdb ps`),
+    // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so do_start/init
+    // log through it. The FIRST node's logger also backs process_logger() — the
+    // ConfigureLogLevel-push fallback target + any process_logger() caller.
+    {
+        auto com_daemon_log = MakeContextLogger(ComDaemon::kNodeName);
+        com_daemon_log->set_level(boot_level);
+        ::theia::runtime::set_process_logger(com_daemon_log);
+        com_daemon.set_logger(std::move(com_daemon_log));
+    }
     com_daemon.start();
-    std::fprintf(stderr, "[com_daemon] up — TIPC type=0x%x instance=%u\n",
-                 ComDaemon::kTipcType, ComDaemon::kTipcInstance);
+    {
+        char _tipc[64];
+        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
+                      ComDaemon::kTipcType, ComDaemon::kTipcInstance);
+        com_daemon.log().info(_tipc);
+    }
 
     if (auto* com_daemon_cfg = config_mux.bind_node(
             com_daemon, ComDaemon::kTipcType,
@@ -87,16 +98,28 @@ int main() {
         config_mux.register_call<NetworkBindingRequest, ComEmpty>(
             com_daemon_cfg, com_daemon);
     } else {
-        std::fprintf(stderr,
-                     "[com_daemon] WARN: config service bind failed; "
-                     "live log-level push + signal inject disabled\n");
+        com_daemon.log().warn("config service bind failed; live log-level "
+                                 "push + signal inject disabled");
     }
 
 
     ComGrpcProxy com_grpc_proxy;
+    // Per-node logger: tagged [#com_grpc_proxy] (kNodeName, matches `tdb ps`),
+    // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so do_start/init
+    // log through it. The FIRST node's logger also backs process_logger() — the
+    // ConfigureLogLevel-push fallback target + any process_logger() caller.
+    {
+        auto com_grpc_proxy_log = MakeContextLogger(ComGrpcProxy::kNodeName);
+        com_grpc_proxy_log->set_level(boot_level);
+        com_grpc_proxy.set_logger(std::move(com_grpc_proxy_log));
+    }
     com_grpc_proxy.start();
-    std::fprintf(stderr, "[com_grpc_proxy] up — TIPC type=0x%x instance=%u\n",
-                 ComGrpcProxy::kTipcType, ComGrpcProxy::kTipcInstance);
+    {
+        char _tipc[64];
+        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
+                      ComGrpcProxy::kTipcType, ComGrpcProxy::kTipcInstance);
+        com_grpc_proxy.log().info(_tipc);
+    }
 
 
 

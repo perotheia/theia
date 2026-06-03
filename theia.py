@@ -139,6 +139,13 @@ def cmd_compdb(args: list[str]) -> int:
         f'mnemonic("CppCompile", {pattern})',
         "--output=jsonproto",
         "--include_artifacts=false",  # we read the source from the args
+        # Tolerate packages that fail to load/analyze (e.g. the retired
+        # //platform/supervisor:* bindings still referenced by the CMake/grpc
+        # edge in services/com + services/log:all_srcs on psp-retirement).
+        # aquery still emits valid jsonproto for everything that DID analyze;
+        # we index that and report the skips. Drop this once those consumers
+        # are repointed off the retired supervisor proto targets.
+        "--keep_going",
     ]
     print(f"$ {' '.join(shlex.quote(a) for a in aquery)}", file=sys.stderr)
     try:
@@ -146,9 +153,19 @@ def cmd_compdb(args: list[str]) -> int:
     except FileNotFoundError as e:
         print(f"theia: {e}", file=sys.stderr)
         return 127
-    if proc.returncode != 0:
+    if proc.returncode not in (0, 1):
+        # rc >= 2 is a real invocation error (bad flag, missing bazel, query
+        # syntax) — bail. rc 1 is --keep_going's "not all targets analyzed"
+        # partial, which still writes valid jsonproto; fall through to it.
         sys.stderr.write(proc.stderr)
         return proc.returncode
+    if proc.returncode == 1:
+        # --keep_going partial: some targets failed to load/analyze. Show
+        # bazel's reason (which packages) but proceed with what DID analyze.
+        sys.stderr.write(proc.stderr)
+        print("theia: compdb is PARTIAL — some targets were skipped "
+              "(see errors above); regenerated from the rest.",
+              file=sys.stderr)
 
     try:
         data = json.loads(proc.stdout)

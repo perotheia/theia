@@ -4,12 +4,10 @@
 // a synchronous call(Get) and check the reply is 50. Migrated from the
 // retired demo/nodes/driver_node.{hh,tcc} onto the gen-app --kind fc
 // shape — cross-node messaging via the generated netgraph (cast by
-// TipcAddr, call by RemoteRef alias); logger via process_logger().
+// TipcAddr, call by RemoteRef alias); logger via this->log() ([#driver] tag).
 
 #include "lib/DriverNode.hh"
 #include "lib/DriverNode_netgraph.hh"   // netgraph::counternode + CounterNodeRef
-
-#include "Logger.hh"
 
 #include <cstring>
 #include <string>
@@ -32,8 +30,8 @@ void DriverNode::init(DriverNodeState& /*s*/) {
 void DriverNode::handle_info(const char* info, DriverNodeState& s) {
     if (std::strcmp(info, "run") != 0) return;
 
-    auto& log = ::theia::runtime::process_logger();
-    log.info("[driver] starting: 10x cast(Inc{5}), then call(Get)");
+    auto& log = this->log();   // [#driver]-tagged node logger
+    log.info("starting: 10x cast(Inc{5}), then call(Get)");
 
     // Fan out 10 increments of 5 to CounterNode (fire-and-forget, by
     // netgraph TipcAddr).
@@ -48,7 +46,7 @@ void DriverNode::handle_info(const char* info, DriverNodeState& s) {
     // address baked into the netgraph alias), then call and check.
     demo::netgraph::CounterNodeRef counter;
     if (!counter.connect()) {
-        log.error("[driver] could not connect to CounterNode");
+        log.error("could not connect to CounterNode");
         return;
     }
     DriverAct act{/*request_id=*/1};
@@ -58,16 +56,16 @@ void DriverNode::handle_info(const char* info, DriverNodeState& s) {
         case theia::runtime::CallTag::Reply:
             s.last_value = r.reply.value;
             ++s.replies_ok;
-            log.debug("[driver] handle_call_result(req_id=" +
+            log.debug("handle_call_result(req_id=" +
                      std::to_string(r.act.request_id) +
                      ") value=" + std::to_string(r.reply.value) +
                      " expected=" + std::to_string(s.expected_value));
             break;
         case theia::runtime::CallTag::Timeout:
-            log.error("[driver] call(Get) timed out");
+            log.error("call(Get) timed out");
             break;
         case theia::runtime::CallTag::Error:
-            log.error(std::string("[driver] call(Get) error: ") + r.error);
+            log.error(std::string("call(Get) error: ") + r.error);
             break;
     }
 }

@@ -5,12 +5,11 @@
 // demo/nodes/observer_node.{hh,tcc} onto the gen-app --kind fc shape —
 // the call goes through the generated netgraph RemoteRef (peer address
 // from the cluster connect observer.counter_call -> counter.srv); timers
-// via process_timers(), logger via process_logger().
+// via process_timers(), logger via this->log() ([#observer] tag).
 
 #include "lib/ObserverNode.hh"
 #include "lib/ObserverNode_netgraph.hh"   // netgraph::CounterNodeRef
 
-#include "Logger.hh"
 #include "TimerService.hh"
 
 #include <cstring>
@@ -44,18 +43,16 @@ void ObserverNode::handle_info(const char* info, ObserverNodeState& s) {
             case theia::runtime::CallTag::Reply:
                 s.last_value = r.reply.value;
                 ++s.replies_ok;
-                ::theia::runtime::process_logger().debug(
-                    "[observer] poll #" + std::to_string(r.act.request_id) +
+                this->log().debug(
+                    "poll #" + std::to_string(r.act.request_id) +
                     " value=" + std::to_string(r.reply.value));
                 break;
             case theia::runtime::CallTag::Timeout:
-                ::theia::runtime::process_logger().error(
-                    "[observer] timeout req_id=" +
-                    std::to_string(r.act.request_id));
+                this->log().error("timeout req_id=" +
+                                  std::to_string(r.act.request_id));
                 break;
             case theia::runtime::CallTag::Error:
-                ::theia::runtime::process_logger().error(
-                    std::string("[observer] error: ") + r.error);
+                this->log().error(std::string("error: ") + r.error);
                 break;
         }
     }

@@ -2,11 +2,10 @@
 //
 // Holds an integer; serves Get (call) and Inc (cast). Migrated from the
 // retired demo/nodes/counter_node.{hh,cc} onto the gen-app --kind fc
-// shape (platform/runtime GenServer; logger via process_logger()).
+// shape (platform/runtime GenServer; logger via this->log() — the node's own
+// [#counter]-tagged logger from the NodeLogger mixin).
 
 #include "lib/CounterNode.hh"
-
-#include "Logger.hh"   // process_logger()
 
 #include <cstring>
 #include <string>
@@ -20,8 +19,7 @@ void CounterNode::init(CounterNodeState& /*s*/) {
 // handle_info: a periodic "tick" logs the cumulative counter.
 void CounterNode::handle_info(const char* info, CounterNodeState& s) {
     if (std::strcmp(info, "tick") == 0) {
-        ::theia::runtime::process_logger().debug(
-            "[counter] tick — counter=" + std::to_string(s.counter));
+        this->log().debug("tick — counter=" + std::to_string(s.counter));
     }
 }
 
@@ -32,8 +30,7 @@ void CounterNode::handle_cast(const Inc& msg, CounterNodeState& s) {
 
 // Get — call, replies with the current counter.
 GetReply CounterNode::handle_call(const Get& /*req*/, CounterNodeState& s) {
-    ::theia::runtime::process_logger().debug(
-        "[counter] handle_call(Get) -> " + std::to_string(s.counter));
+    this->log().debug("handle_call(Get) -> " + std::to_string(s.counter));
     GetReply reply{};
     reply.value = s.counter;
     return reply;

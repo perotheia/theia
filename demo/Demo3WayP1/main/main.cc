@@ -9,8 +9,9 @@
 #include "lib/DriverNode.hh"
 #include "lib/TickerNode.hh"
 
+#include "lib/Log.hh"    // per-node MakeContextLogger(tag) — tagged + $THEIA_LOGGER sink
 #include "TimerService.hh"
-#include "Logger.hh"     // parse_log_level / MakeContextLogger / process_logger
+#include "Logger.hh"     // parse_log_level / process_logger / set_process_logger
 
 #include "TipcMux.hh"    // config-service receiver for reporting nodes (#386)
 
@@ -36,18 +37,14 @@ int main() {
 
     using namespace demo;
 
-    // Process-wide logger. Pick up THEIA_LOG_LEVEL from the env
-    // (supervisor sets it from executor.json's per-child env map,
-    // sourced from Process.log_level on the rig). Defaults to Info
-    // when unset or unparseable. set_process_logger publishes it so a
-    // reporting node's config service can apply a live ConfigureLogLevel
-    // push (#386) via process_logger().set_level on the node thread.
-    auto logger = MakeContextLogger();
+    // Boot log level — THEIA_LOG_LEVEL from the env (supervisor sets it from
+    // executor.json's per-child env map, sourced from Process.log_level on the
+    // rig). Defaults to Info when unset/unparseable. Applied to every node's
+    // logger below. The SINK kind comes from THEIA_LOGGER (MakeContextLogger).
+    auto boot_level = ::theia::runtime::kDefaultLogLevel;
     if (const char* lvl = std::getenv("THEIA_LOG_LEVEL")) {
-        logger->set_level(::theia::runtime::parse_log_level(lvl));
+        boot_level = ::theia::runtime::parse_log_level(lvl);
     }
-    ::theia::runtime::set_process_logger(logger);
-    (void)logger;  // available for user handlers via RuntimeContext
 
     ::theia::runtime::TimerService timers;
     // Publish the process TimerService so a `requires_timers` node's
@@ -69,9 +66,23 @@ int main() {
 
 
     CounterNode counter;
+    // Per-node logger: tagged [#counter] (kNodeName, matches `tdb ps`),
+    // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so do_start/init
+    // log through it. The FIRST node's logger also backs process_logger() — the
+    // ConfigureLogLevel-push fallback target + any process_logger() caller.
+    {
+        auto counter_log = MakeContextLogger(CounterNode::kNodeName);
+        counter_log->set_level(boot_level);
+        ::theia::runtime::set_process_logger(counter_log);
+        counter.set_logger(std::move(counter_log));
+    }
     counter.start();
-    std::fprintf(stderr, "[counter] up — TIPC type=0x%x instance=%u\n",
-                 CounterNode::kTipcType, CounterNode::kTipcInstance);
+    {
+        char _tipc[64];
+        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
+                      CounterNode::kTipcType, CounterNode::kTipcInstance);
+        counter.log().info(_tipc);
+    }
 
     if (auto* counter_cfg = config_mux.bind_node(
             counter, CounterNode::kTipcType,
@@ -90,16 +101,28 @@ int main() {
             counter_cfg, counter);
         config_mux.register_cast<Inc>(counter_cfg, counter);
     } else {
-        std::fprintf(stderr,
-                     "[counter] WARN: config service bind failed; "
-                     "live log-level push + signal inject disabled\n");
+        counter.log().warn("config service bind failed; live log-level "
+                                 "push + signal inject disabled");
     }
 
 
     DriverNode driver;
+    // Per-node logger: tagged [#driver] (kNodeName, matches `tdb ps`),
+    // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so do_start/init
+    // log through it. The FIRST node's logger also backs process_logger() — the
+    // ConfigureLogLevel-push fallback target + any process_logger() caller.
+    {
+        auto driver_log = MakeContextLogger(DriverNode::kNodeName);
+        driver_log->set_level(boot_level);
+        driver.set_logger(std::move(driver_log));
+    }
     driver.start();
-    std::fprintf(stderr, "[driver] up — TIPC type=0x%x instance=%u\n",
-                 DriverNode::kTipcType, DriverNode::kTipcInstance);
+    {
+        char _tipc[64];
+        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
+                      DriverNode::kTipcType, DriverNode::kTipcInstance);
+        driver.log().info(_tipc);
+    }
 
     if (auto* driver_cfg = config_mux.bind_node(
             driver, DriverNode::kTipcType,
@@ -115,16 +138,28 @@ int main() {
         // — lands on the same handle_call / handle_cast path. clientServer
         // ops → register_call; senderReceiver `in` data → register_cast.
     } else {
-        std::fprintf(stderr,
-                     "[driver] WARN: config service bind failed; "
-                     "live log-level push + signal inject disabled\n");
+        driver.log().warn("config service bind failed; live log-level "
+                                 "push + signal inject disabled");
     }
 
 
     TickerNode ticker;
+    // Per-node logger: tagged [#ticker] (kNodeName, matches `tdb ps`),
+    // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so do_start/init
+    // log through it. The FIRST node's logger also backs process_logger() — the
+    // ConfigureLogLevel-push fallback target + any process_logger() caller.
+    {
+        auto ticker_log = MakeContextLogger(TickerNode::kNodeName);
+        ticker_log->set_level(boot_level);
+        ticker.set_logger(std::move(ticker_log));
+    }
     ticker.start();
-    std::fprintf(stderr, "[ticker] up — TIPC type=0x%x instance=%u\n",
-                 TickerNode::kTipcType, TickerNode::kTipcInstance);
+    {
+        char _tipc[64];
+        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
+                      TickerNode::kTipcType, TickerNode::kTipcInstance);
+        ticker.log().info(_tipc);
+    }
 
     if (auto* ticker_cfg = config_mux.bind_node(
             ticker, TickerNode::kTipcType,
@@ -140,9 +175,8 @@ int main() {
         // — lands on the same handle_call / handle_cast path. clientServer
         // ops → register_call; senderReceiver `in` data → register_cast.
     } else {
-        std::fprintf(stderr,
-                     "[ticker] WARN: config service bind failed; "
-                     "live log-level push + signal inject disabled\n");
+        ticker.log().warn("config service bind failed; live log-level "
+                                 "push + signal inject disabled");
     }
 
 

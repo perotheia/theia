@@ -9,6 +9,7 @@
 #include <string>
 
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <syslog.h>
 #include <unistd.h>
 
@@ -81,6 +82,26 @@ std::string iso8601_now() {
     return buf;
 }
 
+// Recursive mkdir (mkdir -p). Best-effort: ignores EEXIST, gives up silently on
+// any other error (the subsequent open() reports the real failure).
+void mkdir_p(const std::string& dir) {
+    if (dir.empty()) return;
+    std::string acc;
+    size_t i = 0;
+    if (dir[0] == '/') { acc = "/"; i = 1; }
+    while (i <= dir.size()) {
+        if (i == dir.size() || dir[i] == '/') {
+            if (!acc.empty() && acc != "/") {
+                ::mkdir(acc.c_str(), 0755);  // EEXIST etc. ignored
+            }
+            if (i < dir.size()) acc += '/';
+        } else {
+            acc += dir[i];
+        }
+        ++i;
+    }
+}
+
 // Drops everything.
 class NullLogger : public Logger {
 public:
@@ -94,6 +115,13 @@ public:
 class FileLogger : public Logger {
 public:
     explicit FileLogger(const std::string& path) {
+        // Create the parent directory tree (mkdir -p) so file:/tmp/theia/x.log
+        // works without the dir pre-existing — the default logger path the
+        // manifest generator emits lives under /tmp/theia.
+        if (auto slash = path.find_last_of('/'); slash != std::string::npos &&
+            slash > 0) {
+            mkdir_p(path.substr(0, slash));
+        }
         fd_ = ::open(path.c_str(), O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC,
                      0644);
         if (fd_ < 0) {

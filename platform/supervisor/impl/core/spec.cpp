@@ -142,6 +142,14 @@ std::unique_ptr<Node> load_worker(const json& j) {
         }
     }
 
+    // Per-process logger kind (executor.json `logger: "file:/path"|"syslog"|
+    // "null"|"stdio"`). Flows to the child as the THEIA_LOGGER env var, which
+    // the child's main.cc passes to theia::runtime::MakeLogger() at boot. An
+    // explicit env["THEIA_LOGGER"] (above) wins if both are present.
+    if (std::string lg = get_str(j, "logger"); !lg.empty()) {
+        w.env.emplace("THEIA_LOGGER", lg);  // emplace = don't clobber an env entry
+    }
+
     w.working_dir = get_str(j, "working_dir");
 
     auto sro = j.find("shall_run_on");

@@ -43,14 +43,22 @@ namespace supervisor {
 
 namespace {
 
-// Route the engine's logs through platform/runtime's process logger — the
-// [#supervisor_ctl] ContextLogger main.cc publishes via lib/Log.hh's
-// MakeContextLogger (timestamp + level + tag + THEIA_LOG_LEVEL filtering all
-// handled there). Same logger the FC handlers use, so engine + handler lines
-// share one format/stream. process_logger() is safe from any thread.
-void log_info(const std::string& m)  { ::theia::runtime::process_logger().info(m); }
-void log_warn(const std::string& m)  { ::theia::runtime::process_logger().warn(m); }
-void log_err (const std::string& m)  { ::theia::runtime::process_logger().error(m); }
+// The engine routes ALL its lines through the node logger SupervisorWorker
+// injects via set_logger() (a ContextLogger tagged [#supervisor_worker]) — set
+// before run(), so it's live for every log_* call. Until set (or in a unit
+// harness), it falls back to the process logger. File-local so the free helpers
+// below keep their bare-name call sites; Supervisor::set_logger points it here.
+::theia::runtime::Logger* g_engine_logger = nullptr;
+
+::theia::runtime::Logger& engine_log() {
+    return g_engine_logger ? *g_engine_logger
+                           : ::theia::runtime::process_logger();
+}
+
+void log_debug(const std::string& m) { engine_log().debug(m); }
+void log_info(const std::string& m)  { engine_log().info(m); }
+void log_warn(const std::string& m)  { engine_log().warn(m); }
+void log_err (const std::string& m)  { engine_log().error(m); }
 
 std::string join(const std::vector<std::string>& xs, char sep = ' ') {
     std::string out;
@@ -117,6 +125,11 @@ const Node& require_supervisor_root(const std::unique_ptr<Node>& root) {
     return *root;
 }
 }  // namespace
+
+// Point the file-local engine logger at the node logger the worker injected.
+void Supervisor::set_logger(::theia::runtime::Logger* lg) noexcept {
+    g_engine_logger = lg;
+}
 
 Supervisor::Supervisor(std::unique_ptr<Node> root,
                         std::string root_dir,
@@ -365,10 +378,9 @@ void Supervisor::ctl_on_heartbeat(const std::string& node_name, pid_t pid,
     auto& s = heartbeats_[pid];
     s.last_seen = now;
     s.last_seq  = seq;
-    std::fprintf(stderr,
-                 "supervisor: heartbeat node=%s pid=%d seq=%llu\n",
-                 node_name.c_str(), static_cast<int>(pid),
-                 static_cast<unsigned long long>(seq));
+    engine_log().debug("heartbeat node=" + node_name + " pid=" +
+                       std::to_string(static_cast<int>(pid)) + " seq=" +
+                       std::to_string(seq));
 
     auto it = last_heartbeat_by_child_.find(node_name);
     bool fire_push = (it == last_heartbeat_by_child_.end()) ||
@@ -1876,10 +1888,8 @@ void Supervisor::apply_trace_config(const std::string& target_node,
         by_msg.erase(msg_type);
         if (by_msg.empty()) trace_configs_.erase(target_node);
     }
-    std::fprintf(stderr,
-        "supervisor: trace config %s for %s/%s\n",
-        enabled ? "ENABLE" : "DISABLE",
-        target_node.c_str(), msg_type.c_str());
+    log_info(std::string("trace config ") + (enabled ? "ENABLE" : "DISABLE") +
+             " for " + target_node + "/" + msg_type);
     // STORE ONLY. The LIVE cast is done by SupervisorCtl after ctl_configure_*
     // returns. Restart re-push still routes through the heartbeat-after-gap path
     // (push_*_to_child → on_*_push → SupervisorCtl forwarder cast).
@@ -1908,9 +1918,8 @@ void Supervisor::push_trace_config_to_child(const std::string& child_name) {
         emit_.set_trace(child_name, kv.second, /*enabled=*/true);
         ++pushed;
     }
-    std::fprintf(stderr,
-        "supervisor: asked control to set %d trace entries on '%s'\n",
-        pushed, child_name.c_str());
+    log_debug("asked control to set " + std::to_string(pushed) +
+              " trace entries on '" + child_name + "'");
 }
 
 // ---- #385: per-child log level -------------------------------------------
@@ -1932,8 +1941,8 @@ void Supervisor::apply_log_level(const std::string& target_node,
         w->env["THEIA_LOG_LEVEL"] = log_level_name(level);
     }
 
-    std::fprintf(stderr, "supervisor: log level for %s -> %s\n",
-                 target_node.c_str(), log_level_name(level));
+    log_info(std::string("log level for ") + target_node + " -> " +
+             log_level_name(level));
     // STORE ONLY. SupervisorCtl casts the live update after ctl_configure_*
     // returns; the heartbeat-after-gap path re-pushes on restart.
 }
@@ -1945,9 +1954,8 @@ void Supervisor::push_log_level_to_child(const std::string& child_name) {
     // Ask CONTROL to set the stored level on the child BY NAME — SupervisorCtl
     // resolves the address + casts LogLevelPush. The engine doesn't resolve.
     emit_.set_log_level(child_name, it->second);
-    std::fprintf(stderr,
-        "supervisor: asked control to set log level '%s' on '%s'\n",
-        log_level_name(it->second), child_name.c_str());
+    log_debug(std::string("asked control to set log level '") +
+              log_level_name(it->second) + "' on '" + child_name + "'");
 }
 
 // (send_sm_ready removed — the SM startup handshake is not part of this e2e

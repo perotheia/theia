@@ -8,8 +8,9 @@
 #include "lib/SupervisorCtl.hh"
 #include "lib/SupervisorWorker.hh"
 
+#include "lib/Log.hh"    // per-node MakeContextLogger(tag) — tagged + $THEIA_LOGGER sink
 #include "TimerService.hh"
-#include "Logger.hh"     // parse_log_level / MakeContextLogger / process_logger
+#include "Logger.hh"     // parse_log_level / process_logger / set_process_logger
 
 #include "TipcMux.hh"    // config-service receiver for reporting nodes (#386)
 
@@ -35,18 +36,14 @@ int main() {
 
     using namespace ara::exec;
 
-    // Process-wide logger. Pick up THEIA_LOG_LEVEL from the env
-    // (supervisor sets it from executor.json's per-child env map,
-    // sourced from Process.log_level on the rig). Defaults to Info
-    // when unset or unparseable. set_process_logger publishes it so a
-    // reporting node's config service can apply a live ConfigureLogLevel
-    // push (#386) via process_logger().set_level on the node thread.
-    auto logger = MakeContextLogger();
+    // Boot log level — THEIA_LOG_LEVEL from the env (supervisor sets it from
+    // executor.json's per-child env map, sourced from Process.log_level on the
+    // rig). Defaults to Info when unset/unparseable. Applied to every node's
+    // logger below. The SINK kind comes from THEIA_LOGGER (MakeContextLogger).
+    auto boot_level = ::theia::runtime::kDefaultLogLevel;
     if (const char* lvl = std::getenv("THEIA_LOG_LEVEL")) {
-        logger->set_level(::theia::runtime::parse_log_level(lvl));
+        boot_level = ::theia::runtime::parse_log_level(lvl);
     }
-    ::theia::runtime::set_process_logger(logger);
-    (void)logger;  // available for user handlers via RuntimeContext
 
     ::theia::runtime::TimerService timers;
     (void)timers;  // no node requires_timers
@@ -65,9 +62,23 @@ int main() {
 
 
     SupervisorCtl supervisor_ctl;
+    // Per-node logger: tagged [#supervisor_ctl] (kNodeName, matches `tdb ps`),
+    // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so init() logs
+    // through it. This node's logger also backs process_logger() — the
+    // ConfigureLogLevel-push fallback target + any process_logger() caller.
+    {
+        auto supervisor_ctl_log = MakeContextLogger(SupervisorCtl::kNodeName);
+        supervisor_ctl_log->set_level(boot_level);
+        ::theia::runtime::set_process_logger(supervisor_ctl_log);
+        supervisor_ctl.set_logger(std::move(supervisor_ctl_log));
+    }
     supervisor_ctl.start();
-    std::fprintf(stderr, "[supervisor_ctl] up — TIPC type=0x%x instance=%u\n",
-                 SupervisorCtl::kTipcType, SupervisorCtl::kTipcInstance);
+    {
+        char _tipc[64];
+        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
+                      SupervisorCtl::kTipcType, SupervisorCtl::kTipcInstance);
+        supervisor_ctl.log().info(_tipc);
+    }
 
     if (auto* supervisor_ctl_cfg = config_mux.bind_node(
             supervisor_ctl, SupervisorCtl::kTipcType,
@@ -105,16 +116,27 @@ int main() {
         config_mux.register_cast<HeartbeatReport>(supervisor_ctl_cfg, supervisor_ctl);
         config_mux.register_cast<SendTimeoutReport>(supervisor_ctl_cfg, supervisor_ctl);
     } else {
-        std::fprintf(stderr,
-                     "[supervisor_ctl] WARN: config service bind failed; "
-                     "live log-level push + signal inject disabled\n");
+        supervisor_ctl.log().warn("config service bind failed; live log-level "
+                                  "push + signal inject disabled");
     }
 
 
     SupervisorWorker supervisor_worker;
+    // Per-node logger: tagged [#supervisor_worker]. The engine (built in
+    // do_start) takes &this->log(), so engine lines wear this tag too.
+    {
+        auto supervisor_worker_log =
+            MakeContextLogger(SupervisorWorker::kNodeName);
+        supervisor_worker_log->set_level(boot_level);
+        supervisor_worker.set_logger(std::move(supervisor_worker_log));
+    }
     supervisor_worker.start();
-    std::fprintf(stderr, "[supervisor_worker] up — TIPC type=0x%x instance=%u\n",
-                 SupervisorWorker::kTipcType, SupervisorWorker::kTipcInstance);
+    {
+        char _tipc[64];
+        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
+                      SupervisorWorker::kTipcType, SupervisorWorker::kTipcInstance);
+        supervisor_worker.log().info(_tipc);
+    }
 
 
 

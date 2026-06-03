@@ -59,6 +59,10 @@ cc_library(
     ],
     deps = [
         "//third_party:nlohmann_json",
+        # platform/runtime Logger — the engine routes log_info/warn/err through
+        # process_logger() (the [#supervisor_ctl] ContextLogger main.cc publishes
+        # via lib/Log.hh's MakeContextLogger), instead of its own fprintf.
+        "//platform/runtime:runtime",
     ],
 )
 

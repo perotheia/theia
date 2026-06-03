@@ -2,8 +2,10 @@
 
 #include "registry.h"
 
-#include <cstdio>
+#include "Logger.hh"   // platform/runtime — process_logger()
+
 #include <stdexcept>
+#include <string>
 
 namespace supervisor {
 
@@ -35,10 +37,9 @@ ResolvedAddr parse_addr(const NodeInfo& ni) {
         a.instance = static_cast<uint32_t>(std::stoul(ni.tipc_instance, nullptr, 0));
         a.ok       = true;
     } catch (...) {
-        std::fprintf(stderr,
-            "supervisor/registry: bad tipc addr for node '%s' (type='%s' "
-            "instance='%s')\n",
-            ni.name.c_str(), ni.tipc_type.c_str(), ni.tipc_instance.c_str());
+        ::theia::runtime::process_logger().warn(
+            "registry: bad tipc addr for node '" + ni.name + "' (type='" +
+            ni.tipc_type + "' instance='" + ni.tipc_instance + "')");
         a.ok = false;
     }
     return a;

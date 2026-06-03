@@ -15,6 +15,8 @@
 
 #include "runtime.h"
 
+#include "Logger.hh"   // platform/runtime — process_logger()
+
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
@@ -24,8 +26,6 @@
 #include <sys/utsname.h>
 #include <dirent.h>
 #include <functional>
-#include <iostream>
-#include <ostream>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -43,19 +43,14 @@ namespace supervisor {
 
 namespace {
 
-void log_line(const std::string& level, const std::string& msg) {
-    // ISO-8601 timestamp + level + message. stderr so children's stdout
-    // stays unmangled.
-    auto now = std::chrono::system_clock::now();
-    auto tt  = std::chrono::system_clock::to_time_t(now);
-    char buf[32];
-    std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", std::localtime(&tt));
-    std::fprintf(stderr, "%s %s supervisor: %s\n", buf, level.c_str(), msg.c_str());
-}
-
-void log_info(const std::string& m)  { log_line("INFO", m); }
-void log_warn(const std::string& m)  { log_line("WARN", m); }
-void log_err (const std::string& m)  { log_line("ERROR", m); }
+// Route the engine's logs through platform/runtime's process logger — the
+// [#supervisor_ctl] ContextLogger main.cc publishes via lib/Log.hh's
+// MakeContextLogger (timestamp + level + tag + THEIA_LOG_LEVEL filtering all
+// handled there). Same logger the FC handlers use, so engine + handler lines
+// share one format/stream. process_logger() is safe from any thread.
+void log_info(const std::string& m)  { ::theia::runtime::process_logger().info(m); }
+void log_warn(const std::string& m)  { ::theia::runtime::process_logger().warn(m); }
+void log_err (const std::string& m)  { ::theia::runtime::process_logger().error(m); }
 
 std::string join(const std::vector<std::string>& xs, char sep = ' ') {
     std::string out;

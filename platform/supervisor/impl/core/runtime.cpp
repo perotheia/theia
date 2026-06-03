@@ -1761,16 +1761,13 @@ namespace {
 // Map a LogLevelValue ORDINAL (0..4) → the level NAME the child reads from its
 // THEIA_LOG_LEVEL spawn env at boot. The ONLY ordinal↔string conversion left:
 // the live push forwards the ordinal verbatim; only the restart env needs a
-// name. Matches the platform.runtime LogLevelValue enum / parse_log_level.
+// name. Thin shim over platform/runtime's log_level_name(LogLevel) — the
+// LogLevelValue ordinals are aligned with ::theia::runtime::LogLevel
+// (Trace=0..Error=4), so this is just the ordinal→enum cast (out-of-range falls
+// through to the runtime's "info" default, same as before).
 const char* log_level_name(uint32_t level) {
-    switch (level) {
-        case 0:  return "trace";
-        case 1:  return "debug";
-        case 2:  return "info";
-        case 3:  return "warn";
-        case 4:  return "error";
-        default: return "info";  // lax default, same as parse_log_level
-    }
+    return ::theia::runtime::log_level_name(
+        static_cast<::theia::runtime::LogLevel>(level));
 }
 
 }  // namespace

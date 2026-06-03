@@ -91,6 +91,36 @@ class ConsoleLogger : public Logger {
 // Helper for the runtime to hand each app a sensible default.
 std::shared_ptr<Logger> MakeConsoleLogger() noexcept;
 
+// ---- Sink kinds, selectable per-process via the manifest ----------------
+//
+// The rig's per-process `logger` field (executor.json) flows to the child as
+// the THEIA_LOGGER env var (kind[:arg], e.g. "file:/var/log/sm.log"); gen-app's
+// main.cc calls MakeLogger($THEIA_LOGGER, kNodeName) at boot. ConsoleLogger
+// above is the "stdio" kind.
+
+// Drops everything. log() is a no-op; the level filter still short-circuits
+// before this is even reached. For nodes that must stay silent.
+std::shared_ptr<Logger> MakeNullLogger() noexcept;
+
+// Appends "<ISO-8601-ts> [LEVEL] message\n" to a file (line-buffered, one
+// write() per record so concurrent loggers don't interleave). Falls back to a
+// ConsoleLogger if the path can't be opened (and warns once on stderr).
+std::shared_ptr<Logger> MakeFileLogger(const std::string& path) noexcept;
+
+// Routes to syslog(3) (journald picks it up). `ident` is the syslog program
+// tag — pass the node's kNodeName so records are attributable per node.
+std::shared_ptr<Logger> MakeSyslogLogger(const std::string& ident) noexcept;
+
+// Selector: parse a THEIA_LOGGER spec "<kind>[:<arg>]" and build the sink.
+//   ""  | "stdio"      -> ConsoleLogger (stderr)            [default]
+//   "null"             -> NullLogger
+//   "file:<path>"      -> FileLogger(path)
+//   "syslog"           -> SyslogLogger(ident)
+// Unknown kind -> ConsoleLogger (lax, never throws). `ident` is the syslog tag
+// (node name); ignored by the other kinds.
+std::shared_ptr<Logger> MakeLogger(const std::string& spec,
+                                   const std::string& ident) noexcept;
+
 // ---- Process-wide logger handle (#386) ----------------------------------
 //
 // A reporting FC daemon's config service receives a LogLevelPush from
@@ -108,6 +138,29 @@ std::shared_ptr<Logger> MakeConsoleLogger() noexcept;
 // the handler can't crash.
 void    set_process_logger(std::shared_ptr<Logger> logger) noexcept;
 Logger& process_logger() noexcept;
+
+// ---- Per-node logger mixin ----------------------------------------------
+//
+// Mixed into GenServerBase + GenRunnable so EVERY node holds its OWN logger —
+// a ContextLogger tagged with the node's name (kNodeName), set by main.cc via
+// set_logger() at construction. Until one is set, log() falls back to the
+// process logger, so an un-migrated node keeps working. This is what gives each
+// node line its correct "[#<node>]" tag (e.g. supervisor_ctl) instead of one
+// process-global tag.
+class NodeLogger {
+ public:
+  void set_logger(std::shared_ptr<Logger> lg) noexcept {
+    if (lg) node_logger_ = std::move(lg);
+  }
+  // The node's logger — never null (process logger is the fallback). Safe from
+  // any thread: set_logger runs once at construction before the node starts.
+  Logger& log() noexcept {
+    return node_logger_ ? *node_logger_ : process_logger();
+  }
+
+ private:
+  std::shared_ptr<Logger> node_logger_;
+};
 
 }  // namespace runtime
 }  // namespace theia

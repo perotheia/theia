@@ -54,6 +54,8 @@
 
 #pragma once
 
+#include "Logger.hh"     // NodeLogger mixin (per-node tagged logger)
+
 #include <atomic>
 #include <string>
 #include <thread>
@@ -62,7 +64,7 @@ namespace theia {
 namespace runtime {
 
 template <typename Derived>
-class GenRunnable {
+class GenRunnable : public NodeLogger {
 public:
     GenRunnable() { mark_reporting_(); }
     virtual ~GenRunnable() { force_stop_(); }

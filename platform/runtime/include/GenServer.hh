@@ -115,7 +115,7 @@ RequestId<Reply, Act> send_request(
 // Derived class is reached via a virtual hook (run_handler) because
 // the mailbox lambdas need to invoke methods that live on Derived,
 // which the base doesn't know about.
-class GenServerBase {
+class GenServerBase : public theia::runtime::NodeLogger {
 public:
     using MailboxFn = std::function<void(GenServerBase*)>;
 
@@ -287,10 +287,14 @@ public:
     void handle_cast(const platform_runtime_LogLevelPush& push,
                      StateT& /*s*/) noexcept {
         auto lvl = static_cast<theia::runtime::LogLevel>(push.level);
+        // Flip BOTH the process logger (legacy / fallback target) and this
+        // node's own logger so the live level change takes effect regardless of
+        // which one a line goes through.
         theia::runtime::process_logger().set_level(lvl);
-        std::fprintf(stderr, "[%s] log level -> %s (supervisor push)\n",
-                     Derived::kNodeName,
-                     theia::runtime::log_level_name(lvl));
+        this->log().set_level(lvl);
+        this->log().info(std::string("log level -> ") +
+                         theia::runtime::log_level_name(lvl) +
+                         " (supervisor push)");
     }
 
     // ---- Config service: TraceControlPush (#403) ------------------------
@@ -331,10 +335,9 @@ public:
             tr.enable(false);
             tr.trace_clear_kinds();
         }
-        std::fprintf(stderr,
-            "[%s] trace kind %d -> %s (supervisor push)\n",
-            Derived::kNodeName, static_cast<int>(push.kind),
-            push.enabled ? "ON" : "OFF");
+        this->log().info(std::string("trace kind ") +
+                         std::to_string(static_cast<int>(push.kind)) + " -> " +
+                         (push.enabled ? "ON" : "OFF") + " (supervisor push)");
     }
 
 protected:

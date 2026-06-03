@@ -2,8 +2,15 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
 #include <cstdio>
+#include <cstring>
+#include <ctime>
 #include <string>
+
+#include <fcntl.h>
+#include <syslog.h>
+#include <unistd.h>
 
 namespace theia {
 namespace runtime {
@@ -59,6 +66,115 @@ void ConsoleLogger::log(LogLevel level, const std::string& message) noexcept {
 
 std::shared_ptr<Logger> MakeConsoleLogger() noexcept {
     return std::make_shared<ConsoleLogger>();
+}
+
+// ---- Selectable sink kinds (THEIA_LOGGER) -------------------------------
+
+namespace {
+
+std::string iso8601_now() {
+    std::time_t t = std::time(nullptr);
+    std::tm tm{};
+    ::gmtime_r(&t, &tm);
+    char buf[32];
+    std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &tm);
+    return buf;
+}
+
+// Drops everything.
+class NullLogger : public Logger {
+public:
+    void log(LogLevel, const std::string&) noexcept override {}
+};
+
+// Appends "<ts> [LEVEL] message\n" to an fd. One write() per record so
+// concurrent loggers can't interleave mid-line (PIPE/regular-file writes under
+// the page size are atomic on Linux). Owns the fd; falls back to stderr if the
+// open failed.
+class FileLogger : public Logger {
+public:
+    explicit FileLogger(const std::string& path) {
+        fd_ = ::open(path.c_str(), O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC,
+                     0644);
+        if (fd_ < 0) {
+            std::fprintf(stderr,
+                "[theia] logger: cannot open '%s' (%s) — using stderr\n",
+                path.c_str(), std::strerror(errno));
+            fd_ = STDERR_FILENO;
+            owns_ = false;
+        }
+    }
+    ~FileLogger() override { if (owns_ && fd_ >= 0) ::close(fd_); }
+
+    void log(LogLevel level, const std::string& message) noexcept override {
+        std::string line = iso8601_now();
+        line += " [";
+        line += level_tag(level);
+        line += "] ";
+        line += message;
+        line += '\n';
+        ssize_t n = ::write(fd_, line.data(), line.size());
+        (void)n;  // best-effort; nothing useful to do on a failed log write
+    }
+private:
+    int  fd_{-1};
+    bool owns_{true};
+};
+
+// Routes to syslog(3). openlog ident must outlive the logger, so we own the
+// string. LOG_USER facility; the per-record priority maps from LogLevel.
+class SyslogLogger : public Logger {
+public:
+    explicit SyslogLogger(std::string ident) : ident_(std::move(ident)) {
+        ::openlog(ident_.c_str(), LOG_PID | LOG_NDELAY, LOG_USER);
+    }
+    ~SyslogLogger() override { ::closelog(); }
+
+    void log(LogLevel level, const std::string& message) noexcept override {
+        int pri = LOG_INFO;
+        switch (level) {
+            case LogLevel::Trace: pri = LOG_DEBUG;   break;
+            case LogLevel::Debug: pri = LOG_DEBUG;   break;
+            case LogLevel::Info:  pri = LOG_INFO;    break;
+            case LogLevel::Warn:  pri = LOG_WARNING; break;
+            case LogLevel::Error: pri = LOG_ERR;     break;
+        }
+        ::syslog(pri, "%s", message.c_str());
+    }
+private:
+    std::string ident_;
+};
+
+}  // namespace
+
+std::shared_ptr<Logger> MakeNullLogger() noexcept {
+    return std::make_shared<NullLogger>();
+}
+std::shared_ptr<Logger> MakeFileLogger(const std::string& path) noexcept {
+    return std::make_shared<FileLogger>(path);
+}
+std::shared_ptr<Logger> MakeSyslogLogger(const std::string& ident) noexcept {
+    return std::make_shared<SyslogLogger>(ident);
+}
+
+std::shared_ptr<Logger> MakeLogger(const std::string& spec,
+                                   const std::string& ident) noexcept {
+    // Split "<kind>[:<arg>]" on the FIRST ':' (a file path may contain more).
+    std::string kind = spec, arg;
+    if (auto pos = spec.find(':'); pos != std::string::npos) {
+        kind = spec.substr(0, pos);
+        arg  = spec.substr(pos + 1);
+    }
+    kind = to_lower(kind);
+    if (kind.empty() || kind == "stdio") return MakeConsoleLogger();
+    if (kind == "null")                  return MakeNullLogger();
+    if (kind == "file")                  return MakeFileLogger(arg);
+    if (kind == "syslog")                return MakeSyslogLogger(ident);
+    // Unknown kind: lax fallback to stderr (don't fail process boot on a typo).
+    std::fprintf(stderr,
+        "[theia] logger: unknown kind '%s' in THEIA_LOGGER='%s' — using stdio\n",
+        kind.c_str(), spec.c_str());
+    return MakeConsoleLogger();
 }
 
 // ---- Process-wide logger handle (#386) ----------------------------------

@@ -20,6 +20,8 @@
 #include "registry.h"
 #include "spec.h"
 
+#include "Logger.hh"   // theia::runtime::Logger (the engine's injected sink)
+
 #include <atomic>
 #include <chrono>
 #include <deque>
@@ -222,6 +224,12 @@ public:
     // Install the outbound emit surface (the FC shell wires these to
     // SupervisorCtl's `events` broadcast senders). Call BEFORE run().
     void set_emit_sink(EmitSink sink) { emit_ = std::move(sink); }
+
+    // Install the logger the engine routes ALL its lines through — the owning
+    // SupervisorWorker passes &node.log() so engine output wears the
+    // [#supervisor_worker] tag. Until set, falls back to process_logger().
+    // Call BEFORE run(). The Logger outlives the engine (owned by the node).
+    void set_logger(::theia::runtime::Logger* lg) noexcept;
 
     // Drive the tree. Returns the process exit code. This IS
     // SupervisorWorker::do_loop(): the signalfd + command-queue select loop,

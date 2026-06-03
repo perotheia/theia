@@ -100,7 +100,7 @@ std::unique_ptr<::supervisor::Supervisor> g_engine;
 // One-time setup on the worker thread, before do_loop(). Build the engine from
 // the manifest, install the emit sink, publish it to the bridge.
 void SupervisorWorker::do_start() {
-    std::fprintf(stderr, "[%s] runnable starting\n", kNodeName);
+    this->log().info("runnable starting");
 
     const std::string manifest = manifest_path();
     const std::string root     = root_dir();
@@ -113,11 +113,16 @@ void SupervisorWorker::do_start() {
         g_engine = std::make_unique<::supervisor::Supervisor>(
             m.take_tree(), root);
         g_engine->set_emit_sink(make_sink());
+        // Engine writes through THIS node's logger so its lines wear the
+        // [#supervisor_worker] tag. &this->log() outlives the engine (the node
+        // owns the logger; the engine is destroyed first in do_stop/teardown).
+        g_engine->set_logger(&this->log());
         ::supervisor::set_supervisor(g_engine.get());
-        std::fprintf(stderr,
-                     "[%s] engine built from %s (root_dir=%s)\n",
-                     kNodeName, manifest.c_str(), root.c_str());
+        this->log().info("engine built from " + manifest +
+                         " (root_dir=" + root + ")");
     } catch (const std::exception& e) {
+        // Startup failure is the one case that goes straight to stderr (the
+        // logger may itself be the thing that's misconfigured) before aborting.
         std::fprintf(stderr,
                      "[%s] FATAL: cannot build supervision engine: %s\n",
                      kNodeName, e.what());
@@ -130,18 +135,17 @@ void SupervisorWorker::do_start() {
 // IS the watchdog, so there's nothing to report to.
 void SupervisorWorker::do_loop() {
     if (!g_engine) {
-        std::fprintf(stderr, "[%s] no engine — loop exits immediately\n",
-                     kNodeName);
+        this->log().error("no engine — loop exits immediately");
         return;
     }
     int rc = g_engine->run();
-    std::fprintf(stderr, "[%s] engine loop exited (rc=%d)\n", kNodeName, rc);
+    this->log().info("engine loop exited (rc=" + std::to_string(rc) + ")");
 }
 
 // Release + signal do_loop() to return. stop_requested() is already set by the
 // base; tell the engine's loop to wind down (it wakes via the command eventfd).
 void SupervisorWorker::do_stop() {
-    std::fprintf(stderr, "[%s] runnable stopping\n", kNodeName);
+    this->log().info("runnable stopping");
     if (g_engine) g_engine->request_shutdown();
     ::supervisor::set_supervisor(nullptr);
 }

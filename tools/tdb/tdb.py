@@ -15,6 +15,7 @@ no raw TIPC. See feedback-clients-via-art-probe.
 adb-shaped verbs:
   ps                       list nodes from the supervisor tree
   supervisor               supervisor host facts (GetSystemInfo)
+  info                     host facts + running build (git sha/ts) + start time
   trace [off] <node> [mt]  ConfigureTrace node on/off (msgtype "" = all kinds)
   trace off                stop ALL active traces
   trace-config             show the stored trace config (GetTraceConfig)
@@ -96,6 +97,34 @@ def cmd_supervisor(args, sup, _tf) -> int:
     for k in ("hostname", "kernel", "os_pretty_name", "cpu_count",
               "total_ram_kb", "uptime_sec"):
         print(f"{k:16} {_g(info, k, '')}")
+    return 0
+
+
+def _fmt_epoch_ms(ts_ms: int) -> str:
+    """Epoch-milliseconds → 'DD/MM/YY HH:MM:SS' local time. 0 → ''."""
+    if not ts_ms:
+        return ""
+    return datetime.fromtimestamp(ts_ms / 1000.0).strftime("%d/%m/%y %H:%M:%S")
+
+
+def cmd_info(args, sup, _tf) -> int:
+    """Full host + BUILD facts (GetSystemInfo) — like `supervisor`, plus the
+    running build's git sha / timestamp (THEIA_GIT_SHA / THEIA_BUILD_TIMESTAMP,
+    baked at build time) and when this supervisor process started."""
+    info = sup.get_system_info(timeout=3.0)
+    rows = [
+        ("hostname",       _g(info, "hostname", "")),
+        ("kernel",         _g(info, "kernel", "")),
+        ("os",             _g(info, "os_pretty_name", "")),
+        ("cpus",           _g(info, "cpu_count", "")),
+        ("ram_kb",         _g(info, "total_ram_kb", "")),
+        ("uptime_sec",     _g(info, "uptime_sec", "")),
+        ("theia_git_sha",  _g(info, "theia_git_sha", "") or "(unstamped)"),
+        ("build_ts",       _g(info, "build_timestamp", "") or "(unstamped)"),
+        ("started",        _fmt_epoch_ms(_g(info, "start_timestamp_ms", 0))),
+    ]
+    for k, v in rows:
+        print(f"{k:16} {v}")
     return 0
 
 
@@ -250,6 +279,7 @@ _COMMANDS = {
     "ps": cmd_ps,
     "supervisor": cmd_supervisor,
     "sup": cmd_supervisor,
+    "info": cmd_info,
     "trace": cmd_trace,
     "trace-config": cmd_trace_config,
     "restart": cmd_restart,
@@ -260,6 +290,7 @@ _COMMANDS = {
 _HELP = """tdb — Theia Debug Bridge. commands:
   ps                       list the supervisor tree
   supervisor               supervisor host facts
+  info                     host facts + running build (git sha / ts) + start time
   trace [off] <node> [mt]  turn tracing on/off for a node/worker
   trace off                stop ALL active traces
   trace-config             show stored trace config

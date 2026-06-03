@@ -30,6 +30,25 @@ cc_library(
 # child tree, all behind plain-C++ control primitives + an EmitSink. The
 # gen-app node impls (below) wrap it; the process-global bridge lets the two
 # nodes share one instance.
+# Build-stamp header: #define THEIA_GIT_SHA / THEIA_BUILD_TIMESTAMP from the
+# live workspace. runtime.cpp's do_get_system_info() reads them (behind #ifdef)
+# so `tdb info` reports which build is running. local=True so git sees the real
+# .git (genrules sandbox otherwise); the header is gitignored (derived). The git
+# command soft-fails to "unknown" outside a checkout (e.g. an exported tarball).
+genrule(
+    name = "version_h",
+    outs = ["core/version.h"],
+    cmd = (
+        "set -e; " +
+        "sha=$$(git rev-parse --short=12 HEAD 2>/dev/null || echo unknown); " +
+        "ts=$$(date -u +%Y-%m-%dT%H:%M:%SZ); " +
+        "{ echo '#pragma once'; " +
+        "echo \"#define THEIA_GIT_SHA \\\"$$sha\\\"\"; " +
+        "echo \"#define THEIA_BUILD_TIMESTAMP \\\"$$ts\\\"\"; } > $@"
+    ),
+    local = True,
+)
+
 cc_library(
     name = "supervisor_engine",
     srcs = [
@@ -43,6 +62,7 @@ cc_library(
         "core/registry.h",
         "core/runtime.h",
         "core/spec.h",
+        "core/version.h",
     ],
     # Two include roots:
     #   "core" — the engine's own .cpp write `#include "runtime.h"`.
@@ -56,6 +76,10 @@ cc_library(
         "-Wall",
         "-Wextra",
         "-fPIC",
+        # Force-include the generated stamp so runtime.cpp's #ifdef THEIA_GIT_SHA
+        # picks it up without an explicit #include of a derived file.
+        "-include",
+        "$(GENDIR)/platform/supervisor/impl/core/version.h",
     ],
     deps = [
         "//third_party:nlohmann_json",

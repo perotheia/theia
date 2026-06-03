@@ -112,13 +112,27 @@ std::string locate_tombstone(const std::string& dir,
 
 }  // namespace
 
+namespace {
+// Validate the root tree BEFORE the init list dereferences it for the Registry.
+// Throws on a null / non-supervisor root (same contract as the old body check).
+const Node& require_supervisor_root(const std::unique_ptr<Node>& root) {
+    if (!root || !root->is_supervisor()) {
+        throw std::runtime_error("root must be a supervisor");
+    }
+    return *root;
+}
+}  // namespace
+
 Supervisor::Supervisor(std::unique_ptr<Node> root,
                         std::string root_dir,
                         std::string machine_name)
-    : root_node_(std::move(root)), root_dir_(std::move(root_dir)) {
-    if (!root_node_ || !root_node_->is_supervisor()) {
-        throw std::runtime_error("root must be a supervisor");
-    }
+    // require_supervisor_root() runs first (its arg `root` is evaluated before
+    // the move into root_node_), validating + yielding the tree the Registry is
+    // built from. Member-init order is declaration order: root_node_, then
+    // registry_ — both see the same valid tree.
+    : root_node_((require_supervisor_root(root), std::move(root))),
+      registry_(*root_node_),
+      root_dir_(std::move(root_dir)) {
     root_ = &root_node_->sup;
 
     start_time_      = std::chrono::steady_clock::now();
@@ -219,21 +233,13 @@ uint32_t Supervisor::ctl_resume_child(const std::string& name) {
     return do_resume_child(name);
 }
 
-// Resolve a target name → child TIPC address. Pure read; SupervisorCtl calls
-// it directly and casts the control message itself.
-Supervisor::NodeAddr Supervisor::resolve_node(const std::string& name) {
-    NodeAddr a;
-    a.ok = resolve_trace_target(name, a.type, a.instance);
-    return a;
-}
-
 bool Supervisor::ctl_configure_trace(const std::string& target_node,
                                      bool enabled, uint32_t kind) {
-    // Validate the target resolves to a real worker/node BEFORE storing, so a
-    // typo'd / stale / non-reporting name fails the control reply instead of
-    // silently "succeeding". STORE ONLY — SupervisorCtl does the cast.
-    uint32_t t, i;
-    if (!resolve_trace_target(target_node, t, i)) {
+    // Validate the target resolves to a real reporting node BEFORE storing, so a
+    // typo'd / non-reporting name fails the control reply instead of silently
+    // "succeeding". The Registry is the immutable manifest index — same answer
+    // on any thread. STORE ONLY — SupervisorCtl does the cast.
+    if (!registry_.resolve(target_node).ok) {
         return false;
     }
     apply_trace_config(target_node, /*msg_type=*/"", enabled, kind);
@@ -242,8 +248,7 @@ bool Supervisor::ctl_configure_trace(const std::string& target_node,
 
 bool Supervisor::ctl_configure_log_level(const std::string& target_node,
                                          uint32_t level) {
-    uint32_t t, i;
-    if (!resolve_trace_target(target_node, t, i)) {
+    if (!registry_.resolve(target_node).ok) {
         return false;
     }
     apply_log_level(target_node, level);
@@ -769,15 +774,16 @@ void Supervisor::enqueue(ExecCommand cmd) {
 // If the loop has already shut down, returns a default ExecReply (best-effort:
 // the future would otherwise hang — guarded by the shutdown check).
 ExecReply Supervisor::call(ExecCommand cmd) {
-    // Re-entrant guard: a call() issued FROM the loop thread (e.g. the restart
-    // re-push resolving a node) must NOT enqueue+block — only the loop drains
-    // the queue, so it would self-deadlock. Dispatch inline instead.
+    // Re-entrant guard: a call() issued FROM the loop thread must NOT
+    // enqueue+block — only the loop drains the queue, so it would self-deadlock.
+    // Dispatch inline instead. (No current caller does this — resolve now reads
+    // the lock-free Registry, not a call — but the guard is cheap insurance
+    // against a future loop-thread call().)
     if (std::this_thread::get_id() == loop_tid_) {
-        ExecReply rep;
         std::promise<ExecReply> prom;
         auto fut = prom.get_future();
         cmd.reply = &prom;
-        dispatch(cmd);           // fills prom synchronously, same thread
+        dispatch(cmd);           // fills the promise synchronously, same thread
         return fut.get();
     }
     if (shutdown_requested_.load()) return ExecReply{};
@@ -843,11 +849,6 @@ void Supervisor::dispatch(ExecCommand& cmd) {
         case Op::GetTraceConfig:
             rep.trace_cfg = ctl_get_trace_config();
             break;
-        case Op::ResolveNode: {
-            const NodeAddr a = resolve_node(cmd.name);
-            rep.addr = NodeAddrResult{a.type, a.instance, a.ok};
-            break;
-        }
         case Op::Shutdown:
             request_shutdown();
             break;
@@ -1445,19 +1446,8 @@ WorkerNode* Supervisor::find_worker_by_name(const std::string& name) {
     return nullptr;
 }
 
-// Resolve a NODE-type name ("DriverNode") to the worker hosting it plus that
-// node's NodeInfo. Lets trace config target an individual node, not just the
-// worker (whose first-reporting-node address would otherwise be used). Returns
-// {nullptr, nullptr} if no hosted node matches.
-std::pair<WorkerNode*, const NodeInfo*>
-Supervisor::find_node_by_name(const std::string& name) {
-    for (auto* w : all_workers(*root_)) {
-        for (const auto& ni : w->nodes) {
-            if (ni.name == name) return {w, &ni};
-        }
-    }
-    return {nullptr, nullptr};
-}
+// (find_node_by_name removed — node-name → address resolution moved into the
+// immutable Registry, core/registry.*.)
 
 SupervisorNode* Supervisor::find_supervisor_by_name(const std::string& name) {
     std::vector<SupervisorNode*> stack{root_};
@@ -1903,60 +1893,11 @@ void Supervisor::apply_trace_config(const std::string& target_node,
     // (push_*_to_child → on_*_push → SupervisorCtl forwarder cast).
 }
 
-// Resolve a trace target name (worker OR node-type) to its node's TIPC
-// {type, instance}. Returns false (and logs why) if the name doesn't resolve
-// to a reporting node with a valid address. Shared by the enable push and the
-// disable push so both address the SAME node.
-bool Supervisor::resolve_trace_target(const std::string& child_name,
-                                      uint32_t& type, uint32_t& instance) {
-    // EITHER a worker name ("p1", "sm") OR a node-type name ("DriverNode",
-    // "SmGate"):
-    //   - worker name → the worker's first reporting node (coarse "trace this
-    //     process" intent).
-    //   - node name   → THAT node's own address, so control lands on the right
-    //     node thread (e.g. DriverNode, not just p1's first node CounterNode).
-    const NodeInfo* target = nullptr;
-    if (WorkerNode* w = find_worker_by_name(child_name)) {
-        if (w->nodes.empty()) {
-            std::fprintf(stderr,
-                "supervisor: trace push: worker '%s' has no NodeInfo "
-                "(reporting=false?) — skipping push\n",
-                child_name.c_str());
-            return false;
-        }
-        for (const auto& ni : w->nodes) {
-            if (ni.reporting) { target = &ni; break; }
-        }
-    } else {
-        auto [host, ni] = find_node_by_name(child_name);
-        if (host && ni) {
-            if (!ni->reporting) {
-                std::fprintf(stderr,
-                    "supervisor: trace push: node '%s' is non-reporting "
-                    "— cannot push (use the legacy in-proc enable)\n",
-                    child_name.c_str());
-                return false;
-            }
-            target = ni;
-        }
-    }
-    if (!target) {
-        std::fprintf(stderr,
-            "supervisor: trace push: no worker or node named '%s' yet\n",
-            child_name.c_str());
-        return false;
-    }
-    try {
-        type     = std::stoul(target->tipc_type, nullptr, 0);
-        instance = std::stoul(target->tipc_instance, nullptr, 0);
-    } catch (...) {
-        std::fprintf(stderr,
-            "supervisor: trace push: bad tipc addr for '%s'\n",
-            child_name.c_str());
-        return false;
-    }
-    return true;
-}
+// (resolve_trace_target removed — name→address resolution now lives in the
+// immutable Registry (core/registry.*), built once from the manifest. The old
+// tree-walking resolver is gone; SupervisorCtl resolves off registry() and the
+// configure-* validation does too. The Registry encodes the SAME worker-name →
+// first-reporting-node / node-name → own-address rules.)
 
 // (push_trace_disable_to_child removed — SupervisorCtl now casts the disable
 // directly from ConfigureTrace's handler, the same plain resolve+cast path as

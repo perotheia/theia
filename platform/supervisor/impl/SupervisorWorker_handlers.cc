@@ -105,9 +105,13 @@ void SupervisorWorker::do_start() {
     const std::string manifest = manifest_path();
     const std::string root     = root_dir();
     try {
-        auto tree = ::supervisor::load_manifest(manifest);
-        g_engine  = std::make_unique<::supervisor::Supervisor>(
-            std::move(tree), root);
+        // Manifest ctor loads + validates the JSON, THROWING if the file is
+        // missing/malformed. A supervisor with no manifest cannot supervise —
+        // that's fatal, not a soft-fail: we let the throw abort the process
+        // (std::abort below) rather than limp on with a null engine.
+        ::supervisor::Manifest m(manifest);
+        g_engine = std::make_unique<::supervisor::Supervisor>(
+            m.take_tree(), root);
         g_engine->set_emit_sink(make_sink());
         ::supervisor::set_supervisor(g_engine.get());
         std::fprintf(stderr,
@@ -117,8 +121,7 @@ void SupervisorWorker::do_start() {
         std::fprintf(stderr,
                      "[%s] FATAL: cannot build supervision engine: %s\n",
                      kNodeName, e.what());
-        // Leave g_engine null — do_loop() returns immediately and the
-        // process exits via the runtime's normal shutdown.
+        std::abort();  // no manifest, no supervision — crash, don't limp.
     }
 }
 

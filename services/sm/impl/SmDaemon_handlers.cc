@@ -17,7 +17,7 @@
 #include "NodeRef.hh"   // theia::runtime::LocalRef — publish self to the gate
 
 #include <chrono>
-#include <cstdio>
+#include <string>
 
 namespace ara::sm {
 
@@ -56,10 +56,9 @@ void SmDaemon::on_enter(SmDaemonState new_s,
         "OFF", "STARTING", "RUNNING", "DEGRADED", "UPDATE", "SHUTDOWN",
     };
     const auto idx = static_cast<std::size_t>(new_s);
-    std::fprintf(stderr, "[%s] → %s @ %llu\n",
-                 kNodeName,
-                 idx < sizeof(names)/sizeof(names[0]) ? names[idx] : "?",
-                 static_cast<unsigned long long>(d.ts_ns));
+    this->log().info(std::string("→ ") +
+        (idx < sizeof(names)/sizeof(names[0]) ? names[idx] : "?") + " @ " +
+        std::to_string(d.ts_ns));
 
     // §3.B notifier: fan out to every registered SmStateStream
     // subscriber. The lib template's broadcast_broadcast_state()
@@ -87,15 +86,13 @@ SmEmpty SmDaemon::handle_call(
         theia::runtime::post_event(*this, UpdateRequest{});
         break;
     case system_services_sm_SmState_SmState_RUNNING:
-        std::fprintf(stderr,
-            "[%s] RequestMode(RUNNING) — RUNNING is reached via "
-            "internal events; request ignored\n", kNodeName);
+        this->log().warn("RequestMode(RUNNING) — RUNNING is reached via "
+                         "internal events; request ignored");
         break;
     default:
-        std::fprintf(stderr,
-            "[%s] RequestMode(target=%u) — not a client-driven "
-            "target; request ignored\n",
-            kNodeName, static_cast<unsigned>(req.target));
+        this->log().warn("RequestMode(target=" +
+            std::to_string(static_cast<unsigned>(req.target)) +
+            ") — not a client-driven target; request ignored");
         break;
     }
     return SmEmpty{};

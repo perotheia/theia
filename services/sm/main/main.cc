@@ -11,7 +11,8 @@
 #include "lib/SmDaemon.hh"
 #include "lib/SmGate.hh"
 
-#include "Logger.hh"     // parse_log_level / process_logger
+#include "lib/Log.hh"    // per-node MakeContextLogger(tag) — tagged + $THEIA_LOGGER sink
+#include "Logger.hh"     // parse_log_level / process_logger / set_process_logger
 
 #include "TipcMux.hh"    // config-service receiver for reporting nodes (#386)
 
@@ -37,18 +38,13 @@ int main() {
 
     using namespace ara::sm;
 
-    // Process-wide logger. Pick up THEIA_LOG_LEVEL from the env
-    // (supervisor sets it from executor.json's per-child env map,
-    // sourced from Process.log_level on the rig). Defaults to Info
-    // when unset or unparseable. set_process_logger publishes it so a
-    // reporting node's config service can apply a live ConfigureLogLevel
-    // push (#386) via process_logger().set_level on the node thread.
-    auto logger = MakeContextLogger();
+    // Boot log level — THEIA_LOG_LEVEL from the env (supervisor sets it from
+    // executor.json's per-child env map). Defaults to Info when unset. Applied
+    // to every node's logger below; the SINK kind comes from THEIA_LOGGER.
+    auto boot_level = ::theia::runtime::kDefaultLogLevel;
     if (const char* lvl = std::getenv("THEIA_LOG_LEVEL")) {
-        logger->set_level(::theia::runtime::parse_log_level(lvl));
+        boot_level = ::theia::runtime::parse_log_level(lvl);
     }
-    ::theia::runtime::set_process_logger(logger);
-    (void)logger;
 
     ::theia::runtime::TimerService timers;
     (void)timers;  // wired into statem nodes' send_after
@@ -59,11 +55,23 @@ int main() {
 
 
     SmDaemon sm_daemon;
+    // Per-node logger: tagged [#sm_daemon] (kNodeName, matches `tdb ps`),
+    // sink chosen by $THEIA_LOGGER. Installed BEFORE start so init/do_* log
+    // through it; the FIRST node's logger also backs process_logger().
+    {
+        auto sm_daemon_log = MakeContextLogger(SmDaemon::kNodeName);
+        sm_daemon_log->set_level(boot_level);
+        ::theia::runtime::set_process_logger(sm_daemon_log);
+        sm_daemon.set_logger(std::move(sm_daemon_log));
+    }
     sm_daemon.start_statem(timers);
-    std::fprintf(stderr,
-                 "[sm_daemon] up — TIPC type=0x%x instance=%u; "
-                 "statem initial=OFF\n",
-                 SmDaemon::kTipcType, SmDaemon::kTipcInstance);
+    {
+        char _tipc[96];
+        std::snprintf(_tipc, sizeof(_tipc),
+                      "up — TIPC type=0x%x instance=%u; statem initial=OFF",
+                      SmDaemon::kTipcType, SmDaemon::kTipcInstance);
+        sm_daemon.log().info(_tipc);
+    }
 
     if (auto* sm_daemon_cfg = config_mux.bind_node(
             sm_daemon, SmDaemon::kTipcType,
@@ -81,16 +89,27 @@ int main() {
         config_mux.register_call<SmRequest, SmEmpty>(
             sm_daemon_cfg, sm_daemon);
     } else {
-        std::fprintf(stderr,
-                     "[sm_daemon] WARN: config service bind failed; "
-                     "live log-level push + signal inject disabled\n");
+        sm_daemon.log().warn("config service bind failed; live log-level "
+                                 "push + signal inject disabled");
     }
 
 
     SmGate sm_gate;
+    // Per-node logger: tagged [#sm_gate] (kNodeName, matches `tdb ps`),
+    // sink chosen by $THEIA_LOGGER. Installed BEFORE start so init/do_* log
+    // through it; the FIRST node's logger also backs process_logger().
+    {
+        auto sm_gate_log = MakeContextLogger(SmGate::kNodeName);
+        sm_gate_log->set_level(boot_level);
+        sm_gate.set_logger(std::move(sm_gate_log));
+    }
     sm_gate.start();
-    std::fprintf(stderr, "[sm_gate] up — TIPC type=0x%x instance=%u\n",
-                 SmGate::kTipcType, SmGate::kTipcInstance);
+    {
+        char _tipc[64];
+        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
+                      SmGate::kTipcType, SmGate::kTipcInstance);
+        sm_gate.log().info(_tipc);
+    }
 
     if (auto* sm_gate_cfg = config_mux.bind_node(
             sm_gate, SmGate::kTipcType,
@@ -113,9 +132,8 @@ int main() {
         config_mux.register_cast<RetryStartup>(sm_gate_cfg, sm_gate);
         config_mux.register_cast<PowerOff>(sm_gate_cfg, sm_gate);
     } else {
-        std::fprintf(stderr,
-                     "[sm_gate] WARN: config service bind failed; "
-                     "live log-level push + signal inject disabled\n");
+        sm_gate.log().warn("config service bind failed; live log-level "
+                                 "push + signal inject disabled");
     }
 
 

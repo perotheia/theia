@@ -7,8 +7,9 @@
 
 #include "lib/PerDaemon.hh"
 
+#include "lib/Log.hh"    // per-node MakeContextLogger(tag) — tagged + $THEIA_LOGGER sink
 #include "TimerService.hh"
-#include "Logger.hh"     // parse_log_level / MakeContextLogger / process_logger
+#include "Logger.hh"     // parse_log_level / process_logger / set_process_logger
 
 #include "TipcMux.hh"    // config-service receiver for reporting nodes (#386)
 
@@ -34,18 +35,14 @@ int main() {
 
     using namespace ara::per;
 
-    // Process-wide logger. Pick up THEIA_LOG_LEVEL from the env
-    // (supervisor sets it from executor.json's per-child env map,
-    // sourced from Process.log_level on the rig). Defaults to Info
-    // when unset or unparseable. set_process_logger publishes it so a
-    // reporting node's config service can apply a live ConfigureLogLevel
-    // push (#386) via process_logger().set_level on the node thread.
-    auto logger = MakeContextLogger();
+    // Boot log level — THEIA_LOG_LEVEL from the env (supervisor sets it from
+    // executor.json's per-child env map, sourced from Process.log_level on the
+    // rig). Defaults to Info when unset/unparseable. Applied to every node's
+    // logger below. The SINK kind comes from THEIA_LOGGER (MakeContextLogger).
+    auto boot_level = ::theia::runtime::kDefaultLogLevel;
     if (const char* lvl = std::getenv("THEIA_LOG_LEVEL")) {
-        logger->set_level(::theia::runtime::parse_log_level(lvl));
+        boot_level = ::theia::runtime::parse_log_level(lvl);
     }
-    ::theia::runtime::set_process_logger(logger);
-    (void)logger;  // available for user handlers via RuntimeContext
 
     ::theia::runtime::TimerService timers;
     (void)timers;  // no node requires_timers
@@ -64,9 +61,23 @@ int main() {
 
 
     PerDaemon per_daemon;
+    // Per-node logger: tagged [#per_daemon] (kNodeName, matches `tdb ps`),
+    // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so do_start/init
+    // log through it. The FIRST node's logger also backs process_logger() — the
+    // ConfigureLogLevel-push fallback target + any process_logger() caller.
+    {
+        auto per_daemon_log = MakeContextLogger(PerDaemon::kNodeName);
+        per_daemon_log->set_level(boot_level);
+        ::theia::runtime::set_process_logger(per_daemon_log);
+        per_daemon.set_logger(std::move(per_daemon_log));
+    }
     per_daemon.start();
-    std::fprintf(stderr, "[per_daemon] up — TIPC type=0x%x instance=%u\n",
-                 PerDaemon::kTipcType, PerDaemon::kTipcInstance);
+    {
+        char _tipc[64];
+        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
+                      PerDaemon::kTipcType, PerDaemon::kTipcInstance);
+        per_daemon.log().info(_tipc);
+    }
 
     if (auto* per_daemon_cfg = config_mux.bind_node(
             per_daemon, PerDaemon::kTipcType,
@@ -86,9 +97,8 @@ int main() {
         config_mux.register_call<PerPut, PerEmpty>(
             per_daemon_cfg, per_daemon);
     } else {
-        std::fprintf(stderr,
-                     "[per_daemon] WARN: config service bind failed; "
-                     "live log-level push + signal inject disabled\n");
+        per_daemon.log().warn("config service bind failed; live log-level "
+                                 "push + signal inject disabled");
     }
 
 

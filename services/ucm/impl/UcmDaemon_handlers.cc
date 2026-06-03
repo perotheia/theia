@@ -11,8 +11,6 @@
 
 #include "lib/UcmDaemon.hh"
 
-#include <cstdio>
-
 namespace ara::ucm {
 
 
@@ -37,8 +35,7 @@ UcmReply UcmDaemon::handle_call(
     //                                 UcmReply).
     // Dispatched by request type; one or more server ports may
     // expose this operation.
-    std::fprintf(stderr, "[%s] RequestUpdate called\n",
-                 kNodeName);
+    this->log().info("RequestUpdate called");
     return UcmReply{};
 }
 

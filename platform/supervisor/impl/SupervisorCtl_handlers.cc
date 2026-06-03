@@ -15,7 +15,7 @@
 // installs the bridge's EmitForwarder in init() — the engine's EmitSink fans
 // events back out through this node's `events` broadcast senders, and the
 // engine's restart re-push asks control (by child NAME) to resolve + cast the
-// typed trace/log config (resolve via call(ResolveNode), cast from here).
+// typed trace/log config (resolve off the lock-free Registry, cast from here).
 
 #include "lib/SupervisorCtl.hh"
 
@@ -160,12 +160,11 @@ void resolve_and_cast(const std::string& child, const Msg& m) {
     if (!g_ctl) return;
     auto* eng = ::supervisor::supervisor_instance();
     if (!eng) return;
-    // Resolve on the LOOP THREAD (call) — the tree it reads is mutated only
-    // there. Then cast from g_ctl (this runtime-backed thread); the worker
-    // runnable can't touch transport.
-    auto c = exec_cmd(::supervisor::ExecCommand::Op::ResolveNode);
-    c.name = child;
-    const auto addr = eng->call(std::move(c)).addr;
+    // Resolve straight off the engine's immutable Registry (the manifest index)
+    // — no command-queue hop: the name→address map is fixed at load and safe to
+    // read from any thread. Then cast from g_ctl (this runtime-backed thread);
+    // the worker runnable can't touch transport.
+    const auto addr = eng->registry().resolve(child);
     if (!addr.ok) return;
     ::theia::runtime::cast(*g_ctl, m,
                            ::theia::runtime::TipcAddr{addr.type, addr.instance});

@@ -34,11 +34,13 @@ cc_library(
     name = "supervisor_engine",
     srcs = [
         "core/bridge.cpp",
+        "core/registry.cpp",
         "core/runtime.cpp",
         "core/spec.cpp",
     ],
     hdrs = [
         "core/bridge.h",
+        "core/registry.h",
         "core/runtime.h",
         "core/spec.h",
     ],

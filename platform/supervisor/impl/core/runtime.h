@@ -17,6 +17,7 @@
 
 #pragma once
 
+#include "registry.h"
 #include "spec.h"
 
 #include <atomic>
@@ -138,24 +139,19 @@ struct TreeRow {
 //
 // Flat fields (not a union): only the ones an op needs are populated. Trivially
 // movable; the queue owns it by value.
-// Forward — ExecReply carries a resolved address for ResolveNode.
-struct NodeAddrResult { uint32_t type{0}; uint32_t instance{0}; bool ok{false}; };
-
 struct ExecReply {
     uint32_t                    status{0};   // ControlReply.status ordinal
     bool                        ok{false};   // configure_* resolve result
     std::vector<TreeRow>        tree;        // GetTree
     std::vector<TraceConfigRow> trace_cfg;   // GetTraceConfig
     SystemInfoData              sysinfo;     // GetSystemInfo
-    NodeAddrResult              addr;        // ResolveNode
 };
 
 struct ExecCommand {
     enum class Op {
         StartChild, DeleteChild, RestartChild, SuspendChild, ResumeChild,
         TerminateChild, OnHeartbeat, OnSendTimeout, ConfigureTrace,
-        ConfigureLogLevel, GetTree, GetSystemInfo, GetTraceConfig, ResolveNode,
-        Shutdown,
+        ConfigureLogLevel, GetTree, GetSystemInfo, GetTraceConfig, Shutdown,
     };
     Op op;
 
@@ -271,20 +267,12 @@ public:
     uint32_t ctl_suspend_child(const std::string& name);
     uint32_t ctl_resume_child(const std::string& name);
 
-    // A resolved child node TIPC address. ok=false when the name doesn't
-    // resolve to a reporting node (typo / stale / non-reporting).
-    struct NodeAddr {
-        uint32_t type     = 0;
-        uint32_t instance = 0;
-        bool     ok       = false;
-    };
-
-    // Resolve a target name (worker OR node-type) to its TIPC address. Reads
-    // the tree, so it runs on the LOOP THREAD via call({Op::ResolveNode}) — the
-    // tree structure (start/delete child) is mutated only there, so a direct
-    // cross-thread call would race. SupervisorCtl does the call, gets the addr
-    // back, then casts the control message itself (the runnable can't cast).
-    NodeAddr resolve_node(const std::string& name);
+    // The immutable name → TIPC address index, built once from the manifest.
+    // Read-only and lock-free: SupervisorCtl resolves a trace/log target off it
+    // DIRECTLY from its own thread (no command-queue hop) — the data it reads
+    // (per-node TIPC addresses) is fixed at load and never mutated by fork/reap
+    // or hot-add/delete. See registry.h.
+    const Registry& registry() const { return registry_; }
 
     // ConfigureTrace / ConfigureLogLevel — STORE the config only (survives
     // restart via the spawn env + the heartbeat-after-gap re-emit). They do NOT
@@ -344,6 +332,10 @@ private:
 
     std::unique_ptr<Node>            root_node_;
     SupervisorNode*                  root_;
+    // Immutable name → TIPC address index, built once from root_node_ in the
+    // ctor. Read-only thereafter; resolve() is lock-free and safe from any
+    // thread (the manifest topology never changes). See registry.h.
+    Registry                         registry_;
     std::string                      root_dir_;
     std::atomic<bool>                shutdown_requested_{false};
     bool                             escalated_{false};
@@ -362,10 +354,11 @@ private:
     std::deque<ExecCommand>          cmd_queue_;
 
     // The select-loop thread id, set at the top of run(). call() compares
-    // against it: a call() issued FROM the loop thread (e.g. the restart
-    // re-push → resolve_node) dispatches INLINE instead of enqueue+block, which
-    // would self-deadlock (only the loop fulfils the promise). Off-loop callers
-    // (SupervisorCtl's TipcMux thread) take the normal enqueue+future path.
+    // against it: a call() issued FROM the loop thread dispatches INLINE instead
+    // of enqueue+block, which would self-deadlock (only the loop fulfils the
+    // promise). No current caller does this — resolve now reads the lock-free
+    // Registry — but the guard keeps a future loop-thread call() safe. Off-loop
+    // callers (SupervisorCtl's TipcMux thread) take the normal enqueue+future.
     std::thread::id                  loop_tid_{};
 
     // Outbound emit surface — installed by the FC shell via set_emit_sink();
@@ -400,9 +393,6 @@ private:
     // OTP semantics require, returning a status ordinal. No envelope: the
     // SupervisorCtl gen_server dispatches one typed CALL per op.
     WorkerNode*     find_worker_by_name(const std::string& name);
-    // Resolve a node-type name to {hosting worker, that node's NodeInfo}.
-    std::pair<WorkerNode*, const NodeInfo*>
-                    find_node_by_name(const std::string& name);
     SupervisorNode* find_supervisor_by_name(const std::string& name);
 
     // OTP start_child / delete_child: hot-add and hot-remove. Both
@@ -534,9 +524,6 @@ private:
     // looked up from the worker's NodeInfo.tipc_{type,instance}.
     // No-op when the child has no entries.
     void push_trace_config_to_child(const std::string& child_name);
-    // Resolve a trace target name (worker OR node-type) to its TIPC addr.
-    bool resolve_trace_target(const std::string& child_name,
-                              uint32_t& type, uint32_t& instance);
 
     // Per-child log level (#385). supdbg → services/com → here.
     // Same survives-restart contract as trace: store the level,

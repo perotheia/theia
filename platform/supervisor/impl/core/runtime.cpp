@@ -139,26 +139,30 @@ Supervisor::Supervisor(std::unique_ptr<Node> root,
     }
     (void)machine_name;
 
-    // Block SIGCHLD/SIGTERM/SIGINT process-wide; we read them via signalfd.
+    // Block SIGCHLD only and read it via signalfd — child reaping is the
+    // engine's concern. SIGTERM/SIGINT are NOT ours: the generic gen-app main.cc
+    // owns process termination (std::signal → stop nodes → exit), the same as
+    // every FC. (Previously this also blocked SIGTERM/SIGINT, stealing them from
+    // main's handler → the process hung on SIGTERM.) pthread_sigmask, NOT
+    // sigprocmask: this runs on the worker thread (GenRunnable::do_start) of a
+    // multithreaded process, where sigprocmask is undefined behavior.
     sigset_t mask;
     sigemptyset(&mask);
     sigaddset(&mask, SIGCHLD);
-    sigaddset(&mask, SIGTERM);
-    sigaddset(&mask, SIGINT);
-    if (sigprocmask(SIG_BLOCK, &mask, nullptr) < 0) {
-        throw std::runtime_error(std::string("sigprocmask: ") + std::strerror(errno));
+    if (int e = pthread_sigmask(SIG_BLOCK, &mask, nullptr); e != 0) {
+        throw std::runtime_error(std::string("pthread_sigmask: ") + std::strerror(e));
     }
     signal_fd_ = signalfd(-1, &mask, SFD_CLOEXEC | SFD_NONBLOCK);
     if (signal_fd_ < 0) {
         throw std::runtime_error(std::string("signalfd: ") + std::strerror(errno));
     }
 
-    // #431 — command-queue wake. The control node's handle_call (TipcMux epoll
-    // thread) post_command()s a closure + writes this fd; the select() loop
-    // adds it to its fd_set and drains/runs the queued closures on the loop
-    // thread. EFD_NONBLOCK so the loop's drain never blocks; the counter
-    // semantics collapse N pending writes into one readable event (we drain
-    // the whole queue regardless of the counter value).
+    // Command-queue wake. The control node (TipcMux thread) enqueue()/call()s a
+    // typed ExecCommand + writes this fd; the select() loop adds it to its
+    // fd_set and drains/dispatches the queued commands on the loop thread.
+    // EFD_NONBLOCK so the loop's drain never blocks; the counter semantics
+    // collapse N pending writes into one readable event (we drain the whole
+    // queue regardless of the counter value).
     cmd_eventfd_ = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
     if (cmd_eventfd_ < 0) {
         throw std::runtime_error(std::string("eventfd: ") + std::strerror(errno));
@@ -182,10 +186,10 @@ void Supervisor::request_shutdown() {
 }
 
 // ---------------------------------------------------------------------------
-// Control-surface wrappers. SupervisorCtl::handle_call now calls these DIRECTLY
-// from its TipcMux thread (no run_on_engine loop-marshal), so each takes
-// state_mu_ to serialize fork/mutate against the loop's reap/sample/emit (which
-// also take it). The loop is no longer the sole writer; the lock is.
+// Control-surface impls — LOOP-THREAD ONLY. Invoked exclusively by dispatch()
+// (drain_commands) on the select-loop thread, which is the single writer of the
+// tree + config tables. No lock: the actor queue (cmd_mutex_) already serialized
+// ingress; once a command runs here it owns the state uncontended.
 // ---------------------------------------------------------------------------
 
 uint32_t Supervisor::ctl_start_child(const std::string& parent_sup,
@@ -193,7 +197,6 @@ uint32_t Supervisor::ctl_start_child(const std::string& parent_sup,
                                      const std::vector<std::string>& start_cmd,
                                      int restart, int shutdown, int type,
                                      const std::vector<std::string>& modules) {
-    std::lock_guard<std::recursive_mutex> lk(state_mu_);
     uint32_t status = 0;
     do_start_child(parent_sup, name, start_cmd, restart, shutdown, type,
                    modules, status);
@@ -201,30 +204,24 @@ uint32_t Supervisor::ctl_start_child(const std::string& parent_sup,
 }
 
 uint32_t Supervisor::ctl_delete_child(const std::string& name) {
-    std::lock_guard<std::recursive_mutex> lk(state_mu_);
     return do_delete_child(name);
 }
 uint32_t Supervisor::ctl_restart_child(const std::string& name) {
-    std::lock_guard<std::recursive_mutex> lk(state_mu_);
     return do_restart_child(name);
 }
 uint32_t Supervisor::ctl_terminate_child(const std::string& name) {
-    std::lock_guard<std::recursive_mutex> lk(state_mu_);
     return do_terminate_child(name);
 }
 uint32_t Supervisor::ctl_suspend_child(const std::string& name) {
-    std::lock_guard<std::recursive_mutex> lk(state_mu_);
     return do_suspend_child(name);
 }
 uint32_t Supervisor::ctl_resume_child(const std::string& name) {
-    std::lock_guard<std::recursive_mutex> lk(state_mu_);
     return do_resume_child(name);
 }
 
 // Resolve a target name → child TIPC address. Pure read; SupervisorCtl calls
 // it directly and casts the control message itself.
 Supervisor::NodeAddr Supervisor::resolve_node(const std::string& name) {
-    std::lock_guard<std::recursive_mutex> lk(state_mu_);
     NodeAddr a;
     a.ok = resolve_trace_target(name, a.type, a.instance);
     return a;
@@ -232,7 +229,6 @@ Supervisor::NodeAddr Supervisor::resolve_node(const std::string& name) {
 
 bool Supervisor::ctl_configure_trace(const std::string& target_node,
                                      bool enabled, uint32_t kind) {
-    std::lock_guard<std::recursive_mutex> lk(state_mu_);
     // Validate the target resolves to a real worker/node BEFORE storing, so a
     // typo'd / stale / non-reporting name fails the control reply instead of
     // silently "succeeding". STORE ONLY — SupervisorCtl does the cast.
@@ -246,7 +242,6 @@ bool Supervisor::ctl_configure_trace(const std::string& target_node,
 
 bool Supervisor::ctl_configure_log_level(const std::string& target_node,
                                          uint32_t level) {
-    std::lock_guard<std::recursive_mutex> lk(state_mu_);
     uint32_t t, i;
     if (!resolve_trace_target(target_node, t, i)) {
         return false;
@@ -270,7 +265,6 @@ std::vector<TraceConfigRow> Supervisor::ctl_get_trace_config() {
 }
 
 std::vector<TreeRow> Supervisor::ctl_get_tree() {
-    std::lock_guard<std::recursive_mutex> lk(state_mu_);
     // Same topological walk as emit_tree_stream, collected into a flat list.
     // Synthesize the <worker>_sup bracket row for reporting workers (#364) so
     // the rebuilt tree matches the firehose hierarchy.
@@ -367,7 +361,6 @@ SystemInfoData Supervisor::ctl_get_system_info() {
 // first beat after a gap (#361).
 void Supervisor::ctl_on_heartbeat(const std::string& node_name, pid_t pid,
                                   uint64_t seq) {
-    std::lock_guard<std::recursive_mutex> lk(state_mu_);
     auto now = std::chrono::steady_clock::now();
     auto& s = heartbeats_[pid];
     s.last_seen = now;
@@ -394,7 +387,6 @@ void Supervisor::ctl_on_send_timeout(const std::string& caller,
                                      const std::string& iface,
                                      const std::string& method,
                                      uint32_t budget_ms, uint32_t observed_ms) {
-    std::lock_guard<std::recursive_mutex> lk(state_mu_);
     std::ostringstream detail;
     detail << caller << " → " << callee << " " << iface << "." << method
            << " budget=" << budget_ms << "ms observed=" << observed_ms << "ms";
@@ -744,28 +736,129 @@ void Supervisor::restart_rest(SupervisorNode& sup, WorkerNode& failed) {
 // Main loop
 // ---------------------------------------------------------------------------
 
-// #431 — push a closure onto the command queue and wake the select() loop.
-// Callable from any thread (the control node's TipcMux epoll thread). The
-// closure runs LATER, on the loop thread, in drain_commands().
-void Supervisor::post_command(std::function<void()> fn) {
+// ---------------------------------------------------------------------------
+// Executor command surface — the actor ingress. enqueue()/call() push a typed
+// ExecCommand and wake the loop; drain_commands() dispatches each on the loop
+// thread. cmd_mutex_ guards ONLY the queue.
+// ---------------------------------------------------------------------------
+
+namespace {
+// Wake the select() loop: eventfd write of 1 increments the counter; coalesces
+// with other pending writes (the loop drains the whole queue regardless).
+void wake_loop(int fd) {
+    if (fd < 0) return;
+    uint64_t one = 1;
+    ssize_t n = ::write(fd, &one, sizeof(one));
+    (void)n;  // best-effort; a full counter still leaves the fd readable
+}
+}  // namespace
+
+// Fire-and-forget cast. Returns immediately; the command runs LATER on the loop
+// thread. Callable from any thread (SupervisorCtl's TipcMux thread).
+void Supervisor::enqueue(ExecCommand cmd) {
+    cmd.reply = nullptr;  // a cast never carries a reply channel
     {
         std::lock_guard<std::mutex> lk(cmd_mutex_);
-        cmd_queue_.push_back(std::move(fn));
+        cmd_queue_.push_back(std::move(cmd));
     }
-    // Wake the loop. eventfd write of 1 increments the counter; coalesces
-    // with any other pending writes (we drain the whole queue regardless).
-    if (cmd_eventfd_ >= 0) {
-        uint64_t one = 1;
-        ssize_t n = ::write(cmd_eventfd_, &one, sizeof(one));
-        (void)n;  // best-effort; a full counter still leaves the fd readable
-    }
+    wake_loop(cmd_eventfd_);
 }
 
-// #431 — run every queued closure on the LOOP THREAD. Called once per
-// select() iteration before reap/sample/emit, so control dispatch is
-// single-threaded with all other state mutation (no mutex on the tree, no
-// fork-under-lock). We swap the queue out under the lock, then run the
-// closures with the lock released (a closure may itself post_command).
+// Synchronous call. Attaches a single per-call promise, enqueues, and blocks on
+// the future until the loop thread dispatches the command and fills the reply.
+// If the loop has already shut down, returns a default ExecReply (best-effort:
+// the future would otherwise hang — guarded by the shutdown check).
+ExecReply Supervisor::call(ExecCommand cmd) {
+    // Re-entrant guard: a call() issued FROM the loop thread (e.g. the restart
+    // re-push resolving a node) must NOT enqueue+block — only the loop drains
+    // the queue, so it would self-deadlock. Dispatch inline instead.
+    if (std::this_thread::get_id() == loop_tid_) {
+        ExecReply rep;
+        std::promise<ExecReply> prom;
+        auto fut = prom.get_future();
+        cmd.reply = &prom;
+        dispatch(cmd);           // fills prom synchronously, same thread
+        return fut.get();
+    }
+    if (shutdown_requested_.load()) return ExecReply{};
+    std::promise<ExecReply> prom;
+    auto fut = prom.get_future();
+    cmd.reply = &prom;
+    {
+        std::lock_guard<std::mutex> lk(cmd_mutex_);
+        cmd_queue_.push_back(std::move(cmd));
+    }
+    wake_loop(cmd_eventfd_);
+    return fut.get();
+}
+
+// Dispatch ONE command on the loop thread. The single switch that maps each
+// typed op to its ctl_* impl; for CALL-shaped ops, fills cmd.reply. No lock —
+// the loop is the single writer.
+void Supervisor::dispatch(ExecCommand& cmd) {
+    using Op = ExecCommand::Op;
+    ExecReply rep;
+    switch (cmd.op) {
+        case Op::StartChild:
+            rep.status = ctl_start_child(cmd.parent, cmd.name, cmd.start_cmd,
+                                         cmd.restart, cmd.shutdown, cmd.type,
+                                         cmd.modules);
+            break;
+        case Op::DeleteChild:
+            rep.status = ctl_delete_child(cmd.name);
+            break;
+        case Op::RestartChild:
+            rep.status = ctl_restart_child(cmd.name);
+            break;
+        case Op::SuspendChild:
+            rep.status = ctl_suspend_child(cmd.name);
+            break;
+        case Op::ResumeChild:
+            rep.status = ctl_resume_child(cmd.name);
+            break;
+        case Op::TerminateChild:
+            rep.status = ctl_terminate_child(cmd.name);
+            break;
+        case Op::OnHeartbeat:
+            ctl_on_heartbeat(cmd.name, cmd.pid, cmd.seq);
+            break;
+        case Op::OnSendTimeout:
+            ctl_on_send_timeout(cmd.name, cmd.callee, cmd.iface, cmd.method,
+                                cmd.budget_ms, cmd.observed_ms);
+            break;
+        case Op::ConfigureTrace:
+            rep.ok = ctl_configure_trace(cmd.name, cmd.enabled, cmd.kind);
+            rep.status = rep.ok ? 0u : 4u;
+            break;
+        case Op::ConfigureLogLevel:
+            rep.ok = ctl_configure_log_level(cmd.name, cmd.level);
+            rep.status = rep.ok ? 0u : 4u;
+            break;
+        case Op::GetTree:
+            rep.tree = ctl_get_tree();
+            break;
+        case Op::GetSystemInfo:
+            rep.sysinfo = ctl_get_system_info();
+            break;
+        case Op::GetTraceConfig:
+            rep.trace_cfg = ctl_get_trace_config();
+            break;
+        case Op::ResolveNode: {
+            const NodeAddr a = resolve_node(cmd.name);
+            rep.addr = NodeAddrResult{a.type, a.instance, a.ok};
+            break;
+        }
+        case Op::Shutdown:
+            request_shutdown();
+            break;
+    }
+    if (cmd.reply) cmd.reply->set_value(std::move(rep));
+}
+
+// Drain the queue and dispatch every command on the LOOP THREAD. Called once
+// per select() iteration before reap/sample/emit, so control dispatch is
+// single-threaded with all other state mutation. We swap the queue out under
+// the lock, then dispatch with the lock released (a command could enqueue).
 void Supervisor::drain_commands() {
     // Drain the eventfd counter (non-blocking) so the loop doesn't spin.
     if (cmd_eventfd_ >= 0) {
@@ -773,22 +866,23 @@ void Supervisor::drain_commands() {
         ssize_t n = ::read(cmd_eventfd_, &cnt, sizeof(cnt));
         (void)n;  // EAGAIN when not readable — fine
     }
-    std::deque<std::function<void()>> batch;
+    std::deque<ExecCommand> batch;
     {
         std::lock_guard<std::mutex> lk(cmd_mutex_);
         batch.swap(cmd_queue_);
     }
-    for (auto& fn : batch) {
-        if (fn) fn();
+    for (auto& cmd : batch) {
+        dispatch(cmd);
     }
 }
 
 int Supervisor::run() {
+    loop_tid_ = std::this_thread::get_id();  // claim loop-thread identity
     log_info("supervisor starting (root=" + root_->name + ")");
     start_subtree(*root_);
 
     // The control surface is provided by the gen-app SupervisorCtl node
-    // (bound on the FC's config_mux at 0x80020001); it post_command()s each
+    // (bound on the FC's config_mux at 0x80020001); it enqueue()/call()s each
     // op into this engine. No ControlServer / TipcPublisher here any more —
     // this loop is purely the supervision state owner.
 
@@ -825,33 +919,20 @@ int Supervisor::run() {
                 }
                 if (n != sizeof(si)) break;
 
-                switch (si.ssi_signo) {
-                    case SIGTERM:
-                    case SIGINT:
-                        log_info("shutdown requested (signal=" +
-                                 std::to_string(si.ssi_signo) + ")");
-                        shutdown_requested_.store(true);
-                        break;
-                    case SIGCHLD:
-                        // Handled by reap() below; nothing else to do here.
-                        break;
-                    default:
-                        break;
-                }
+                // Only SIGCHLD is blocked into this signalfd now; reap() below
+                // handles it. SIGTERM/SIGINT are owned by the generic main.cc
+                // (which calls request_shutdown via worker.stop → do_stop), so
+                // they never arrive here. Any other signo is ignored.
+                (void)si;
             }
         }
 
-        // #431 — run any control commands posted by SupervisorCtl::handle_call
-        // (TipcMux epoll thread) FIRST, on this loop thread, so the ctl_*
-        // primitives (→ do_*/apply_*) are single-threaded with reap/sample/emit
-        // below. This is the threading-hazard fix: one writer, no mutex on the
-        // tree, no fork-under-lock.
+        // Drain + dispatch any control commands enqueued by SupervisorCtl
+        // (TipcMux thread) FIRST, on THIS loop thread, so the ctl_* impls
+        // (→ do_*/apply_*) run single-threaded with reap/sample/emit below.
+        // This IS the actor model: one writer (this loop), no lock on the tree,
+        // no fork-under-lock, no reap delayed behind a control caller.
         drain_commands();
-
-        // Per-tick tree work runs under state_mu_ so it's serialized against
-        // SupervisorCtl's DIRECT ctl_* calls (reap-vs-fork, etc.). The lock is
-        // recursive: config_repush below re-enters via ctl_set_* → resolve_node.
-        std::lock_guard<std::recursive_mutex> tick_lk(state_mu_);
 
         // Reap any exited workers, regardless of whether select returned a
         // signalfd event — we may have missed coalesced SIGCHLDs.
@@ -877,7 +958,7 @@ int Supervisor::run() {
         }
 
         // (Inbound control / HeartbeatReport / SendTimeoutReport now arrive
-        // on SupervisorCtl's TipcMux and reach the engine via post_command;
+        // on SupervisorCtl's TipcMux and reach the engine via enqueue()/call();
         // no socket to drain here.)
 
         // Periodic emissions. The .art file's heartbeat_period_ms /

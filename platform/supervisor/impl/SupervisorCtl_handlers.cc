@@ -6,14 +6,16 @@
 // lib/SupervisorCtl.hh.
 //
 // SupervisorCtl is the control front-end: it receives the nanopb control
-// surface on TipcMux (bound in main.cc) and DIRECTLY drives the shared
-// supervision engine (impl/core/runtime.*) — each handler calls eng->ctl_*()
-// straight, no loop-marshal. The engine serializes those calls against its own
-// loop tick with state_mu_ (recursive), so a CALL gets its reply synchronously
-// on the TipcMux thread. SupervisorCtl also installs the bridge's EmitForwarder
-// in init() — the engine's EmitSink fans events back out through this node's
-// `events` broadcast senders, and the engine's restart re-push asks control (by
-// child NAME) to resolve + cast the typed trace/log config.
+// surface on TipcMux (bound in main.cc) and drives the shared supervision
+// engine (impl/core/runtime.*) through the ACTOR command queue — each handler
+// builds a typed ExecCommand and either enqueue()s it (cast: heartbeat,
+// send-timeout, shutdown) or call()s it (CALL: start/restart/delete/configure
+// status, GetTree/SystemInfo/TraceConfig reads). The engine's loop thread is
+// the sole writer of the tree; no state lock is exposed. SupervisorCtl also
+// installs the bridge's EmitForwarder in init() — the engine's EmitSink fans
+// events back out through this node's `events` broadcast senders, and the
+// engine's restart re-push asks control (by child NAME) to resolve + cast the
+// typed trace/log config (resolve via call(ResolveNode), cast from here).
 
 #include "lib/SupervisorCtl.hh"
 
@@ -25,21 +27,28 @@
 
 #include <cstdio>
 #include <cstring>
-#include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace ara::exec {
 
 namespace {
 
-// DIRECT control. SupervisorCtl's handlers call the engine's ctl_* methods
-// straight (eng->ctl_*()), no run_on_engine loop-marshal / lambda / future. The
-// engine serializes these against its loop tick with state_mu_ (see
-// impl/core/runtime.*). `engine()` is the published pointer or nullptr before
-// the worker constructs it.
+// The engine handle (process-global, published by SupervisorWorker once it
+// constructs the engine). nullptr before then — every caller null-checks.
+// Handlers hand typed ExecCommands to engine()->enqueue()/call(); they never
+// touch engine state directly.
 ::supervisor::Supervisor* engine() {
     return ::supervisor::supervisor_instance();
+}
+
+// A default ExecCommand with just the op set — avoids brace-init's
+// -Wmissing-field-initializers on the many trailing arg fields.
+::supervisor::ExecCommand exec_cmd(::supervisor::ExecCommand::Op op) {
+    ::supervisor::ExecCommand c;
+    c.op = op;
+    return c;
 }
 
 // Copy a fixed nanopb char[] field into a std::string (already NUL-terminated
@@ -151,7 +160,12 @@ void resolve_and_cast(const std::string& child, const Msg& m) {
     if (!g_ctl) return;
     auto* eng = ::supervisor::supervisor_instance();
     if (!eng) return;
-    const auto addr = eng->resolve_node(child);
+    // Resolve on the LOOP THREAD (call) — the tree it reads is mutated only
+    // there. Then cast from g_ctl (this runtime-backed thread); the worker
+    // runnable can't touch transport.
+    auto c = exec_cmd(::supervisor::ExecCommand::Op::ResolveNode);
+    c.name = child;
+    const auto addr = eng->call(std::move(c)).addr;
     if (!addr.ok) return;
     ::theia::runtime::cast(*g_ctl, m,
                            ::theia::runtime::TipcAddr{addr.type, addr.instance});
@@ -211,17 +225,31 @@ void SupervisorCtl::handle_info(const char* /*info*/, SupervisorCtlState& /*s*/)
 
 void SupervisorCtl::handle_cast(const HeartbeatReport& msg,
                                  SupervisorCtlState& /*s*/) {
-    if (auto* e = engine())
-        e->ctl_on_heartbeat(s(msg.node_name), static_cast<pid_t>(msg.pid),
-                            msg.seq);
+    using Op = ::supervisor::ExecCommand::Op;
+    auto* e = engine();
+    if (!e) return;
+    ::supervisor::ExecCommand c;
+    c.op   = Op::OnHeartbeat;
+    c.name = s(msg.node_name);
+    c.pid  = static_cast<pid_t>(msg.pid);
+    c.seq  = msg.seq;
+    e->enqueue(std::move(c));
 }
 
 void SupervisorCtl::handle_cast(const SendTimeoutReport& msg,
                                  SupervisorCtlState& /*s*/) {
-    if (auto* e = engine())
-        e->ctl_on_send_timeout(s(msg.caller_node), s(msg.callee_node),
-                               s(msg.iface), s(msg.method),
-                               msg.budget_ms, msg.observed_ms);
+    using Op = ::supervisor::ExecCommand::Op;
+    auto* e = engine();
+    if (!e) return;
+    ::supervisor::ExecCommand c;
+    c.op          = Op::OnSendTimeout;
+    c.name        = s(msg.caller_node);   // caller
+    c.callee      = s(msg.callee_node);
+    c.iface       = s(msg.iface);
+    c.method      = s(msg.method);
+    c.budget_ms   = msg.budget_ms;
+    c.observed_ms = msg.observed_ms;
+    e->enqueue(std::move(c));
 }
 
 
@@ -232,8 +260,10 @@ TreeSnapshot SupervisorCtl::handle_call(
     // Point-in-time snapshot for `tdb ps` / `tdb supervisor`: walk the engine's
     // tree into the flat parent-keyed children[] (the caller rebuilds the
     // hierarchy by name, same shape the NodeEdge/NodeState firehose streams).
+    using Op = ::supervisor::ExecCommand::Op;
     auto* eng = engine();
-    auto rows = eng ? eng->ctl_get_tree() : std::vector<::supervisor::TreeRow>{};
+    auto rows = eng ? eng->call(exec_cmd(Op::GetTree)).tree
+                    : std::vector<::supervisor::TreeRow>{};
     TreeSnapshot snap{};
     const pb_size_t cap =
         static_cast<pb_size_t>(sizeof(snap.children) / sizeof(snap.children[0]));
@@ -275,14 +305,21 @@ ControlReply SupervisorCtl::handle_call(
     for (pb_size_t i = 0; i < spec.start_cmd_count; ++i) cmd.push_back(s(spec.start_cmd[i]));
     std::vector<std::string> mods;
     for (pb_size_t i = 0; i < spec.modules_count; ++i) mods.push_back(s(spec.modules[i]));
-    const int restart = static_cast<int>(spec.restart);
-    const int shutdown = spec.shutdown;
-    const int type = static_cast<int>(spec.type);
-
+    using Op = ::supervisor::ExecCommand::Op;
     auto* eng = engine();
-    uint32_t status = eng
-        ? eng->ctl_start_child(parent, name, cmd, restart, shutdown, type, mods)
-        : 4 /*invalid_request when no engine*/;
+    uint32_t status = 4 /*invalid_request when no engine*/;
+    if (eng) {
+        ::supervisor::ExecCommand c;
+        c.op        = Op::StartChild;
+        c.parent    = parent;
+        c.name      = name;
+        c.start_cmd = std::move(cmd);
+        c.modules   = std::move(mods);
+        c.restart   = static_cast<int>(spec.restart);
+        c.shutdown  = spec.shutdown;
+        c.type      = static_cast<int>(spec.type);
+        status = eng->call(std::move(c)).status;
+    }
     ControlReply rep;
     set_reply(rep, status, name);
     return rep;
@@ -291,9 +328,15 @@ ControlReply SupervisorCtl::handle_call(
 ControlReply SupervisorCtl::handle_call(
         const DeleteChildRequest& req,
         SupervisorCtlState& /*s*/) {
+    using Op = ::supervisor::ExecCommand::Op;
     const std::string name = s(req.name);
     auto* eng = engine();
-    uint32_t status = eng ? eng->ctl_delete_child(name) : 4;
+    uint32_t status = 4;
+    if (eng) {
+        auto c = exec_cmd(Op::DeleteChild);
+        c.name = name;
+        status = eng->call(std::move(c)).status;
+    }
     ControlReply rep;
     set_reply(rep, status, name);
     return rep;
@@ -308,12 +351,17 @@ ControlReply SupervisorCtl::handle_call(
 ControlReply SupervisorCtl::handle_call(
         const ChildSelector& req,
         SupervisorCtlState& /*s*/) {
+    using Op = ::supervisor::ExecCommand::Op;
     const std::string name = s(req.name);
     const bool hold = req.no_restart;
     auto* eng = engine();
-    uint32_t status = !eng ? 4
-                     : hold ? eng->ctl_suspend_child(name)   // terminate + hold
-                            : eng->ctl_restart_child(name);   // stop then start
+    uint32_t status = 4;
+    if (eng) {
+        // hold=true → SuspendChild (terminate + hold); else RestartChild.
+        auto c = exec_cmd(hold ? Op::SuspendChild : Op::RestartChild);
+        c.name = name;
+        status = eng->call(std::move(c)).status;
+    }
     ControlReply rep;
     set_reply(rep, status, name);
     return rep;
@@ -322,7 +370,10 @@ ControlReply SupervisorCtl::handle_call(
 ControlReply SupervisorCtl::handle_call(
         const Stop& /*req*/,
         SupervisorCtlState& /*s*/) {
-    if (auto* eng = engine()) eng->request_shutdown();
+    // Enqueue Shutdown (fire-and-forget): the loop sets shutdown_requested_ and
+    // exits. We reply to the caller immediately — the wind-down is async.
+    using Op = ::supervisor::ExecCommand::Op;
+    if (auto* eng = engine()) eng->enqueue(exec_cmd(Op::Shutdown));
     ControlReply rep;
     set_reply(rep, 0, "", "shutting down");
     return rep;
@@ -331,9 +382,11 @@ ControlReply SupervisorCtl::handle_call(
 SystemInfo SupervisorCtl::handle_call(
         const GetSystemInfoRequest& /*req*/,
         SupervisorCtlState& /*s*/) {
+    using Op = ::supervisor::ExecCommand::Op;
     auto* eng = engine();
     ::supervisor::SystemInfoData info =
-        eng ? eng->ctl_get_system_info() : ::supervisor::SystemInfoData{};
+        eng ? eng->call(exec_cmd(Op::GetSystemInfo)).sysinfo
+            : ::supervisor::SystemInfoData{};
     SystemInfo m{};
     std::snprintf(m.hostname, sizeof(m.hostname), "%s", info.hostname.c_str());
     std::snprintf(m.kernel, sizeof(m.kernel), "%s", info.kernel.c_str());
@@ -353,21 +406,28 @@ SystemInfo SupervisorCtl::handle_call(
 ControlReply SupervisorCtl::handle_call(
         const ConfigureTraceRequest& req,
         SupervisorCtlState& /*s*/) {
+    using Op = ::supervisor::ExecCommand::Op;
     const auto& cfg = req.config;
     const std::string target = s(cfg.target_node);
     ControlReply rep;
-    auto* eng = ::supervisor::supervisor_instance();
+    auto* eng = engine();
     if (!eng) { set_reply(rep, 4, target, "engine not up"); return rep; }
 
-    // Store (survives restart) — returns false if the target doesn't resolve.
-    if (!eng->ctl_configure_trace(target, cfg.trace_ctrl.enabled,
-                                  static_cast<uint32_t>(cfg.trace_ctrl.kind))) {
+    // STORE on the loop thread (survives restart) — ok=false if the target
+    // doesn't resolve. The store + resolve validation run where the tree lives.
+    auto c = exec_cmd(Op::ConfigureTrace);
+    c.name    = target;
+    c.enabled = cfg.trace_ctrl.enabled;
+    c.kind    = static_cast<uint32_t>(cfg.trace_ctrl.kind);
+    if (!eng->call(std::move(c)).ok) {
         set_reply(rep, 4 /*invalid_request*/, target,
                   "no worker or node by that name");
         return rep;
     }
-    // Push live — the lifted resolve+cast, cfg.trace_ctrl verbatim. The SAME
-    // function the engine's restart re-push calls (by ordinal).
+    // Push live FROM THIS (runtime-backed) thread — the lifted resolve+cast,
+    // cfg.trace_ctrl verbatim. resolve runs on the loop (via call); the cast is
+    // here (the worker runnable can't touch transport). SAME function the
+    // engine's restart re-push calls (by ordinal).
     ctl_set_trace(target, cfg.trace_ctrl);
     set_reply(rep, 0, target, "trace config applied");
     return rep;
@@ -376,8 +436,9 @@ ControlReply SupervisorCtl::handle_call(
 TraceConfigList SupervisorCtl::handle_call(
         const GetTraceConfigRequest& /*req*/,
         SupervisorCtlState& /*s*/) {
+    using Op = ::supervisor::ExecCommand::Op;
     auto* eng = engine();
-    auto rows = eng ? eng->ctl_get_trace_config()
+    auto rows = eng ? eng->call(exec_cmd(Op::GetTraceConfig)).trace_cfg
                     : std::vector<::supervisor::TraceConfigRow>{};
     TraceConfigList list{};
     list.configs_count = 0;
@@ -402,19 +463,23 @@ TraceConfigList SupervisorCtl::handle_call(
 ControlReply SupervisorCtl::handle_call(
         const ConfigureLogLevelRequest& req,
         SupervisorCtlState& /*s*/) {
+    using Op = ::supervisor::ExecCommand::Op;
     const auto& cfg = req.config;
     const std::string target = s(cfg.target_node);
     ControlReply rep;
-    auto* eng = ::supervisor::supervisor_instance();
+    auto* eng = engine();
     if (!eng) { set_reply(rep, 4, target, "engine not up"); return rep; }
 
-    // Store (survives restart) — returns false if the target doesn't resolve.
-    if (!eng->ctl_configure_log_level(
-            target, static_cast<uint32_t>(cfg.log_level.level))) {
+    // STORE on the loop thread (survives restart) — ok=false if unresolved.
+    auto c = exec_cmd(Op::ConfigureLogLevel);
+    c.name  = target;
+    c.level = static_cast<uint32_t>(cfg.log_level.level);
+    if (!eng->call(std::move(c)).ok) {
         set_reply(rep, 4, target, "no worker or node by that name");
         return rep;
     }
-    // Push live — the lifted resolve+cast, cfg.log_level verbatim.
+    // Push live FROM THIS thread — resolve (loop) + cast (here), cfg.log_level
+    // verbatim.
     ctl_set_log_level(target, cfg.log_level);
     set_reply(rep, 0, target, "log level applied");
     return rep;

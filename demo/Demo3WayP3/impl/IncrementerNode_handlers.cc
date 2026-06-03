@@ -3,13 +3,12 @@
 // Every 300ms casts Inc{2} at CounterNode (cross-PROCESS — Counter is in
 // P1). Migrated from the retired demo/nodes/incrementer_node.{hh,tcc}
 // onto the gen-app --kind fc shape — outbound cast by the generated
-// netgraph TipcAddr; timers via process_timers(), logger via
-// process_logger().
+// netgraph TipcAddr; timers via process_timers(), logger via this->log()
+// ([#incrementer] tag).
 
 #include "lib/IncrementerNode.hh"
 #include "lib/IncrementerNode_netgraph.hh"   // netgraph::counternode
 
-#include "Logger.hh"
 #include "TimerService.hh"
 
 #include <cstring>
@@ -30,8 +29,7 @@ void IncrementerNode::handle_info(const char* info, IncrementerNodeState& s) {
     ++s.casts_sent;
 
     if ((s.casts_sent % 10) == 0) {
-        ::theia::runtime::process_logger().info(
-            "[incrementer] casts_sent=" + std::to_string(s.casts_sent));
+        this->log().info("casts_sent=" + std::to_string(s.casts_sent));
     }
     theia::runtime::send_after(theia::runtime::process_timers(), 300, *this,
                               "tick");

@@ -51,6 +51,16 @@ namespace {
     return c;
 }
 
+// The supervisor as a trace/log TARGET means ITSELF, not a child. `tdb trace
+// root` (the supervision tree's root name, shown by `tdb ps`) or `tdb trace sup`
+// redirects to the supervisor's OWN runtime: only the gen_server node
+// (supervisor_ctl) has a Tracer — the worker runnable is a bare thread. So a
+// self-target flips tracer_for("supervisor_ctl") IN-PROCESS, with no Registry
+// resolve (which would reject "root") and no TIPC cast (there is no child node).
+bool is_self_target(const std::string& target) {
+    return target == "root" || target == "sup";
+}
+
 // Copy a fixed nanopb char[] field into a std::string (already NUL-terminated
 // by nanopb's decode of a max_size:N field).
 std::string s(const char* fixed) { return std::string(fixed); }
@@ -404,11 +414,24 @@ SystemInfo SupervisorCtl::handle_call(
 
 ControlReply SupervisorCtl::handle_call(
         const ConfigureTraceRequest& req,
-        SupervisorCtlState& /*s*/) {
+        SupervisorCtlState& st) {
     using Op = ::supervisor::ExecCommand::Op;
     const auto& cfg = req.config;
     const std::string target = s(cfg.target_node);
     ControlReply rep;
+
+    // Self-target: `tdb trace root` / `tdb trace sup` traces the supervisor
+    // ITSELF, not a child. Flip THIS node's (supervisor_ctl) Tracer in-process
+    // — no engine store, no Registry resolve, no TIPC cast. Only the gen_server
+    // (this node) has a Tracer; the worker runnable doesn't. We reuse the
+    // framework's TraceControlPush handler verbatim (the SAME logic a child runs
+    // when the supervisor casts to it), so kind/enable semantics stay identical.
+    if (is_self_target(target)) {
+        this->handle_cast(cfg.trace_ctrl, st);  // base GenServer overload
+        set_reply(rep, 0, target, "trace config applied (supervisor self)");
+        return rep;
+    }
+
     auto* eng = engine();
     if (!eng) { set_reply(rep, 4, target, "engine not up"); return rep; }
 
@@ -461,11 +484,21 @@ TraceConfigList SupervisorCtl::handle_call(
 
 ControlReply SupervisorCtl::handle_call(
         const ConfigureLogLevelRequest& req,
-        SupervisorCtlState& /*s*/) {
+        SupervisorCtlState& st) {
     using Op = ::supervisor::ExecCommand::Op;
     const auto& cfg = req.config;
     const std::string target = s(cfg.target_node);
     ControlReply rep;
+
+    // Self-target: `tdb loglevel root` sets the supervisor's OWN process log
+    // level in-process via the framework's LogLevelPush handler — no engine
+    // store, no resolve, no cast. (Same self redirect as ConfigureTrace.)
+    if (is_self_target(target)) {
+        this->handle_cast(cfg.log_level, st);  // base GenServer overload
+        set_reply(rep, 0, target, "log level applied (supervisor self)");
+        return rep;
+    }
+
     auto* eng = engine();
     if (!eng) { set_reply(rep, 4, target, "engine not up"); return rep; }
 

@@ -7,8 +7,9 @@
 //   - SupervisorWorker (runnable) constructs the process-global Supervisor
 //     and runs do_loop() == run() (the select loop, sole state owner).
 //   - SupervisorCtl (atomic gen_server) receives the control surface over
-//     the STANDARD Theia transport (nanopb on TipcMux) and post_command()s
-//     each op into this engine on the loop thread.
+//     the STANDARD Theia transport (nanopb on TipcMux) and hands each op to
+//     this engine as a typed ExecCommand via enqueue()/call() (the actor
+//     queue); the loop thread dispatches it.
 // Outbound events/health/topo-pairs leave via the EmitSink callbacks below,
 // which the FC shell wires to SupervisorCtl's `events` broadcast senders.
 // Per-node trace/log config + the SM startup handshake still cast raw
@@ -22,11 +23,13 @@
 #include <chrono>
 #include <deque>
 #include <functional>
+#include <future>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <sys/types.h>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -124,6 +127,65 @@ struct TreeRow {
     std::string start_cmd;      // workers only
 };
 
+// ---- The executor command (actor ingress) --------------------------------
+//
+// Peer threads (SupervisorCtl on the TipcMux thread) NEVER touch engine state
+// directly. They build a typed ExecCommand and hand it to Supervisor::enqueue()
+// (fire-and-forget cast) or Supervisor::call() (blocks for a reply). The loop
+// thread — the SOLE owner of the tree, fork/exec/waitpid, SIGCHLD, and the
+// config tables — drains the queue and dispatches each command via a single
+// switch. No state lock: there is one writer.
+//
+// Flat fields (not a union): only the ones an op needs are populated. Trivially
+// movable; the queue owns it by value.
+// Forward — ExecReply carries a resolved address for ResolveNode.
+struct NodeAddrResult { uint32_t type{0}; uint32_t instance{0}; bool ok{false}; };
+
+struct ExecReply {
+    uint32_t                    status{0};   // ControlReply.status ordinal
+    bool                        ok{false};   // configure_* resolve result
+    std::vector<TreeRow>        tree;        // GetTree
+    std::vector<TraceConfigRow> trace_cfg;   // GetTraceConfig
+    SystemInfoData              sysinfo;     // GetSystemInfo
+    NodeAddrResult              addr;        // ResolveNode
+};
+
+struct ExecCommand {
+    enum class Op {
+        StartChild, DeleteChild, RestartChild, SuspendChild, ResumeChild,
+        TerminateChild, OnHeartbeat, OnSendTimeout, ConfigureTrace,
+        ConfigureLogLevel, GetTree, GetSystemInfo, GetTraceConfig, ResolveNode,
+        Shutdown,
+    };
+    Op op;
+
+    // ---- typed args (per-op subset) ----
+    std::string              name;          // child / target / heartbeat node
+    std::string              parent;        // StartChild parent supervisor
+    std::vector<std::string> start_cmd;     // StartChild argv
+    std::vector<std::string> modules;       // StartChild modules
+    int                      restart{0};    // StartChild
+    int                      shutdown{0};   // StartChild
+    int                      type{0};       // StartChild
+    bool                     no_restart{false};  // SuspendChild vs RestartChild caller intent
+
+    pid_t                    pid{-1};       // OnHeartbeat
+    uint64_t                 seq{0};        // OnHeartbeat
+
+    std::string              callee;        // OnSendTimeout
+    std::string              iface;         // OnSendTimeout
+    std::string              method;        // OnSendTimeout
+    uint32_t                 budget_ms{0};  // OnSendTimeout
+    uint32_t                 observed_ms{0};// OnSendTimeout
+
+    bool                     enabled{false};// ConfigureTrace
+    uint32_t                 kind{0};       // ConfigureTrace
+    uint32_t                 level{0};      // ConfigureLogLevel
+
+    // reply channel — set ONLY by call(); null for enqueue() casts.
+    std::promise<ExecReply>* reply{nullptr};
+};
+
 // The outbound emit surface. The FC shell installs these (each forwards to
 // SupervisorCtl's matching `events` broadcast sender); the engine calls them
 // from the loop thread. Any unset callback is a quiet no-op (best-effort).
@@ -174,17 +236,25 @@ public:
     // FC shell's do_stop().
     void request_shutdown();
 
-    // #431 — command queue (the threading bridge). SupervisorCtl::handle_call
-    // runs on the TipcMux thread; the select() loop is the SOLE owner of all
-    // supervision state (reap/sample/emit/fork). handle_call builds a closure
-    // that mutates the engine + fulfils its own std::promise, then
-    // post_command()s it and wakes the loop. The loop drains + runs every
-    // queued closure inline — same thread as reap() — so there is ONE writer,
-    // no mutex around the tree, no fork-under-lock. Callable from any thread.
-    void post_command(std::function<void()> fn);
+    // ---- Executor command surface (the ONLY thing peer threads touch) ------
+    //
+    // SupervisorCtl (TipcMux thread) builds a typed ExecCommand and hands it
+    // here. The select() loop is the SOLE owner of all supervision state
+    // (tree / fork / waitpid / SIGCHLD / config tables); it drains the queue
+    // and dispatches each command via one switch on the loop thread. cmd_mutex_
+    // guards ONLY the queue (ingress) — never exposed; there is no state lock.
+    //
+    //   enqueue(cmd)  — fire-and-forget cast. Returns immediately.
+    //   call(cmd)     — blocks on a single per-call std::promise for the reply.
+    //
+    // Both wake the loop via cmd_eventfd_. Safe from any thread; a no-op if the
+    // loop has already shut down (call() then returns a default ExecReply).
+    void      enqueue(ExecCommand cmd);
+    ExecReply call(ExecCommand cmd);
 
-    // ---- Control-surface primitives (called from SupervisorCtl::handle_call
-    //      via post_command, so they run on the loop thread). All take/return
+    // ---- Control-surface primitives — LOOP-THREAD ONLY. Invoked exclusively
+    //      by drain_commands()'s dispatch switch (never from a peer thread), so
+    //      they need no lock: the loop is the single writer. All take/return
     //      plain C++ values — the nanopb<->engine translation lives in
     //      SupervisorCtl_handlers.cc. Each returns a status ordinal matching
     //      the old ControlReply.status convention.
@@ -209,9 +279,11 @@ public:
         bool     ok       = false;
     };
 
-    // Resolve a target name (worker OR node-type) to its TIPC address. A pure
-    // read of the tree — SupervisorCtl calls this directly, then casts the
-    // control message itself. Thread-safe (state_mu_).
+    // Resolve a target name (worker OR node-type) to its TIPC address. Reads
+    // the tree, so it runs on the LOOP THREAD via call({Op::ResolveNode}) — the
+    // tree structure (start/delete child) is mutated only there, so a direct
+    // cross-thread call would race. SupervisorCtl does the call, gets the addr
+    // back, then casts the control message itself (the runnable can't cast).
     NodeAddr resolve_node(const std::string& name);
 
     // ConfigureTrace / ConfigureLogLevel — STORE the config only (survives
@@ -244,9 +316,13 @@ public:
                              uint32_t budget_ms, uint32_t observed_ms);
 
 private:
-    // Drain + run all queued commands on the loop thread. Called once per
-    // select() iteration BEFORE reap/sample/emit.
+    // Drain + dispatch all queued ExecCommands on the loop thread (one switch).
+    // Called once per select() iteration BEFORE reap/sample/emit.
     void drain_commands();
+
+    // The single dispatch point: run one command on the loop thread and, for
+    // CALL-shaped ops, fill its reply promise. Calls the ctl_* impls below.
+    void dispatch(ExecCommand& cmd);
     // Subtree traversal.
     std::vector<WorkerNode*> all_workers(SupervisorNode& sup);
     SupervisorNode* supervisor_of(WorkerNode& w);
@@ -275,22 +351,22 @@ private:
     // signalfd descriptor and a self-pipe wake-up fd for portability.
     int                              signal_fd_{-1};
 
-    // #431 — command queue + its eventfd wake. post_command() (any thread)
-    // pushes a closure and writes the eventfd; the select() loop adds the
-    // eventfd to its fd_set, drains it, and runs the closures on the loop
+    // Command queue + its eventfd wake. enqueue()/call() (any thread) push a
+    // typed ExecCommand and write the eventfd; the select() loop adds the
+    // eventfd to its fd_set, drains it, and dispatches each command on the loop
     // thread. cmd_eventfd_ is EFD_NONBLOCK | EFD_CLOEXEC; a single counter.
+    // cmd_mutex_ guards ONLY this queue (the actor ingress) — there is NO lock
+    // on the tree/config state: the loop thread is the single writer.
     int                              cmd_eventfd_{-1};
     std::mutex                       cmd_mutex_;
+    std::deque<ExecCommand>          cmd_queue_;
 
-    // Guards ALL engine state (the tree + config tables). SupervisorCtl's
-    // handlers now call ctl_* DIRECTLY from its TipcMux thread (no
-    // run_on_engine loop-marshal), so every mutating ctl_* takes this, and the
-    // loop's per-tick tree work (reap / config re-push / emit_snapshot /
-    // check_heartbeats) takes it too — serializing fork/reap against direct
-    // control. RECURSIVE because the locked re-push path (config_repush →
-    // ctl_set_* → resolve_node) re-enters it on the same thread.
-    std::recursive_mutex             state_mu_;
-    std::deque<std::function<void()>> cmd_queue_;
+    // The select-loop thread id, set at the top of run(). call() compares
+    // against it: a call() issued FROM the loop thread (e.g. the restart
+    // re-push → resolve_node) dispatches INLINE instead of enqueue+block, which
+    // would self-deadlock (only the loop fulfils the promise). Off-loop callers
+    // (SupervisorCtl's TipcMux thread) take the normal enqueue+future path.
+    std::thread::id                  loop_tid_{};
 
     // Outbound emit surface — installed by the FC shell via set_emit_sink();
     // forwards events/health/topo-pairs to SupervisorCtl's broadcast senders.

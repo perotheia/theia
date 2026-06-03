@@ -2,8 +2,8 @@
 //
 // The gen-app FC has TWO nodes that must share ONE supervision engine:
 //   - SupervisorWorker (runnable) constructs the engine + runs its loop.
-//   - SupervisorCtl (atomic gen_server) post_command()s control ops into it
-//     and is the source of the EmitSink callbacks.
+//   - SupervisorCtl (atomic gen_server) enqueue()/call()s typed control
+//     ExecCommands into it and is the source of the EmitSink callbacks.
 // Rather than thread a pointer between the two node objects (which main.cc
 // constructs independently), they reach the engine through this process-
 // global accessor — the same pattern as log[trace]'s TraceHub.

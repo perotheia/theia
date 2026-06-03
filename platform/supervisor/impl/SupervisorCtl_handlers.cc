@@ -176,8 +176,14 @@ void resolve_and_cast(const std::string& child, const Msg& m) {
     // the worker runnable can't touch transport.
     const auto addr = eng->registry().resolve(child);
     if (!addr.ok) return;
+    // Short connect budget: a trace/log push to a child that ISN'T listening
+    // (down / not yet up) must NOT stall this control thread for the 3s connect
+    // default — that wedges the whole SupervisorCtl surface. 250ms is plenty for
+    // a live local peer; a dead one fails fast. The store already happened, and
+    // the heartbeat-after-gap re-push re-applies once the child is back.
     ::theia::runtime::cast(*g_ctl, m,
-                           ::theia::runtime::TipcAddr{addr.type, addr.instance});
+                           ::theia::runtime::TipcAddr{addr.type, addr.instance},
+                           /*dst_name=*/nullptr, /*connect_timeout_ms=*/250);
 }
 
 // Typed entry points — the handlers pass the message straight off the wire.

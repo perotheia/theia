@@ -337,13 +337,20 @@ void cast(LocalRef<T>& ref, Msg msg) {
 // consistent with the existing RemoteRef path.
 template <typename Daemon, typename Msg>
 void cast(Daemon& /*self*/, const Msg& msg, TipcAddr addr,
-          const char* dst_name = nullptr) {
+          const char* dst_name = nullptr,
+          int connect_timeout_ms = 3000) {
     using Codec = RemoteCodec<Msg>;
     // Ad-hoc client — one fresh connection per cast. Fine for low-
     // frequency signals (state broadcasts). A per-peer client cache
     // is the optimization step, kept for a future round.
+    //
+    // connect_timeout_ms bounds the connect-with-retry: a caller pushing to a
+    // possibly-DOWN peer (the supervisor's trace/log live-push to a child that
+    // may not be listening) passes a SMALL budget so a dead target fails fast
+    // instead of stalling the caller for the 3s default. Default preserves the
+    // original behaviour for all other callers.
     TipcClient client;
-    if (!client.connect(addr.type, addr.instance)) return;
+    if (!client.connect(addr.type, addr.instance, connect_timeout_ms)) return;
 
     uint8_t buf[256];
     pb_ostream_t os = pb_ostream_from_buffer(buf, sizeof(buf));

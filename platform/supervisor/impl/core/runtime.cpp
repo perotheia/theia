@@ -483,6 +483,41 @@ void Supervisor::start_worker(WorkerNode& w) {
             setenv(kv.first.c_str(), kv.second.c_str(), 1);
         }
 
+        // THEIA_NODE_CFG — per-node CPU affinity + scheduler for the hosting
+        // process's main.cc to apply to each node thread (apply_node_affinity).
+        // Built from this worker's NodeInfo (rig NodeToCPUMapping). Encoding:
+        //   <node>=cpu:<c>,<c>;sched:<policy>[:<prio>]  | <node2>=...
+        // Only nodes that actually carry cfg are emitted; absent THEIA_NODE_CFG
+        // means "nothing to pin" (the common case).
+        {
+            std::string cfg;
+            for (const auto& ni : w.nodes) {
+                if (ni.cpus.empty() && ni.sched.empty()) continue;
+                if (!cfg.empty()) cfg += '|';
+                cfg += ni.name;
+                cfg += '=';
+                bool first_field = true;
+                if (!ni.cpus.empty()) {
+                    cfg += "cpu:";
+                    for (size_t i = 0; i < ni.cpus.size(); ++i) {
+                        if (i) cfg += ',';
+                        cfg += std::to_string(ni.cpus[i]);
+                    }
+                    first_field = false;
+                }
+                if (!ni.sched.empty()) {
+                    if (!first_field) cfg += ';';
+                    cfg += "sched:";
+                    cfg += ni.sched;
+                    if (ni.sched == "fifo" || ni.sched == "rr") {
+                        cfg += ':';
+                        cfg += std::to_string(ni.sched_prio);
+                    }
+                }
+            }
+            if (!cfg.empty()) setenv("THEIA_NODE_CFG", cfg.c_str(), 1);
+        }
+
         // CPU affinity. AUTOSAR ProcessToMachineMapping flavour:
         //   shall_run_on:     positive list — only these cores.
         //   shall_not_run_on: negative list — every online core MINUS these.

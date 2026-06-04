@@ -173,6 +173,13 @@ public:
     // runs.
     void dispatch_info(const char* info) { dispatch_info_(info); }
 
+    // The node thread's pthread handle, for per-node CPU affinity / scheduler
+    // application by main.cc after start() (THEIA_NODE_CFG). 0 before start().
+    std::thread::native_handle_type native_handle() {
+        return thread_.joinable() ? thread_.native_handle()
+                                  : std::thread::native_handle_type{};
+    }
+
 protected:
     // Override in Derived (via GenServer<Derived, State>) to forward
     // a const-char* "info" message to the typed handle_info(...) on

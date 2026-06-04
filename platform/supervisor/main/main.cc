@@ -11,6 +11,7 @@
 #include "lib/Log.hh"    // per-node MakeContextLogger(tag) — tagged + $THEIA_LOGGER sink
 #include "TimerService.hh"
 #include "Logger.hh"     // parse_log_level / process_logger / set_process_logger
+#include "NodeAffinity.hh"  // apply_node_affinity($THEIA_NODE_CFG) per node
 
 #include "TipcMux.hh"    // config-service receiver for reporting nodes (#386)
 
@@ -73,6 +74,12 @@ int main() {
         supervisor_ctl.set_logger(std::move(supervisor_ctl_log));
     }
     supervisor_ctl.start();
+    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (the supervisor
+    // sets it from the rig's NodeToCPUMapping). No-op when unset / no entry for
+    // this node; soft-fails (logs) on EPERM. Applied AFTER start() — the thread
+    // exists now.
+    ::theia::runtime::apply_node_affinity(supervisor_ctl.native_handle(),
+        SupervisorCtl::kNodeName, std::getenv("THEIA_NODE_CFG"));
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
@@ -132,6 +139,12 @@ int main() {
         supervisor_worker.set_logger(std::move(supervisor_worker_log));
     }
     supervisor_worker.start();
+    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (the supervisor
+    // sets it from the rig's NodeToCPUMapping). No-op when unset / no entry for
+    // this node; soft-fails (logs) on EPERM. Applied AFTER start() — the thread
+    // exists now.
+    ::theia::runtime::apply_node_affinity(supervisor_worker.native_handle(),
+        SupervisorWorker::kNodeName, std::getenv("THEIA_NODE_CFG"));
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",

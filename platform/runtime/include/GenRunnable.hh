@@ -98,6 +98,13 @@ public:
     // stop_requested(); offered for readability inside do_loop().
     bool running() const { return running_.load(); }
 
+    // The worker thread's pthread handle, for per-node CPU affinity / scheduler
+    // application by main.cc after start() (THEIA_NODE_CFG). 0 before start().
+    std::thread::native_handle_type native_handle() {
+        return worker_.joinable() ? worker_.native_handle()
+                                  : std::thread::native_handle_type{};
+    }
+
     // ---- defaults Derived may override --------------------------------
     // do_start / do_stop default to no-ops; do_loop has no default (a
     // runnable with no body is a programming error — Derived must define it).

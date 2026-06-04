@@ -71,6 +71,14 @@ struct NodeInfo {
     bool        reporting{true};
     std::string tipc_type;      // hex string like "0x80010001"
     std::string tipc_instance;  // decimal string like "0"
+
+    // Per-node CPU affinity + scheduler (from the rig's NodeToCPUMapping,
+    // executor.json nodes[]). The supervisor serializes these into the child's
+    // THEIA_NODE_CFG env; the hosting process's main.cc applies them to the
+    // node's thread (apply_node_affinity). Empty/default = leave node unpinned.
+    std::vector<int> cpus;          // affinity set; empty = inherit process
+    std::string      sched;         // "other"|"batch"|"idle"|"fifo"|"rr"|"deadline"|""
+    int              sched_prio{0}; // rtprio for fifo/rr
 };
 
 struct WorkerNode {

@@ -33,9 +33,8 @@ python "$REPO/theia.py" stage-local central
 #    tree — kept here rather than in the generic stage-local path.)
 if [[ -x "$REPO/bazel-bin/services/log/main/log" ]]; then
     artheia gen-netgraph -R system/system.art \
-        --out "$REPO/install/central/netgraph.json" \
-        && echo "staged install/central/netgraph.json" \
-        || echo "WARN: gen-netgraph failed (non-fatal for the supervisor run)" >&2
+        --out "$REPO/install/central/netgraph.json"
+    echo "staged install/central/netgraph.json"
 fi
 
 cat <<EOF

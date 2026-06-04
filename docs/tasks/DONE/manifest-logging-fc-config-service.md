@@ -135,6 +135,24 @@ A shared control package is the cleaner match for "inject the same way"
    (running supervisor+FC+com) not required for correctness — both ends
    agree on service_id + wire bytes and every leg builds.
 
+7. **LIVE end-to-end VERIFIED.** **DONE** (post per-node-logger work). Against
+   the staged central stack (`install/central`, all 8 FCs forked):
+   `ConfigureLogLevel(per_daemon, debug)` → supervisor `status:0 'log level
+   applied'`, and **per_daemon's own file log** gained:
+   `[INFO ] [#per_daemon] log level -> debug (supervisor push)` — i.e. the FC's
+   `GenServer::handle_cast(LogLevelPush&)` fired and applied it. The whole chain
+   (probe → supervisor → Registry resolve → GW_MSG_GEN_CAST → FC TipcMux
+   register_cast → handle_cast → logger.set_level) confirmed live, no restart.
+
+## Update — strengthened by the per-node logger work
+
+The base handler now applies the level to the NODE's OWN tagged logger
+(`this->log().set_level(lvl)`), not just `process_logger()` — so in a multi-node
+process each node's level is set independently, and the "log level -> X
+(supervisor push)" confirmation is written through that node's logger with its
+`[#<node>]` tag. The supervisor send-path also moved off the hand-rolled GwHdrWire
+onto the runtime RemoteRef / TheiaMsgHeader. Functionally complete + live-proven.
+
 ## Out of scope (this cut)
 
 - **Trace (#361 FC leg).** `TraceConfig.msg_type` is a string; nanopb's

@@ -67,13 +67,6 @@ message SnapshotEnd {
     uint64 generation = 1;
 }
 
-// Request body for the no-arg Stop() operation. gen-proto omits a request
-// message for an empty operation, so this is HAND-ADDED (re-add after any
-// gen-app regen — the known Stop-gap). The SupervisorControlIf Stop() op +
-// SupervisorCtl.hh `using Stop = system_supervisor_Stop` need it to exist.
-message Stop {
-}
-
 message NodeEdge {
     uint32 op = 1;
     string parent_name = 2;
@@ -229,5 +222,9 @@ message SendTimeoutReport {
     string method = 4;
     uint32 budget_ms = 5;
     uint32 observed_ms = 6;
+}
+
+message Stop {
+    // empty body
 }
 

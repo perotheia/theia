@@ -101,6 +101,12 @@ struct WorkerNode {
     std::vector<int>                     shall_run_on;
     std::vector<int>                     shall_not_run_on;
 
+    // Per-child PROCESS memory cap (bytes). Applied as RLIMIT_AS in the fork
+    // before execvp — the whole child process (all its node threads) shares it,
+    // since RLIMIT is per-process not per-thread. 0 = no cap. From the rig's
+    // Process.mem_limit (manifest), carried in executor.json as mem_limit_bytes.
+    uint64_t                             mem_limit_bytes{0};
+
     // Runtime state.
     int                                  pid{-1};      // -1 when not running
     std::chrono::steady_clock::time_point last_start{};

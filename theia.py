@@ -80,6 +80,75 @@ def cmd_orchestrate(args: list[str]) -> int:
     return _puppet("orchestration.pp", args)
 
 
+# Central single-machine local stage: the bin-name (executor.json start_cmd
+# leaf, bin/<name>) -> bazel target the binary is built from. The supervisor is
+# handled separately (lands at <dest>/supervisor, not bin/).
+_LOCAL_BINARIES = {
+    "log":  "//services/log/main:log",
+    "sm":   "//services/sm/main:sm",
+    "per":  "//services/per/main:per",
+    "ucm":  "//services/ucm/main:ucm",
+    "shwa": "//services/shwa/main:shwa",
+    "p1":   "//demo/Demo3WayP1/main:demo",
+    "p2":   "//demo/Demo3WayP2/main:demo",
+    "p3":   "//demo/Demo3WayP3/main:demo",
+}
+_LOCAL_SUPERVISOR = "//platform/supervisor/main:supervisor"
+
+
+def _bazel_bin(target: str) -> Path:
+    """//pkg/dir:name -> WORKSPACE/bazel-bin/pkg/dir/name."""
+    pkg, name = target.lstrip("/").split(":", 1)
+    return WORKSPACE / "bazel-bin" / pkg / name
+
+
+def cmd_stage_local(args: list[str]) -> int:
+    """LOCAL orchestration: build + populate install/<machine>/ via puppet.
+
+    The dev inner-loop counterpart of the remote .ipk deploy. bazel builds the
+    binaries (its job) + artheia emits executor.json; then `puppet apply
+    theia::local_install` copies them into install/<machine>/ and applies the
+    SAME setcap contract (theia::postinstall) a real deploy uses. Default
+    machine: central. Pass a machine name to override."""
+    import json
+
+    machine = next((a for a in args if not a.startswith("-")), "central")
+    rig = {"central": "CentralRig"}.get(machine, "CentralRig")
+    dest = WORKSPACE / "install" / machine
+
+    # 1. bazel build — the supervisor + every child binary.
+    targets = [_LOCAL_SUPERVISOR, *_LOCAL_BINARIES.values()]
+    if (rc := _run(["bazel", "build", *targets])) != 0:
+        return rc
+
+    # 2. executor.json — the supervisor tree for this machine.
+    dest.mkdir(parents=True, exist_ok=True)
+    if (rc := _run([
+        "artheia", "executor", "emit", "demo.manifest.rig",
+        "--rig", rig, "--out", str(dest / "executor.json"),
+    ])) != 0:
+        return rc
+
+    # 3. puppet apply theia::local_install — copy binaries + setcap. The binary
+    #    map is passed as a Puppet hash literal via -e.
+    bins = {n: str(_bazel_bin(t)) for n, t in _LOCAL_BINARIES.items()}
+    bins_pp = ", ".join(f"'{n}' => '{p}'" for n, p in bins.items())
+    manifest = (
+        "class { 'theia::local_install': "
+        f"dest => '{dest}', "
+        f"supervisor_src => '{_bazel_bin(_LOCAL_SUPERVISOR)}', "
+        f"binaries => {{ {bins_pp} }}, "
+        "}"
+    )
+    return _run([
+        "sudo", "puppet", "apply",
+        f"--modulepath={PUPPET / 'modules'}",
+        "--hiera_config=/dev/null",
+        "-e", manifest,
+        *[a for a in args if a.startswith("-")],
+    ])
+
+
 def cmd_dist(args: list[str]) -> int:
     """bazel build the per-machine .ipk deploy bundles for the DISTRIBUTED
     (2-machine central+compute) deploy — @rig_zonal (demo.manifest.zonal_rig).
@@ -201,7 +270,8 @@ def cmd_compdb(args: list[str]) -> int:
 COMMANDS = {
     "rig":         (cmd_rig,         "docker compose {up|down} the deploy stack"),
     "provision":   (cmd_provision,   "puppet apply — Phase 1 (os pkgs + .ipk)"),
-    "orchestrate": (cmd_orchestrate, "puppet apply — Phase 2 (app rollout)"),
+    "orchestrate": (cmd_orchestrate, "puppet apply — Phase 2 remote (app rollout)"),
+    "stage-local": (cmd_stage_local, "build + puppet-populate install/<machine>/ (local)"),
     "dist":        (cmd_dist,        "bazel build per-machine .ipk bundles"),
     "install":     (cmd_install,     f"bazel run //:install → {INSTALL_DESTDIR}"),
     "compdb":      (cmd_compdb,      "regen compile_commands.json from bazel (clangd)"),

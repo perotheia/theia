@@ -92,33 +92,13 @@ class theia::provisioning (
 
     # ----- 2b. File capabilities (setcap) ---------------------------------
     #
-    # Grant the minimum Linux capabilities each binary needs, so they run
-    # UNPRIVILEGED (no root, no full CAP_SYS_ADMIN) yet can do their one
-    # privileged thing:
-    #
-    #   - gateway: cap_net_raw + cap_net_admin — open AF_PACKET / raw CAN+UDP
-    #     sockets and tweak link state for the ASAM-CMP bus capture.
-    #   - supervisor: cap_sys_nice — set realtime scheduling (SCHED_FIFO/RR) +
-    #     CPU affinity on the FC node threads it pushes via THEIA_NODE_CFG.
-    #
-    # +eip = Effective + Inheritable + Permitted (the cap is active on exec).
-    # Re-applied every provisioning run (setcap is idempotent); a binary
-    # upgrade clears caps, so this MUST run after the opkg install above
-    # (require => the package, once the install step is un-stubbed).
-    $theia_root = '/opt/theia'
-
-    exec { 'theia-setcap-gateway':
-        command => "/usr/sbin/setcap cap_net_raw,cap_net_admin+eip ${theia_root}/gateway",
-        unless  => "/usr/sbin/getcap ${theia_root}/gateway | /bin/grep -q cap_net_raw",
-        onlyif  => "/usr/bin/test -x ${theia_root}/gateway",
-        path    => ['/usr/sbin', '/usr/bin', '/bin'],
-    }
-
-    exec { 'theia-setcap-supervisor':
-        command => "/usr/sbin/setcap cap_sys_nice+eip ${theia_root}/supervisor",
-        unless  => "/usr/sbin/getcap ${theia_root}/supervisor | /bin/grep -q cap_sys_nice",
-        onlyif  => "/usr/bin/test -x ${theia_root}/supervisor",
-        path    => ['/usr/sbin', '/usr/bin', '/bin'],
+    # Grant each binary the minimum Linux capabilities it needs to run
+    # UNPRIVILEGED. The cap CONTRACT lives once in theia::postinstall (shared
+    # with the local dev path); here we just apply it at the deploy root. Must
+    # run AFTER the opkg install above — a fresh binary has no caps (ordered via
+    # require once the install step is un-stubbed).
+    class { 'theia::postinstall':
+        root => '/opt/theia',
     }
 
     # ----- 3. services/db schema-version check + offline migration --------

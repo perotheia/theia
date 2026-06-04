@@ -19,6 +19,7 @@ adb-shaped verbs:
   trace [off] <node> [mt]  ConfigureTrace node on/off (msgtype "" = all kinds)
   trace off                stop ALL active traces
   trace-config             show the stored trace config (GetTraceConfig)
+  loglevel [<node> [lvl]]  show all/one node's log level; with lvl, SET it live
   logcat [--json|-c|-g]    follow the trace firehose (subscribe to log[trace]);
                            --json = NDJSON (header + decoded inner proto) per line
   restart <name>           RestartChild
@@ -203,6 +204,56 @@ def cmd_trace_config(args, sup, _tf) -> int:
     return 0
 
 
+_LEVEL_NAMES = {0: "trace", 1: "debug", 2: "info", 3: "warn", 4: "error"}
+_LEVEL_SET = set(_LEVEL_NAMES.values())
+
+
+def cmd_loglevel(args, sup, _tf) -> int:
+    """loglevel                — every reporting node's effective level
+       loglevel <node>         — that node's level
+       loglevel <node> <level> — SET <node> to <level> (live, no restart)
+    level ∈ trace|debug|info|warn|error."""
+    # SET: <node> <level>
+    if len(args) >= 2:
+        node, level = args[0], args[1].lower()
+        if level not in _LEVEL_SET:
+            print(f"bad level {args[1]!r} (use {'/'.join(sorted(_LEVEL_SET))})",
+                  file=sys.stderr)
+            return 2
+        rep = sup.configure_log_level(target_node=node, level=level, timeout=3.0)
+        status = _g(rep, "status")
+        msg = _g(rep, "message", "")
+        if status == 0:
+            print(f"loglevel {node} -> {level}"
+                  f"{(' (' + msg + ')') if msg else ''}")
+            return 0
+        print(f"loglevel {node} -> FAILED (status={status}): {msg or 'rejected'}",
+              file=sys.stderr)
+        return 1
+
+    # GET (all, or one node)
+    rows = list(_g(sup.get_log_level_config(timeout=3.0), "configs", []) or [])
+    want = args[0] if args else None
+    shown = 0
+    for r in rows:
+        name = _g(r, "target_node")
+        if want is not None and name != want:
+            continue
+        lvl = _LEVEL_NAMES.get(_g(r, "level", 2), "?")
+        if _g(r, "is_override", False):
+            boot = _LEVEL_NAMES.get(_g(r, "boot_level", 2), "?")
+            print(f"{name:18} {lvl:6} (override; boot={boot})")
+        else:
+            print(f"{name:18} {lvl:6} (boot)")
+        shown += 1
+    if want is not None and shown == 0:
+        print(f"no reporting node named {want!r}", file=sys.stderr)
+        return 1
+    if shown == 0:
+        print("(no reporting nodes)")
+    return 0
+
+
 def cmd_restart(args, sup, _tf) -> int:
     if not args:
         print("usage: restart <name>", file=sys.stderr)
@@ -282,6 +333,7 @@ _COMMANDS = {
     "info": cmd_info,
     "trace": cmd_trace,
     "trace-config": cmd_trace_config,
+    "loglevel": cmd_loglevel,
     "restart": cmd_restart,
     "terminate": cmd_terminate,
     "logcat": cmd_logcat,
@@ -294,6 +346,7 @@ _HELP = """tdb — Theia Debug Bridge. commands:
   trace [off] <node> [mt]  turn tracing on/off for a node/worker
   trace off                stop ALL active traces
   trace-config             show stored trace config
+  loglevel [<node> [lvl]]  show all/one node's log level; with lvl, SET it live
   logcat [--json]          follow the trace firehose (--json = NDJSON)
   restart <name>           restart a child
   terminate <name>         stop-and-hold a child

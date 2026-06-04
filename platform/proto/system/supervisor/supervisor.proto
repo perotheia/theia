@@ -67,9 +67,10 @@ message SnapshotEnd {
     uint64 generation = 1;
 }
 
-// Hand-added: empty request body for the no-arg `operation Stop()` — gen-proto
-// doesn't synthesize it (project-gen-app-stop-msg-gap). register_call<Stop,..>
-// needs the type.
+// Request body for the no-arg Stop() operation. gen-proto omits a request
+// message for an empty operation, so this is HAND-ADDED (re-add after any
+// gen-app regen — the known Stop-gap). The SupervisorControlIf Stop() op +
+// SupervisorCtl.hh `using Stop = system_supervisor_Stop` need it to exist.
 message Stop {
 }
 
@@ -190,6 +191,21 @@ message LogLevelConfig {
 
 message ConfigureLogLevelRequest {
     LogLevelConfig config = 1;
+}
+
+message GetLogLevelConfigRequest {
+    // empty body
+}
+
+message LogLevelStatus {
+    string target_node = 1;
+    platform_runtime.LogLevelValue level = 2;
+    bool is_override = 3;
+    platform_runtime.LogLevelValue boot_level = 4;
+}
+
+message LogLevelConfigList {
+    repeated LogLevelStatus configs = 1;
 }
 
 message ControlReply {

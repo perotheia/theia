@@ -54,6 +54,8 @@ using ConfigureTraceRequest = system_supervisor_ConfigureTraceRequest;
 using GetTraceConfigRequest = system_supervisor_GetTraceConfigRequest;
 using TraceConfigList = system_supervisor_TraceConfigList;
 using ConfigureLogLevelRequest = system_supervisor_ConfigureLogLevelRequest;
+using GetLogLevelConfigRequest = system_supervisor_GetLogLevelConfigRequest;
+using LogLevelConfigList = system_supervisor_LogLevelConfigList;
 using SupervisionEvent = system_supervisor_SupervisionEvent;
 using HealthBeacon = system_supervisor_HealthBeacon;
 using SnapshotBegin = system_supervisor_SnapshotBegin;
@@ -229,6 +231,9 @@ public:
                                             SupervisorCtlState& s);
 
     ControlReply handle_call(const ConfigureLogLevelRequest& req,
+                                            SupervisorCtlState& s);
+
+    LogLevelConfigList handle_call(const GetLogLevelConfigRequest& req,
                                             SupervisorCtlState& s);
 
 

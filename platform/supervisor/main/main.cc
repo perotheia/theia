@@ -120,6 +120,8 @@ int main() {
             supervisor_ctl_cfg, supervisor_ctl);
         config_mux.register_call<ConfigureLogLevelRequest, ControlReply>(
             supervisor_ctl_cfg, supervisor_ctl);
+        config_mux.register_call<GetLogLevelConfigRequest, LogLevelConfigList>(
+            supervisor_ctl_cfg, supervisor_ctl);
         config_mux.register_cast<HeartbeatReport>(supervisor_ctl_cfg, supervisor_ctl);
         config_mux.register_cast<SendTimeoutReport>(supervisor_ctl_cfg, supervisor_ctl);
     } else {

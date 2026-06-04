@@ -390,6 +390,24 @@ message ConfigureLogLevelRequest {
     LogLevelConfig config
 }
 
+message GetLogLevelConfigRequest {
+}
+
+// One node's effective log level for the read-back (tdb loglevel). `level` is
+// the effective value (override if a ConfigureLogLevel push is in effect, else
+// the boot level); is_override flags that; boot_level is the manifest
+// THEIA_LOG_LEVEL the FC started at. LogLevelValue from platform.runtime.
+message LogLevelStatus {
+    string        target_node
+    LogLevelValue level
+    bool          is_override
+    LogLevelValue boot_level
+}
+
+message LogLevelConfigList {
+    repeated LogLevelStatus configs
+}
+
 // Generic ack/error payload for action RPCs.
 //   status: 0=ok, 1=not_found, 2=already_running,
 //           3=already_stopped, 4=invalid_request,
@@ -482,6 +500,9 @@ interface clientServer SupervisorControlIf {
     // level + pushes it to the child's log-control channel; re-pushed
     // on every (re)start.
     operation ConfigureLogLevel(in req: ConfigureLogLevelRequest) returns ControlReply
+    // Read-back: every reporting node's effective log level (boot ⊕ override).
+    // tdb loglevel (no args). Mirrors GetTraceConfig.
+    operation GetLogLevelConfig(in req: GetLogLevelConfigRequest) returns LogLevelConfigList
 }
 
 interface senderReceiver SupervisorEventIf {

@@ -94,6 +94,14 @@ class SupervisorClient:
             "SupervisorCtl", "ConfigureLogLevel", timeout=timeout,
             config=dict(target_node=target_node, log_level=dict(level=lvl)))
 
+    # LogLevelValue ordinal → name (inverse of _LEVELS).
+    _LEVEL_NAMES = {0: "trace", 1: "debug", 2: "info", 3: "warn", 4: "error"}
+
+    def get_log_level_config(self, timeout: float = 2.0) -> dict[str, Any]:
+        # Every reporting node's effective level (boot ⊕ override).
+        return self.probe.call("SupervisorCtl", "GetLogLevelConfig",
+                               timeout=timeout)
+
     def restart_child(self, name: str, timeout: float = 2.0) -> dict[str, Any]:
         return self.probe.call("SupervisorCtl", "RestartChild", timeout=timeout,
                                name=name, no_restart=False)

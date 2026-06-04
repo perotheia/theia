@@ -130,6 +130,9 @@ std::unique_ptr<Node> load_worker(const json& j) {
     w.restart  = parse_restart_type(get_str(j, "restart", "permanent"));
     w.shutdown = read_shutdown(j.value("shutdown", json()));
 
+    // Per-process memory cap (RLIMIT_AS), bytes. 0/absent = no cap.
+    w.mem_limit_bytes = j.value("mem_limit_bytes", static_cast<uint64_t>(0));
+
     auto modules = j.find("modules");
     if (modules != j.end() && modules->is_array()) {
         for (const auto& m : *modules) w.modules.push_back(m.get<std::string>());

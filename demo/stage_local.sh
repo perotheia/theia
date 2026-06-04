@@ -67,6 +67,23 @@ stage() {
     # supervisor binary at the machine root.
     cp -f "$SUP" "$dir/supervisor"
 
+    # File capabilities (mirror deploy/puppet provisioning.pp):
+    #   - supervisor: cap_sys_nice — apply SCHED_FIFO/RR + affinity on FC node
+    #     threads (THEIA_NODE_CFG); without it those soft-fail EPERM.
+    #   - gateway (if staged): cap_net_raw,cap_net_admin — raw bus sockets.
+    # setcap needs root; cp clears caps, so re-apply every stage. Skipped (with
+    # a hint) when sudo isn't available — affinity still works, rt-sched won't.
+    if command -v setcap >/dev/null 2>&1; then
+        if sudo -n true 2>/dev/null; then
+            sudo setcap cap_sys_nice+eip "$dir/supervisor" || true
+            [[ -x "$dir/gateway" ]] && \
+                sudo setcap cap_net_raw,cap_net_admin+eip "$dir/gateway" || true
+        else
+            echo "NOTE: no passwordless sudo — skipping setcap; rt-sched on node" >&2
+            echo "      threads will soft-fail EPERM. Run: sudo setcap cap_sys_nice+eip $dir/supervisor" >&2
+        fi
+    fi
+
     # bin/<child> for each requested binary.
     for spec in "$@"; do
         local name="${spec%%:*}" src="${spec#*:}"

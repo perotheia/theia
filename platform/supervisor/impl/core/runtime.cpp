@@ -30,6 +30,10 @@
 #include <string>
 #include <thread>
 #include <sched.h>
+#include <sys/prctl.h>      // PR_CAP_AMBIENT_RAISE — pass CAP_SYS_NICE to children
+#include <sys/syscall.h>    // SYS_capget / SYS_capset (raw, no libcap dep)
+#include <linux/capability.h>  // CAP_SYS_NICE + cap header/data structs
+#include <sys/resource.h>   // setrlimit(RLIMIT_AS) — per-process memory cap
 #include <sys/select.h>
 #include <sys/signalfd.h>
 #include <sys/eventfd.h>
@@ -542,6 +546,52 @@ void Supervisor::start_worker(WorkerNode& w) {
                 std::fprintf(stderr, "sched_setaffinity: %s\n", std::strerror(errno));
                 // Soft-fail: continue with whatever affinity we have.
             }
+        }
+
+        // Per-process memory cap (RLIMIT_AS). RLIMIT is per-PROCESS, so this
+        // bounds the whole child (all its node threads' address space). Applied
+        // in the child, pre-exec — execvp keeps the rlimit. 0 = no cap. Soft-
+        // fail: a too-low cap would just fail the child's own allocations, not
+        // the supervisor.
+        if (w.mem_limit_bytes > 0) {
+            struct rlimit rl;
+            rl.rlim_cur = static_cast<rlim_t>(w.mem_limit_bytes);
+            rl.rlim_max = static_cast<rlim_t>(w.mem_limit_bytes);
+            if (setrlimit(RLIMIT_AS, &rl) < 0) {
+                std::fprintf(stderr, "setrlimit(RLIMIT_AS, %llu): %s\n",
+                             static_cast<unsigned long long>(w.mem_limit_bytes),
+                             std::strerror(errno));
+            }
+        }
+
+        // Propagate CAP_SYS_NICE to the child so its main.cc can set realtime
+        // scheduling (SCHED_FIFO/RR) on the node threads. A capability is NOT
+        // inherited across execvp by default. Two steps:
+        //   (1) add it to this (forked child) process's INHERITABLE set —
+        //       PR_CAP_AMBIENT_RAISE requires the cap in BOTH Permitted AND
+        //       Inheritable, but `setcap +eip` populates the file's inheritable,
+        //       not the running process's, so we set it explicitly via capset;
+        //   (2) raise it into the AMBIENT set so the exec'd child gets it
+        //       Effective.
+        // All a silent no-op when the supervisor lacks CAP_SYS_NICE in Permitted
+        // (no `setcap cap_sys_nice+eip` on the supervisor binary) — rt-sched then
+        // soft-fails in the child (affinity still works). The gateway's
+        // cap_net_raw is granted on the GATEWAY binary directly, not here.
+        {
+            // capget the current header+data, OR in CAP_SYS_NICE inheritable.
+            __user_cap_header_struct hdr{};
+            hdr.version = _LINUX_CAPABILITY_VERSION_3;
+            hdr.pid = 0;  // self
+            __user_cap_data_struct data[2]{};
+            if (syscall(SYS_capget, &hdr, data) == 0) {
+                const int idx = CAP_TO_INDEX(CAP_SYS_NICE);
+                const uint32_t bit = CAP_TO_MASK(CAP_SYS_NICE);
+                data[idx].inheritable |= bit;   // need Inh for the ambient raise
+                syscall(SYS_capset, &hdr, data);  // best-effort
+            }
+#if defined(PR_CAP_AMBIENT) && defined(PR_CAP_AMBIENT_RAISE)
+            prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_RAISE, CAP_SYS_NICE, 0, 0);
+#endif
         }
 
         // exec argv.

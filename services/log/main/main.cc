@@ -12,6 +12,7 @@
 #include "lib/Log.hh"    // per-node MakeContextLogger(tag) — tagged + $THEIA_LOGGER sink
 #include "TimerService.hh"
 #include "Logger.hh"     // parse_log_level / process_logger / set_process_logger
+#include "NodeAffinity.hh"  // apply_node_affinity($THEIA_NODE_CFG) per node
 
 #include "TipcMux.hh"    // config-service receiver for reporting nodes (#386)
 
@@ -74,6 +75,12 @@ int main() {
         log_daemon.set_logger(std::move(log_daemon_log));
     }
     log_daemon.start();
+    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (the supervisor
+    // sets it from the rig's NodeToCPUMapping). No-op when unset / no entry for
+    // this node; soft-fails (logs) on EPERM. Applied AFTER start() — the thread
+    // exists now.
+    ::theia::runtime::apply_node_affinity(log_daemon.native_handle(),
+        LogDaemon::kNodeName, std::getenv("THEIA_NODE_CFG"));
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
@@ -112,6 +119,12 @@ int main() {
         trace_pump.set_logger(std::move(trace_pump_log));
     }
     trace_pump.start();
+    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (the supervisor
+    // sets it from the rig's NodeToCPUMapping). No-op when unset / no entry for
+    // this node; soft-fails (logs) on EPERM. Applied AFTER start() — the thread
+    // exists now.
+    ::theia::runtime::apply_node_affinity(trace_pump.native_handle(),
+        TraceStreamPump::kNodeName, std::getenv("THEIA_NODE_CFG"));
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
@@ -131,6 +144,12 @@ int main() {
         trace_ctl.set_logger(std::move(trace_ctl_log));
     }
     trace_ctl.start();
+    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (the supervisor
+    // sets it from the rig's NodeToCPUMapping). No-op when unset / no entry for
+    // this node; soft-fails (logs) on EPERM. Applied AFTER start() — the thread
+    // exists now.
+    ::theia::runtime::apply_node_affinity(trace_ctl.native_handle(),
+        TraceCtl::kNodeName, std::getenv("THEIA_NODE_CFG"));
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",

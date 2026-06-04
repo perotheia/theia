@@ -13,6 +13,7 @@
 
 #include "lib/Log.hh"    // per-node MakeContextLogger(tag) — tagged + $THEIA_LOGGER sink
 #include "Logger.hh"     // parse_log_level / process_logger / set_process_logger
+#include "NodeAffinity.hh"  // apply_node_affinity($THEIA_NODE_CFG) per node
 
 #include "TipcMux.hh"    // config-service receiver for reporting nodes (#386)
 
@@ -72,6 +73,10 @@ int main() {
                       SmDaemon::kTipcType, SmDaemon::kTipcInstance);
         sm_daemon.log().info(_tipc);
     }
+    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (supervisor sets it
+    // from the rig's NodeToCPUMapping). No-op when unset; soft-fails on EPERM.
+    ::theia::runtime::apply_node_affinity(sm_daemon.native_handle(),
+        SmDaemon::kNodeName, std::getenv("THEIA_NODE_CFG"));
 
     if (auto* sm_daemon_cfg = config_mux.bind_node(
             sm_daemon, SmDaemon::kTipcType,
@@ -110,6 +115,10 @@ int main() {
                       SmGate::kTipcType, SmGate::kTipcInstance);
         sm_gate.log().info(_tipc);
     }
+    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (supervisor sets it
+    // from the rig's NodeToCPUMapping). No-op when unset; soft-fails on EPERM.
+    ::theia::runtime::apply_node_affinity(sm_gate.native_handle(),
+        SmGate::kNodeName, std::getenv("THEIA_NODE_CFG"));
 
     if (auto* sm_gate_cfg = config_mux.bind_node(
             sm_gate, SmGate::kTipcType,

@@ -177,6 +177,16 @@ std::unique_ptr<Node> load_worker(const json& j) {
             ni.reporting = get_bool(n, "reporting", true);
             ni.tipc_type = get_str(n, "tipc_type");
             ni.tipc_instance = get_str(n, "tipc_instance");
+            // Per-node affinity + scheduler (optional). cpus: [int,...];
+            // sched: "fifo"|"rr"|...; sched_prio: rtprio.
+            if (auto cpus = n.find("cpus");
+                cpus != n.end() && cpus->is_array()) {
+                for (const auto& c : *cpus) {
+                    if (c.is_number_integer()) ni.cpus.push_back(c.get<int>());
+                }
+            }
+            ni.sched      = get_str(n, "sched");
+            ni.sched_prio = get_int(n, "sched_prio", 0);
             w.nodes.push_back(std::move(ni));
         }
     }

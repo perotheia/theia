@@ -281,6 +281,40 @@ std::vector<TraceConfigRow> Supervisor::ctl_get_trace_config() {
     return out;
 }
 
+std::vector<LogLevelRow> Supervisor::ctl_get_log_level() {
+    // Every reporting node, effective level = boot ⊕ override. Boot is the
+    // worker's THEIA_LOG_LEVEL spawn env (the name the FC's main.cc parsed);
+    // override is log_levels_[name] (set by a ConfigureLogLevel push, which
+    // keys by the node OR worker name). One row per reporting node.
+    std::vector<LogLevelRow> out;
+    for (WorkerNode* w : all_workers(*root_)) {
+        // Boot ordinal: parse the worker's env (default Info when unset).
+        auto it = w->env.find("THEIA_LOG_LEVEL");
+        const uint32_t boot = static_cast<uint32_t>(
+            ::theia::runtime::parse_log_level(
+                it != w->env.end() ? it->second : "info"));
+        for (const NodeInfo& ni : w->nodes) {
+            if (!ni.reporting) continue;
+            LogLevelRow r;
+            r.target_node = ni.name;
+            r.boot_level  = boot;
+            // Override keyed by the node name OR the worker name.
+            uint32_t eff = boot;
+            bool overridden = false;
+            for (const std::string& key : {ni.name, w->name}) {
+                auto o = log_levels_.find(key);
+                if (o != log_levels_.end() && o->second != kNoLevel) {
+                    eff = o->second; overridden = true; break;
+                }
+            }
+            r.level       = eff;
+            r.is_override = overridden;
+            out.push_back(std::move(r));
+        }
+    }
+    return out;
+}
+
 std::vector<TreeRow> Supervisor::ctl_get_tree() {
     // Same topological walk as emit_tree_stream, collected into a flat list.
     // Synthesize the <worker>_sup bracket row for reporting workers (#364) so
@@ -940,6 +974,9 @@ void Supervisor::dispatch(ExecCommand& cmd) {
             break;
         case Op::GetTraceConfig:
             rep.trace_cfg = ctl_get_trace_config();
+            break;
+        case Op::GetLogLevelConfig:
+            rep.log_cfg = ctl_get_log_level();
             break;
         case Op::Shutdown:
             request_shutdown();

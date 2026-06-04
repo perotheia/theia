@@ -114,6 +114,15 @@ struct TraceConfigRow {
     uint32_t    kind{0};   // TraceKind ordinal; enabled is implicit (present)
 };
 
+// One read-back log-level row for GetLogLevelConfig (tdb loglevel). Effective
+// level = override if set, else boot; is_override flags that.
+struct LogLevelRow {
+    std::string target_node;
+    uint32_t    level{0};        // effective LogLevelValue ordinal (0..4)
+    bool        is_override{false};
+    uint32_t    boot_level{0};   // manifest THEIA_LOG_LEVEL ordinal
+};
+
 // One row of the supervisor tree for GetTree (a flat, parent-keyed list — the
 // caller reassembles the hierarchy by name, same shape the firehose streams).
 // kind: 0=worker, 1=supervisor. state: 0=stopped, 2=running, 3=terminating.
@@ -146,6 +155,7 @@ struct ExecReply {
     bool                        ok{false};   // configure_* resolve result
     std::vector<TreeRow>        tree;        // GetTree
     std::vector<TraceConfigRow> trace_cfg;   // GetTraceConfig
+    std::vector<LogLevelRow>    log_cfg;     // GetLogLevelConfig
     SystemInfoData              sysinfo;     // GetSystemInfo
 };
 
@@ -153,7 +163,8 @@ struct ExecCommand {
     enum class Op {
         StartChild, DeleteChild, RestartChild, SuspendChild, ResumeChild,
         TerminateChild, OnHeartbeat, OnSendTimeout, ConfigureTrace,
-        ConfigureLogLevel, GetTree, GetSystemInfo, GetTraceConfig, Shutdown,
+        ConfigureLogLevel, GetTree, GetSystemInfo, GetTraceConfig,
+        GetLogLevelConfig, Shutdown,
     };
     Op op;
 
@@ -294,6 +305,11 @@ public:
 
     // GetTraceConfig read-back: flatten the per-child trace_configs_ table.
     std::vector<TraceConfigRow> ctl_get_trace_config();
+
+    // GetLogLevelConfig read-back: EVERY reporting node with its effective log
+    // level — boot (the worker's THEIA_LOG_LEVEL spawn env) ⊕ override (the
+    // log_levels_ map). For tdb loglevel (no args).
+    std::vector<LogLevelRow> ctl_get_log_level();
 
     // GetTree: a flat, parent-keyed snapshot of the whole tree (root +
     // supervisors + workers, synthetic <worker>_sup rows for reporting

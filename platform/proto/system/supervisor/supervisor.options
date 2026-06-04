@@ -27,6 +27,10 @@ system_supervisor.TraceConfigList.configs         max_count:64
 # ---- log level request body ----------------------------------------------
 system_supervisor.LogLevelConfig.target_node      max_size:64
 
+# ---- log level read-back (GetLogLevelConfig) -----------------------------
+system_supervisor.LogLevelStatus.target_node      max_size:64
+system_supervisor.LogLevelConfigList.configs      max_count:64
+
 # ---- child spec (StartChild) ---------------------------------------------
 system_supervisor.ChildSpec.name                  max_size:64
 system_supervisor.ChildSpec.parent_supervisor     max_size:64

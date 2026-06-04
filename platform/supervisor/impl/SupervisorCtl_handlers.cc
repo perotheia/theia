@@ -523,5 +523,30 @@ ControlReply SupervisorCtl::handle_call(
     return rep;
 }
 
+LogLevelConfigList SupervisorCtl::handle_call(
+        const GetLogLevelConfigRequest& /*req*/,
+        SupervisorCtlState& /*s*/) {
+    using Op = ::supervisor::ExecCommand::Op;
+    auto* eng = engine();
+    auto rows = eng ? eng->call(exec_cmd(Op::GetLogLevelConfig)).log_cfg
+                    : std::vector<::supervisor::LogLevelRow>{};
+    LogLevelConfigList list{};
+    list.configs_count = 0;
+    for (const auto& r : rows) {
+        if (list.configs_count >=
+            static_cast<pb_size_t>(sizeof(list.configs) / sizeof(list.configs[0]))) {
+            break;  // fixed array full; truncate
+        }
+        auto& c = list.configs[list.configs_count++];
+        c = system_supervisor_LogLevelStatus{};
+        std::snprintf(c.target_node, sizeof(c.target_node), "%s",
+                      r.target_node.c_str());
+        c.level       = static_cast<platform_runtime_LogLevelValue>(r.level);
+        c.is_override = r.is_override;
+        c.boot_level  = static_cast<platform_runtime_LogLevelValue>(r.boot_level);
+    }
+    return list;
+}
+
 
 }  // namespace ara::exec

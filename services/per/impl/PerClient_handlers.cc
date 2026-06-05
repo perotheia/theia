@@ -16,6 +16,7 @@
 #include "lib/PerClient.hh"
 
 #include "NodeRef.hh"                       // theia::runtime::cast(self, msg, TipcAddr)
+#include "ParamsConfig.hh"                  // get_config() — static param push_connect_ms
 #include "platform_runtime/runtime.pb.h"    // platform_runtime_ConfigUpdated
 
 #include <cstdint>
@@ -123,12 +124,17 @@ void push_config_now(PerClient& self, const std::string& subscriber,
     set_bytes(m.config, snap.config);
     set_str(m.digest, snap.digest);
     m.changed_count = 0;   // whole-snapshot delivery (no diff in the first slice)
-    // Bounded connect (250ms): a subscriber that's DOWN must fail fast, never
-    // stall the node thread. Same budget the supervisor uses for its child
-    // trace/log push.
+    // Bounded connect: a subscriber that's DOWN must fail fast, never stall the
+    // node thread. The budget is a STATIC PARAM (push_connect_ms) read from the
+    // per-FC config JSON at boot — defaults to 250ms (the supervisor's child
+    // trace/log push budget) when no config is staged.
+    const uint32_t budget =
+        ::theia::runtime::get_config().node(PerClient::kNodeName)
+            .u32("push_connect_ms", 250);
     ::theia::runtime::cast(self, m,
                            ::theia::runtime::TipcAddr{addr.type, addr.instance},
-                           /*dst_name=*/nullptr, /*connect_timeout_ms=*/250);
+                           /*dst_name=*/nullptr,
+                           /*connect_timeout_ms=*/static_cast<int>(budget));
 }
 
 // Schedule a fan-out of `snap` to `subscribers` to run LATER on the node
@@ -160,6 +166,11 @@ void schedule_push(PerClient& self,
 
 
 void PerClient::init(PerClientState& /*s*/) {
+    // Read static params at boot (deployment knobs from the per-FC config JSON).
+    auto cfg = ::theia::runtime::get_config().node(kNodeName);
+    this->log().info(std::string("params: push_connect_ms=") +
+                     std::to_string(cfg.u32("push_connect_ms", 250)) +
+                     " etcd_endpoint=" + cfg.str("etcd_endpoint", "(default)"));
 }
 
 void PerClient::handle_info(const char* /*info*/, PerClientState& /*s*/) {

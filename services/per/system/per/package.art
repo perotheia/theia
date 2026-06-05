@@ -158,8 +158,9 @@ node atomic PerClient {
         // Per-cast connect budget (ms) for the ConfigUpdated push — a DOWN
         // subscriber must fail fast, never stall the node thread.
         push_connect_ms : uint32 = 250
-        // etcd endpoint the (future) store connects to. Static deploy knob.
-        etcd_endpoint   : string = "127.0.0.1:2379"
+        // etcd endpoint the store connects to. Static deploy knob, read-only
+        // at runtime (const) — chosen at deploy, never mutated live.
+        const etcd_endpoint : string = "127.0.0.1:2379"
     }
 }
 

@@ -1,4 +1,4 @@
-# FIRST-TIME-ONLY (regenerated with --force). source: services/per/system/per/package.art
+# FIRST-TIME-ONLY (regenerated with --force). source: system/services/per/package.art
 #
 # Impl slice — handler bodies. The user owns this BUILD.bazel after
 # first emit (you may want to add per-FC test_*.cc files; gen-app
@@ -15,7 +15,8 @@ package(default_visibility = ["//visibility:public"])
 cc_library(
     name = "per_state",
     hdrs = [
-        "PerDaemon_state.hh",
+        "PerClient_state.hh",
+        "PerManager_state.hh",
     ],
     # The lib #includes these as "impl/<Node>_state.hh", so the include
     # root is the FC out_dir (one above impl/).
@@ -27,7 +28,8 @@ cc_library(
 cc_library(
     name = "per_impl",
     srcs = [
-        "PerDaemon_handlers.cc",
+        "PerClient_handlers.cc",
+        "PerManager_handlers.cc",
     ],
     copts = [
         "-std=c++17",

@@ -5,7 +5,14 @@ package(default_visibility = ["//visibility:public"])
 
 genrule(
     name = "per_pb",
-    srcs = ["per.proto"],
+    srcs = [
+        "per.proto",
+        # nanopb_generator auto-loads the same-basename .options next to the
+        # .proto — it must be in the sandbox so the string/bytes fields become
+        # fixed char[]/bytes[] arrays the RemoteCodec decode path can read
+        # (else they're pb_callback_t and handlers can't read target_node etc).
+        "per.options",
+    ],
     outs = [
         "per.pb.c",
         "per.pb.h",

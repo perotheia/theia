@@ -1,44 +1,167 @@
-// Per (PER) — Adaptive Platform Functional Cluster.
+// Per (PER) — Adaptive Platform Persistency Functional Cluster.
 //
-// Implementation:
-//   etcd v3 proxy. Stores Node parameters from component.art and
-//   platform/vehicle/cluster parameters (TBD), always versioned.
-//   On schema migration writes BOTH keys if both exist:
-//       /theia/v1/state/<m>/health
-//       /theia/v2/state/<m>/health
-//   with a mapping between old and new keys when shape changes are
-//   non-1:1. Lazy migration on read.
+// services/per is the config & state GATEKEEPER and the SINGLE process that
+// talks to etcd. Apps never link the etcd client; they reach config through
+// per's typed RPCs. Two value lifecycles (see
+// docs/tasks/TODO/services-db-state-gatekeeper.md):
 //
-// Communication shape:
-//   `PersistencyIf` is clientServer: Get/Put/Watch are typed RPCs.
-//   Every FC and app that needs persistent state is a CLIENT;
-//   PerDaemon is the single SERVER. PerDaemon talks to etcd over
-//   etcd-cli-c++.
+//   params  — static deployment knobs. NOT handled here: they ship as a
+//             generated per-FC JSON read by the runtime config singleton.
+//   config  — structured, runtime-observable protobuf. Stored in etcd as
+//             BINARY proto bytes, schema-DIGEST-versioned (not path-versioned).
+//             Lazy migration on read; map-forward on write. THIS is what per
+//             serves.
 //
-//   PerDaemon is also a SENDER on LogStream (it logs migration and
-//   CAS conflicts).
+// Surface SPLIT by audience / lifecycle into two interfaces, two nodes:
+//
+//   PerClientIf  (PerClient,  tipc 0x80010007)  — Get/Put/Watch config.
+//       Hot path, used by every app. WatchConfig only ARMS the watch; the
+//       update is delivered out-of-band as a platform.runtime.ConfigUpdated
+//       CAST the node's framework handle_cast applies (the third config-service
+//       push, sibling of TraceControlPush / LogLevelPush). So per holds each
+//       watcher's netgraph addr and casts ConfigUpdated directly to it — no
+//       supervisor in the config data path (config is durable in etcd; a
+//       restarted node re-Gets + re-Watches on boot).
+//
+//   PerManagerIf (PerManager, tipc 0x80010008)  — schema registry + snapshot
+//       + bulk migrate. Rare, privileged, ops/tooling only; separate port so it
+//       can be ACL'd / firewalled independently and never collides with the
+//       client hot path.
+//
+// per is also a SENDER on LogStream (it logs migrations + CAS conflicts).
 
 package system.services.per
+
+// Reuse the runtime's control-plane messages — ConfigUpdated is the cast per
+// sends to a watching node, applied by that node's GenServer base handle_cast.
+// ChildControlIf (the config-service push interface that bundles config_push)
+// also lives in platform.runtime; per is a SENDER of it.
+import platform.runtime.*
 
 // Forward decl of the LogStream interface owned by system.services.log.
 // Cross-package import is by FQN; the body lives in log/package.art.
 interface senderReceiver LogStream { }
 
-message PerKey   { string key }
-message PerValue { bytes  value     uint64 mod_rev }
-message PerPut   { string key       bytes  value }
-message PerEmpty {}
+// ─── Config client messages (binary-proto values, digest-versioned) ──────
 
-interface clientServer PersistencyIf {
-    operation Get(in k:PerKey) returns PerValue
-    operation Put(in p:PerPut) returns PerEmpty
+// A config snapshot: the serialized node-config bytes + the schema digest they
+// are encoded under. The CLIENT unpacks `config` with its own codec — per never
+// needs the node's proto type, it just stores/forwards bytes + digest.
+message ConfigSnapshot {
+    bytes  config           // serialized <Node>Config (binary proto)
+    string digest           // schema digest the bytes are encoded under
+    uint64 mod_rev          // etcd revision (for CAS / staleness checks)
 }
 
-node atomic PerDaemon {
+// Get the current config for a node. `target_node` is the config owner (the
+// node name, e.g. "supervisor_ctl"); `want_digest` is the schema the CALLER
+// speaks — per migrates the stored value forward to it (lazy migration on read)
+// and strips the version metadata before returning.
+message GetConfigReq {
+    string target_node
+    string want_digest      // caller's schema digest ("" = whatever is stored)
+}
+
+// Write a node's config. per maps an older-schema value forward to the current
+// schema before persisting, so readers at the new schema don't pay the
+// transform. `expect_rev` enables compare-and-set (0 = unconditional).
+message PutConfigReq {
+    string target_node
+    bytes  config           // serialized <Node>Config (binary proto)
+    string digest           // schema digest the bytes are encoded under
+    uint64 expect_rev       // CAS guard (0 = unconditional)
+}
+
+// Arm a watch on a node's config. Returns a plain ack (ControlReply); the
+// actual update is delivered as a platform.runtime.ConfigUpdated cast to the
+// caller node's config-service receiver. `subscriber_node` is who to cast
+// updates to (its netgraph name); `want_digest` is the schema to deliver in.
+message WatchConfigReq {
+    string target_node
+    string subscriber_node
+    string want_digest
+}
+
+// Generic ack/error for the write + control ops.
+message PerReply {
+    uint32 status           // 0 = ok; non-zero = error class
+    string message          // human-readable detail / reason
+    uint64 mod_rev          // resulting etcd revision (on Put)
+}
+
+interface clientServer PerClientIf {
+    operation GetConfig(in r: GetConfigReq)   returns ConfigSnapshot
+    operation PutConfig(in r: PutConfigReq)   returns PerReply
+    operation WatchConfig(in r: WatchConfigReq) returns PerReply  // arms; update via ConfigUpdated cast
+}
+
+// ─── Manager messages (schema registry + snapshot + bulk migrate) ────────
+
+message RegisterSchemaReq {
+    string config_type      // the node-config message FQN (e.g. "SupervisorConfig")
+    string digest           // proto digest for this version
+}
+
+message SchemaInfo {
+    string config_type
+    string digest
+}
+
+message ListSchemasReq  { string config_type }     // "" = all
+message SchemaList      { repeated SchemaInfo schemas }
+
+// Bulk-rewrite every stored value of a config type from one schema to another,
+// through the registered transform chain. Progress reported via LogStream;
+// crash-safe resume via a lease-bound marker (handler detail).
+message MigrateBulkReq {
+    string config_type
+    string from_digest
+    string to_digest
+}
+
+// Operational snapshot / restore of the whole datastore (wraps etcd
+// Maintenance). `label` tags the snapshot.
+message SnapshotReq        { string label }
+message RestoreSnapshotReq { string label }
+
+interface clientServer PerManagerIf {
+    operation RegisterSchema(in r: RegisterSchemaReq) returns PerReply
+    operation ListSchemas(in r: ListSchemasReq)       returns SchemaList
+    operation MigrateBulk(in r: MigrateBulkReq)       returns PerReply
+    operation Snapshot(in r: SnapshotReq)             returns PerReply
+    operation RestoreSnapshot(in r: RestoreSnapshotReq) returns PerReply
+}
+
+// ─── Nodes ───────────────────────────────────────────────────────────────
+
+// Config client API — Get/Put/Watch. Every app is a client; this is the single
+// server. Also the SENDER of ConfigUpdated casts to watching nodes (it requires
+// the runtime ChildControlIf-style push, realized via a RemoteRef in the
+// handler) and a LogStream sender for migration/CAS logging.
+node atomic PerClient {
     tipc type=0x80010007 instance=0
     tag = "PER"
     ports {
-        server per_state provides PersistencyIf
-        sender to_log    provides LogStream  best_effort
+        server client_api provides PerClientIf
+        // Outbound config push to each WATCHING subscriber. per is the SOURCE
+        // of the platform.runtime.ConfigUpdated cast (the `config_push` data of
+        // ChildControlIf); the subscriber side is gen-app's universal
+        // config-service register_cast<ConfigUpdated>. Address is dynamic (the
+        // subscriber resolved from WatchConfigReq.subscriber_node at run time,
+        // not a static netgraph peer) — emitted via the cast-to-runtime-addr
+        // override; this port models the intent. Mirrors the supervisor's
+        // `sender child_ctrl provides ChildControlIf`.
+        sender config_out provides ChildControlIf
+        sender to_log     provides LogStream  best_effort
+    }
+}
+
+// Manager API — schema registry + snapshot + bulk migrate. Ops/tooling only.
+node atomic PerManager {
+    tipc type=0x80010008 instance=0
+    tag = "PER"
+    ports {
+        server manager_api provides PerManagerIf
+        sender to_log      provides LogStream  best_effort
     }
 }

@@ -108,6 +108,31 @@ def _fmt_epoch_ms(ts_ms: int) -> str:
     return datetime.fromtimestamp(ts_ms / 1000.0).strftime("%d/%m/%y %H:%M:%S")
 
 
+def _fmt_ram_mb(ram_kb: int) -> str:
+    """Total RAM kB → human MB/GB. e.g. 32538708 → '31044 MB (30.3 GB)'."""
+    if not ram_kb:
+        return ""
+    mb = ram_kb / 1024.0
+    return f"{mb:,.0f} MB ({mb / 1024.0:.1f} GB)"
+
+
+def _fmt_uptime(sec: int) -> str:
+    """Seconds → 'Dd Hh Mm' (largest non-zero unit first). e.g.
+    269681 → '3d 2h 54m'."""
+    if not sec:
+        return ""
+    days, rem = divmod(int(sec), 86400)
+    hours, rem = divmod(rem, 3600)
+    mins = rem // 60
+    parts = []
+    if days:
+        parts.append(f"{days}d")
+    if hours or days:
+        parts.append(f"{hours}h")
+    parts.append(f"{mins}m")
+    return " ".join(parts)
+
+
 def cmd_info(args, sup, _tf) -> int:
     """Full host + BUILD facts (GetSystemInfo) — like `supervisor`, plus the
     running build's git sha / timestamp (THEIA_GIT_SHA / THEIA_BUILD_TIMESTAMP,
@@ -118,8 +143,8 @@ def cmd_info(args, sup, _tf) -> int:
         ("kernel",         _g(info, "kernel", "")),
         ("os",             _g(info, "os_pretty_name", "")),
         ("cpus",           _g(info, "cpu_count", "")),
-        ("ram_kb",         _g(info, "total_ram_kb", "")),
-        ("uptime_sec",     _g(info, "uptime_sec", "")),
+        ("ram",            _fmt_ram_mb(_g(info, "total_ram_kb", 0))),
+        ("uptime",         _fmt_uptime(_g(info, "uptime_sec", 0))),
         ("theia_git_sha",  _g(info, "theia_git_sha", "") or "(unstamped)"),
         ("build_ts",       _g(info, "build_timestamp", "") or "(unstamped)"),
         ("started",        _fmt_epoch_ms(_g(info, "start_timestamp_ms", 0))),
@@ -129,45 +154,105 @@ def cmd_info(args, sup, _tf) -> int:
     return 0
 
 
+# TraceKind ordinal ↔ name (platform_runtime.TraceKind). A node's trace filter
+# is a BITMASK — several kinds can be on at once; OTHER (0) is the catch-all
+# "all kinds" sentinel (shown as ALL). The supervisor stores a SET of enabled
+# kinds per node, so a node yields one read-back row per enabled kind.
+_KIND_NAMES = {0: "OTHER", 1: "CAST_OUT", 2: "CAST_IN",
+               3: "CALL_OUT", 4: "CALL_IN", 5: "STATEM"}
+_KIND_ORD = {v: k for k, v in _KIND_NAMES.items()}
+
+
+def _cfg_kind(c) -> int:
+    """A read-back TraceConfig row nests the kind at trace_ctrl.kind
+    (TraceConfig{ target_node; TraceControlPush trace_ctrl{ kind; enabled } }),
+    not at the top level. Returns the TraceKind ordinal (0 = OTHER)."""
+    return int(_g(_g(c, "trace_ctrl"), "kind", 0) or 0)
+
+
+def _active_by_node(sup) -> dict[str, set[int]]:
+    """node → set of enabled TraceKind ordinals (one read-back row per kind)."""
+    rows = list(_g(sup.get_trace_config(timeout=3.0), "configs", []) or [])
+    out: dict[str, set[int]] = {}
+    for c in rows:
+        node = _g(c, "target_node")
+        if node:
+            out.setdefault(node, set()).add(_cfg_kind(c))
+    return out
+
+
+def _fmt_kinds(kinds: set[int]) -> str:
+    """A kind-set → display string. {0} (catch-all) → 'ALL'; else the kind
+    names joined, low ordinal first."""
+    if kinds == {0}:
+        return "ALL"
+    return "|".join(_KIND_NAMES.get(k, "?") for k in sorted(kinds))
+
+
 def cmd_trace(args, sup, _tf) -> int:
-    # trace <node> [msg_type]        — enable
-    # trace off <node> [msg_type]    — disable one node
-    # trace off                      — disable ALL active traces
-    enabled = True
-    if args and args[0] in ("off", "on"):
-        enabled = args[0] == "on"
-        args = args[1:]
-    if not args:
-        if not enabled:
-            return _trace_off_all(sup)
-        print("usage: trace [off] <node> [msg_type]   (trace off = stop all)",
+    """trace                     — every node with an active trace + its kinds
+       trace off                 — stop ALL traces
+       trace <node>              — that node's trace kinds (or off)
+       trace <node> <KIND>       — ADD KIND to <node>'s trace (live, no restart)
+       trace <node> <KIND> off   — remove just that KIND
+       trace <node> off          — stop <node>'s trace entirely
+       trace <node> OTHER        — catch-all: trace EVERY kind
+    KIND ∈ CAST_OUT|CAST_IN|CALL_OUT|CALL_IN|STATEM|OTHER (case-insensitive).
+    Kinds accumulate — a node can trace several at once."""
+    # `trace off` (no node) — stop everything.
+    if len(args) == 1 and args[0].lower() == "off":
+        return _trace_off_all(sup)
+
+    # SET / per-kind toggle: <node> <KIND|off> [off]
+    if len(args) >= 2:
+        node, kind_arg = args[0], args[1].upper()
+        # `trace <node> off` — disable the whole node (catch-all disable).
+        if kind_arg == "OFF":
+            kind, enabled = 0, False
+        elif kind_arg in _KIND_ORD:
+            kind = _KIND_ORD[kind_arg]
+            # optional 3rd token off/on toggles just this kind (default on/add).
+            enabled = not (len(args) >= 3 and args[2].lower() == "off")
+        else:
+            print(f"bad kind {args[1]!r} "
+                  f"(use {'/'.join(_KIND_ORD)} or off)", file=sys.stderr)
+            return 2
+        rep = sup.configure_trace(target_node=node, enabled=enabled,
+                                  kind=kind, timeout=3.0)
+        status = _g(rep, "status")
+        msg = _g(rep, "message", "")
+        if status == 0:
+            # Echo the node's RESULTING kind-set so the accumulation is visible.
+            kinds = _active_by_node(sup).get(node, set())
+            state = _fmt_kinds(kinds) if kinds else "off"
+            print(f"trace {node} -> {state}"
+                  f"{(' (' + msg + ')') if msg else ''}")
+            return 0
+        print(f"trace {node} -> FAILED (status={status}): {msg or 'rejected'}",
               file=sys.stderr)
-        return 2
-    node = args[0]
-    msg_type = args[1] if len(args) > 1 else ""
-    rep = sup.configure_trace(target_node=node, msg_type=msg_type,
-                              enabled=enabled, kind=0, timeout=3.0)
-    verb = "on" if enabled else "off"
-    status = _g(rep, "status")
-    msg = _g(rep, "message", "")
-    if status == 0:
-        print(f"trace {verb}: {node} {msg_type or '(all)'} -> ok"
-              f"{(' (' + msg + ')') if msg else ''}")
+        return 1
+
+    # GET (all, or one node) — mirrors `loglevel` read-back.
+    active = _active_by_node(sup)
+    if args:                      # trace <node> — that node's state
+        node = args[0]
+        print(f"{node:18} {_fmt_kinds(active[node]) if node in active else 'off'}")
         return 0
-    # Non-zero = the supervisor rejected it (e.g. unknown node name). Report
-    # the supervisor's reason; don't pretend it worked.
-    print(f"trace {verb}: {node} -> FAILED (status={status}): {msg or 'rejected'}",
-          file=sys.stderr)
-    return 1
+    # trace (no args) — every node with an active trace.
+    if not active:
+        print("(no active traces)")
+        return 0
+    for node in sorted(active):
+        print(f"{node:18} {_fmt_kinds(active[node])}")
+    return 0
 
 
 def _trace_off_all(sup) -> int:
     """`trace off` with no node: disable EVERY stored trace config entry.
 
-    Read the supervisor's current trace config (the same read-back
-    `trace-config` shows) and ConfigureTrace(enabled=False) each
-    (target_node, msg_type) pair, so every node the supervisor was pushing
-    trace to gets a disable.
+    Read the supervisor's current trace config and ConfigureTrace(enabled=False)
+    each target_node, so every node the supervisor was pushing trace to gets a
+    disable.
     """
     tc = sup.get_trace_config(timeout=3.0)
     cfgs = list(_g(tc, "configs", []) or [])
@@ -177,14 +262,13 @@ def _trace_off_all(sup) -> int:
     rc = 0
     for c in cfgs:
         node = _g(c, "target_node")
-        mtype = _g(c, "msg_type") or ""
         if not node:
             continue
-        rep = sup.configure_trace(target_node=node, msg_type=mtype,
+        rep = sup.configure_trace(target_node=node,
                                   enabled=False, kind=0, timeout=3.0)
         status = _g(rep, "status")
         if status == 0:
-            print(f"trace off: {node} {mtype or '(all)'} -> ok")
+            print(f"trace off: {node} -> ok")
         else:
             print(f"trace off: {node} -> FAILED (status={status}): "
                   f"{_g(rep, 'message', 'rejected')}", file=sys.stderr)
@@ -199,8 +283,8 @@ def cmd_trace_config(args, sup, _tf) -> int:
         print("(no trace config)")
         return 0
     for c in cfgs:
-        print(f"{_g(c, 'target_node')}  {_g(c, 'msg_type') or '(all)'}  "
-              f"kind={_g(c, 'kind', 0)}")
+        print(f"{_g(c, 'target_node'):18} "
+              f"{_KIND_NAMES.get(_cfg_kind(c), '?')}")
     return 0
 
 
@@ -317,7 +401,8 @@ def cmd_logcat(args, _sup, trace_factory) -> int:
             # base64 payload in the envelope JSON. content is None when the
             # record has no payload (e.g. Dispatch) or the type didn't resolve.
             body = _fmt_content(rec.content) if rec.content else ""
-            print(f"{rec.ts_ns:>16} {rec.src:>16} {rec.msg_type:<22} "
+            kind = getattr(rec, "kind", "") or "?"
+            print(f"{rec.ts_ns:>16} {rec.src:>16} {kind:<9} {rec.msg_type:<22} "
                   f"corr={rec.corr_id}{(' ' + body) if body else ''}")
     except KeyboardInterrupt:
         pass
@@ -343,8 +428,12 @@ _HELP = """tdb — Theia Debug Bridge. commands:
   ps                       list the supervisor tree
   supervisor               supervisor host facts
   info                     host facts + running build (git sha / ts) + start time
-  trace [off] <node> [mt]  turn tracing on/off for a node/worker
+  trace                    list every node with an active trace + its kinds
   trace off                stop ALL active traces
+  trace <node>             show that node's trace kinds (or off)
+  trace <node> <KIND>      ADD KIND to node (CAST_OUT|CAST_IN|CALL_OUT|CALL_IN|
+                           STATEM|OTHER=all); kinds accumulate
+  trace <node> <KIND> off  remove just that KIND; `trace <node> off` stops all
   trace-config             show stored trace config
   loglevel [<node> [lvl]]  show all/one node's log level; with lvl, SET it live
   logcat [--json]          follow the trace firehose (--json = NDJSON)

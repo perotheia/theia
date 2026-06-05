@@ -18,9 +18,14 @@
 #include "NodeRef.hh"                       // theia::runtime::cast(self, msg, TipcAddr)
 #include "platform_runtime/runtime.pb.h"    // platform_runtime_ConfigUpdated
 
+#include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <fstream>
+#include <sstream>
 #include <string>
+#include <unordered_map>
 
 namespace system_services_per {
 
@@ -43,21 +48,58 @@ void set_bytes(BytesT& dst, const std::string& s) {
     dst.size = static_cast<pb_size_t>(n);
 }
 
-// Resolve a subscriber node NAME to its TIPC address. FOR NOW per derives it
-// the same way the manifest does for app worker nodes: a node's address is
-// declared in the netgraph/executor — but per (a plain FC) doesn't carry the
-// cluster registry yet. So the first slice resolves a small set of known
-// reporting nodes by convention; the real version reuses the supervisor's
-// Registry (name -> {type,instance}) loaded from the manifest. Returns {ok}.
+// Resolve a subscriber node NAME to its TIPC address, from the staged
+// netgraph.json (node name -> {type, instance}). Path comes from $THEIA_NETGRAPH
+// (the supervisor/stage sets it; defaults to ./netgraph.json next to the
+// binary). Loaded once and cached. This is the lightweight reuse of the cluster
+// address book — per doesn't need the full supervisor Registry, just name->addr
+// for the nodes it pushes config to. (A node-type name like "PerManager" or an
+// app worker name resolves if it's in the netgraph.) Returns {ok}.
 struct ResolvedAddr { bool ok; uint32_t type; uint32_t instance; };
 
-ResolvedAddr resolve_subscriber(const std::string& /*name*/) {
-    // TODO(per): load the manifest Registry and resolve name -> TipcAddr, like
-    // the supervisor does (project-app-node-tipc-resolution). Until then a
-    // subscriber must be reachable by an addr the test supplies out-of-band;
-    // we return not-ok so Put/Watch DON'T attempt a cast to an unknown peer
-    // (the store + subscription bookkeeping still works and is observable).
-    return {false, 0, 0};
+const std::unordered_map<std::string, std::pair<uint32_t, uint32_t>>&
+netgraph_addrs() {
+    static const auto table = [] {
+        std::unordered_map<std::string, std::pair<uint32_t, uint32_t>> t;
+        const char* path = std::getenv("THEIA_NETGRAPH");
+        std::string p = path ? path : "netgraph.json";
+        std::ifstream f(p);
+        if (!f) return t;
+        std::stringstream ss; ss << f.rdbuf();
+        const std::string s = ss.str();
+        // Minimal hand-parse of the {"nodes":[{"name":..,"tipc":{"type":..,
+        // "instance":..}}]} shape — avoids pulling a JSON lib into per's impl.
+        // Scan for "name":"X" ... "type":"0x..","instance":"N" triples.
+        std::size_t pos = 0;
+        while ((pos = s.find("\"name\"", pos)) != std::string::npos) {
+            auto nq1 = s.find('"', s.find(':', pos) + 1);
+            auto nq2 = s.find('"', nq1 + 1);
+            if (nq1 == std::string::npos || nq2 == std::string::npos) break;
+            std::string name = s.substr(nq1 + 1, nq2 - nq1 - 1);
+            auto tpos = s.find("\"type\"", nq2);
+            auto ipos = s.find("\"instance\"", nq2);
+            if (tpos == std::string::npos || ipos == std::string::npos) {
+                pos = nq2 + 1; continue;
+            }
+            auto rd = [&](std::size_t kpos) -> uint32_t {
+                auto q1 = s.find('"', s.find(':', kpos) + 1);
+                auto q2 = s.find('"', q1 + 1);
+                return static_cast<uint32_t>(
+                    std::strtoul(s.substr(q1 + 1, q2 - q1 - 1).c_str(), nullptr, 0));
+            };
+            t[name] = {rd(tpos), rd(ipos)};
+            pos = nq2 + 1;
+        }
+        return t;
+    }();
+    return table;
+}
+
+ResolvedAddr resolve_subscriber(const std::string& name) {
+    const auto& t = netgraph_addrs();
+    auto it = t.find(name);
+    if (it == t.end()) return {false, 0, 0};
+    return {true, it->second.first, it->second.second};
 }
 
 // Cast the current stored config to one subscriber.
@@ -65,10 +107,16 @@ void push_config(PerClient& self, const Subscription& sub,
                  const StoredConfig& cur) {
     auto addr = resolve_subscriber(sub.subscriber_node);
     if (!addr.ok) {
-        self.log().debug(std::string("watch: subscriber '") +
-                         sub.subscriber_node + "' unresolved — not pushed");
+        self.log().info(std::string("push: subscriber '") +
+                        sub.subscriber_node + "' UNRESOLVED — not pushed");
         return;
     }
+    char abuf[96];
+    std::snprintf(abuf, sizeof(abuf),
+                  "push: ConfigUpdated -> %s @ 0x%08x:%u (%zuB)",
+                  sub.subscriber_node.c_str(), addr.type, addr.instance,
+                  cur.config.size());
+    self.log().info(abuf);
     platform_runtime_ConfigUpdated m{};
     set_bytes(m.config, cur.config);
     set_str(m.digest, cur.digest);

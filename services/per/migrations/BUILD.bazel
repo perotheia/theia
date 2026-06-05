@@ -1,0 +1,20 @@
+# Config-migration transforms. Each .cc registers its (from->to) edge at
+# static-init via MigrationRegistrar (the trace_decoder_protos pattern). One
+# file per adjacent step: migrations/<config_type>/<from>_to_<to>.cc.
+#
+# alwayslink: the registrars have no referenced symbols (their effect is the
+# static-init side effect), so the linker must NOT drop the TU.
+
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "per_migrations",
+    srcs = glob(["**/*.cc"], allow_empty = True),
+    copts = ["-std=c++17", "-fPIC"],
+    deps = [
+        "//services/per/impl:migration_registry",
+    ],
+    alwayslink = True,
+)

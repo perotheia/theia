@@ -15,6 +15,7 @@
 
 #include "lib/PerClient.hh"
 
+#include "impl/migration_registry.hpp"     // lazy migration-on-read transform chain
 #include "NodeRef.hh"                       // theia::runtime::cast(self, msg, TipcAddr)
 #include "ParamsConfig.hh"                  // get_config() — static param push_connect_ms
 #include "platform_runtime/runtime.pb.h"    // platform_runtime_ConfigUpdated
@@ -226,15 +227,35 @@ ConfigSnapshot PerClient::handle_call(
                          " -> (absent)");
         return rep;
     }
-    // TODO(per): if req.want_digest != cur.digest, run the migration chain to
-    // want_digest here (lazy migration on read, consulting SchemaRegistry). The
-    // first slice returns the stored value verbatim.
-    set_bytes(rep.config, cur.config);
-    set_str(rep.digest, cur.digest);
+    // Lazy migration on read: if the caller wants a different schema than what's
+    // stored, reshape the value forward through the registered transform chain
+    // and return it tagged with the caller's digest (version stripped/replaced).
+    // want_digest == "" means "whatever is stored" (no migration).
+    std::string out_config = cur.config;
+    std::string out_digest = cur.digest;
+    const std::string want(req.want_digest);
+    if (!want.empty() && want != cur.digest) {
+        auto migrated = MigrationRegistry::instance().migrate(
+            cur.digest, want, cur.config);
+        if (migrated) {
+            out_config = std::move(*migrated);
+            out_digest = want;
+            this->log().info(std::string("GetConfig ") + req.target_node +
+                             " migrated " + cur.digest + " -> " + want);
+        } else {
+            // No transform path — return the stored value verbatim (its own
+            // digest) so the caller can decide; don't fail the read.
+            this->log().warn(std::string("GetConfig ") + req.target_node +
+                             " no migration " + cur.digest + " -> " + want +
+                             "; returning stored digest");
+        }
+    }
+    set_bytes(rep.config, out_config);
+    set_str(rep.digest, out_digest);
     rep.mod_rev = static_cast<uint64_t>(cur.mod_rev);
     this->log().info(std::string("GetConfig ") + req.target_node + " -> " +
-                     std::to_string(cur.config.size()) + "B digest=" +
-                     cur.digest + " rev=" + std::to_string(cur.mod_rev));
+                     std::to_string(out_config.size()) + "B digest=" +
+                     out_digest + " rev=" + std::to_string(cur.mod_rev));
     return rep;
 }
 

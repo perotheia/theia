@@ -110,8 +110,9 @@ struct SystemInfoData {
 // One read-back trace-config row for GetTraceConfig.
 struct TraceConfigRow {
     std::string target_node;
-    std::string msg_type;
-    uint32_t    kind{0};   // TraceKind ordinal; enabled is implicit (present)
+    uint32_t    kind{0};   // TraceKind ordinal; enabled is implicit (present).
+                           // One row per (node, enabled-kind) — a node tracing
+                           // several kinds yields several rows.
 };
 
 // One read-back log-level row for GetLogLevelConfig (tdb loglevel). Effective
@@ -502,20 +503,22 @@ private:
     std::map<pid_t, HeartbeatState>  heartbeats_;
     void check_heartbeats();
 
-    // ---- Trace config (#361) -----------------------------------------------
+    // ---- Trace config (#361, #403) -----------------------------------------
     //
-    // The supervisor receives ConfigureTrace from supdbg/services-com,
-    // remembers the (target_node, msg_type) → enabled tuple, and pushes
-    // it to the node's NodeTraceCtl TIPC server. The config is keyed by
-    // child NAME (the worker process), not pid, so it survives restart:
-    // the first HeartbeatReport after a gap fires a re-push.
+    // The supervisor receives ConfigureTrace from tdb/services-com, remembers
+    // which trace KINDS each child has enabled, and pushes them to the node's
+    // config service. Keyed by child NAME (the worker process), not pid, so it
+    // survives restart: the first HeartbeatReport after a gap fires a re-push.
     //
-    // Storage: configs_by_child[child_name][msg_type] = TraceKind ordinal.
-    // Presence of the (child, msg_type) key means "enabled"; the value is
-    // the trace KIND to push (#403; 0 = all kinds). Empty (no entries)
-    // means "no trace for that child" — no push is sent.
+    // A node's Tracer kind filter is a BITMASK — several kinds can be on at once
+    // (CAST_IN | CALL_OUT | ...). So we store a SET of enabled TraceKind
+    // ordinals per child (the inner map is keyed by KIND; presence = that kind
+    // is enabled). The catch-all "all kinds" push (kind 0 / Other) is stored as
+    // the single kind 0. Empty (no entries) means "no trace for that child" —
+    // no push is sent. Read-back lists every enabled kind; restart re-push casts
+    // one TraceControlPush per enabled kind so the node rebuilds its mask.
     std::map<std::string,
-             std::map<std::string, uint32_t>>  trace_configs_;
+             std::map<uint32_t, bool>>  trace_configs_;
 
     // Tracks last heartbeat time per child NAME (not pid) — so we can
     // detect a "fresh start after gap" trigger independent of pid.
@@ -537,10 +540,13 @@ private:
 
     // Apply one TraceConfig: update the in-memory table and push to
     // the node (best-effort — failure to push is logged, not fatal).
+    // Set/clear ONE trace kind for a child. kind 0 (Other / catch-all) when
+    // enabled REPLACES the set with just the catch-all (the node wipes its mask
+    // → all kinds pass); a non-zero kind ADDS to the set. Disabling kind 0 (or
+    // any kind that empties the set) clears the child's trace.
     void apply_trace_config(const std::string& target_node,
-                            const std::string& msg_type,
-                            bool enabled,
-                            uint32_t kind = 0);
+                            uint32_t kind,
+                            bool enabled);
 
     // Push the WHOLE trace_configs_[child] map to that child's
     // NodeTraceCtl TIPC server. Called on (re)start of the worker and

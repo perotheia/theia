@@ -8,7 +8,7 @@
 #
 # Instead we expose specific artifacts via filegroup labels here.
 
-load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@rules_cc//cc:defs.bzl", "cc_import", "cc_library")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -40,6 +40,38 @@ filegroup(
 alias(
     name = "etcd-cpp-apiv3",
     actual = ":etcd-cpp-apiv3-install",
+)
+
+# Pure-Bazel cc_library for a normal cc_library/cc_binary consumer (e.g.
+# services/per's etcd_store) — exposes the etcd-cpp-apiv3 install headers +
+# links the prebuilt shared lib. The .so's transitive deps (grpc++, libprotobuf,
+# cpprest, ssl) are host system libs that resolve at load time. The RPATH below
+# lets the per binary find libetcd-cpp-api*.so at run time from the source tree.
+# Link ONLY libetcd-cpp-api.so. It is self-contained (the SyncClient/Watcher
+# symbols + the etcd/gogoproto descriptors), and does NOT depend on
+# libetcd-cpp-api-core.so at runtime. The -core .so embeds the SAME gogoproto
+# extension descriptors (gogoproto.goproto_enum_prefix, field 62001); linking
+# BOTH registers that extension TWICE → a fatal libprotobuf "Multiple extension
+# registrations" abort at startup. One .so = one registration.
+cc_import(
+    name = "etcd_cpp_so",
+    shared_library = "etcd-cpp-apiv3/install/lib/libetcd-cpp-api.so",
+)
+
+cc_library(
+    name = "etcd_cc",
+    hdrs = glob(["etcd-cpp-apiv3/install/include/**/*.hpp"]),
+    includes = ["etcd-cpp-apiv3/install/include"],
+    deps = [
+        ":etcd_cpp_so",
+    ],
+    # Find the .so's at run time relative to the binary (bazel-bin) and from an
+    # installed tree; the absolute source path is the dev-run fallback.
+    linkopts = [
+        "-Wl,-rpath,$$ORIGIN/../../../third_party/etcd-cpp-apiv3/install/lib",
+        "-Wl,-rpath,/home/axadmin/repo/theia/third_party/etcd-cpp-apiv3/install/lib",
+    ],
+    visibility = ["//visibility:public"],
 )
 
 

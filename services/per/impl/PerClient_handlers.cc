@@ -107,7 +107,7 @@ ResolvedAddr resolve_subscriber(const std::string& name) {
 // ever invoked from the deferred mailbox lambda in schedule_push, never inline
 // from a handler) — see schedule_push for why.
 void push_config_now(PerClient& self, const std::string& subscriber,
-                     const StoredConfig& snap) {
+                     const StoreValue& snap) {
     auto addr = resolve_subscriber(subscriber);
     if (!addr.ok) {
         self.log().info(std::string("push: subscriber '") + subscriber +
@@ -152,7 +152,7 @@ void push_config_now(PerClient& self, const std::string& subscriber,
 // runs.
 void schedule_push(PerClient& self,
                    std::vector<std::string> subscribers,
-                   StoredConfig snap) {
+                   StoreValue snap) {
     if (subscribers.empty()) return;
     self.enqueue([&self, subs = std::move(subscribers),
                   snap = std::move(snap)](::theia::runtime::GenServerBase*) {
@@ -165,12 +165,49 @@ void schedule_push(PerClient& self,
 }  // namespace
 
 
-void PerClient::init(PerClientState& /*s*/) {
+void PerClient::init(PerClientState& s) {
     // Read static params at boot (deployment knobs from the per-FC config JSON).
     auto cfg = ::theia::runtime::get_config().node(kNodeName);
+    const std::string endpoint = cfg.str("etcd_endpoint", "127.0.0.1:2379");
     this->log().info(std::string("params: push_connect_ms=") +
                      std::to_string(cfg.u32("push_connect_ms", 250)) +
-                     " etcd_endpoint=" + cfg.str("etcd_endpoint", "(default)"));
+                     " etcd_endpoint=" + endpoint);
+
+    // Choose the store: etcd-backed when reachable, else the in-memory
+    // fallback. THEIA_PER_BACKEND=mem forces in-memory (tests / no etcd).
+    const char* backend = std::getenv("THEIA_PER_BACKEND");
+    if (backend && std::string(backend) == "mem") {
+        s.store = make_memory_store();
+        this->log().info("store: in-memory (forced by THEIA_PER_BACKEND=mem)");
+    } else {
+        s.store = make_etcd_store(endpoint);
+        if (s.store) {
+            this->log().info("store: etcd @ " + endpoint);
+            // Watch the whole config prefix. On an etcd change, per casts
+            // ConfigUpdated to every subscriber of that target. The watch cb
+            // runs on the etcd watcher thread — defer the cast onto the node
+            // thread (the re-entrancy/blocking rule), capturing copies.
+            PerClient* self = this;
+            s.store->watch_prefix([self, &s](const WatchEvent& ev) {
+                std::vector<std::string> subs;
+                auto wit = s.watches.find(ev.target_node);
+                if (wit != s.watches.end())
+                    for (const auto& sub : wit->second)
+                        subs.push_back(sub.subscriber_node);
+                if (subs.empty()) return;
+                StoreValue snap = ev.cur;
+                self->enqueue([self, subs = std::move(subs),
+                               snap = std::move(snap)]
+                              (::theia::runtime::GenServerBase*) {
+                    for (const auto& sub : subs) push_config_now(*self, sub, snap);
+                });
+            });
+        } else {
+            this->log().warn("store: etcd unreachable @ " + endpoint +
+                             " — falling back to in-memory");
+            s.store = make_memory_store();
+        }
+    }
 }
 
 void PerClient::handle_info(const char* /*info*/, PerClientState& /*s*/) {
@@ -181,22 +218,20 @@ ConfigSnapshot PerClient::handle_call(
         const GetConfigReq& req,
         PerClientState& s) {
     ConfigSnapshot rep{};
-    auto it = s.store.find(req.target_node);
-    if (it == s.store.end()) {
-        // Missing key: empty snapshot (mod_rev 0 = "not present"). A real
-        // NOT_FOUND status rides PerReply on the write path; Get returns the
-        // snapshot shape, so emptiness signals absence.
+    StoreValue cur = s.store->get(req.target_node);
+    if (!cur.found) {
+        // Missing key: empty snapshot (mod_rev 0 = "not present"). Get returns
+        // the snapshot shape, so emptiness signals absence.
         this->log().info(std::string("GetConfig ") + req.target_node +
                          " -> (absent)");
         return rep;
     }
-    // TODO(per): if req.want_digest != stored digest, run the migration chain
-    // to want_digest here (lazy migration on read), strip the version. The
+    // TODO(per): if req.want_digest != cur.digest, run the migration chain to
+    // want_digest here (lazy migration on read, consulting SchemaRegistry). The
     // first slice returns the stored value verbatim.
-    const StoredConfig& cur = it->second;
     set_bytes(rep.config, cur.config);
     set_str(rep.digest, cur.digest);
-    rep.mod_rev = cur.mod_rev;
+    rep.mod_rev = static_cast<uint64_t>(cur.mod_rev);
     this->log().info(std::string("GetConfig ") + req.target_node + " -> " +
                      std::to_string(cur.config.size()) + "B digest=" +
                      cur.digest + " rev=" + std::to_string(cur.mod_rev));
@@ -207,40 +242,43 @@ PerReply PerClient::handle_call(
         const PutConfigReq& req,
         PerClientState& s) {
     PerReply rep{};
-    // CAS guard: if expect_rev != 0 it must match the current rev.
-    auto it = s.store.find(req.target_node);
-    const uint64_t cur_rev = (it == s.store.end()) ? 0 : it->second.mod_rev;
-    if (req.expect_rev != 0 && req.expect_rev != cur_rev) {
-        rep.status = 1;   // CAS conflict
+    const std::string config(reinterpret_cast<const char*>(req.config.bytes),
+                             req.config.size);
+    const int64_t new_rev = s.store->put(
+        req.target_node, config, req.digest,
+        static_cast<int64_t>(req.expect_rev));
+    if (new_rev == 0) {
+        // CAS conflict (expect_rev didn't match the store's current rev).
+        rep.status = 1;
         set_str(rep.message, "rev mismatch (CAS)");
-        rep.mod_rev = cur_rev;
+        StoreValue v = s.store->get(req.target_node);
+        rep.mod_rev = static_cast<uint64_t>(v.mod_rev);
         this->log().warn(std::string("PutConfig ") + req.target_node +
-                         " CAS conflict: expected " +
-                         std::to_string(req.expect_rev) + " have " +
-                         std::to_string(cur_rev));
+                         " CAS conflict (expected " +
+                         std::to_string(req.expect_rev) + ")");
         return rep;
     }
-    // Store the new value (binary-proto bytes verbatim; per never decodes it).
-    StoredConfig& cur = s.store[req.target_node];
-    cur.config.assign(reinterpret_cast<const char*>(req.config.bytes),
-                      req.config.size);
-    cur.digest = req.digest;
-    cur.mod_rev = s.next_rev++;
     rep.status = 0;
-    rep.mod_rev = cur.mod_rev;
+    rep.mod_rev = static_cast<uint64_t>(new_rev);
     this->log().info(std::string("PutConfig ") + req.target_node + " <- " +
-                     std::to_string(cur.config.size()) + "B digest=" +
-                     cur.digest + " rev=" + std::to_string(cur.mod_rev));
+                     std::to_string(config.size()) + "B digest=" +
+                     std::string(req.digest) + " rev=" + std::to_string(new_rev));
 
-    // Fan the change out to every subscriber watching this target — DEFERRED
-    // off this reply path (schedule_push enqueues onto the node thread; the
-    // caller gets its PutConfig reply now, the casts run after).
-    auto wit = s.watches.find(req.target_node);
-    if (wit != s.watches.end()) {
-        std::vector<std::string> subs;
-        subs.reserve(wit->second.size());
-        for (const auto& sub : wit->second) subs.push_back(sub.subscriber_node);
-        schedule_push(*this, std::move(subs), cur);   // cur copied into the lambda
+    // Fan-out: with the ETCD store the change comes back via the watch callback
+    // (registered in init), so we DON'T fan out here — that would double-push.
+    // With the IN-MEMORY store there is no watch source, so push directly here.
+    // Both paths defer off the reply (schedule_push enqueues onto the node).
+    if (!s.store->is_watched()) {
+        auto wit = s.watches.find(req.target_node);
+        if (wit != s.watches.end()) {
+            std::vector<std::string> subs;
+            subs.reserve(wit->second.size());
+            for (const auto& sub : wit->second)
+                subs.push_back(sub.subscriber_node);
+            StoreValue snap;
+            snap.config = config; snap.digest = req.digest; snap.mod_rev = new_rev;
+            schedule_push(*this, std::move(subs), std::move(snap));
+        }
     }
     return rep;
 }
@@ -270,10 +308,12 @@ PerReply PerClient::handle_call(
 
     // Deliver the current snapshot immediately so a fresh subscriber starts in
     // sync (etcd watch semantics: an initial value, then deltas) — DEFERRED off
-    // the reply path, same as the Put fan-out.
-    auto it = s.store.find(req.target_node);
-    if (it != s.store.end()) {
-        schedule_push(*this, {req.subscriber_node}, it->second);
+    // the reply path. This is the per-subscriber initial sync, NOT covered by
+    // the etcd watch (which only fires on future changes), so it runs for both
+    // store backends.
+    StoreValue cur = s.store->get(req.target_node);
+    if (cur.found) {
+        schedule_push(*this, {req.subscriber_node}, std::move(cur));
     }
     return rep;
 }

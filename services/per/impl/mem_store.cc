@@ -1,0 +1,60 @@
+// In-memory Store — the etcd-free fallback + test default. No etcd dependency,
+// so this TU lives in :per_impl (not :per_etcd). watch_prefix is a no-op: the
+// in-memory path has no async change source, so the handler fans ConfigUpdated
+// out directly on Put (see PerClient_handlers.cc).
+
+#include "etcd_store.hpp"
+
+#include <mutex>
+#include <string>
+#include <unordered_map>
+
+namespace system_services_per {
+
+namespace {
+
+class MemStore : public Store {
+public:
+    StoreValue get(const std::string& node) override {
+        std::lock_guard<std::mutex> lk(mu_);
+        StoreValue out;
+        auto it = kv_.find(node);
+        if (it == kv_.end()) return out;
+        out = it->second;
+        out.found = true;
+        return out;
+    }
+
+    int64_t put(const std::string& node, const std::string& config,
+                const std::string& digest, int64_t expect_rev) override {
+        std::lock_guard<std::mutex> lk(mu_);
+        auto it = kv_.find(node);
+        const int64_t cur_rev = (it == kv_.end()) ? 0 : it->second.mod_rev;
+        if (expect_rev != 0 && expect_rev != cur_rev) return 0;  // CAS conflict
+        StoreValue& v = kv_[node];
+        v.config = config;
+        v.digest = digest;
+        v.mod_rev = ++rev_;
+        v.found = true;
+        return v.mod_rev;
+    }
+
+    void watch_prefix(std::function<void(const WatchEvent&)>) override {
+        // no-op — see file header.
+    }
+
+    bool is_watched() const override { return false; }
+
+private:
+    std::mutex mu_;
+    std::unordered_map<std::string, StoreValue> kv_;
+    int64_t rev_ = 0;
+};
+
+}  // namespace
+
+std::unique_ptr<Store> make_memory_store() {
+    return std::make_unique<MemStore>();
+}
+
+}  // namespace system_services_per

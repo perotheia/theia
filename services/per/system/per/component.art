@@ -2,6 +2,6 @@ package system.services.per
 
 
 composition Per {
-    prototype PerDaemon per_daemon
+    prototype PerClient  per_client
+    prototype PerManager per_manager
 }
-

@@ -1,0 +1,46 @@
+# nanopb field-size constraints for the system.services.per wire messages.
+# nanopb_generator auto-loads this file because it sits next to per.proto
+# (same basename). Without it every string/bytes/repeated field becomes a
+# pb_callback_t — which the runtime RemoteCodec decode path SKIPS, so the
+# fields are unreadable in handle_call / unfillable on encode. Pinning them to
+# fixed in-struct arrays (max_size / max_count) makes them plain char[]/bytes[]
+# members. Same fix as system_supervisor.*.options. (gen-app does NOT emit
+# this; hand-maintained alongside the .art.)
+#
+# Grammar: "<Fully.Qualified.field>  max_size:N | max_count:N".
+
+# ---- ConfigSnapshot (GetConfig reply) ------------------------------------
+# config: serialized <Node>Config bytes (binary proto the client unpacks).
+#   4 KiB ceiling — a node's config is a small structured message.
+system_services_per.ConfigSnapshot.config        max_size:4096
+system_services_per.ConfigSnapshot.digest        max_size:64
+
+# ---- GetConfigReq --------------------------------------------------------
+system_services_per.GetConfigReq.target_node      max_size:64
+system_services_per.GetConfigReq.want_digest      max_size:64
+
+# ---- PutConfigReq --------------------------------------------------------
+system_services_per.PutConfigReq.target_node      max_size:64
+system_services_per.PutConfigReq.config           max_size:4096
+system_services_per.PutConfigReq.digest           max_size:64
+
+# ---- WatchConfigReq ------------------------------------------------------
+system_services_per.WatchConfigReq.target_node     max_size:64
+system_services_per.WatchConfigReq.subscriber_node max_size:64
+system_services_per.WatchConfigReq.want_digest     max_size:64
+
+# ---- PerReply ------------------------------------------------------------
+system_services_per.PerReply.message              max_size:160
+
+# ---- Manager messages ----------------------------------------------------
+system_services_per.RegisterSchemaReq.config_type max_size:96
+system_services_per.RegisterSchemaReq.digest      max_size:64
+system_services_per.SchemaInfo.config_type        max_size:96
+system_services_per.SchemaInfo.digest             max_size:64
+system_services_per.ListSchemasReq.config_type    max_size:96
+system_services_per.SchemaList.schemas            max_count:64
+system_services_per.MigrateBulkReq.config_type    max_size:96
+system_services_per.MigrateBulkReq.from_digest    max_size:64
+system_services_per.MigrateBulkReq.to_digest      max_size:64
+system_services_per.SnapshotReq.label             max_size:96
+system_services_per.RestoreSnapshotReq.label      max_size:96

@@ -68,6 +68,10 @@ THEIA_DECLARE_REMOTE_CODEC(platform_runtime_LogLevelPush)
 // Trace control (#403) — the supervisor's per-node trace-kind push.
 // Same framework-universal codec rationale as LogLevelPush above.
 THEIA_DECLARE_REMOTE_CODEC(platform_runtime_TraceControlPush)
+// Config update — services/per's runtime-observable config push. Same
+// framework-universal codec rationale; variable-length fields are pinned to
+// fixed arrays by runtime.options so this decodes like the scalar pushes.
+THEIA_DECLARE_REMOTE_CODEC(platform_runtime_ConfigUpdated)
 
 namespace theia {
 namespace runtime {
@@ -357,6 +361,53 @@ public:
                          std::to_string(static_cast<int>(push.kind)) + " -> " +
                          (push.enabled ? "ON" : "OFF") + " (supervisor push)");
     }
+
+    // ---- Config service: ConfigUpdated (services/per) -------------------
+    //
+    // The THIRD framework config-service cast (sibling of LogLevelPush /
+    // TraceControlPush). services/per casts this to a node when its watched
+    // config changes; a node's main.cc activates it by
+    // register_cast<platform_runtime_ConfigUpdated>(binding, node) on the
+    // config-service binding. Unlike trace/log, the PAYLOAD is node-specific —
+    // `push.config` is the serialized <Node>Config the node must unpack with
+    // its OWN codec — so the base can't decode it. The framework therefore
+    // does the GENERIC part (stash the raw bytes + digest + changed mask so the
+    // node can read them, and emit a uniform log line) and hands off to a
+    // Derived-overridable hook:
+    //
+    //   void on_config_update(const platform_runtime_ConfigUpdated& cfg,
+    //                         State& state);
+    //
+    // The default hook is a no-op (name-hiding picks Derived's once it defines
+    // one — same trick as init()/handle_info). A node that wants live config
+    // overrides on_config_update, ParseFromString/nanopb-decodes cfg.config
+    // into its config type, swaps its held shared_ptr<const Config>, and honors
+    // the per-field STATIC/HOT_RELOAD/RESTART_REQUIRED class. A node that
+    // doesn't override still compiles + ignores the push (e.g. config it only
+    // reads at boot via get_config()).
+    void handle_cast(const platform_runtime_ConfigUpdated& push,
+                     StateT& s) noexcept {
+        const std::size_t clen = push.config.size;
+        this->log().info(std::string("config update: ") +
+                         std::to_string(clen) + "B digest=" +
+                         (push.digest[0] ? push.digest : "(none)") +
+                         " changed=" + std::to_string(push.changed_count) +
+                         " (services/per push)");
+        // Hand the typed snapshot to the node. Default below is a no-op; a
+        // Derived on_config_update shadows it (overload resolution / name
+        // hiding picks Derived's). Exceptions in the app hook must not kill the
+        // node thread — the cast path is noexcept.
+        try {
+            static_cast<Derived*>(this)->on_config_update(push, s);
+        } catch (...) {
+            this->log().warn("on_config_update threw — config not applied");
+        }
+    }
+
+    // Default config hook — no-op (a node that only reads config at boot, or
+    // doesn't use services/per, ignores live pushes). Derived shadows it.
+    void on_config_update(const platform_runtime_ConfigUpdated& /*cfg*/,
+                          StateT& /*s*/) noexcept {}
 
 protected:
     void dispatch_info_(const char* info) override {

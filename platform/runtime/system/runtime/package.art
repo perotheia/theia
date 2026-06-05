@@ -60,15 +60,45 @@ message TraceControlPush {
     bool      enabled
 }
 
-// The supervisor → child CONTROL plane, as one interface bundling the two
-// fire-and-forget casts the supervisor pushes to every reporting node. The
-// supervisor `requires` it (sends); each child node `provides` it — realized by
-// the universal config-service receiver gen-app injects (register_cast<
-// TraceControlPush> / register_cast<LogLevelPush> → GenServer base handle_cast).
-// senderReceiver (not clientServer): both are casts, no reply. Carried here in
-// the runtime package so a child provides it without depending on the
-// supervisor, and the supervisor requires it without re-declaring the messages.
+// ── Runtime-observable config push (the THIRD config-service cast) ────────
+//
+// services/per (the etcd-backed config gatekeeper) casts this to a node when
+// its config changes. Same framework path as TraceControlPush / LogLevelPush:
+// gen-app register_cast<ConfigUpdated>'s it on the node's config-service
+// receiver, and the GenServer base handle_cast(ConfigUpdated) decodes `config`
+// to the node's own config message, swaps the held shared_ptr<const Config>,
+// and (if the app overrides it) calls on_config_update(cfg, changed).
+//
+// Unlike Trace/LogLevelPush this carries VARIABLE-LENGTH data (the serialized
+// config + digest + the changed-paths mask). nanopb would render those as
+// pb_callback_t — which the register_cast/RemoteCodec decode path skips — so
+// runtime.options pins each to a fixed in-struct array (same fix as the
+// supervisor's readable strings). `config` is opaque protobuf bytes: the node
+// unpacks it with its own codec; the runtime stays config-type-agnostic.
+// `changed` is the FieldMask-shaped list of dotted field paths that differ from
+// the previous value (services/per computes it from etcd's prev_kv); empty on
+// the first delivery (whole snapshot is new).
+message ConfigUpdated {
+    bytes           config              // serialized <Node>Config; node unpacks
+    string          digest              // schema digest the bytes are encoded under
+    repeated string changed             // dotted field paths that changed (FieldMask)
+}
+
+// The CONTROL plane pushed to every reporting node, as one interface bundling
+// the fire-and-forget casts a node's framework config-service receiver applies.
+// The SENDER `requires` it; each child node `provides` it — realized by the
+// universal config-service receiver gen-app injects (register_cast<
+// TraceControlPush> / <LogLevelPush> / <ConfigUpdated> → GenServer base
+// handle_cast). senderReceiver (not clientServer): all are casts, no reply.
+// Carried here in the runtime package so a child provides it without depending
+// on the sender. Two senders today:
+//   - the supervisor  → trace_ctrl + log_level (per-child, restart-surviving)
+//   - services/per    → config_push (per-subscriber, on a watched config change)
+// The address is dynamic in both cases (resolved at run time, not a static
+// netgraph peer); the sender emits via the cast-to-runtime-addr override and
+// this port models the intent.
 interface senderReceiver ChildControlIf {
     data TraceControlPush trace_ctrl   // turn a node's Tracer on/off per kind
     data LogLevelPush     log_level    // set a node's live log level
+    data ConfigUpdated    config_push  // runtime-observable config (services/per)
 }

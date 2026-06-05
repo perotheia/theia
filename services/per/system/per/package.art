@@ -154,6 +154,13 @@ node atomic PerClient {
         sender config_out provides ChildControlIf
         sender to_log     provides LogStream  best_effort
     }
+    params {
+        // Per-cast connect budget (ms) for the ConfigUpdated push — a DOWN
+        // subscriber must fail fast, never stall the node thread.
+        push_connect_ms : uint32 = 250
+        // etcd endpoint the (future) store connects to. Static deploy knob.
+        etcd_endpoint   : string = "127.0.0.1:2379"
+    }
 }
 
 // Manager API — schema registry + snapshot + bulk migrate. Ops/tooling only.

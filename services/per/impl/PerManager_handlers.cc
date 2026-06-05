@@ -1,93 +1,115 @@
-// User handler bodies for PerManager.
+// User handler bodies for PerManager — the config gatekeeper's MANAGEMENT API.
 //
-// FIRST-TIME-ONLY SCAFFOLD. `artheia gen-app --kind fc` checks for
-// this file's existence and refuses to overwrite unless `--force`
-// is passed. Bodies are yours; the declarations are in
-// lib/PerManager.hh.
+// Ops/tooling only (separate port from the client hot path): the schema
+// registry (RegisterSchema/ListSchemas), bulk migrate, and operational
+// snapshot/restore. The schema registry is a PROCESS-GLOBAL singleton shared
+// with PerClient (which reads it for migration-on-read) — see schema_registry.hpp.
 //
-// Default behaviour for every handler is a no-op (logs the message
-// type to stderr so you can see traffic land). Replace with real
-// behaviour as the FC matures.
+// Snapshot/RestoreSnapshot + the real MigrateBulk rewrite need the etcd backend
+// (wrap etcdctl / the etcd Maintenance gRPC); until that lands they return a
+// NOT-IMPLEMENTED status rather than a fake success, so a caller is never
+// misled. RegisterSchema/ListSchemas are fully functional now.
 
 #include "lib/PerManager.hh"
+#include "schema_registry.hpp"
 
-#include <cstdio>
+#include <cstring>
+#include <string>
 
 namespace system_services_per {
 
+namespace {
 
-// ---- OTP init/1 — runs once on the node thread after start(), before
-//      the first message. Bootstrap a self-driving node's work loop here
-//      (e.g. ::theia::runtime::post_info(*this, "tick")); leave empty for a
-//      passive node. State fields live in impl/PerManager_state.hh.
+template <std::size_t N>
+void set_str(char (&dst)[N], const std::string& s) {
+    const std::size_t n = s.size() < N - 1 ? s.size() : N - 1;
+    std::memcpy(dst, s.data(), n);
+    dst[n] = '\0';
+}
+
+// Status codes on PerReply: 0 ok, 2 invalid arg, 3 not implemented (needs etcd).
+constexpr uint32_t kOk = 0, kInvalid = 2, kNotImpl = 3;
+
+}  // namespace
+
+
 void PerManager::init(PerManagerState& /*s*/) {
 }
 
-// ---- string handle_info — the post_info()/send_after() tick path.
 void PerManager::handle_info(const char* /*info*/, PerManagerState& /*s*/) {
 }
 
 
-
-
 PerReply PerManager::handle_call(
-        const RegisterSchemaReq& /*req*/,
+        const RegisterSchemaReq& req,
         PerManagerState& /*s*/) {
-    // TODO: implement RegisterSchema (RegisterSchemaReq →
-    //                                 PerReply).
-    // Dispatched by request type; one or more server ports may
-    // expose this operation.
-    std::fprintf(stderr, "[%s] RegisterSchema called\n",
-                 kNodeName);
-    return PerReply{};
+    PerReply rep{};
+    const bool ok = SchemaRegistry::instance().register_schema(
+        req.config_type, req.digest);
+    rep.status = ok ? kOk : kInvalid;
+    set_str(rep.message, ok ? "schema registered"
+                            : "empty config_type or digest");
+    this->log().info(std::string("RegisterSchema ") + req.config_type +
+                     " digest=" + req.digest + (ok ? " -> ok" : " -> REJECTED"));
+    return rep;
 }
 
 SchemaList PerManager::handle_call(
-        const ListSchemasReq& /*req*/,
+        const ListSchemasReq& req,
         PerManagerState& /*s*/) {
-    // TODO: implement ListSchemas (ListSchemasReq →
-    //                                 SchemaList).
-    // Dispatched by request type; one or more server ports may
-    // expose this operation.
-    std::fprintf(stderr, "[%s] ListSchemas called\n",
-                 kNodeName);
-    return SchemaList{};
+    SchemaList rep{};
+    auto entries = SchemaRegistry::instance().list(req.config_type);
+    const pb_size_t cap =
+        static_cast<pb_size_t>(sizeof(rep.schemas) / sizeof(rep.schemas[0]));
+    for (const auto& e : entries) {
+        if (rep.schemas_count >= cap) break;   // fixed array full; truncate
+        auto& s = rep.schemas[rep.schemas_count++];
+        s = system_services_per_SchemaInfo{};   // nested element type (not aliased)
+        set_str(s.config_type, e.config_type);
+        set_str(s.digest, e.digest);
+    }
+    this->log().info(std::string("ListSchemas ") +
+                     (req.config_type[0] ? req.config_type : "(all)") + " -> " +
+                     std::to_string(rep.schemas_count) + " entries");
+    return rep;
 }
 
 PerReply PerManager::handle_call(
-        const MigrateBulkReq& /*req*/,
+        const MigrateBulkReq& req,
         PerManagerState& /*s*/) {
-    // TODO: implement MigrateBulk (MigrateBulkReq →
-    //                                 PerReply).
-    // Dispatched by request type; one or more server ports may
-    // expose this operation.
-    std::fprintf(stderr, "[%s] MigrateBulk called\n",
-                 kNodeName);
-    return PerReply{};
+    PerReply rep{};
+    // The lazy migration on read (PerClient.GetConfig) covers most reshapes; a
+    // bulk rewrite of every stored value needs to walk the etcd keyspace +
+    // apply the transform chain + a crash-safe resume marker — that's the etcd
+    // backend. Not available against the in-memory store.
+    rep.status = kNotImpl;
+    set_str(rep.message, "MigrateBulk needs the etcd backend (not yet wired)");
+    this->log().warn(std::string("MigrateBulk ") + req.config_type + " " +
+                     req.from_digest + "->" + req.to_digest +
+                     " -> NOT IMPLEMENTED (no etcd)");
+    return rep;
 }
 
 PerReply PerManager::handle_call(
-        const SnapshotReq& /*req*/,
+        const SnapshotReq& req,
         PerManagerState& /*s*/) {
-    // TODO: implement Snapshot (SnapshotReq →
-    //                                 PerReply).
-    // Dispatched by request type; one or more server ports may
-    // expose this operation.
-    std::fprintf(stderr, "[%s] Snapshot called\n",
-                 kNodeName);
-    return PerReply{};
+    PerReply rep{};
+    rep.status = kNotImpl;
+    set_str(rep.message, "Snapshot needs the etcd backend (etcdctl/Maintenance)");
+    this->log().warn(std::string("Snapshot '") + req.label +
+                     "' -> NOT IMPLEMENTED (no etcd)");
+    return rep;
 }
 
 PerReply PerManager::handle_call(
-        const RestoreSnapshotReq& /*req*/,
+        const RestoreSnapshotReq& req,
         PerManagerState& /*s*/) {
-    // TODO: implement RestoreSnapshot (RestoreSnapshotReq →
-    //                                 PerReply).
-    // Dispatched by request type; one or more server ports may
-    // expose this operation.
-    std::fprintf(stderr, "[%s] RestoreSnapshot called\n",
-                 kNodeName);
-    return PerReply{};
+    PerReply rep{};
+    rep.status = kNotImpl;
+    set_str(rep.message, "RestoreSnapshot needs the etcd backend");
+    this->log().warn(std::string("RestoreSnapshot '") + req.label +
+                     "' -> NOT IMPLEMENTED (no etcd)");
+    return rep;
 }
 
 

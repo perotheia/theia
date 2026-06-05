@@ -102,28 +102,58 @@ ResolvedAddr resolve_subscriber(const std::string& name) {
     return {true, it->second.first, it->second.second};
 }
 
-// Cast the current stored config to one subscriber.
-void push_config(PerClient& self, const Subscription& sub,
-                 const StoredConfig& cur) {
-    auto addr = resolve_subscriber(sub.subscriber_node);
+// Cast one config snapshot to one subscriber. Runs ON THE NODE THREAD (only
+// ever invoked from the deferred mailbox lambda in schedule_push, never inline
+// from a handler) — see schedule_push for why.
+void push_config_now(PerClient& self, const std::string& subscriber,
+                     const StoredConfig& snap) {
+    auto addr = resolve_subscriber(subscriber);
     if (!addr.ok) {
-        self.log().info(std::string("push: subscriber '") +
-                        sub.subscriber_node + "' UNRESOLVED — not pushed");
+        self.log().info(std::string("push: subscriber '") + subscriber +
+                        "' UNRESOLVED — not pushed");
         return;
     }
     char abuf[96];
     std::snprintf(abuf, sizeof(abuf),
                   "push: ConfigUpdated -> %s @ 0x%08x:%u (%zuB)",
-                  sub.subscriber_node.c_str(), addr.type, addr.instance,
-                  cur.config.size());
+                  subscriber.c_str(), addr.type, addr.instance,
+                  snap.config.size());
     self.log().info(abuf);
     platform_runtime_ConfigUpdated m{};
-    set_bytes(m.config, cur.config);
-    set_str(m.digest, cur.digest);
+    set_bytes(m.config, snap.config);
+    set_str(m.digest, snap.digest);
     m.changed_count = 0;   // whole-snapshot delivery (no diff in the first slice)
+    // Bounded connect (250ms): a subscriber that's DOWN must fail fast, never
+    // stall the node thread. Same budget the supervisor uses for its child
+    // trace/log push.
     ::theia::runtime::cast(self, m,
                            ::theia::runtime::TipcAddr{addr.type, addr.instance},
                            /*dst_name=*/nullptr, /*connect_timeout_ms=*/250);
+}
+
+// Schedule a fan-out of `snap` to `subscribers` to run LATER on the node
+// thread, OFF the current handler's reply path.
+//
+// Why deferred (the re-entrancy / blocking hazard): casting from inside a
+// handle_call runs a SYNCHRONOUS TIPC connect (bounded at 250ms) per
+// subscriber. Doing that inline would (a) make the CALLER wait for every cast
+// before it gets its reply, and (b) for an N-subscriber fan-out, block the
+// node thread for up to N*250ms — wedging every other config op behind it. So
+// we enqueue() a copy of the work onto this node's own mailbox: the handler
+// returns its reply immediately, and the casts run one-by-one on the node
+// thread afterwards, each still bounded. Copies (not refs) are captured because
+// the lambda outlives the handler frame and `s.store` may change before it
+// runs.
+void schedule_push(PerClient& self,
+                   std::vector<std::string> subscribers,
+                   StoredConfig snap) {
+    if (subscribers.empty()) return;
+    self.enqueue([&self, subs = std::move(subscribers),
+                  snap = std::move(snap)](::theia::runtime::GenServerBase*) {
+        for (const auto& sub : subs) {
+            push_config_now(self, sub, snap);
+        }
+    });
 }
 
 }  // namespace
@@ -191,12 +221,15 @@ PerReply PerClient::handle_call(
                      std::to_string(cur.config.size()) + "B digest=" +
                      cur.digest + " rev=" + std::to_string(cur.mod_rev));
 
-    // Fan the change out to every subscriber watching this target.
+    // Fan the change out to every subscriber watching this target — DEFERRED
+    // off this reply path (schedule_push enqueues onto the node thread; the
+    // caller gets its PutConfig reply now, the casts run after).
     auto wit = s.watches.find(req.target_node);
     if (wit != s.watches.end()) {
-        for (const auto& sub : wit->second) {
-            push_config(*this, sub, cur);
-        }
+        std::vector<std::string> subs;
+        subs.reserve(wit->second.size());
+        for (const auto& sub : wit->second) subs.push_back(sub.subscriber_node);
+        schedule_push(*this, std::move(subs), cur);   // cur copied into the lambda
     }
     return rep;
 }
@@ -225,12 +258,11 @@ PerReply PerClient::handle_call(
                      (exists ? " (refresh)" : " (new)"));
 
     // Deliver the current snapshot immediately so a fresh subscriber starts in
-    // sync (etcd watch semantics: an initial value, then deltas).
+    // sync (etcd watch semantics: an initial value, then deltas) — DEFERRED off
+    // the reply path, same as the Put fan-out.
     auto it = s.store.find(req.target_node);
     if (it != s.store.end()) {
-        push_config(*this,
-                    Subscription{req.subscriber_node, req.want_digest},
-                    it->second);
+        schedule_push(*this, {req.subscriber_node}, it->second);
     }
     return rep;
 }

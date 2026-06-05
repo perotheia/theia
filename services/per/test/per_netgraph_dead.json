@@ -1,0 +1,8 @@
+{
+  "package": "system.services.per",
+  "nodes": [
+    { "name": "PerClient",  "tipc": { "type": "0x80010007", "instance": "0" } },
+    { "name": "PerManager", "tipc": { "type": "0x80010008", "instance": "0" } },
+    { "name": "dead_sub",   "tipc": { "type": "0x8001dead", "instance": "0" } }
+  ]
+}

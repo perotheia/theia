@@ -1,28 +1,21 @@
 // State struct for PerClient — APP-OWNED, WRITE-ONCE.
 //
-// Holds the config gatekeeper's in-process state. The CONFIG STORE is an
-// in-memory map FOR NOW (proves the Get/Put/Watch + ConfigUpdated-cast path
-// end-to-end before the etcd-cpp-apiv3 link goes in — see
-// docs/tasks/TODO/services-db-state-gatekeeper.md). Swapping the store for the
-// real etcd client touches only this struct + the handler bodies; the wire
-// surface and the cast path stay put.
+// Holds the config gatekeeper's in-process state. The CONFIG STORE is now an
+// abstract Store (etcd_store.hpp): etcd-backed when etcd is reachable, else the
+// in-memory fallback. The handlers talk to the Store interface, so the wire
+// surface + the ConfigUpdated cast path are store-agnostic. Subscriptions
+// (target -> who to push to) stay node-local here.
 
 #pragma once
 
-#include <cstdint>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
-namespace system_services_per {
+#include "etcd_store.hpp"   // Store / StoreValue / make_*_store
 
-// One stored config value: the serialized node-config bytes + its schema
-// digest + a monotonically increasing revision (stand-in for etcd's mod_rev).
-struct StoredConfig {
-    std::string config;     // serialized <Node>Config (binary proto bytes)
-    std::string digest;     // schema digest the bytes are encoded under
-    uint64_t    mod_rev{0}; // bumped on each Put (etcd revision analogue)
-};
+namespace system_services_per {
 
 // A watch subscription: who to cast ConfigUpdated to (by node name → resolved
 // to a TIPC addr at push time) and which schema to deliver in.
@@ -32,12 +25,10 @@ struct Subscription {
 };
 
 struct PerClientState {
-    // target_node -> current config value.
-    std::unordered_map<std::string, StoredConfig> store;
+    // The config store — etcd-backed or in-memory (chosen in init()).
+    std::unique_ptr<Store> store;
     // target_node -> subscribers watching it.
     std::unordered_map<std::string, std::vector<Subscription>> watches;
-    // global revision counter (per-store, not per-key — simple + sufficient).
-    uint64_t next_rev = 1;
 };
 
 }  // namespace system_services_per

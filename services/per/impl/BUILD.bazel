@@ -25,17 +25,35 @@ cc_library(
     deps = ["//platform/runtime:runtime"],
 )
 
+# The SOLE etcd connection — isolated cc_library so the heavy etcd-cpp-apiv3
+# link (grpc++, libprotobuf.so, cpprest) lives in ONE target. etcd_store.cc is
+# the only TU that includes etcd headers; the handlers talk to the abstract
+# Store (etcd_store.hpp). This is the "only db svc keeps the connection" design,
+# enforced at the build graph.
+cc_library(
+    name = "per_etcd",
+    srcs = ["etcd_store.cc"],
+    hdrs = ["etcd_store.hpp"],
+    copts = ["-std=c++17", "-fPIC"],
+    deps = [
+        "//third_party:etcd_cc",
+    ],
+)
+
 cc_library(
     name = "per_impl",
     srcs = [
         "PerClient_handlers.cc",
         "PerManager_handlers.cc",
+        "mem_store.cc",
     ],
     # App-owned headers shared between the two nodes' handler TUs. The
     # process-global config-schema registry (PerManager writes, PerClient reads)
-    # — same shared-singleton shape as services/log's trace_hub.hpp.
+    # — same shared-singleton shape as services/log's trace_hub.hpp. etcd_store.hpp
+    # is the abstract Store the handlers use (impl in :per_etcd).
     hdrs = [
         "schema_registry.hpp",
+        "etcd_store.hpp",
     ],
     copts = [
         "-std=c++17",
@@ -45,5 +63,6 @@ cc_library(
     ],
     deps = [
         "//services/per/lib:per_lib",
+        ":per_etcd",
     ],
 )

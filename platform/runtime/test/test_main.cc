@@ -870,6 +870,75 @@ static std::string case_tracer_msg_type_filter() {
     return {};
 }
 
+// The trace KIND filter is a BITMASK (#403): a node can trace several
+// dispatch classes at once (CastOut | CallIn | ...). This proves the mask
+// accumulates, drops un-selected kinds, supports per-bit clear without
+// nuking the others, and that mask==0 is the catch-all "all kinds pass".
+// The Tracer methods exercised here are the ones the supervisor's
+// TraceControlPush handle_cast drives (GenServer.hh).
+static std::string case_tracer_kind_mask() {
+    namespace rt = theia::runtime;
+    TraceCapture cap;
+
+    auto& tr = rt::tracer_for("KindMaskTestNode");
+    tr.enable(true);
+    tr.set_reporting(true);
+    tr.trace_clear_all();      // no msg_type filter — isolate the kind filter
+    tr.trace_clear_kinds();    // mask 0 = catch-all
+
+    // TraceEvent → TraceKind: Send=CastOut, Recv=CastIn, Dispatch=CallIn,
+    // SendReply=CallOut, StateTransition=Statem.
+    // (0) mask empty → every kind passes.
+    tr.emit(rt::TraceEvent::Send,    "A", 0, nullptr, 0);  // CastOut, pass
+    tr.emit(rt::TraceEvent::Recv,    "A", 0, nullptr, 0);  // CastIn,  pass
+
+    // (1) narrow to CastOut | CallIn — accumulate two bits.
+    tr.trace_enable_kind(rt::TraceKind::CastOut, true);
+    tr.trace_enable_kind(rt::TraceKind::CallIn,  true);
+    tr.emit(rt::TraceEvent::Send,     "B", 1, nullptr, 0);  // CastOut, pass
+    tr.emit(rt::TraceEvent::Dispatch, "B", 1, nullptr, 0);  // CallIn,  pass
+    tr.emit(rt::TraceEvent::Recv,     "B", 1, nullptr, 0);  // CastIn,  DROP
+    tr.emit(rt::TraceEvent::SendReply,"B", 1, nullptr, 0);  // CallOut, DROP
+
+    // (2) clear just CastOut — CallIn must survive.
+    tr.trace_enable_kind(rt::TraceKind::CastOut, false);
+    tr.emit(rt::TraceEvent::Send,     "C", 2, nullptr, 0);  // CastOut, DROP
+    tr.emit(rt::TraceEvent::Dispatch, "C", 2, nullptr, 0);  // CallIn,  pass
+
+    // (3) clear kinds → back to catch-all, all pass.
+    tr.trace_clear_kinds();
+    tr.emit(rt::TraceEvent::Recv,     "D", 3, nullptr, 0);  // CastIn,  pass
+    tr.emit(rt::TraceEvent::SendReply,"D", 3, nullptr, 0);  // CallOut, pass
+
+    tr.enable(false);
+
+    auto recs = cap.records();
+    auto count = [&](const char* msg, uint32_t corr) {
+        int n = 0;
+        for (const auto& r : recs)
+            if (r.msg_type == msg && r.corr_id == corr) ++n;
+        return n;
+    };
+
+    // (0) catch-all: both pass.
+    if (count("A", 0) != 2)
+        return "(0) catch-all should pass both A, got "
+               + std::to_string(count("A", 0));
+    // (1) only the two selected kinds pass (CastOut + CallIn = 2 of 4).
+    if (count("B", 1) != 2)
+        return "(1) mask CastOut|CallIn should pass exactly 2 of 4 B, got "
+               + std::to_string(count("B", 1));
+    // (2) CastOut cleared, CallIn survives → only the Dispatch passes.
+    if (count("C", 2) != 1)
+        return "(2) after clearing CastOut, only CallIn passes, got "
+               + std::to_string(count("C", 2));
+    // (3) catch-all again: both pass.
+    if (count("D", 3) != 2)
+        return "(3) cleared mask should pass both D, got "
+               + std::to_string(count("D", 3));
+    return {};
+}
+
 // Handwritten p* binaries.
 static std::string case_tipc_3process() {
     return run_3process_("demo_p1", "demo_p2", "demo_p3");
@@ -1082,6 +1151,7 @@ int main() {
     CASE(stat, tipc_trace_correlation)  { return case_tipc_trace_correlation(); });
     CASE(stat, tracer_runtime_toggle)   { return case_tracer_runtime_toggle(); });
     CASE(stat, tracer_msg_type_filter)  { return case_tracer_msg_type_filter(); });
+    CASE(stat, tracer_kind_mask)        { return case_tracer_kind_mask(); });
     CASE(stat, statem_traffic_light)    { return case_statem_traffic_light(); });
     CASE(stat, statem_retry_escalate)   { return case_statem_retry_escalate(); });
     CASE(stat, statem_postpone)         { return case_statem_postpone(); });

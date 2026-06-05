@@ -254,7 +254,7 @@ bool Supervisor::ctl_configure_trace(const std::string& target_node,
     if (!registry_.resolve(target_node).ok) {
         return false;
     }
-    apply_trace_config(target_node, /*msg_type=*/"", enabled, kind);
+    apply_trace_config(target_node, kind, enabled);
     return true;
 }
 
@@ -270,11 +270,11 @@ bool Supervisor::ctl_configure_log_level(const std::string& target_node,
 std::vector<TraceConfigRow> Supervisor::ctl_get_trace_config() {
     std::vector<TraceConfigRow> out;
     for (const auto& outer : trace_configs_) {
-        for (const auto& inner : outer.second) {
+        for (const auto& kv : outer.second) {
+            if (!kv.second) continue;   // only enabled kinds
             TraceConfigRow r;
             r.target_node = outer.first;
-            r.msg_type    = inner.first;
-            r.kind        = inner.second;   // value = TraceKind (#403)
+            r.kind        = kv.first;   // inner key = TraceKind ordinal (#403)
             out.push_back(std::move(r));
         }
     }
@@ -1996,22 +1996,36 @@ void Supervisor::emit_tree_stream() {
 }
 
 void Supervisor::apply_trace_config(const std::string& target_node,
-                                    const std::string& msg_type,
-                                    bool enabled,
-                                    uint32_t kind) {
+                                    uint32_t kind,
+                                    bool enabled) {
     if (target_node.empty()) {
         log_warn("apply_trace_config: empty target_node — dropping");
         return;
     }
-    auto& by_msg = trace_configs_[target_node];
+    auto& by_kind = trace_configs_[target_node];
     if (enabled) {
-        by_msg[msg_type] = kind;   // value = TraceKind; presence = enabled
+        if (kind == 0) {
+            // Catch-all ("all kinds"): REPLACE the set with just kind 0. The
+            // node wipes its mask on a kind-0 enable (mask==0 → all pass), so a
+            // mix of stale narrow kinds would misrepresent its state on re-push.
+            by_kind.clear();
+            by_kind[0] = true;
+        } else {
+            // A specific kind narrows. If the catch-all was set, drop it — the
+            // set now means "exactly these kinds", matching the node's mask.
+            by_kind.erase(0);
+            by_kind[kind] = true;
+        }
     } else {
-        by_msg.erase(msg_type);
-        if (by_msg.empty()) trace_configs_.erase(target_node);
+        if (kind == 0) {
+            by_kind.clear();   // disable kind 0 = stop the whole child
+        } else {
+            by_kind.erase(kind);
+        }
+        if (by_kind.empty()) trace_configs_.erase(target_node);
     }
     log_info(std::string("trace config ") + (enabled ? "ENABLE" : "DISABLE") +
-             " for " + target_node + "/" + msg_type);
+             " kind " + std::to_string(kind) + " for " + target_node);
     // STORE ONLY. The LIVE cast is done by SupervisorCtl after ctl_configure_*
     // returns. Restart re-push still routes through the heartbeat-after-gap path
     // (push_*_to_child → on_*_push → SupervisorCtl forwarder cast).
@@ -2032,12 +2046,14 @@ void Supervisor::push_trace_config_to_child(const std::string& child_name) {
     if (cfg_it == trace_configs_.end()) return;  // nothing to push
     if (!emit_.set_trace) return;
 
-    // Ask CONTROL to set each stored kind on the child BY NAME. The engine does
-    // NOT resolve the address or cast — SupervisorCtl::set_trace does both.
-    // Entry presence = enabled; value = TraceKind.
+    // Ask CONTROL to set each enabled kind on the child BY NAME. The engine does
+    // NOT resolve the address or cast — SupervisorCtl::set_trace does both. One
+    // push per enabled kind so the node rebuilds its full mask. Inner key =
+    // TraceKind ordinal; value = enabled.
     int pushed = 0;
     for (const auto& kv : cfg_it->second) {
-        emit_.set_trace(child_name, kv.second, /*enabled=*/true);
+        if (!kv.second) continue;
+        emit_.set_trace(child_name, /*kind=*/kv.first, /*enabled=*/true);
         ++pushed;
     }
     log_debug("asked control to set " + std::to_string(pushed) +

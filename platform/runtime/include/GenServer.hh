@@ -316,31 +316,42 @@ public:
     // kind bit; an empty kind mask means "all kinds" (master on).
     void handle_cast(const platform_runtime_TraceControlPush& push,
                      StateT& /*s*/) noexcept {
+        // The Tracer kind filter is a BITMASK over TraceKind ordinals — a node
+        // can trace several kinds at once (CAST_IN | CALL_OUT | ...). Each push
+        // ADDS or REMOVES a single kind incrementally; the mask accumulates
+        // across pushes. mask==0 is the catch-all sentinel ("all kinds pass").
         auto& tr = ::theia::runtime::tracer_for(Derived::kNodeName);
+        auto tk = static_cast<::theia::runtime::TraceKind>(push.kind);
+        const bool catch_all = (tk == ::theia::runtime::TraceKind::Other);
         if (push.enabled) {
-            // Master on. push.kind selects which dispatch class to trace.
-            // kind 0 is the CATCH-ALL sentinel ("all kinds") — it must leave
-            // the mask at 0 (trace_kind_passes: mask==0 → every kind passes).
-            // Setting bit 0 would make the mask 0b1 and filter to ONLY kind 0
-            // (Other) — dropping Recv (which carries the payload), Dispatch,
-            // Send. So for kind 0 we CLEAR the mask; only a non-zero kind
-            // narrows.
+            // Master on. kind 0 (Other) is the CATCH-ALL: leave the mask at 0
+            // (mask==0 → every kind passes). Setting bit 0 would narrow to ONLY
+            // kind Other, dropping Recv/Dispatch/Send — so for kind 0 we CLEAR
+            // the mask; a non-zero kind ADDS its bit to whatever is already set.
             tr.enable(true);
-            auto tk = static_cast<::theia::runtime::TraceKind>(push.kind);
-            if (tk == ::theia::runtime::TraceKind::Other) {
+            if (catch_all) {
                 tr.trace_clear_kinds();   // catch-all: all kinds pass
             } else {
-                tr.trace_enable_kind(tk, true);
+                tr.trace_enable_kind(tk, true);   // accumulate into the mask
             }
-        } else {
-            // Disable. Clear the kind bit; if no kinds remain selected, flip
-            // the master OFF so emit() stops entirely (mask==0 means "all
-            // kinds pass", so just clearing the bit would NOT stop tracing —
-            // the master switch is what actually silences the node).
-            tr.trace_enable_kind(
-                static_cast<::theia::runtime::TraceKind>(push.kind), false);
+        } else if (catch_all) {
+            // Disable the WHOLE node (`trace <node> off`): master off + wipe
+            // the mask. (mask==0 alone means "all pass", so the master switch
+            // is what actually silences the node.)
             tr.enable(false);
             tr.trace_clear_kinds();
+        } else {
+            // Disable ONE kind. Clear just that bit — other selected kinds keep
+            // tracing. Only flip the master OFF if NO specific kind remains AND
+            // we weren't in catch-all (mask was already non-zero): clearing the
+            // last bit would leave mask==0, which means "all pass" — NOT what
+            // the user asked. So when the bit-clear empties a previously-narrow
+            // mask, silence the node via the master switch.
+            uint32_t before = tr.trace_kind_mask();
+            tr.trace_enable_kind(tk, false);
+            if (before != 0 && tr.trace_kind_mask() == 0) {
+                tr.enable(false);   // last narrow kind cleared → node silent
+            }
         }
         this->log().info(std::string("trace kind ") +
                          std::to_string(static_cast<int>(push.kind)) + " -> " +

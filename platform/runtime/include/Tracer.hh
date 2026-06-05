@@ -292,6 +292,12 @@ public:
     void trace_clear_kinds() noexcept {
         kind_mask_.store(0, std::memory_order_relaxed);
     }
+    // Current kind bitmask (0 = catch-all / "all kinds"). Lets the supervisor-
+    // push handler tell "cleared the last narrow kind" from "still tracing
+    // others" so it can flip the master switch correctly.
+    uint32_t trace_kind_mask() const noexcept {
+        return kind_mask_.load(std::memory_order_relaxed);
+    }
     bool trace_kind_passes(TraceKind k) const noexcept {
         uint32_t mask = kind_mask_.load(std::memory_order_relaxed);
         if (mask == 0) return true;  // no kind filter set → all kinds pass

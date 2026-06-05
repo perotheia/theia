@@ -64,5 +64,22 @@ cc_library(
     deps = [
         "//services/per/lib:per_lib",
         ":per_etcd",
+        ":migration_registry",
+        # The config-migration transforms register at static-init; pulled in so
+        # the per binary has them. alwayslink (on per_migrations) keeps them.
+        "//services/per/migrations:per_migrations",
     ],
+    visibility = ["//visibility:public"],
+)
+
+# The migration-registry header as its own leaf target, so a migration TU
+# (//services/per/migrations) and the handlers can BOTH depend on it without a
+# lib<->migrations cycle:  migration_registry  <-  {per_impl, per_migrations}.
+cc_library(
+    name = "migration_registry",
+    hdrs = ["migration_registry.hpp"],
+    # FC root as include root: migration TUs #include "impl/migration_registry.hpp".
+    includes = [".."],
+    copts = ["-std=c++17", "-fPIC"],
+    visibility = ["//visibility:public"],
 )

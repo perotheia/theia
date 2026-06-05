@@ -31,6 +31,12 @@ cc_library(
         "PerClient_handlers.cc",
         "PerManager_handlers.cc",
     ],
+    # App-owned headers shared between the two nodes' handler TUs. The
+    # process-global config-schema registry (PerManager writes, PerClient reads)
+    # — same shared-singleton shape as services/log's trace_hub.hpp.
+    hdrs = [
+        "schema_registry.hpp",
+    ],
     copts = [
         "-std=c++17",
         "-Wall",

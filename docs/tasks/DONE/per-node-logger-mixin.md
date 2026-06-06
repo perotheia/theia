@@ -1,5 +1,14 @@
 # Per-node logger — mixin on GenServer/GenRunnable, injected by main.cc
 
+> **DONE (2026-06-04).** Landed across `dc02265` (runtime+supervisor per-node
+> tagged loggers + selectable sinks), `12440c9` (supervisor engine logs via
+> `lib/Log.hh`/process_logger), `1f1e654` (services FCs ported), `7186678`
+> (demo ported), `8000c6b` (FileLogger mkdir -p). NodeLogger mixin +
+> ContextLogger `[#<tag>]` + MakeLogger stdio|null|file|syslog + THEIA_LOGGER
+> env all in `platform/runtime/include/`. The 4 raw `fprintf` left in supervisor
+> `runtime.cpp` are post-fork/pre-execvp child errors (chdir/affinity/rlimit/
+> execvp) — those MUST stay raw (async-signal-safety), not a leftover.
+
 ## Problem
 
 Logging across an FC process is inconsistent and mis-tagged:

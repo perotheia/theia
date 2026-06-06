@@ -1,5 +1,11 @@
 # Retire PSP arm of gen-app; standalone-app via `--kind lib`
 
+> **DONE (2026-06-04).** S1–S4 complete; the artheia psp arm is gone
+> (`cpp_app.py` + `templates/cpp_app/` deleted, `--kind` is now `fc|lib`).
+> S5 (odd_path_monitor rewire) and S6 (vendor/odd_path_client drop + doc
+> cleanup) are **descoped** — the psp retirement is considered done; the
+> remaining odd-path work, if ever resumed, is independent of this task.
+
 ## Why
 
 `artheia gen-app --kind psp` ships a separate three-slice cpp_app shape

@@ -1,5 +1,14 @@
 # Per-node CPU affinity + scheduler (rig → executor.json → env → main.cc)
 
+> **DONE (2026-06-04).** Landed in `79b7d3b`. Full chain wired:
+> `NodeToCPUMapping` → executor.json `nodes[]` (cpus/sched/sched_prio) →
+> supervisor serializes `THEIA_NODE_CFG` into the child fork env
+> (`spec.{h,cpp}` NodeInfo + `runtime.cpp`) → `main.cc` `apply_node_affinity`
+> (`platform/runtime/NodeAffinity.{hh,cc}`: pthread_setaffinity_np +
+> pthread_setschedparam). Verified live (counter thread `cls=RR rtprio=40`).
+> nice/DEADLINE (need TID) and per-node memory (need cgroup v2) deferred as
+> noted in the body.
+
 ## Context
 
 `NodeToCPUMapping` (artheia/manifest/machine.py) is fully DEFINED — per-node CPU

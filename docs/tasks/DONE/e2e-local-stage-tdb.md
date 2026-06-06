@@ -1,5 +1,13 @@
 # E2E local-stage + tdb integration test
 
+> **DONE (2026-06-04).** Supervisor S1–S5 landed (boot from staged
+> executor.json, fork all children, clean shutdown), GetTree/GetChild return
+> populated snapshots, and the tdb client drives the live tree (`ps`, `info`,
+> `loglevel`, `trace`, `logcat`) over the .art-declared probe. `theia
+> stage-local` + Puppet local_install stages the binaries; demo `stage_local.sh`
+> emits the cluster netgraph.json. Residual `logcat -g/-c` (ring size/clear) is
+> a minor follow-up tracked inline, not blocking.
+
 Goal: a runnable end-to-end smoke — stage the current build into `install/`,
 boot the new `ara::exec` supervisor from `executor.json`, then drive + observe
 it with `tdb` (not com/supdbg): list the tree, flip trace on a component,
@@ -99,12 +107,10 @@ subscribe to that trace via `tdb → log[trace]`.
 
 - **S2 (manifest cleanup).** Remove `--manifest-out` from gen-app
   (cli.py:1145/1205 + fc_app.py:605/manifest_out param — already a no-op/deprec,
-  just delete the option + plumbing). Document `gen-manifest <system.art>
-  services/manifest/service.py` as THE manifest generator (cluster.art-driven +
+  just delete the option + plumbing). Document `gen-manifest <system.art> services/manifest/service.py` as THE manifest generator (cluster.art-driven +
   executor.py sidecar). No new generator needed.
 
-- **S3 (netgraph).** Keep `artheia gen-netgraph -R system/system.art --out
-  install/central/netgraph.json` in stage_local (log[trace] reads it for the
+- **S3 (netgraph).** Keep `artheia gen-netgraph -R system/system.art --out install/central/netgraph.json` in stage_local (log[trace] reads it for the
   addr→name rewrite). No runtime FC consumes the per-node netgraph headers yet
   (latent: hardcoded sm-gate 0x8001001D in send_sm_ready could become a
   `connect` — deferred, platform-wide).
@@ -113,15 +119,15 @@ subscribe to that trace via `tdb → log[trace]`.
   `zonal_rig.py` with central+compute; drop compute_host from rig.py. Update
   stage_local to stage 1 machine from rig.py (zonal_rig.py for the 2-box run).
 
-- **S5 (boot).** After stage, `cd install/central && THEIA_SUPERVISOR_MANIFEST=
-  ./executor.json ./supervisor`. Verify children fork (the smoke already works
+- **S5 (boot).** After stage, `cd install/central && THEIA_SUPERVISOR_MANIFEST= ./executor.json ./supervisor`. Verify children fork (the smoke already works
   with a hand JSON tree).
 
 - **S6 (tdb — NET NEW).** Build `tdb` per the design (adb-shaped: ps / attach /
   trace / logcat / supervisor). It wraps a TIPC SupervisorCtl client + the
   firehose reassembler (B3) + the observer trace reader (B6). Drop tools/supdbg
+
   + its gRPC client AFTER tdb covers `Get Supervisor Tree` / trace for rf.
-  Repoint testing/rf_theia/adapters/supervisor_grpc.py → a tdb/TIPC adapter.
+    Repoint testing/rf_theia/adapters/supervisor_grpc.py → a tdb/TIPC adapter.
 
 - **S7 (trace e2e).** `tdb trace <node>` → SupervisorCtl.ConfigureTrace →
   child Tracer enables; `tdb logcat` / attach → Subscribe to log[trace]
@@ -131,6 +137,7 @@ subscribe to that trace via `tdb → log[trace]`.
 ## STATUS — S1–S5 DONE (booting supervisor from a staged install/)
 
 Landed + verified end-to-end:
+
 - **S2** ✅ gen-app `--manifest-out` removed; manifest is gen-manifest
   (cluster.art-driven). artheia commit.
 - **S4** ✅ rig.py → single-machine (central); zonal_rig.py = the 2-machine
@@ -156,7 +163,7 @@ Landed + verified end-to-end:
   //services/log/main builds green (was pre-broken).
 
 (The Demo3WayP{1,2,3} apps build + run fine — the earlier "runtime API drift"
-was a misdiagnosis: they were just missing the DEMO_→THEIA_DECLARE_REMOTE_CODEC
+was a misdiagnosis: they were just missing the DEMO\_→THEIA_DECLARE_REMOTE_CODEC
 rename in demo/*/lib/demo_codecs.hh, which poisoned the TU parse. Fixed.)
 
 - **S6 (tdb CLI)** ✅ MOSTLY DONE. tools/tdb/tdb.py — adb-shaped, two modes
@@ -177,7 +184,7 @@ size/clear). All runnable on this host (`modprobe tipc`).
 ## Sequencing reality
 
 The 7 steps are NOT independent. Hard dependency chain:
-  S1/S4 (stage) → S5 (boot) → **S6 (build tdb — the long pole)** → S7 (trace).
+S1/S4 (stage) → S5 (boot) → **S6 (build tdb — the long pole)** → S7 (trace).
 B1–B3 (no tdb, no TIPC supervisor client, empty GetTree) are the gating work;
 steps 1–5 are mostly stale-script repair + already-existing generators. The
 e2e cannot pass until tdb (or an equivalent TIPC client + firehose reassembler)

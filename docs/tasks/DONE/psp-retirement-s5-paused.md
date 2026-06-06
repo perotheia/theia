@@ -1,5 +1,10 @@
 # S5 paused — `node runnable` was wrong; re-think the .art shape first
 
+> **DESCOPED (2026-06-04).** psp retirement is considered done at S4. S5/S6
+> (the odd_path_monitor rewire captured below) are no longer in scope; kept
+> here as a record of where the `.art` shape investigation stopped, should the
+> odd-path work ever be picked up independently.
+
 Subordinate to [psp-retirement.md](psp-retirement.md). S5 began by
 re-doing the `.art` spec for `odd_path_monitor` so the generator could
 emit typed handlers. That hit a chain of issues; the user pulled

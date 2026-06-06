@@ -20,6 +20,7 @@ Read this page to orient. For a specific task, load the matching reference:
 | Bazel build: rig extension, FC daemons, `.ipk` bundles | [references/build-system.md](references/build-system.md) |
 | Provisioning & orchestration: Puppet, docker compose, Pi 4 push | [references/provision-orchestrate.md](references/provision-orchestrate.md) |
 | AUTOSAR PSP import: DBC/FIBEX → `.art` + netgraph | [references/autosar.md](references/autosar.md) |
+| Config schema migration: `config <Msg>` evolution, transform.json, gen-transform plugin | [references/migration.md](references/migration.md) |
 
 Always run artheia with the workspace venv on PATH:
 `PATH="$PWD/.venv/bin:$PATH" artheia …`. It is editable-installed

@@ -122,6 +122,111 @@ class SupervisorClient:
         self.probe.stop()
 
 
+class PerClient:
+    """Drives services/per (config gatekeeper) — PerManager (Snapshot / schema /
+    migrate) + PerClient (Get/Put/Watch). Built from tdb.art's TdbPer node so
+    the probe resolves per's TIPC addrs + op service_ids straight from the model.
+    """
+
+    def __init__(self, ctx, repo) -> None:
+        self.ctx = ctx
+        self.repo = Path(repo)
+        self.probe = ctx.probe("TdbPer", instance=_unique_instance()).start()
+
+    @classmethod
+    def from_workspace(cls, repo: str | Path) -> "PerClient":
+        repo = Path(repo)
+        return cls(_ctx(repo), repo)
+
+    def snapshot(self, label: str, timeout: float = 3.0) -> dict[str, Any]:
+        return self.probe.call("PerManager", "Snapshot", timeout=timeout,
+                               label=label)
+
+    def restore_snapshot(self, label: str, timeout: float = 3.0) -> dict[str, Any]:
+        return self.probe.call("PerManager", "RestoreSnapshot", timeout=timeout,
+                               label=label)
+
+    def list_schemas(self, config_type: str = "", timeout: float = 3.0):
+        return self.probe.call("PerManager", "ListSchemas", timeout=timeout,
+                               config_type=config_type)
+
+    def migrate_bulk(self, config_type: str, from_digest: str, to_digest: str,
+                     plugin_so: str = "", timeout: float = 10.0) -> dict[str, Any]:
+        return self.probe.call("PerManager", "MigrateBulk", timeout=timeout,
+                               config_type=config_type, from_digest=from_digest,
+                               to_digest=to_digest, plugin_so=plugin_so)
+
+    # ---- snapshot decode -------------------------------------------------
+    def decode_snapshot(self, persnap_path: str | Path,
+                        schema_path: str | Path) -> dict:
+        """Read a .persnap file + a gen-schema config schema, decode each
+        record's opaque config bytes against its config-type proto, and return
+        {node: {digest, config_type, config: <decoded dict>}}.
+
+        A record whose stored digest doesn't match any schema config (or whose
+        type can't be decoded) is returned with the raw bytes hex + a note, so
+        the snapshot is never lost to a single bad record."""
+        import json as _json
+        recs = _read_persnap(Path(persnap_path))
+        schema = _json.loads(Path(schema_path).read_text())
+        configs = schema.get("configs", {})
+        # node -> config entry (a node binds exactly one config_type).
+        node_to_cfg = {}
+        for cfg_name, e in configs.items():
+            for n in e.get("nodes", []):
+                node_to_cfg[n] = (cfg_name, e)
+
+        out = {}
+        for node, digest, blob in recs:
+            entry = {"digest": digest}
+            cfg = node_to_cfg.get(node)
+            if cfg is None:
+                entry.update(config_type=None, config={"_raw_hex": blob.hex()},
+                             note="node not in schema")
+            else:
+                cfg_name, e = cfg
+                entry["config_type"] = cfg_name
+                try:
+                    entry["config"] = self.ctx.codec.decode(
+                        e["art_package"], e["proto_type"], blob)
+                except Exception as ex:  # noqa: BLE001
+                    entry["config"] = {"_raw_hex": blob.hex()}
+                    entry["note"] = f"decode failed: {ex}"
+            out[node] = entry
+        return out
+
+    def stop(self) -> None:
+        self.probe.stop()
+
+
+def _read_persnap(path: Path):
+    """Parse a .persnap file → [(node, digest, config_bytes), ...]. Format
+    (snapshot_ops.hpp): "PERSNAP1\\n" then per record three length-prefixed
+    (u32 LE) byte fields: node, digest, config."""
+    import struct
+    data = path.read_bytes()
+    magic = b"PERSNAP1\n"
+    if not data.startswith(magic):
+        raise ValueError(f"{path}: not a per snapshot (bad magic)")
+    off = len(magic)
+
+    def field():
+        nonlocal off
+        (n,) = struct.unpack_from("<I", data, off)
+        off += 4
+        b = data[off:off + n]
+        off += n
+        return b
+
+    out = []
+    while off < len(data):
+        node = field().decode("utf-8", "replace")
+        digest = field().decode("utf-8", "replace")
+        config = field()
+        out.append((node, digest, config))
+    return out
+
+
 class TraceClient:
     """Subscribes to log[trace] and yields decoded records.
 

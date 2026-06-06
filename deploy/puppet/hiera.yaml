@@ -1,0 +1,6 @@
+# Minimal valid Hiera 5 config. Theia's deploy manifests carry their data
+# inline (parsejson of the artheia-emitted machine.json/application.json), so
+# there are no hierarchy levels to look up — this file exists only to give
+# `puppet apply` a valid --hiera_config and silence the /dev/null v3 warning.
+---
+version: 5

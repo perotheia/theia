@@ -110,17 +110,17 @@ for m in "${machines[@]}"; do
         : > "$dst_dir/${m}.ipk"
     fi
 
-    # executor.json (the supervisor tree, JSON-only since #380) +
-    # machines.yaml (GUI manifest) come from the top-level
-    # @rig//:executor_json and @rig//:machines_yaml genrules. Both
-    # machines get the SAME files — the rig has one global executor
-    # tree, and the GUI's machines.yaml lists every machine's endpoint.
-    for f in executor.json machines.yaml; do
+    # executor.json (the supervisor tree, JSON) + machines.json (GUI
+    # manifest) come from the top-level @rig//:executor_json and
+    # @rig//:machines_json genrules. Both machines get the SAME files — the
+    # rig has one global executor tree, and the GUI's machines.json lists
+    # every machine's endpoint.
+    for f in executor.json machines.json; do
         if [[ -f "$BAZEL_RIG_DIR/$f" ]]; then
             cp "$BAZEL_RIG_DIR/$f" "$dst_dir/$f"
             log "  $m: copied $f"
         else
-            log "  $m: WARNING: $BAZEL_RIG_DIR/$f missing — run 'bazel build @${RIG}//:executor_json @${RIG}//:machines_yaml'"
+            log "  $m: WARNING: $BAZEL_RIG_DIR/$f missing — run 'bazel build @${RIG}//:executor_json @${RIG}//:machines_json'"
         fi
     done
 done

@@ -42,13 +42,13 @@ Each container's lifecycle:
 2. The script picks the Puppet manifest matching its `$HOSTNAME`
    (`/etc/puppet/manifests/central.pp` or `compute.pp`).
 3. `puppet apply` runs the `theia` module:
-   - `theia::install` — `opkg install /opt/theia/ipk/<machine>.ipk`.
-   - `theia::config` — drops `executor.yaml` + `machines.yaml`
+   - `theia::install` — `dpkg --install /opt/theia/ipk/<machine>.ipk`.
+   - `theia::config` — drops `executor.json` + `machines.json`
      into `/etc/theia/`.
    - `theia::service` — placeholder (in the dev compose, the
      supervisor runs in foreground after Puppet returns).
 4. The script verifies `/usr/bin/theia-supervisor` exists and
-   `/etc/theia/executor.yaml` is present.
+   `/etc/theia/executor.json` is present.
 5. `exec`s the supervisor binary in foreground (Docker signals
    reach the supervisor directly; `docker stop` → SIGTERM →
    graceful shutdown).
@@ -61,14 +61,12 @@ python3 -m venv .venv
 .venv/bin/pip install -e ./artheia
 export PATH="$PWD/.venv/bin:$PATH"
 
-# 2. Build the supervisor binary (CMake — not yet a Bazel target).
-cd platform/supervisor && cmake -S . -B build && cmake --build build -j
-cd ../..
+# 2. Build the per-machine .ipks (the 2-machine zonal rig) + the
+#    supervisor binary (a bazel gen-app FC).
+theia dist                                          # @rig_zonal bundles
+PATH="$PWD/.venv/bin:$PATH" bazel build //platform/supervisor/main:supervisor
 
-# 3. Build the per-machine .ipks + the two YAMLs.
-PATH="$PWD/.venv/bin:$PATH" bazel build @rig_demo//:all
-
-# 4. Stage artifacts into deploy/.staging/.
+# 3. Stage artifacts into deploy/.staging/.
 ./deploy/stage.sh
 
 # 5. Build the base Docker image + per-host images.
@@ -98,8 +96,8 @@ After `up`:
 | `puppet/central.pp`         | Per-host manifest: include the theia module with machine="central_host". |
 | `puppet/compute.pp`         | Same, machine="compute_host". |
 | `puppet/modules/theia/manifests/init.pp`    | Aggregator class. |
-| `puppet/modules/theia/manifests/install.pp` | `opkg install <ipk>`. |
-| `puppet/modules/theia/manifests/config.pp`  | Drop executor.yaml + machines.yaml. |
+| `puppet/modules/theia/manifests/install.pp` | `dpkg --install <ipk>`. |
+| `puppet/modules/theia/manifests/config.pp`  | Drop executor.json + machines.json. |
 | `puppet/modules/theia/manifests/service.pp` | Lifecycle (placeholder; entrypoint handles it). |
 | `.staging/` (gitignored)    | Staged Bazel artifacts. Populated by `stage.sh`. |
 | `logs/` (gitignored)        | Container stdout/stderr captures. |
@@ -118,9 +116,9 @@ After `up`:
   `services/manifest/fc.py`.
 
 - **Supervisor binary is bind-mounted, not installed via opkg**.
-  Until packaged as part of an .ipk, we mount it from the
-  workspace build. See `docker-compose.yml`'s
-  `../platform/supervisor/build/supervisor:/usr/bin/theia-supervisor`.
+  Until packaged as part of an .ipk, we mount the bazel-built FC
+  binary from the workspace. See `docker-compose.yml`'s
+  `../bazel-bin/platform/supervisor/main/supervisor:/usr/bin/theia-supervisor`.
 
 - **No systemd in the dev compose**. The entrypoint exec's the
   supervisor in foreground. Production deploys with
@@ -145,8 +143,8 @@ You forgot `./deploy/stage.sh`. The compose mount expects the
 **Container exits immediately with rc=3**
 The supervisor binary isn't at `/usr/bin/theia-supervisor`. Check
 the bind-mount path in `docker-compose.yml` — the source is
-`../platform/supervisor/build/supervisor`, which only exists after
-`cmake --build build` runs successfully.
+`../bazel-bin/platform/supervisor/main/supervisor`, which only
+exists after `bazel build //platform/supervisor/main:supervisor`.
 
 **Both containers up but supervisor logs "service missing"**
 The FC binaries aren't installed. Expected today; see "Known

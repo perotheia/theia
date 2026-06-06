@@ -4,11 +4,11 @@
 # Lifecycle:
 #   1. Apply Puppet manifest at /etc/puppet/manifests/<host>.pp.
 #      Puppet's `theia` module installs the .ipk (if present),
-#      drops executor.yaml + machines.yaml, writes the systemd
+#      drops executor.json + machines.json, writes the systemd
 #      unit, and `notify`s the supervisor service.
 #   2. Detect whether supervisor is now installed. If not, fail
 #      fast — there's no useful work to do.
-#   3. Foreground-exec the supervisor binary with the executor.yaml
+#   3. Foreground-exec the supervisor binary with the executor.json
 #      so it inherits Docker's signal handling (Ctrl-C / docker stop
 #      → SIGTERM → graceful shutdown).
 #

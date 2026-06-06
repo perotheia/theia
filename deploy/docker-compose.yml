@@ -1,38 +1,37 @@
 # deploy/docker-compose.yml — two-host Theia bringup in Docker.
 #
-# Topology (matches demo/manifest/rig.py::DemoSoftware):
+# Topology (matches demo/manifest/zonal_rig.py::DemoSoftware):
 #
-#   central — services (18 FCs) + gateway, exposes gRPC on host:7700.
+#   central — services (the FC daemons) + gateway, exposes gRPC on host:7700.
 #   compute — demo binaries, exposes gRPC on host:7701.
 #
-# Both containers share a bridge network so gRPC + TIPC traffic
-# crosses cleanly. The artheia rig manifest's machines.yaml records
-# the gRPC endpoints; a GUI client running on the host (or in a
-# third container) connects to both.
+# Both containers share a bridge network so gRPC + TIPC traffic crosses
+# cleanly. The artheia rig manifest's machines.json records the gRPC
+# endpoints; a GUI / tdb client on the host connects to both.
 #
-# Pre-flight (run from workspace root):
+# Pre-flight (run from workspace root, venv on PATH):
 #
-#   # 1. Workspace venv with artheia installed.
-#   python3 -m venv .venv && .venv/bin/pip install -e ./artheia
 #   export PATH="$PWD/.venv/bin:$PATH"
 #
-#   # 2. Build the supervisor binary (CMake — not yet a Bazel target).
-#   cd platform/supervisor && cmake -S . -B build && cmake --build build -j
-#   cd ../..
+#   # 1. Build the per-machine .ipks + the supervisor binary via Bazel.
+#   theia dist                       # bazel build the @rig_zonal bundles
+#   bazel build //platform/supervisor/main:supervisor
 #
-#   # 3. Build the per-machine .ipks via Bazel rig extension.
-#   PATH="$PWD/.venv/bin:$PATH" bazel build @rig_demo//:all
+#   # 2. Stage artifacts into deploy/.staging/ (compose's bind-mount source).
+#   ./deploy/stage.sh                # see deploy/stage.sh
 #
-#   # 4. Stage artifacts into deploy/.staging/ (compose's bind-mount source).
-#   ./deploy/stage.sh           # see deploy/stage.sh
-#
-#   # 5. Build the base + per-host images.
+#   # 3. Build the base + per-host images, then bring it up.
 #   docker compose -f deploy/docker-compose.yml build
-#
-#   # 6. Bring it up.
 #   docker compose -f deploy/docker-compose.yml up
 #
+#   # 4. Inside each container the entrypoint runs `theia provision` then
+#   #    `theia orchestrate` (Puppet phase 1 + 2) before exec'ing the
+#   #    supervisor. Drive it from the host with tdb.
+#
 # Tear-down:  Ctrl-C, then `docker compose -f deploy/docker-compose.yml down`.
+#
+# NOTE: the supervisor dropped etcd — live state flows over the TIPC
+# NodeEdge/NodeState firehose, not etcd. No etcd endpoint/lib mounts here.
 
 services:
 
@@ -49,45 +48,21 @@ services:
     ports:
       - "7700:7700"     # supervisor → host: services/com gRPC bridge
     volumes:
-      # Per-machine .ipk + the two YAMLs Bazel emits via @rig_demo//:all.
-      # stage.sh copies them into deploy/.staging/<machine_name>/ipk/
-      # where <machine_name> matches the rig.py MachineManifest.name
-      # (`central_host`, `compute_host`).
+      # Per-machine .ipk + executor.json + machines.json Bazel emits via
+      # @rig_zonal//:all. stage.sh copies them into
+      # deploy/.staging/<machine_name>/ipk/ where <machine_name> matches the
+      # rig MachineManifest.name (`central_host`, `compute_host`).
       - ./.staging/central_host/ipk:/opt/theia/ipk:ro
       # Puppet manifests (central.pp) + the shared theia module.
       - ./puppet:/etc/puppet:ro
-      # Supervisor binary built from CMake. Until packaged as part of
-      # the .ipk, we bind-mount it directly. Read-only — Puppet doesn't
-      # need to write here.
-      - ../platform/supervisor/build/supervisor:/usr/bin/theia-supervisor:ro
-      # services/com gRPC bridge binary. Mounted at the path the
-      # supervisor's executor.yaml expects (services/com/daemon.sh
-      # under --root-dir /opt/theia). It's a native ELF, not a shell
-      # script, but the supervisor's start_cmd doesn't care — it just
-      # execvp's whatever's at that path.
-      - ../services/com/build/services-com:/opt/theia/services/com/daemon.sh:ro
-      # etcd-cpp-apiv3 shared lib. The supervisor's etcd_publisher
-      # links against it (rpath = workspace-relative install path,
-      # which doesn't exist inside the container). Mount the entire
-      # install/lib so libetcd-cpp-api.so + libetcd-cpp-api-core.so
-      # both resolve. /usr/local/lib so ld.so finds them via the
-      # default search path.
-      - ../third_party/etcd-cpp-apiv3/install/lib:/usr/local/lib/theia-etcd:ro
+      # Supervisor binary (bazel gen-app FC //platform/supervisor/main:supervisor).
+      # Until packaged in the .ipk, bind-mount it directly, read-only.
+      - ../bazel-bin/platform/supervisor/main/supervisor:/usr/bin/theia-supervisor:ro
       # Logs persist to ./logs/ for inspection after teardown.
       - ./logs/central:/var/log/theia
     environment:
       - HOSTNAME=central
       - TZ=UTC
-      # The supervisor's etcd publisher picks this up via getenv()
-      # and tees TreeSnapshot / HealthBeacon / ChildState into
-      # /theia/state/<HOSTNAME>/* under a 10s lease, plus
-      # SupervisionEvents into /theia/events/<HOSTNAME>/. Reach the
-      # host's theia-etcd via the docker bridge gateway IP.
-      - THEIA_ETCD_ENDPOINTS=http://172.30.0.1:2379
-      # ld.so search path: workspace-relative rpath of the vendored
-      # libetcd-cpp-api{,core}.so resolves to /usr/local/lib/theia-etcd
-      # inside the container (see the bind-mount above).
-      - LD_LIBRARY_PATH=/usr/local/lib/theia-etcd
     restart: unless-stopped
 
   compute:
@@ -108,18 +83,11 @@ services:
     volumes:
       - ./.staging/compute_host/ipk:/opt/theia/ipk:ro
       - ./puppet:/etc/puppet:ro
-      - ../platform/supervisor/build/supervisor:/usr/bin/theia-supervisor:ro
-      - ../services/com/build/services-com:/opt/theia/services/com/daemon.sh:ro
-      - ../third_party/etcd-cpp-apiv3/install/lib:/usr/local/lib/theia-etcd:ro
+      - ../bazel-bin/platform/supervisor/main/supervisor:/usr/bin/theia-supervisor:ro
       - ./logs/compute:/var/log/theia
     environment:
       - HOSTNAME=compute
       - TZ=UTC
-      - THEIA_ETCD_ENDPOINTS=http://172.30.0.1:2379
-      # ld.so search path: workspace-relative rpath of the vendored
-      # libetcd-cpp-api{,core}.so resolves to /usr/local/lib/theia-etcd
-      # inside the container (see the bind-mount above).
-      - LD_LIBRARY_PATH=/usr/local/lib/theia-etcd
     restart: unless-stopped
     # compute can't start until central is up — the gateway lives on
     # central and the demo's TIPC clients dial central via the bridge.
@@ -129,7 +97,7 @@ services:
 networks:
   theia_net:
     driver: bridge
-    # Static subnet so the artheia machines.yaml addresses are stable
+    # Static subnet so the artheia machines.json addresses are stable
     # across `compose down/up` cycles.
     ipam:
       config:

@@ -2,82 +2,68 @@
 #
 # When this runs:
 #   - Day-to-day application updates (FC daemons, demo binaries, …)
-#   - Anything that does NOT touch supervisor / gateway / etcd / schema
+#   - Anything that does NOT touch supervisor / gateway / schema
 #
 # What it does:
-#   1. For every entry in application.yaml's components list,
-#      install / upgrade the corresponding /opt/theia/apps/<name>.ipk.
-#   2. Notify the supervisor to reload its child table (no restart).
+#   1. For every bazel_buildable component in application.json, install /
+#      upgrade /opt/theia/apps/<name>.ipk.
+#   2. Notify the supervisor to reload its child table (no restart) via tdb.
 #
-# Per-machine config source: /etc/theia/manifest/application.yaml
-#   Same Distribution tarball as machine.yaml. Orchestration runs are
-#   triggered remotely (push) when a new release of an application
-#   is published; the operator pushes a fresh .ipk + an updated
-#   application.yaml side-by-side, then runs `puppet apply
-#   orchestration.pp`.
+# Per-machine config source: ${manifest_dir}/application.json — same
+#   Distribution tarball as machine.json. Orchestration runs are triggered
+#   remotely (push) when a new application release is published: the operator
+#   pushes a fresh .ipk + an updated application.json side-by-side, then runs
+#   `puppet apply orchestration.pp`.
 #
-# Full updates (supervisor / gateway / etcd) DO NOT use this path —
-# they go through theia::provisioning instead, which restarts the
-# whole stack and runs any necessary services/db migration first.
+# Full updates (supervisor / gateway) DO NOT use this path — they go through
+# theia::provisioning, which restarts the stack and runs any per migration.
 
 class theia::orchestration (
     String $machine,
-    String $manifest_dir = "/etc/theia/manifest",
+    String $manifest_dir     = "/etc/theia/manifest",
     String $app_install_root = "/opt/theia/apps",
+    String $tdb_bin          = "/opt/theia/bin/tdb",
 ) {
-    $application_yaml_path = "${manifest_dir}/application.yaml"
+    $application_json_path = "${manifest_dir}/application.json"
 
     file { $app_install_root:
         ensure => directory,
         mode   => '0755',
     }
 
-    notice("theia::orchestration: reading ${application_yaml_path} for machine '${machine}'")
+    $manifest = parsejson(file($application_json_path))
 
-    # ----- 1. Replace application .ipks ----------------------------------
-    #
-    # Real implementation iterates application.yaml's components list
-    # and reinstalls each .ipk if the on-disk version differs. The
-    # supervisor doesn't restart — it watches /opt/theia/apps/ and
-    # spawns the child binary as instructed by its in-process
-    # SupervisorTree (the executor.yaml from the rig).
-    #
-    #   $app_yaml = loadyaml($application_yaml_path)
-    #   $app_yaml['applications'].each |$app| {
-    #       $app['components'].each |$cmp| {
-    #           package { "theia-app-${cmp['name']}":
-    #               ensure   => 'latest',
-    #               provider => 'dpkg',
-    #               source   => "/var/theia/apps/${cmp['name']}.ipk",
-    #               notify   => Exec['theia-supervisor-reload'],
-    #           }
-    #       }
-    #   }
-    #
-    # `ensure => latest` is intentional: the operator's push moves
-    # /var/theia/apps/<name>.ipk to the new bits before applying
-    # this manifest, and dpkg compares versions.
+    notice("theia::orchestration: ${application_json_path} → machine '${machine}'")
 
-    notice("theia::orchestration: application .ipk install step is STUB")
+    # ----- 1. Install / upgrade application .ipks -------------------------
+    #
+    # Flatten applications[].components[] to the buildable ones; each has a
+    # /opt/theia/apps/<name>.ipk staged beside the manifest. ensure => latest:
+    # the operator's push moves the .ipk to the new bits before this runs and
+    # dpkg compares versions. A version bump notifies the supervisor reload.
+    $components = $manifest['applications'].reduce([]) |$acc, $app| {
+        $acc + $app['components'].filter |$c| { $c['bazel_buildable'] }
+    }
 
-    # ----- 2. Tell the supervisor to reload (no restart) ----------------
-    #
-    # The supervisor exposes a control plane (services/com gRPC bridge)
-    # that accepts RestartChild / TerminateChild / StartChild. Touch
-    # the reload endpoint so it re-reads the executor.yaml in case
-    # processes were added / removed. This is the orchestration-side
-    # equivalent of `systemctl daemon-reload` — no service restarts,
-    # just a signal that the spec changed.
-    #
-    #   exec { 'theia-supervisor-reload':
-    #       command     => '/opt/theia/supervisor/bin/supdbg reload',
-    #       refreshonly => true,
-    #   }
-    #
-    # If a child process needs to actually restart (e.g. new binary),
-    # the operator follows up with a targeted `supdbg restart <name>`.
-    # Orchestration does NOT do blanket restarts — that's a
-    # provisioning concern.
+    $components.each |$cmp| {
+        package { "theia-app-${cmp['name']}":
+            ensure   => 'latest',
+            provider => 'dpkg',
+            source   => "${app_install_root}/${cmp['name']}.ipk",
+            require  => File[$app_install_root],
+            notify   => Exec['theia-supervisor-reload'],
+        }
+    }
 
-    notice("theia::orchestration: supervisor reload step is STUB")
+    # ----- 2. Tell the supervisor to reload (no restart) ------------------
+    #
+    # The supervisor exposes a control plane (services/com gRPC bridge ↔ the
+    # Theia transport) that tdb drives. A reload re-reads the executor tree so
+    # added/removed children are picked up. refreshonly: only fires on a .ipk
+    # change above. No blanket restarts — that's a provisioning concern.
+    exec { 'theia-supervisor-reload':
+        command     => "${tdb_bin} reload",
+        refreshonly => true,
+        path        => ['/usr/bin', '/bin', '/opt/theia/bin'],
+    }
 }

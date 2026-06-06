@@ -1,19 +1,18 @@
 # provisioning.pp — Phase 1 site manifest.
 #
-# Apply with:
+# Apply with (or just `theia provision`):
 #   puppet apply --modulepath=deploy/puppet/modules \
 #                deploy/puppet/provisioning.pp \
-#                --hiera_config=/dev/null \
-#                $(test -n "$THEIA_MACHINE" && echo "--node_terminus=plain")
+#                --hiera_config=deploy/puppet/hiera.yaml
 #
 # Resolves the target machine from $THEIA_MACHINE env (falling back
 # to the hostname). Drives theia::provisioning, which reads
-# /etc/theia/manifest/machine.yaml for the OS packages + opkg
+# /etc/theia/manifest/machine.json for the OS packages + opkg
 # artifacts to install.
 #
 # WHEN TO USE: greenfield install, full update (supervisor / gateway
-# / etcd bump), or any schema-delta release. Restarts the whole
-# stack and (eventually) runs services/db offline migration.
+# bump), or any schema-delta release. Restarts the whole stack and
+# (eventually) runs services/per offline migration.
 #
 # NOT for day-to-day app pushes — that's orchestration.pp.
 

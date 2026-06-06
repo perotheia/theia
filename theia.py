@@ -63,7 +63,7 @@ def _puppet(manifest: str, args: list[str]) -> int:
         "puppet", "apply",
         f"--modulepath={PUPPET / 'modules'}",
         str(PUPPET / manifest),
-        "--hiera_config=/dev/null",
+        f"--hiera_config={PUPPET / 'hiera.yaml'}",
         *args,
     ])
 
@@ -175,7 +175,7 @@ def cmd_install(args: list[str]) -> int:
     return _run([
         "sudo", "puppet", "apply",
         f"--modulepath={PUPPET / 'modules'}",
-        "--hiera_config=/dev/null",
+        f"--hiera_config={PUPPET / 'hiera.yaml'}",
         "-e", manifest,
         *[a for a in args if a.startswith("-")],
     ])

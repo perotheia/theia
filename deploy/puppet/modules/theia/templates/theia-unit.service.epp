@@ -1,0 +1,14 @@
+<%- | String $name, String $target_dir | -%>
+# Managed by Puppet (theia::provisioning). Do not edit by hand.
+[Unit]
+Description=Theia <%= $name %>
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=<%= $target_dir %><%= $name %>
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

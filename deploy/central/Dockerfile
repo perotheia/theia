@@ -16,7 +16,7 @@ ENV HOSTNAME=central
 # (or the compute container's downstream caller) can reach it.
 EXPOSE 7700
 
-# The .ipk, executor.yaml, machines.yaml, supervisor binary, and
+# The .ipk, executor.json, machines.json, supervisor binary, and
 # Puppet manifests are all bind-mounted via docker-compose at
 # runtime — no COPYs here. That lets `bazel build` and edit-rebuild
 # cycles flow into the running container without docker rebuild.

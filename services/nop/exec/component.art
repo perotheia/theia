@@ -20,11 +20,13 @@ import system.supervisor.*
 
 // ---- forward-decl: supervisor node EXEC is realized by ------------------
 // `extern` marks this a forward declaration — the real `node atomic
-// Supervisor` (tipc 0x80020001, with ports/params) lives in
-// system.supervisor and is pulled in via the import above. No fake tipc:
-// the scope provider materializes the full node from the import.
-extern node atomic Supervisor { }
+// SupervisorCtl` (tipc 0x80020001, the supervisor's Theia control node) lives
+// in system.supervisor and is pulled in via the import above. (The supervisor
+// is now two nodes — SupervisorCtl atomic + SupervisorWorker runnable; EXEC
+// aliases the control node.) No fake tipc: the scope provider materializes the
+// full node from the import.
+extern node atomic SupervisorCtl { }
 
 composition Exec {
-    prototype Supervisor exec
+    prototype SupervisorCtl exec
 }

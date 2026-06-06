@@ -1,0 +1,8 @@
+# nanopb field-size constraints for the system.demo wire messages.
+# nanopb_generator auto-loads this file (same basename next to demo.proto).
+# A string/bytes field without a max_size becomes a pb_callback_t, which a
+# migration plugin's struct-copy codegen (gen-transform) can't assign as a
+# plain char[]. Pinning CounterConfig.label to a fixed char[] makes it a plain
+# member the transform can strncpy. (Same fix as system_supervisor.*.options.)
+
+system_demo.CounterConfig.label   max_size:64

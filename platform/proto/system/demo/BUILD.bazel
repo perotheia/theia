@@ -6,7 +6,13 @@ package(default_visibility = ["//visibility:public"])
 
 genrule(
     name = "demo_pb",
-    srcs = ["demo.proto"],
+    srcs = [
+        "demo.proto",
+        # nanopb_generator auto-loads the same-basename .options — pins
+        # CounterConfig.label to char[] so a migration plugin's struct copy can
+        # assign it (else pb_callback_t).
+        "demo.options",
+    ],
     outs = [
         "demo.pb.c",
         "demo.pb.h",

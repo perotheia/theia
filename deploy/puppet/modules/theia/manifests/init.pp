@@ -10,17 +10,17 @@
 #                    `compute_host`). Drives Puppet's lookup of the
 #                    .ipk under /opt/theia/ipk/.
 #   executor_json  — Absolute path on the host to the executor.json
-#                    (supervisor tree, JSON-only since #380) that should
-#                    land at /etc/theia/executor.json. Typically
+#                    (supervisor tree, JSON) that should land at
+#                    /etc/theia/executor.json. Typically
 #                    /opt/theia/ipk/executor.json because the
 #                    docker-compose mounts it alongside the .ipk.
-#   machines_yaml  — Same for machines.yaml (GUI manifest).
+#   machines_json  — Same for machines.json (GUI manifest).
 #   ipk_path       — Path to the per-machine .ipk inside the container.
 
 class theia (
     String $machine,
     String $executor_json = "/opt/theia/ipk/executor.json",
-    String $machines_yaml = "/opt/theia/ipk/machines.yaml",
+    String $machines_json = "/opt/theia/ipk/machines.json",
     String $ipk_path      = "/opt/theia/ipk/${machine}.ipk",
 ) {
     include theia::install

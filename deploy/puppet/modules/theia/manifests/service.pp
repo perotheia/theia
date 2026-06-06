@@ -22,7 +22,7 @@
 #
 # For now this class is intentionally empty — run-supervisor.sh handles
 # the lifecycle directly. Puppet's idempotency stops at file drops
-# (executor.yaml, .ipk install).
+# (executor.json, .ipk install).
 
 class theia::service {
     # Intentionally empty. The supervisor is started by

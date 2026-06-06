@@ -1,16 +1,16 @@
-# theia::config — drop executor.json + machines.yaml into /etc/theia/.
+# theia::config — drop executor.json + machines.json into /etc/theia/.
 #
-# The supervisor tree is JSON-only since #380 (the supervisor binary
-# parses JSON); $executor_json points at the executor.json emitted by
-# @rig//:executor_json and staged into the image.
+# The supervisor tree is JSON (the supervisor binary parses JSON); $executor_json
+# points at the executor.json emitted by @rig//:executor_json and staged into the
+# image. $machines_json is the GUI manifest (artheia emit-machines → machines.json).
 #
-# Each per-machine container reads the same executor.json (the rig has
-# one global executor tree); each machine only runs the processes whose
-# host_machine binding matches it — redundant entries are harmless.
+# Each per-machine container reads the same executor.json (the rig has one global
+# executor tree); each machine only runs the processes whose host_machine binding
+# matches it — redundant entries are harmless.
 
 class theia::config {
     $executor_json = $theia::executor_json
-    $machines_yaml = $theia::machines_yaml
+    $machines_json = $theia::machines_json
 
     file { '/etc/theia':
         ensure => directory,
@@ -24,9 +24,9 @@ class theia::config {
         require => File['/etc/theia'],
     }
 
-    file { '/etc/theia/machines.yaml':
+    file { '/etc/theia/machines.json':
         ensure  => file,
-        source  => $machines_yaml,
+        source  => $machines_json,
         mode    => '0644',
         require => File['/etc/theia'],
     }

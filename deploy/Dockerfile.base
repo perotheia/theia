@@ -63,7 +63,7 @@ RUN apt-get update && \
 
 # Theia per-machine layout:
 #   /opt/theia/         — install root (opkg --offline-root pivot)
-#   /etc/theia/         — config (executor.yaml, machines.yaml)
+#   /etc/theia/         — config (executor.json, machines.json)
 #   /var/log/theia/     — supervisor logs + tombstones
 #   /etc/puppet/        — puppet manifests + modules
 RUN mkdir -p /opt/theia /etc/theia /var/log/theia/tombstones /etc/puppet

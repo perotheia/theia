@@ -14,7 +14,12 @@
 #include "impl/etcd_store.hpp"          // shared_store() + Store::scan/put
 #include "impl/migration_plugin.hpp"   // load_migration_plugin (dlopen)
 #include "impl/migration_registry.hpp" // MigrationRegistry::migrate (the chain)
+#include "impl/snapshot_ops.hpp"       // write/restore_config_snapshot
+#include "ParamsConfig.hh"             // get_config() — snapshot_dir param
 #include "schema_registry.hpp"
+
+#include <sys/stat.h>
+#include <sys/types.h>
 
 #include <cstring>
 #include <string>
@@ -28,6 +33,26 @@ void set_str(char (&dst)[N], const std::string& s) {
     const std::size_t n = s.size() < N - 1 ? s.size() : N - 1;
     std::memcpy(dst, s.data(), n);
     dst[n] = '\0';
+}
+
+// Snapshot file path for a label: <snapshot_dir>/<label>.persnap. snapshot_dir
+// is the PerManager static param. mkdir -p the dir on save.
+std::string snapshot_dir() {
+    return ::theia::runtime::get_config().node(PerManager::kNodeName)
+        .str("snapshot_dir", "/tmp/theia/per-snapshots");
+}
+std::string snapshot_path(const std::string& label) {
+    return snapshot_dir() + "/" + label + ".persnap";
+}
+// mkdir -p each path component (POSIX, no <filesystem> dep).
+void mkdir_p(const std::string& dir) {
+    std::string acc;
+    for (std::size_t i = 0; i <= dir.size(); ++i) {
+        if (i == dir.size() || dir[i] == '/') {
+            if (!acc.empty()) ::mkdir(acc.c_str(), 0755);  // ignore EEXIST
+        }
+        if (i < dir.size()) acc.push_back(dir[i]);
+    }
 }
 
 // Status codes on PerReply: 0 ok, 2 invalid arg, 3 not implemented (needs etcd).
@@ -145,10 +170,33 @@ PerReply PerManager::handle_call(
         const SnapshotReq& req,
         PerManagerState& /*s*/) {
     PerReply rep{};
-    rep.status = kNotImpl;
-    set_str(rep.message, "Snapshot needs the etcd backend (etcdctl/Maintenance)");
-    this->log().warn(std::string("Snapshot '") + req.label +
-                     "' -> NOT IMPLEMENTED (no etcd)");
+    Store* store = shared_store();
+    if (!store) {
+        rep.status = kNotImpl;
+        set_str(rep.message, "store not ready");
+        return rep;
+    }
+    if (req.label[0] == '\0') {
+        rep.status = kInvalid;
+        set_str(rep.message, "empty label");
+        return rep;
+    }
+    // CONFIG-SCOPED snapshot: just per's /theia/config/ keyspace (via the
+    // Store's scan), NOT a full etcd backup. Restore is then a safe live re-put.
+    mkdir_p(snapshot_dir());
+    const std::string path = snapshot_path(req.label);
+    const long n = write_config_snapshot(*store, path);
+    if (n < 0) {
+        rep.status = kInvalid;
+        set_str(rep.message, "snapshot write failed: " + path);
+        this->log().warn(std::string("Snapshot '") + req.label +
+                         "' -> write FAILED (" + path + ")");
+        return rep;
+    }
+    rep.status = kOk;
+    set_str(rep.message, "snapshot " + std::to_string(n) + " keys -> " + path);
+    this->log().info(std::string("Snapshot '") + req.label + "' -> " +
+                     std::to_string(n) + " keys at " + path);
     return rep;
 }
 
@@ -156,10 +204,25 @@ PerReply PerManager::handle_call(
         const RestoreSnapshotReq& req,
         PerManagerState& /*s*/) {
     PerReply rep{};
-    rep.status = kNotImpl;
-    set_str(rep.message, "RestoreSnapshot needs the etcd backend");
-    this->log().warn(std::string("RestoreSnapshot '") + req.label +
-                     "' -> NOT IMPLEMENTED (no etcd)");
+    Store* store = shared_store();
+    if (!store) {
+        rep.status = kNotImpl;
+        set_str(rep.message, "store not ready");
+        return rep;
+    }
+    const std::string path = snapshot_path(req.label);
+    const long n = restore_config_snapshot(*store, path);
+    if (n < 0) {
+        rep.status = kInvalid;
+        set_str(rep.message, "restore failed (missing/bad): " + path);
+        this->log().warn(std::string("RestoreSnapshot '") + req.label +
+                         "' -> FAILED (" + path + ")");
+        return rep;
+    }
+    rep.status = kOk;
+    set_str(rep.message, "restored " + std::to_string(n) + " keys from " + path);
+    this->log().info(std::string("RestoreSnapshot '") + req.label + "' -> " +
+                     std::to_string(n) + " keys from " + path);
     return rep;
 }
 

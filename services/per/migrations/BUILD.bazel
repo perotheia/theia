@@ -1,20 +1,23 @@
-# Config-migration transforms. Each .cc registers its (from->to) edge at
-# static-init via MigrationRegistrar (the trace_decoder_protos pattern). One
-# file per adjacent step: migrations/<config_type>/<from>_to_<to>.cc.
+# Config-migration transform PLUGINS. Each is a standalone .so the running per
+# dlopen's at MigrateBulk time (the n+1 reshape code, run inside the deployed n
+# per — see impl/migration_plugin_api.h). A plugin speaks ONLY the C ABI; it
+# depends on :migration_registry just for the header (migration_plugin_api.h),
+# NOT on per's C++ internals.
 #
-# alwayslink: the registrars have no referenced symbols (their effect is the
-# static-init side effect), so the linker must NOT drop the TU.
+# linkshared makes a .so; linkstatic=False keeps it position-independent.
+# Built but NOT linked into the per binary — staged separately + dlopen'd.
 
-load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@rules_cc//cc:defs.bzl", "cc_binary")
 
 package(default_visibility = ["//visibility:public"])
 
-cc_library(
-    name = "per_migrations",
-    srcs = glob(["**/*.cc"], allow_empty = True),
+cc_binary(
+    name = "libper_migrate_example.so",
+    srcs = ["example/v1_to_v2.cc"],
     copts = ["-std=c++17", "-fPIC"],
+    linkshared = True,
+    linkstatic = False,
     deps = [
-        "//services/per/impl:migration_registry",
+        "//services/per/impl:migration_registry",  # the C ABI header only
     ],
-    alwayslink = True,
 )

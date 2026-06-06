@@ -117,6 +117,11 @@ message MigrateBulkReq {
     string config_type
     string from_digest
     string to_digest
+    // Path to the transform plugin (.so) the running per dlopen's to get the
+    // from->to reshape code. The code is authored WITH the new (n+1) version but
+    // must RUN inside the deployed (n) per — so it ships as a plugin, not baked
+    // in. Empty = use whatever transforms are already registered.
+    string plugin_so
 }
 
 // Operational snapshot / restore of the whole datastore (wraps etcd

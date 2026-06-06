@@ -209,6 +209,9 @@ void PerClient::init(PerClientState& s) {
             s.store = make_memory_store();
         }
     }
+    // Publish the store so PerManager (a separate node thread) can reach it for
+    // MigrateBulk's keyspace walk. PerClientState still OWNS the unique_ptr.
+    set_shared_store(s.store.get());
 }
 
 void PerClient::handle_info(const char* /*info*/, PerClientState& /*s*/) {

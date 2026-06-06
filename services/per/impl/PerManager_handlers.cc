@@ -11,6 +11,9 @@
 // misled. RegisterSchema/ListSchemas are fully functional now.
 
 #include "lib/PerManager.hh"
+#include "impl/etcd_store.hpp"          // shared_store() + Store::scan/put
+#include "impl/migration_plugin.hpp"   // load_migration_plugin (dlopen)
+#include "impl/migration_registry.hpp" // MigrationRegistry::migrate (the chain)
 #include "schema_registry.hpp"
 
 #include <cstring>
@@ -78,15 +81,63 @@ PerReply PerManager::handle_call(
         const MigrateBulkReq& req,
         PerManagerState& /*s*/) {
     PerReply rep{};
-    // The lazy migration on read (PerClient.GetConfig) covers most reshapes; a
-    // bulk rewrite of every stored value needs to walk the etcd keyspace +
-    // apply the transform chain + a crash-safe resume marker — that's the etcd
-    // backend. Not available against the in-memory store.
-    rep.status = kNotImpl;
-    set_str(rep.message, "MigrateBulk needs the etcd backend (not yet wired)");
-    this->log().warn(std::string("MigrateBulk ") + req.config_type + " " +
-                     req.from_digest + "->" + req.to_digest +
-                     " -> NOT IMPLEMENTED (no etcd)");
+    const std::string from = req.from_digest, to = req.to_digest;
+
+    // 1. Load the transform plugin if a path was given. The reshape code is
+    //    authored with the NEW (n+1) version but runs inside the deployed (n)
+    //    per, so it ships as a dlopen'd .so. Once loaded, its edges feed BOTH
+    //    this bulk rewrite AND GetConfig's lazy migration-on-read. Empty path =
+    //    use whatever's already registered.
+    if (req.plugin_so[0]) {
+        std::string err;
+        if (!load_migration_plugin(req.plugin_so, &err)) {
+            rep.status = kInvalid;
+            set_str(rep.message, "plugin load failed: " + err);
+            this->log().warn(std::string("MigrateBulk: ") +
+                             "plugin '" + req.plugin_so + "' -> " + err);
+            return rep;
+        }
+        this->log().info(std::string("MigrateBulk: loaded plugin ") +
+                         req.plugin_so);
+    }
+
+    // 2. Confirm a transform PATH exists from->to (after the plugin loaded).
+    //    A trivial probe with empty bytes: nullopt = no path.
+    if (!MigrationRegistry::instance().migrate(from, to, std::string{})) {
+        rep.status = kInvalid;
+        set_str(rep.message, "no transform path " + from + "->" + to);
+        this->log().warn(std::string("MigrateBulk: no path ") + from + "->" + to);
+        return rep;
+    }
+
+    // 3. Walk the keyspace, rewrite every value at `from` to `to` (CAS on its
+    //    mod_rev so a concurrent Put isn't clobbered). Values already at `to`
+    //    (or any other digest) are skipped.
+    Store* store = shared_store();
+    if (!store) {
+        rep.status = kNotImpl;
+        set_str(rep.message, "store not ready");
+        return rep;
+    }
+    uint32_t migrated = 0, skipped = 0, conflicts = 0;
+    for (auto& [node, val] : store->scan()) {
+        if (val.digest != from) { ++skipped; continue; }
+        auto out = MigrationRegistry::instance().migrate(from, to, val.config);
+        if (!out) { ++skipped; continue; }   // shouldn't happen (path checked)
+        // CAS on the value's current rev — if someone Put it meanwhile, skip
+        // (the next MigrateBulk run, or lazy read, catches it).
+        const int64_t nr = store->put(node, *out, to, val.mod_rev);
+        if (nr == 0) ++conflicts; else ++migrated;
+    }
+
+    rep.status = kOk;
+    set_str(rep.message, "migrated " + std::to_string(migrated) +
+                         ", skipped " + std::to_string(skipped) +
+                         ", conflicts " + std::to_string(conflicts));
+    this->log().info(std::string("MigrateBulk ") + from + "->" + to +
+                     ": migrated " + std::to_string(migrated) +
+                     " skipped " + std::to_string(skipped) +
+                     " conflicts " + std::to_string(conflicts));
     return rep;
 }
 

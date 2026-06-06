@@ -56,6 +56,7 @@ message MigrateBulkReq {
     string config_type = 1;
     string from_digest = 2;
     string to_digest = 3;
+    string plugin_so = 4;
 }
 
 message SnapshotReq {

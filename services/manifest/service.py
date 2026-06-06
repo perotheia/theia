@@ -1,9 +1,9 @@
-"""Adaptive Platform manifest — GENERATED from services/system/system.art.
+"""Adaptive Platform manifest — GENERATED from system/services/cluster.art.
 
 Do not edit by hand. Edit the ``cluster`` declarations in the source
 ``.art`` and regenerate:
 
-    artheia gen-manifest services/system/system.art <this file>
+    artheia gen-manifest-proto system/services/cluster.art <this file>
 
 ARA manifest sections (see docs/autosar/manifest.md):
 
@@ -41,7 +41,6 @@ from artheia.manifest.utils import (
 # directory convention (artheia.manifest.utils).
 # ---------------------------------------------------------------------------
 SERVICES_MEMBERS: list[tuple[str, str, list[str]]] = [
-    ('com', 'Com', []),
     ('log', 'Log', []),
     ('per', 'Per', []),
     ('sm', 'Sm', []),

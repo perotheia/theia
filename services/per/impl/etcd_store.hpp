@@ -17,6 +17,8 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace system_services_per {
 
@@ -54,6 +56,10 @@ public:
     // a Put's fan-out comes back through the watch cb, so the handler must NOT
     // also fan out inline (avoids a double push). False for in-memory.
     virtual bool is_watched() const = 0;
+    // Every stored config: (target_node, value). For MigrateBulk's keyspace
+    // walk. The list is a snapshot (etcd range read / map copy); the caller
+    // re-puts each migrated value with CAS on its mod_rev.
+    virtual std::vector<std::pair<std::string, StoreValue>> scan() = 0;
 };
 
 // Build the etcd-backed store (connects to `endpoint`, e.g. "127.0.0.1:2379").
@@ -66,5 +72,12 @@ std::unique_ptr<Store> make_etcd_store(const std::string& endpoint);
 // link :per_etcd still gets it. watch_prefix is a no-op (in-memory has no async
 // watch source; the handler fans out on Put directly).
 std::unique_ptr<Store> make_memory_store();
+
+// Process-shared store handle. PerClient::init owns the store (it set up the
+// watch) and publishes the raw pointer here; PerManager reads it for MigrateBulk
+// (which walks the keyspace). Both nodes are in one process; the store outlives
+// both for the process lifetime. nullptr until PerClient::init runs.
+void set_shared_store(Store* s);
+Store* shared_store();
 
 }  // namespace system_services_per

@@ -5,6 +5,7 @@
 
 #include "etcd_store.hpp"
 
+#include <atomic>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -45,6 +46,18 @@ public:
 
     bool is_watched() const override { return false; }
 
+    std::vector<std::pair<std::string, StoreValue>> scan() override {
+        std::lock_guard<std::mutex> lk(mu_);
+        std::vector<std::pair<std::string, StoreValue>> out;
+        out.reserve(kv_.size());
+        for (const auto& e : kv_) {
+            StoreValue v = e.second;
+            v.found = true;
+            out.emplace_back(e.first, std::move(v));
+        }
+        return out;
+    }
+
 private:
     std::mutex mu_;
     std::unordered_map<std::string, StoreValue> kv_;
@@ -56,5 +69,14 @@ private:
 std::unique_ptr<Store> make_memory_store() {
     return std::make_unique<MemStore>();
 }
+
+// Process-shared store handle (see etcd_store.hpp). A plain atomic pointer —
+// set once by PerClient::init before any MigrateBulk could run; read by
+// PerManager. No ownership (PerClientState owns the unique_ptr).
+namespace {
+std::atomic<Store*> g_shared_store{nullptr};
+}
+void set_shared_store(Store* s) { g_shared_store.store(s); }
+Store* shared_store() { return g_shared_store.load(); }
 
 }  // namespace system_services_per

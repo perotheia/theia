@@ -42,5 +42,6 @@ system_services_per.SchemaList.schemas            max_count:64
 system_services_per.MigrateBulkReq.config_type    max_size:96
 system_services_per.MigrateBulkReq.from_digest    max_size:64
 system_services_per.MigrateBulkReq.to_digest      max_size:64
+system_services_per.MigrateBulkReq.plugin_so      max_size:256
 system_services_per.SnapshotReq.label             max_size:96
 system_services_per.RestoreSnapshotReq.label      max_size:96

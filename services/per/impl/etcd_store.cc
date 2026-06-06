@@ -90,6 +90,24 @@ public:
 
     bool is_watched() const override { return watcher_ != nullptr; }
 
+    std::vector<std::pair<std::string, StoreValue>> scan() override {
+        std::vector<std::pair<std::string, StoreValue>> out;
+        auto resp = client_.ls(kPrefix);   // directory listing under the prefix
+        if (!resp.is_ok()) return out;
+        const auto& keys = resp.keys();
+        const auto& vals = resp.values();
+        for (std::size_t i = 0; i < keys.size() && i < vals.size(); ++i) {
+            std::string node = node_from_key(keys[i]);
+            if (node.empty()) continue;
+            StoreValue v;
+            v.found = true;
+            unpack(vals[i].as_string(), v.digest, v.config);
+            v.mod_rev = vals[i].modified_index();
+            out.emplace_back(std::move(node), std::move(v));
+        }
+        return out;
+    }
+
 private:
     void on_watch(const etcd::Response& resp) {
         if (!cb_) return;

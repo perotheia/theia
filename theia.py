@@ -14,11 +14,11 @@ Commands:
     theia provision       puppet apply  — Phase 1 (install os pkgs + .ipk)
     theia orchestrate     puppet apply  — Phase 2 (app rollout, no restart)
     theia dist            bazel build the per-machine .ipk bundles
-    theia install         bazel run //:install — local install into /install
+    theia install         build + puppet-populate install/<machine>/ (local host)
     theia compdb          regen compile_commands.json from bazel (for clangd)
 
 Extra args after the verb pass through (e.g. `theia rig up central`,
-`theia install --destdir /tmp/out`).
+`theia install compute`).
 """
 from __future__ import annotations
 
@@ -30,7 +30,6 @@ from pathlib import Path
 WORKSPACE = Path(__file__).resolve().parent
 COMPOSE = WORKSPACE / "deploy" / "docker-compose.yml"
 PUPPET = WORKSPACE / "deploy" / "puppet"
-INSTALL_DESTDIR = "/install"
 
 
 def _run(argv: list[str]) -> int:
@@ -114,14 +113,17 @@ def _fc_art_path(fc: str, target: str):
     return cand if cand.exists() else None
 
 
-def cmd_stage_local(args: list[str]) -> int:
-    """LOCAL orchestration: build + populate install/<machine>/ via puppet.
+def cmd_install(args: list[str]) -> int:
+    """LOCAL install: build + populate $WORKSPACE/install/<machine>/ via puppet.
 
-    The dev inner-loop counterpart of the remote .ipk deploy. bazel builds the
-    binaries (its job) + artheia emits executor.json; then `puppet apply
-    theia::local_install` copies them into install/<machine>/ and applies the
-    SAME setcap contract (theia::postinstall) a real deploy uses. Default
-    machine: central. Pass a machine name to override."""
+    The dev inner-loop counterpart of the remote .ipk deploy, and the inherited
+    home of demo/stage_local.sh. bazel builds the binaries (its job) + artheia
+    emits executor.json + per-FC params; then `puppet apply theia::local_install`
+    copies them into install/<machine>/ and applies the SAME setcap contract
+    (theia::postinstall) a real deploy uses — "bazel builds, puppet orchestrates
+    the host". Default machine: central. Pass a machine name to override.
+
+    (`theia stage-local` is a back-compat alias for this verb.)"""
     import json
 
     machine = next((a for a in args if not a.startswith("-")), "central")
@@ -190,14 +192,6 @@ def cmd_dist(args: list[str]) -> int:
         "@rig_zonal//compute_host:image",
     ]
     return _run(["bazel", "build", *targets])
-
-
-def cmd_install(args: list[str]) -> int:
-    """bazel run //:install -- --destdir /install (local install). Override
-    the destination by passing your own --destdir <dir>."""
-    extra = list(args) if any(a == "--destdir" for a in args) \
-        else ["--destdir", INSTALL_DESTDIR, *args]
-    return _run(["bazel", "run", "//:install", "--", *extra])
 
 
 # Default scope for the compile DB: the in-tree, LINUX-buildable C++ trees
@@ -301,9 +295,9 @@ COMMANDS = {
     "rig":         (cmd_rig,         "docker compose {up|down} the deploy stack"),
     "provision":   (cmd_provision,   "puppet apply — Phase 1 (os pkgs + .ipk)"),
     "orchestrate": (cmd_orchestrate, "puppet apply — Phase 2 remote (app rollout)"),
-    "stage-local": (cmd_stage_local, "build + puppet-populate install/<machine>/ (local)"),
+    "install":     (cmd_install,     "build + puppet-populate install/<machine>/ (local host)"),
+    "stage-local": (cmd_install,     "alias for `install` (back-compat)"),
     "dist":        (cmd_dist,        "bazel build per-machine .ipk bundles"),
-    "install":     (cmd_install,     f"bazel run //:install → {INSTALL_DESTDIR}"),
     "compdb":      (cmd_compdb,      "regen compile_commands.json from bazel (clangd)"),
 }
 

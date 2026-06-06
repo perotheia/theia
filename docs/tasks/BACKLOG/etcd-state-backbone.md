@@ -1,5 +1,25 @@
 # etcd state backbone + services/db proxy
 
+> **STATUS (2026-06-06): partly DONE, partly SUPERSEDED.**
+> - **Phase 1** (etcd on host): DONE — etcd runs at 127.0.0.1:2379.
+> - **Phase 6** (services/db, the state-shape gatekeeper + migration): DONE,
+>   implemented on `services/per` (the SOLE etcd client) — see
+>   `DONE/services-db-state-gatekeeper.md`. Lazy migration on read, MigrateBulk,
+>   Snapshot/Restore, schema registry all landed + probe-verified. (Caveat: the
+>   bulk crash-safe RESUME marker is deferred.)
+> - **Phases 2–5** (supervisor WRITES etcd; GUI/supdbg READ etcd): SUPERSEDED.
+>   The supervisor deliberately DROPPED etcd ("etcd dropped — all-internal-TIPC",
+>   runtime.cpp); live state now flows over the TIPC NodeEdge/NodeState firehose,
+>   not etcd. The "two readers, one writer" topology below no longer holds: per
+>   is the only etcd client; the supervisor publishes nothing to etcd. If the GUI
+>   ever needs an etcd state mirror, it'd be a NEW publisher decision, not this.
+> - **Phase 7** (docs): the migration docs landed (docs/artheia/transform.md,
+>   docs/skills/theia/references/migration.md).
+>
+> Net: the config-state half (Phase 6) shipped; the observability-via-etcd half
+> (Phases 2–5) was abandoned for the TIPC firehose. Keep this doc as rationale;
+> nothing here is the active workplan.
+
 **Goal:** make etcd the single source of truth for live Theia state.
 Supervisor publishes ChildState / SupervisionEvent / tombstone
 metadata into etcd. The GUI reads etcd directly for keys-and-values

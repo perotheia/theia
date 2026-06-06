@@ -397,12 +397,17 @@ DemoRig.process_to_machine_mappings = list(
 # Docker deployment under `deploy/`.
 
 _PlatformAppOverlay = ApplicationManifest(
-    name="platform_app",
+    # MUST match ServicesSoftware's app name (`services_app`) so the squash
+    # merges by same-identity: that pulls host_machine=central_host onto the
+    # FC components (which ship with host_machine="" in the platform base).
+    # A mismatched name left the FCs unbound → "" resolved to admin_host, and
+    # central_host's .ipk packaged only the supervisor.
+    name="services_app",
     host_machine=CentralHost.name,
-    # The 18 FC components come from ServicesSoftware (the platform base);
-    # the squash merges them in by same-identity (name="platform_app").
-    # We add the platform-fabric components here — supervisor + gateway
-    # — because they belong on central and platform_app is its AA.
+    # The FC components come from ServicesSoftware (the platform base); the
+    # same-identity squash merges them in. We add the platform-fabric
+    # components here — supervisor (+ gateway when it builds) — because they
+    # belong on central and services_app is its AA.
     components=list(_PLATFORM_FABRIC_COMPONENTS),
 )
 

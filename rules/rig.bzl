@@ -207,16 +207,20 @@ filegroup(
 )
 '''.format(targets = targets_str))
 
-    # pkg_opkg target packaging every binary into /usr/bin/<name>.
-    # Note: this assumes each bazel_target produces a single binary
-    # output mapped to /usr/bin/<component-name>. cc_binary's default
-    # output filename matches the target name, so //demo:p1_main →
-    # bazel-bin/demo/p1_main. The opkg rule's `files` map expects
-    # {label: dest_path}.
+    # pkg_opkg target packaging every binary into /opt/theia/bin/<name>.
+    # This MUST match the supervisor's child lookup: the executor.json
+    # start_cmd is a relative `bin/<name>` resolved against THEIA_ROOT_DIR
+    # (=/opt/theia in the deploy), i.e. /opt/theia/bin/<name>. (The local
+    # `theia install` path lands binaries at install/<machine>/bin/<name>
+    # for the same reason.) cc_binary's default output filename matches the
+    # target name, so //services/sm/main:sm → bazel-bin/.../sm. The opkg
+    # rule's `files` map expects {label: dest_path}. The supervisor itself
+    # also lands here so run-supervisor.sh's /usr/bin/theia-supervisor
+    # bind-mount (dev) and the packaged path coexist.
     files_entries = []
     for c in buildable:
         files_entries.append(
-            '        "{label}": "/usr/bin/{name}",'.format(
+            '        "{label}": "/opt/theia/bin/{name}",'.format(
                 label = _abs_label(c["bazel_target"]),
                 name = c["name"],
             ),

@@ -34,10 +34,17 @@ def _pkg_opkg_impl(ctx):
 
     control_content = _render_control(ctx.attr)
 
+    # A dest under any bin/ or sbin/ dir is an executable (0755); everything
+    # else is data (0644). Covers /usr/bin, /usr/sbin AND /opt/theia/bin —
+    # the Theia deploy lands FC binaries at /opt/theia/bin/<name> (matching
+    # the executor start_cmd `bin/<name>` + THEIA_ROOT_DIR=/opt/theia).
+    def _exec_mode(dest):
+        return "755" if ("/bin/" in dest or "/sbin/" in dest) else "644"
+
     # Build copy commands
     copy_lines = []
     for i, dest in enumerate(dest_paths):
-        mode = "755" if (dest.startswith("/usr/bin") or dest.startswith("/usr/sbin")) else "644"
+        mode = _exec_mode(dest)
         copy_lines.append(
             "install -D -m " + mode + " " +
             "'\"${SRCS[" + str(i) + "]}\"'" + " \"$STAGE" + dest + "\""
@@ -47,7 +54,7 @@ def _pkg_opkg_impl(ctx):
     copy_cmds = []
     for i in range(len(src_files)):
         dest = dest_paths[i]
-        mode = "755" if (dest.startswith("/usr/bin") or dest.startswith("/usr/sbin")) else "644"
+        mode = _exec_mode(dest)
         copy_cmds.append(
             "install -D -m " + mode + " \"$SRC" + str(i) + "\" \"$STAGE" + dest + "\""
         )

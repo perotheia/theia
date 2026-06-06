@@ -177,4 +177,11 @@ node atomic PerManager {
         server manager_api provides PerManagerIf
         sender to_log      provides LogStream  best_effort
     }
+    params {
+        // Where Snapshot writes / RestoreSnapshot reads the config-prefix
+        // backup files (<dir>/<label>.persnap). CONFIG-SCOPED, not a full etcd
+        // snapshot: just per's /theia/config/ keyspace, so restore is a safe
+        // live re-put with no cluster disruption.
+        snapshot_dir : string = "/tmp/theia/per-snapshots"
+    }
 }

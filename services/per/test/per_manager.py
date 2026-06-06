@@ -52,14 +52,18 @@ def main() -> int:
         n = len(r.get("schemas", []))
         print("  count:", n); ok &= n == 3
 
-        print("== Snapshot -> NOT IMPLEMENTED (status 3) ==")
+        # Snapshot is now implemented (config-scoped backup) — succeeds.
+        print("== Snapshot('pre') -> ok (status 0) ==")
         r = probe.call("PerManager", "Snapshot", label="pre")
-        print("  ", r); ok &= r.get("status") == 3
+        print("  ", r); ok &= r.get("status") == 0
 
-        print("== MigrateBulk -> NOT IMPLEMENTED (status 3) ==")
+        # MigrateBulk with NO plugin + no registered path -> validation error
+        # (status 2, "no transform path"), NOT the old NOT-IMPLEMENTED stub.
+        print("== MigrateBulk no-path -> invalid (status 2) ==")
         r = probe.call("PerManager", "MigrateBulk",
-                       config_type="SupervisorConfig", from_digest="v1", to_digest="v2")
-        print("  ", r); ok &= r.get("status") == 3
+                       config_type="SupervisorConfig", from_digest="zz1",
+                       to_digest="zz2", plugin_so="")
+        print("  ", r); ok &= r.get("status") == 2
 
         print("RESULT:", "OK" if ok else "FAIL")
         return 0 if ok else 1

@@ -57,6 +57,7 @@ cc_library(
         "etcd_store.hpp",
         "migration_plugin.hpp",
         "migration_plugin_api.h",
+        "snapshot_ops.hpp",
     ],
     # FC root as include root: handler TUs #include "impl/migration_*.h*".
     includes = [".."],

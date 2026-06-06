@@ -14,6 +14,7 @@ Read this page to orient. For a specific task, load the matching reference:
 
 | You're doing… | Read |
 | --- | --- |
+| **Removing / simplifying / rewriting code** (read first) | [references/requirements.md](references/requirements.md) — functional vs non-functional |
 | Writing or editing `.art` files | [references/art-lang-grammar.md](references/art-lang-grammar.md) |
 | Generating / regenerating an application C++ (lib/main/impl) | [references/artheia-gen-app.md](references/artheia-gen-app.md) |
 | Regenerating the system: .art → manifests (stages 1–2) | [references/artheia-gen-system.md](references/artheia-gen-system.md) |

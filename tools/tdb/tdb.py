@@ -356,6 +356,60 @@ def cmd_terminate(args, sup, _tf) -> int:
     return 0 if _g(rep, "status") == 0 else 1
 
 
+def cmd_get_snapshot(args, _sup, _tf) -> int:
+    """get-snapshot <label> [--schema <file>] [--dir <snapshot_dir>]
+
+    Trigger a per Snapshot, then decode the resulting .persnap into JSON with
+    every config proto decoded — {node: {digest, config_type, config: {...}}}.
+
+    The schema (gen-schema output, digest→config_type→shape) is generated on the
+    fly from system/system.art unless --schema points at a staged one. The
+    snapshot dir defaults to /tmp/theia/dbbackup (per's snapshot_dir param)."""
+    import json as _json
+    from tdb_client import PerClient as _PerClient
+
+    label = next((a for a in args if not a.startswith("--")), "tdb")
+    schema_path = _opt(args, "--schema")
+    snap_dir = _opt(args, "--dir") or "/tmp/theia/dbbackup"
+
+    # Schema: use a staged one, else generate from the system .art into a temp.
+    if schema_path is None:
+        import tempfile
+        sys.path.insert(0, str(REPO / "artheia"))
+        from artheia.model import parse_file as _pf
+        from artheia.generators.config_schema import generate_config_schema
+        art = REPO / "system" / "system.art"
+        schema_path = str(Path(tempfile.gettempdir()) / "tdb_config_schema.json")
+        generate_config_schema(_pf(str(art)), schema_path)
+
+    per = _PerClient.from_workspace(REPO)
+    try:
+        rep = per.snapshot(label)
+        if _g(rep, "status") != 0:
+            print(f"Snapshot failed: {_g(rep, 'message')}", file=sys.stderr)
+            return 1
+        persnap = Path(snap_dir) / f"{label}.persnap"
+        if not persnap.exists():
+            print(f"snapshot file not found: {persnap} "
+                  f"(is per on this host? snapshot_dir match?)", file=sys.stderr)
+            return 1
+        decoded = per.decode_snapshot(persnap, schema_path)
+        print(_json.dumps({"label": label, "nodes": decoded}, indent=2,
+                          default=lambda b: b.hex() if isinstance(b, bytes) else b))
+        return 0
+    finally:
+        per.stop()
+
+
+def _opt(args, name):
+    """Read `--name <value>` from a flat arg list; None if absent."""
+    if name in args:
+        i = args.index(name)
+        if i + 1 < len(args):
+            return args[i + 1]
+    return None
+
+
 def _fmt_epoch_ns(ts_ns: int) -> str:
     """Epoch-nanoseconds (the sender's system_clock at the trace point) →
     DD/MM/YY HH:MM:SS.mmm local time. 0 → '' (no timestamp)."""
@@ -422,6 +476,7 @@ _COMMANDS = {
     "restart": cmd_restart,
     "terminate": cmd_terminate,
     "logcat": cmd_logcat,
+    "get-snapshot": cmd_get_snapshot,
 }
 
 _HELP = """tdb — Theia Debug Bridge. commands:

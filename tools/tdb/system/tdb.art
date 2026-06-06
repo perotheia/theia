@@ -25,6 +25,7 @@ package system.tools.tdb
 // mechanism services/nop/exec uses to alias the supervisor node).
 import system.supervisor.*
 import system.services.log.*
+import system.services.per.*
 
 // ---- extern peers (materialized from the imports) ------------------------
 //
@@ -37,6 +38,11 @@ extern node atomic SupervisorCtl { }
 
 // log[trace]'s subscribe control node (tipc 0x80010014) — system.services.log.
 extern node atomic TraceCtl { }
+
+// per's config-gatekeeper nodes — system.services.per. PerManager (0x80010008)
+// for Snapshot/schema/migrate; PerClient (0x80010007) for Get/Put/Watch config.
+extern node atomic PerManager { }
+extern node atomic PerClient { }
 
 // ---- tdb client nodes ----------------------------------------------------
 //
@@ -64,6 +70,16 @@ node atomic TdbTrace {
     ports {
         client   trace_sub   requires TraceStreamSub
         receiver trace_rec    requires TraceRecordStream
+    }
+}
+
+// per client: drives PerClientIf (Get/Put/Watch config) + PerManagerIf
+// (schema / Snapshot / MigrateBulk). Used by `tdb get-snapshot`, config ops.
+node atomic TdbPer {
+    tipc type=0x80020103 instance=0
+    ports {
+        client per_client  requires system.services.per.PerClientIf
+        client per_mgr     requires system.services.per.PerManagerIf
     }
 }
 

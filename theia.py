@@ -102,6 +102,18 @@ def _bazel_bin(target: str) -> Path:
     return WORKSPACE / "bazel-bin" / pkg / name
 
 
+def _fc_art_path(fc: str, target: str):
+    """The .art the gen-params emitter reads for an FC. Services FCs live at the
+    canonical symlink path system/services/<fc>/package.art; demo apps
+    (//demo/...) at system/demo/package.art. Returns a Path or None if absent
+    (an FC with no .art simply gets no params file)."""
+    if target.startswith("//demo/"):
+        cand = WORKSPACE / "system" / "demo" / "package.art"
+    else:
+        cand = WORKSPACE / "system" / "services" / fc / "package.art"
+    return cand if cand.exists() else None
+
+
 def cmd_stage_local(args: list[str]) -> int:
     """LOCAL orchestration: build + populate install/<machine>/ via puppet.
 
@@ -128,6 +140,24 @@ def cmd_stage_local(args: list[str]) -> int:
         "--rig", rig, "--out", str(dest / "executor.json"),
     ])) != 0:
         return rc
+
+    # 2b. Per-FC static params JSON — config/<fc>.json, one per FC that declares
+    #     a params {} block. Read once at boot by the runtime config singleton
+    #     (init_config(<fc>) resolves $THEIA_CONFIG_DIR/<fc>.json; the supervisor
+    #     sets THEIA_CONFIG_DIR=config in the child env, see executor emit). A
+    #     params-less FC emits an empty {nodes:{}} (harmless; lookups default).
+    cfg_dir = dest / "config"
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    for fc, target in _LOCAL_BINARIES.items():
+        art = _fc_art_path(fc, target)
+        if art is None:
+            continue
+        if (rc := _run([
+            "artheia", "gen-params", str(art),
+            "--out", str(cfg_dir / f"{fc}.json"),
+        ])) != 0:
+            return rc
+    print(f"staged {cfg_dir}/<fc>.json (static params)")
 
     # 3. puppet apply theia::local_install — copy binaries + setcap. The binary
     #    map is passed as a Puppet hash literal via -e.

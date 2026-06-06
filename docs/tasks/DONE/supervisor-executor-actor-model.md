@@ -1,5 +1,12 @@
 # Supervisor executor — typed-command actor model (forward rewrite)
 
+> **DONE (2026-06-04).** Landed in `019e7c2`. `ExecCommand`/`enqueue`/`call`
+> actor queue is in `runtime.{h,cpp}` + `bridge.h`; the loop thread is the sole
+> owner of fork/reap/waitpid/SIGCHLD/config tables. The engine has no
+> `state_mu_` / `recursive_mutex` / `run_on_engine` (verification grep clean —
+> the only `state_mu_` hit is the unrelated `events_node_state_mu_` broadcast
+> guard).
+
 ## Context
 
 Commit `1e64178` ("supervisor: direct control — drop run_on_engine, lock the

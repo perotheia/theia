@@ -1,5 +1,12 @@
 # `artheia.gen_server.probe` — a Python gen_server probe to test FCs in isolation
 
+> **DONE (2026-06-04).** Implemented and in active use: `artheia.gen_server.probe`
+> binds a node's TIPC addr from the parsed `.art` and speaks the gen_server wire
+> (cast/call) to drive FCs in isolation. It's the transport under tdb
+> (`tdb.art` → SupervisorCtl/log) and the observer, exercised live every session
+> (ps/info/loglevel/trace/logcat). Connect resilience to stale co-bindings was
+> hardened this session (transport.py retry-on-fresh-socket).
+
 > **IMPLEMENTED (2026-05-30..31).** Package: `artheia/artheia/gen_server/probe/`
 > (`wire.py` · `codec.py` · `transport.py` · `context.py` · `node.py`). All
 > gen_server ops: active `cast`/`call`; passive `on_cast`/`on_call`/`expect_cast`/

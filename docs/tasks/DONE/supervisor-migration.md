@@ -1,3 +1,5 @@
+[tag:done] 
+
 # Supervisor migration to gen-app FC (+ protocol audit)
 
 Migrate the supervisor off its bespoke CMake/hand-rolled build onto the
@@ -14,6 +16,7 @@ Original preserved at `platform/supervisor.orig/` (user mines it). New tree:
 The current `SupervisorControlIf` has 13 operations. Categorized:
 
 ### KEEP — core supervision (children + signals + Theia)
+
 | element | why |
 | --- | --- |
 | `StartChild` / `DeleteChild` / `RestartChild` / `TerminateChild` | child lifecycle — the supervisor's job |
@@ -30,6 +33,7 @@ The current `SupervisorControlIf` has 13 operations. Categorized:
 log[trace] CANNOT own per-node trace config: it doesn't know when a component
 restarts after a crash, and trace must survive restart — only the supervisor
 knows restarts and can re-push. So:
+
 - **`tdb → supervisor → node`** for trace config; supervisor re-pushes on every
   (re)start. log[trace]'s TraceCtl owns only the trace SUBSCRIPTION (tdb +
   observers subscribe to the firehose — Step 2). Two distinct concerns.
@@ -68,6 +72,7 @@ knows restarts and can re-push. So:
 ## Progress
 
 DONE:
+
 - Steps 1-2: `platform/supervisor` → `supervisor.orig`; fresh `supervisor/`
   with `system/` copied.
 - Step 5 audit + the 3 decisions (above). Protocol cut applied to the .art:
@@ -79,9 +84,10 @@ DONE:
 - Step 3-4: `.art` split into SupervisorCtl (atomic — control/events/reports
   ports) + SupervisorWorker (runnable — OS side). gen-app'd to a clean FC:
   `--ns system::supervisor`, proto package `system_supervisor` (RESOLVES the
-  services_→system_ package break that triggered this migration). No CMake.
+  services\_→system\_ package break that triggered this migration). No CMake.
 
 REMAINING:
+
 - Step 6: thread-safe SupervisorState bridge (child tree + watchdog table),
   process-global like log[trace]'s TraceHub. Port the hand-written supervision
   logic from supervisor.orig/src/{runtime,control_node}.cpp into the new
@@ -101,6 +107,7 @@ dependents get deleted, not re-provided; the com-bridge protocol framing goes
 entirely; trace config is tdb→supervisor→node (no com relay).
 
 ### Removal scope (the cleanup)
+
 - DELETE `services/com/` (the gRPC bridge) + `tools/supervisor-gui/` (wxWidgets,
   incl. its etcd panels).
 - DELETE the CMake-era roots as each FC is on gen-app: DONE for log
@@ -116,6 +123,7 @@ entirely; trace config is tdb→supervisor→node (no com relay).
   workspace-root BUILD.bazel.
 
 ## DONE this turn
+
 - supervisor → .orig; fresh gen-app FC (SupervisorCtl atomic + SupervisorWorker
   runnable), proto `system_supervisor` (resolves the package break), no CMake.
 - protocol cut in .art (monolithic TreeSnapshot out of event iface; trace config
@@ -126,17 +134,19 @@ entirely; trace config is tdb→supervisor→node (no com relay).
 
 `supervisor.orig/src/runtime.cpp` already has the exact architecture the new
 design wants:
+
 - `Supervisor::run()` = the select() loop, SOLE owner of supervision state
   (reap/sample/emit/fork/watchdog) → becomes **SupervisorWorker::do_loop()**.
 - `Supervisor::dispatch_control_nanopb` runs on the TipcMux epoll thread and
-  bridges to the loop via `post_command()` (mutex + eventfd cmd_queue_) → the
+  bridges to the loop via `post_command()` (mutex + eventfd cmd_queue\_) → the
   control ops → **SupervisorCtl::handle_call(...)** delegating to the shared
   Supervisor.
-- So the **thread-safe bridge (task 6) already exists** (cmd_queue_/eventfd +
+- So the **thread-safe bridge (task 6) already exists** (cmd_queue\_/eventfd +
   the loop being the single state owner). Task 6 = make the `Supervisor`
   object process-global, shared by the two gen-app nodes.
 
 So the port = REPACKAGE the Supervisor class under the gen-app FC shell:
+
 - carry `runtime.{cpp,h}` + `spec.{cpp,h}` (DROP etcd_publisher.*; drop the
   ControlServer/its own TipcMux — gen-app's SupervisorCtl binds the control
   address + does handle_call instead; reuse dispatch_control_nanopb's body).
@@ -147,6 +157,7 @@ So the port = REPACKAGE the Supervisor class under the gen-app FC shell:
   straight over.
 
 ## A — com unlinked at .art level: DONE
+
 `system/services/com` symlink removed; cluster.art dropped the com import +
 `composition Com` stub + cluster member. Services cluster = Log/Per/Sm/Ucm/Shwa.
 com dir stays on disk, just not in the model. cluster.art parses clean.
@@ -160,6 +171,7 @@ The .orig had TWO control paths + a firehose, with an ADDRESS COLLISION
 TipcPublisher + ControlServer + etcd entirely.
 
 Split runtime.cpp (carried to impl/core/):
+
 - **ENGINE — port intact (transport-free):** all_workers, start_worker,
   start_subtree, stop_worker, shutdown_subtree, on_child_exit,
   record_and_check_restart, restart_all/rest, reap, do_start/delete/restart/
@@ -169,18 +181,18 @@ Split runtime.cpp (carried to impl/core/):
   `held` work from Step 4 is already in here.
 - **TRANSPORT EDGES — rewrite onto gen-app:**
   - `run()` → SupervisorWorker::do_loop() (the signalfd+cmd_eventfd select loop;
-    keep, drop the ControlServer start/stop + publisher_.open/poll).
+    keep, drop the ControlServer start/stop + publisher\_.open/poll).
   - `emit_event` / `emit_health` / `emit_snapshot` / `cast_node_state` /
-    `emit_tree_stream` → SupervisorCtl's `events` sender (broadcast_events_*).
-    Currently call publisher_.publish(tag, bytes) + etcd_publisher_.* → replace
+    `emit_tree_stream` → SupervisorCtl's `events` sender (broadcast_events\_*).
+    Currently call publisher\_.publish(tag, bytes) + etcd_publisher\_.* → replace
     with the gen-app sender; drop etcd lines.
   - `on_inbound_frame` (legacy tag dispatch: heartbeat/control/systeminfo) +
     `dispatch_control_nanopb` → SupervisorCtl::handle_call(op) → post_command
     into the engine. Heartbeats come in on SupervisorCtl's `reports` receiver.
   - `push_trace_config_to_child` / `push_log_level_to_child` → the worker casts
-    to the child's config port (was publisher_.reply_to/cast).
+    to the child's config port (was publisher\_.reply_to/cast).
   - `send_sm_ready` → worker casts SystemBoot/StartupComplete to sm.
-- etcd: strip ctor param + EtcdPublisher member + all etcd_publisher_.* calls.
+- etcd: strip ctor param + EtcdPublisher member + all etcd_publisher\_.* calls.
   runtime.h ctor already de-etcd'd; runtime.cpp ctor body + members remain.
 
 How the two nodes share the engine: a process-global `Supervisor` instance
@@ -218,6 +230,7 @@ with a manifest it builds the engine, forks children, runs the select() loop,
 and shuts down cleanly on SIGTERM (rc=0). Verified end-to-end (no TIPC needed).
 
 What changed this pass:
+
 - **Engine is protobuf-free.** `impl/core/runtime.{h,cpp}` dropped ALL libprotobuf
   `*.pb.h`, the `TipcPublisher`/`EtcdPublisher` members, `ControlServer`,
   `on_inbound_frame`/`dispatch_control_nanopb`. The control surface is now plain
@@ -227,7 +240,7 @@ What changed this pass:
   `std::function`s (plain `EventData`/`HealthData`/`EdgeData`/`NodeStateData`
   structs). `emit_snapshot` collapsed to sample+stream (monolithic TreeSnapshot
   + etcd gone). The trace/log push + sm_ready still cast raw GW_MSG_GEN_CAST to
-  child/sm TIPC names (unchanged).
+    child/sm TIPC names (unchanged).
 - **Two nodes wired over a process-global bridge** (`impl/core/bridge.{h,cpp}`):
   `SupervisorWorker::do_start` loads the manifest (env `THEIA_SUPERVISOR_MANIFEST`
   / `THEIA_ROOT_DIR`), constructs the engine, installs the EmitSink → bridge
@@ -239,15 +252,15 @@ What changed this pass:
 - **etcd dropped** (never carried). **No CMake** — `impl/BUILD.bazel` hand-owns a
   `supervisor_engine` cc_library (core/ + nlohmann_json) + `supervisor_impl`; the
   generated `main.cc`/lib are untouched.
-- **proto wiring**: added `platform/proto/system/supervisor/{BUILD.bazel,
-  supervisor.options}` (nanopb genrule + field-size pins so inbound strings are
+- **proto wiring**: added `platform/proto/system/supervisor/{BUILD.bazel, supervisor.options}` (nanopb genrule + field-size pins so inbound strings are
   READABLE — see feedback-nanopb-options) + registered in `platform_protos`.
 - **C++ namespace = `ara::exec`** (AUTOSAR Execution Management), NOT
   `system::supervisor` — the literal `system` namespace collides with
-  `int system(const char*)` from <cstdlib>. Proto package stays
+  `int system(const char*)` from \<cstdlib\>. Proto package stays
   `system_supervisor`. See project-supervisor-namespace-ara-exec.
 
 ## REMAINING (next focused efforts)
+
 - **Generator gaps found** (hand-patched for now, fix upstream): (1) the proto
   generator omitted `message Stop {}` for the no-arg `operation Stop()` — added by
   hand to supervisor.proto; (2) gen-app `--ns` must be `ara::exec`, not
@@ -263,11 +276,9 @@ What changed this pass:
 - Retarget the SuspendChild/ResumeChild test-mock work: the engine keeps
   `do_suspend_child`/`do_resume_child` + the `held` flag, but the OTP-faithful
   protocol cut REMOVED Suspend/Resume from the wire (stop-and-hold = Terminate
-  with no_restart). Confirm tdb drives hold via TerminateChild; the `ctl_suspend/
-  resume` wrappers are currently unreachable from the wire (kept for a probe).
+  with no_restart). Confirm tdb drives hold via TerminateChild; the `ctl_suspend/ resume` wrappers are currently unreachable from the wire (kept for a probe).
 - Wire the manifest path properly into the rig (today: env var + cwd default).
 - GetTree/GetChild handle_call return empty envelopes (the monolithic read died
   with com); a client reads the live tree off the NodeEdge/NodeState firehose.
   Wire tdb to that + an e2e test (build platform/system green first).
-- Delete com + supervisor-gui + supdbg-com-client on-disk dirs; clean residual
-  refs (model already unlinked; binaries/dirs still present).
+- 

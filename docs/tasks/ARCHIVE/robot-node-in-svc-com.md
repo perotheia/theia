@@ -1,3 +1,6 @@
+[tag:rejected] 
+
+
 Purpose:
 
 1. send signals to component from robot tests
@@ -15,16 +18,18 @@ Tasks:
    we proposing to use python protobuf lib to work with signal payload.
    wire format stay the same whenever we use nanopb in cluster or google protobuf on host robot tests.
 
-2. Add robot node to services/com 
-- to simulate signals from any component. 
-need spetial wiring between com and robot node 
-robot node can be disabled in release by injecting conditiona compilation flag from services manifest to bazel to cmake.
+2. Add robot node to services/com
+
+- to simulate signals from any component.
+  need spetial wiring between com and robot node
+  robot node can be disabled in release by injecting conditiona compilation flag from services manifest to bazel to cmake.
 
 ---
 
 ## Design (#387) — generalize the existing bridge, don't build a new one
 
 Decisions (user):
+
 - **Reuse the com gRPC bridge + its unary call path.** com already
   forwards a ControlRequest envelope to the supervisor over TIPC
   (SupervisorView, request/reply). Piggyback signal-inject as one more
@@ -61,6 +66,7 @@ must be a real connected TIPC client that HOLDS the socket open for the
 reply.
 
 Consequence for the two paths:
+
 - **CAST (signal, no reply):** can be one-shot. Either com opens a
   client and sends GW_MSG_GEN_CAST, or it rides the supervisor's
   fire-and-forget `send_gw_cast_to_tipc_name`. No socket to keep.
@@ -125,7 +131,7 @@ encode → GW_MSG_GEN_CALL (service_id=djb2("services_services_sm_SmRequest"))
      await GW_MSG_GEN_CALL_REPLY by correlation_id — mirror
      `TipcUplink::send_control_request`'s reader-thread + pending map.
      Return the reply payload to the gRPC caller.
-   Gated behind the release flag (step 6). **theia (services/com).**
+     Gated behind the release flag (step 6). **theia (services/com).**
 3. **FC receive — THREE dispatch kinds (the "any issues?" answer).**
    An injected message must reach the node via the SAME path a real
    peer uses, which differs by receiver kind:
@@ -139,18 +145,17 @@ encode → GW_MSG_GEN_CALL (service_id=djb2("services_services_sm_SmRequest"))
      wouldn't compile (no handle_cast for the event type). So the
      inbound receiver for a statem node must decode then call
      `post_event`, not `handle_cast`.
-   gen-app must therefore register the right receiver per declared
-   type/port kind: register_call for clientServer ops, register_cast→
-   handle_cast for plain senderReceiver, and a register_cast→post_event
-   shim for statem events. The runtime already has all three entry
-   points; this is template wiring. **artheia templates + 5-FC regen.**
+     gen-app must therefore register the right receiver per declared
+     type/port kind: register_call for clientServer ops, register_cast→
+     handle_cast for plain senderReceiver, and a register_cast→post_event
+     shim for statem events. The runtime already has all three entry
+     points; this is template wiring. **artheia templates + 5-FC regen.**
 4. **Python encode/decode.** Generate `_pb2` for the FC app protos
    (extend supdbg gen_protos.sh / sibling) and add an rf_theia adapter
    that encodes/decodes signals with google.protobuf — replacing the
    ctypes FFI (libtrace_decoder stays as legacy fallback). Wire format
    identical to nanopb on-target. **theia (tools/supdbg + rf_theia).**
-5. **supdbg + Robot surface.** `supdbg signal inject <dst> <msg_type>
-   <payload>` + `supdbg signal call <dst> <msg_type> <payload>`
+5. **supdbg + Robot surface.** `supdbg signal inject <dst> <msg_type> <payload>` + `supdbg signal call <dst> <msg_type> <payload>`
    (+ client methods) and rf_theia keywords (Inject Signal As /
    Call Service As). **theia.**
 6. **Release gate.** services-manifest flag → bazel define / cmake
@@ -176,8 +181,7 @@ confusion). It is a second node declared in `services/system/com`'s
 0x..01–0x..12). TIPC is network-wide, so the probe carries its OWN
 distinct address; it sends TO a target FROM its own identity,
 impersonation is attribution only (header `src`), never an address
-takeover. This was the first real use of the multi-node `gen-app --kind
-fc` (artheia 16c4db9) — com emits ComDaemon + ProbeDaemon, one
+takeover. This was the first real use of the multi-node `gen-app --kind fc` (artheia 16c4db9) — com emits ComDaemon + ProbeDaemon, one
 `com_codecs.hh`, a main that starts both threads. The actual forward
 engine stays `robot_inject_signal`/`robot_call_service` in
 `services/com/src/robot_node.cpp`, fronted by the existing gRPC
@@ -190,6 +194,7 @@ sm's statem events (SystemBoot/StartupComplete/…) are driven by INTERNAL
 `post_event()` only — `SmDaemon` has no inbound port for them, so a
 direct cast lands on an unregistered service_id and is dropped. So sm is
 now TWO nodes (theia 927cab5):
+
 - **SmDaemon** — the GenStateM node, TIPC 0x8001000D (unchanged statem).
 - **SmGate** — a plain GenServer, TIPC **0x8001001D**, with a receiver
   port for the lifecycle messages. Its `handle_cast` forwards each into

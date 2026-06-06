@@ -14,6 +14,7 @@ only. No gRPC anywhere.** This supersedes the gRPC-bridge / ProbeDaemon /
 SmProbe approaches (removed; see Cleanup below).
 
 Three parts:
+
 1. **Trace producer → log[trace]** — nodes emit execution traces to the
    TraceCollector (exists; one wire-id bug to fix).
 2. **`artheia.observer`** — a Python Theia node that subscribes to the trace
@@ -82,6 +83,7 @@ problem — the collector is always listening into its ring.
 
 - Ring size is a `services/log` node param (etcd-backed, tunable per
   deployment, no rebuild):
+
   ```
   node atomic TraceCollector {
       params { trace_ring_records : uint32 = 4096 }
@@ -183,6 +185,7 @@ stop the node's process and keep it down (no restart, no heartbeat-timeout
 escalation) until explicitly resumed.
 
 Add to `SupervisorControlIf` (the `.art` contract):
+
 - `StopChild(name)` semantics extended (or a flag) → **hold down**: set a
   per-WorkerNode `held` flag so the reap path skips `on_child_exit()` and the
   watchdog skips the held pid (no SIGTERM-escalate).
@@ -267,6 +270,7 @@ sequenceDiagram
 ---
 
 > Status: IN IMPLEMENTATION.
+>
 > - Step 1 (trace service_id fix) DONE — commit a3bc5ad.
 > - Step 2 (ring-buffer trace hub + remote Subscribe) DONE — commit 112ceb0;
 >   TraceStreamPump (runnable) + TraceCtl (atomic) share a process-global
@@ -275,7 +279,7 @@ sequenceDiagram
 > - Step 3 (artheia.observer) DONE — artheia commit 3484fb0, test 8b900eb.
 >   TraceObserver.from_log_art(...).start()/records()/stop(); resolves TraceCtl
 >   + Subscribe from the log .art; decodes via libprotobuf + JSON. Verified e2e
->   by demo/test/observer_stream.py.
+>     by demo/test/observer_stream.py.
 > - Remaining: Step 4 supervisor SuspendChild/ResumeChild (op 12/13 + held
 >   flag), Step 5 tdb TUI (over artheia.observer). Plus the Cleanup section
 >   (gRPC bridge / ProbeDaemon / SmProbe / TRC-v1 removal).

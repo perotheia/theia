@@ -1,5 +1,13 @@
 # Manifest-driven logging: AUTOSAR tags + per-process LogLevel
 
+> **DONE (2026-06-04).** Per-node tagged loggers + selectable sinks
+> (stdio/null/file/syslog), manifest default file logger, rig-level logger
+> config (Process.logger / Rig.logger precedence), and live per-node LogLevel
+> push via the supervisor (`tdb loglevel` get-all/get-one/set, with
+> GetLogLevelConfig read-back boot⊕override) all landed and exercised. Companion
+> `manifest-logging-fc-config-service.md` (the supervisor config service half)
+> is likewise DONE.
+
 Originally a 4-bullet stub in BACKLOG:
 
 - define logging dst in execution manifest: console/file/syslog

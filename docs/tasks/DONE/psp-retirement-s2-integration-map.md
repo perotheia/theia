@@ -15,10 +15,8 @@ The app links a static `platform_dispatch` library and links/dlopens
 `libpsp.so` for the encoders. `FlexRayCmpAdapter` glues decoded nanopb
 PDUs into the `reconstruct::InputFrame` the BEV pipeline consumes.
 
-**The seam to preserve:** `FlexRayWorldSource → FlexRayCmpAdapter →
-reconstruct::InputFrame`. Everything above that line is application
-code (BEV, RSS, UI, recording). Everything below it is what `--kind
-lib` must re-emit in the new shape.
+**The seam to preserve:** `FlexRayWorldSource → FlexRayCmpAdapter → reconstruct::InputFrame`. Everything above that line is application
+code (BEV, RSS, UI, recording). Everything below it is what `--kind lib` must re-emit in the new shape.
 
 ## The seam in pictures
 
@@ -58,7 +56,7 @@ lib` must re-emit in the new shape.
 ### A. The PSP artefact directory — what `--kind lib` will replace
 
 | file | what it does | new-arm equivalent |
-|---|---|---|
+| --- | --- | --- |
 | `platform/config/signals.csv` | hand-edited 200+ row wishlist of (signal, PDU, slot, channel) tuples | move into `vendor/<app>/system/<app>/component.art` as port + interface declarations (each PDU is a `message`, each FlexRay slot mapping is a `gateway_route`) |
 | `platform/generate.sh` | 5-phase pipeline: validate → ensure PSP → ensure libpsp → gen_app_dispatch → expand_dispatch → nanopb | folded into `artheia gen-app --kind lib` (one command) |
 | `platform/generated/dispatch_table.{h,c}` | `(slot, channel) → cmp_encode_*` C dispatch | emitted by `--kind lib`; same shape but from `.art` `gateway_route` blocks |
@@ -73,7 +71,7 @@ lib` must re-emit in the new shape.
 ### B. App-side glue — what stays, with header rewires
 
 | file | role | S5 change |
-|---|---|---|
+| --- | --- | --- |
 | `app/core/world/FlexRayWorldSource.{h,cpp}` | Qt-side world source, owns the `CmpReceiver`, drives `FlexRayCmpAdapter`. Live + replay modes. | Keep wholesale. Only `start()` signature might shift if PSP discovery changes. |
 | `app/core/world/FlexRayWorldSource.cpp` (581-line monster) | implements live + pcap-replay receive threads | Keep; the receive loop is gateway-side detail and lives in vendor code now too |
 | `app/core/reconstruct/FlexRayCmpAdapter.{h,cpp}` | converts decoded nanopb PDUs → `reconstruct::InputFrame` | Keep. Update `#include` paths to point at the new generated location (`<app>/platform/generated/...` stays the same path → no change probable) |
@@ -205,7 +203,7 @@ existing CAN form to a unified bus-agnostic route shape.
 `<app>/platform/`:
 
 | output | from |
-|---|---|
+| --- | --- |
 | `lib/<Node>.hh` + `impl/<Node>_handlers.cc` | `node` declarations (same as `--kind fc`) |
 | `generated/<PDU>.pb.{h,c}` | `message` declarations → `gen-proto-package` → nanopb |
 | `generated/dispatch_table.{h,c}` | `gateway_route` declarations (FlexRay form) |

@@ -1,5 +1,10 @@
 # Supervisor signal ownership — split SIGTERM (generic main) vs SIGCHLD (engine)
 
+> **DONE (2026-06-04).** Landed in `019e7c2`. `runtime.cpp` blocks **SIGCHLD
+> only** via `pthread_sigmask` (not `sigprocmask`) into the engine's signalfd;
+> SIGTERM/SIGINT stay owned by the generic `main.cc`, so the supervisor exits
+> cleanly on SIGTERM.
+
 ## Problem
 
 The supervisor process hangs on SIGTERM instead of exiting. Sending SIGTERM to a

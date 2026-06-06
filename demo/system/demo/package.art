@@ -34,6 +34,16 @@ message GetReply {
     int32 value
 }
 
+// Runtime-observable config for CounterNode (services/per gatekeeper target).
+// A structured message bound to the node via `config` — the unit gen-schema
+// walks, snapshots decode against, and transforms reshape. v1 shape.
+message CounterConfig {
+    uint32 step          // how much each Inc adds
+    uint32 max_value     // saturate at this
+    bool   wrap          // wrap to 0 instead of saturating
+    string label         // human tag
+}
+
 // ---- interfaces ---------------------------------------------------------
 
 // senderReceiver: one-way typed messages. Drives handle_cast on the
@@ -55,6 +65,7 @@ interface clientServer CounterSrv {
 // Like every node, traceable at runtime via tracer_for("CounterNode").
 node atomic CounterNode {
     tipc type=0xd0010001 instance=0
+    config CounterConfig
     ports {
         server   srv      provides CounterSrv
         receiver inc_in   requires IncIface

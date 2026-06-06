@@ -182,6 +182,6 @@ node atomic PerManager {
         // backup files (<dir>/<label>.persnap). CONFIG-SCOPED, not a full etcd
         // snapshot: just per's /theia/config/ keyspace, so restore is a safe
         // live re-put with no cluster disruption.
-        snapshot_dir : string = "/tmp/theia/per-snapshots"
+        snapshot_dir : string = "/tmp/theia/dbbackup"
     }
 }

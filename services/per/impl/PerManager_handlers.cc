@@ -39,7 +39,7 @@ void set_str(char (&dst)[N], const std::string& s) {
 // is the PerManager static param. mkdir -p the dir on save.
 std::string snapshot_dir() {
     return ::theia::runtime::get_config().node(PerManager::kNodeName)
-        .str("snapshot_dir", "/tmp/theia/per-snapshots");
+        .str("snapshot_dir", "/tmp/theia/dbbackup");
 }
 std::string snapshot_path(const std::string& label) {
     return snapshot_dir() + "/" + label + ".persnap";

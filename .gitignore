@@ -27,6 +27,7 @@ dist/
 
 # Local agent/IDE state — never tracked.
 /.claude/
+/.cache/
 
 # nanopb / protoc codegen outputs. Every .pb.{c,h} (and .pb.cc) is
 # DERIVED from a committed .proto via a genrule (see the sm_pb template

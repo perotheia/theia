@@ -3,7 +3,49 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from migrate import apply_rule, apply_transform  # noqa: E402
+import pytest  # noqa: E402
+
+from migrate import (  # noqa: E402
+    apply_rule, apply_transform, path_get, path_set, path_del,
+    validate_cardinality, _SENTINEL,
+)
+
+
+def test_jsonpath_nested():
+    cfg = {"a": {"b": {"c": 1}}}
+    assert path_get(cfg, "$.a.b.c") == 1
+    assert path_get(cfg, "$.a.x") is _SENTINEL
+    path_set(cfg, "$.a.b.d", 2)
+    assert cfg["a"]["b"]["d"] == 2
+    path_set(cfg, "$.new.deep", 9)        # creates intermediates
+    assert cfg["new"]["deep"] == 9
+    path_del(cfg, "$.a.b.c")
+    assert "c" not in cfg["a"]["b"]
+
+
+def test_rename_and_transform_nested():
+    cfg = {"address": {"city": "berlin"}, "status": "ACTIVE"}
+    apply_rule(cfg, {"op": "rename", "from": "$.address.city",
+                     "to": "$.location.city"})
+    assert cfg["location"]["city"] == "berlin"
+    apply_rule(cfg, {"op": "transform", "path": "$.status",
+                     "map": {"ACTIVE": "enabled"}})
+    assert cfg["status"] == "enabled"
+    # unmapped value with a default
+    apply_rule(cfg, {"op": "transform", "path": "$.status",
+                     "map": {"NOPE": "x"}, "default": "fallback"})
+    assert cfg["status"] == "fallback"
+
+
+def test_cardinality_rejects_topology():
+    with pytest.raises(ValueError):
+        validate_cardinality({"rules": [{"op": "split"}]})
+    with pytest.raises(ValueError):
+        validate_cardinality({"cardinality": "1:N", "rules": []})
+    with pytest.raises(ValueError):
+        validate_cardinality({"maxFanout": 5, "rules": []})
+    # 1:1 is fine
+    validate_cardinality({"cardinality": "1:1", "rules": []})
 
 
 def test_rules():

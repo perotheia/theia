@@ -36,12 +36,21 @@ namespace {
 
 // The supervision tree (JSON, emitted by `artheia executor emit`) and the
 // child working-dir root come from the environment — the rig sets these when
-// it launches the supervisor binary. Sensible fallbacks keep a bare run alive.
+// it launches the supervisor binary. THEIA_SUPERVISOR_MANIFEST is REQUIRED:
+// there is no fallback. A missing env var means the launcher is wrong (e.g. a
+// stale run-supervisor.sh, or a bare `./supervisor` with no environment), and
+// the supervisor must NOT start with a guessed cwd-relative default — that
+// silently masks the real misconfiguration. Fail loudly instead (do_start
+// catches the throw and aborts with the message below).
 std::string manifest_path() {
-    if (const char* p = std::getenv("THEIA_SUPERVISOR_MANIFEST"); p && *p) {
+    const char* p = std::getenv("THEIA_SUPERVISOR_MANIFEST");
+    if (p && *p) {
         return p;
     }
-    return "supervisor_tree.json";  // cwd-relative default
+    throw std::runtime_error(
+        "THEIA_SUPERVISOR_MANIFEST is not set — the supervisor needs an "
+        "explicit executor manifest path in the environment (the launcher, "
+        "e.g. run-supervisor.sh, exports it). Refusing to start.");
 }
 
 std::string root_dir() {
@@ -102,13 +111,15 @@ std::unique_ptr<::supervisor::Supervisor> g_engine;
 void SupervisorWorker::do_start() {
     this->log().info("runnable starting");
 
-    const std::string manifest = manifest_path();
-    const std::string root     = root_dir();
+    const std::string root = root_dir();
     try {
-        // Manifest ctor loads + validates the JSON, THROWING if the file is
-        // missing/malformed. A supervisor with no manifest cannot supervise —
-        // that's fatal, not a soft-fail: we let the throw abort the process
+        // manifest_path() THROWS if THEIA_SUPERVISOR_MANIFEST is unset (no
+        // fallback — a guessed default would mask a launcher misconfig). The
+        // Manifest ctor then loads + validates the JSON, THROWING if the file
+        // is missing/malformed. A supervisor with no manifest cannot supervise
+        // — that's fatal, not a soft-fail: we let the throw abort the process
         // (std::abort below) rather than limp on with a null engine.
+        const std::string manifest = manifest_path();
         ::supervisor::Manifest m(manifest);
         g_engine = std::make_unique<::supervisor::Supervisor>(
             m.take_tree(), root);

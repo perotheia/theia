@@ -1,3 +1,14 @@
 """pero_theia/rules — Starlark rules package."""
 
+load("@rules_python//python:defs.bzl", "py_binary")
+
 package(default_visibility = ["//visibility:public"])
+
+# The .ipk packer invoked by the dist_ipk rule (rules/dist_ipk.bzl). Parses a
+# host's application.json + machine.json and packs the wanted binaries into an
+# opkg/dpkg-compatible .ipk. Stdlib only.
+py_binary(
+    name = "pack_ipk",
+    srcs = ["pack_ipk.py"],
+    main = "pack_ipk.py",
+)

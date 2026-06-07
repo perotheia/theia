@@ -13,8 +13,9 @@ Commands:
     theia rig down        docker compose down
     theia provision       puppet apply  — Phase 1 (install os pkgs + .ipk)
     theia orchestrate     puppet apply  — Phase 2 (app rollout, no restart)
-    theia dist            bazel build the per-machine .ipk bundles
+    theia dist            bazel .ipk bundles + manifests → dist/manifest/<machine>/
     theia install         build + puppet-populate install/<machine>/ (local host)
+                          + manifests → install/manifest/<machine>/
     theia compdb          regen compile_commands.json from bazel (for clangd)
 
 Extra args after the verb pass through (e.g. `theia rig up central`,
@@ -161,6 +162,15 @@ def cmd_install(args: list[str]) -> int:
             return rc
     print(f"staged {cfg_dir}/<fc>.json (static params)")
 
+    # 2c. The four AUTOSAR manifest kinds (machine/application/service/
+    #     execution.json) per machine → install/manifest/<machine>/. Single-
+    #     machine local rig (demo.manifest.rig) — no --rig attr needed.
+    if (rc := _run([
+        "artheia", "generate-manifest", "demo.manifest.rig",
+        "--out", str(WORKSPACE / "install" / "manifest"),
+    ])) != 0:
+        return rc
+
     # 3. puppet apply theia::local_install — copy binaries + setcap. The binary
     #    map is passed as a Puppet hash literal via -e.
     bins = {n: str(_bazel_bin(t)) for n, t in _LOCAL_BINARIES.items()}
@@ -183,7 +193,9 @@ def cmd_install(args: list[str]) -> int:
 
 def cmd_dist(args: list[str]) -> int:
     """bazel build the per-machine .ipk deploy bundles for the DISTRIBUTED
-    (2-machine central+compute) deploy — @rig_zonal (demo.manifest.zonal_rig).
+    (2-machine central+compute) deploy — @rig_zonal (demo.manifest.zonal_rig) —
+    AND emit the per-machine AUTOSAR manifest set (machine/application/service/
+    execution.json) to dist/manifest/<machine>/.
     Pass machine image labels to narrow; default builds central + compute.
 
     (The single-machine local host bundle is `theia install` → @rig_demo.)"""
@@ -191,7 +203,16 @@ def cmd_dist(args: list[str]) -> int:
         "@rig_zonal//central_host:image",
         "@rig_zonal//compute_host:image",
     ]
-    return _run(["bazel", "build", *targets])
+    if (rc := _run(["bazel", "build", *targets])) != 0:
+        return rc
+    # The four AUTOSAR manifest kinds per machine → dist/manifest/<machine>/.
+    # zonal rig has several *Software exports; --rig DemoSoftware is the full
+    # multi-machine one (the same attr @rig_zonal passes the rig extension).
+    return _run([
+        "artheia", "generate-manifest", "demo.manifest.zonal_rig",
+        "--rig", "DemoSoftware",
+        "--out", str(WORKSPACE / "dist" / "manifest"),
+    ])
 
 
 # Default scope for the compile DB: the in-tree, LINUX-buildable C++ trees
@@ -297,7 +318,7 @@ COMMANDS = {
     "orchestrate": (cmd_orchestrate, "puppet apply — Phase 2 remote (app rollout)"),
     "install":     (cmd_install,     "build + puppet-populate install/<machine>/ (local host)"),
     "stage-local": (cmd_install,     "alias for `install` (back-compat)"),
-    "dist":        (cmd_dist,        "bazel build per-machine .ipk bundles"),
+    "dist":        (cmd_dist,        "per-machine .ipk bundles + manifests (dist/manifest/)"),
     "compdb":      (cmd_compdb,      "regen compile_commands.json from bazel (clangd)"),
 }
 

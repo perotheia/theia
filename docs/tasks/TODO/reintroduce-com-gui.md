@@ -173,8 +173,83 @@ DO NOT follow (obsolete):
   TraceStream).
 - GUI-trace-panel-wireshark-style.md phase-2 data source (etcd Watch) — superseded.
 
+## What "firehose" actually is (investigated Phase A)
+
+The firehose = the supervisor's live tree-state STREAM — the same tree `tdb ps`
+renders, pushed continuously as small fixed messages: `SnapshotBegin → {NodeEdge,
+NodeState}×N → SnapshotEnd` (the #429 topo-pair stream that replaced the old
+64KB monolithic TreeSnapshot). Delivery:
+
+  SupervisorCtl `events` broadcast sender  ──(netgraph, standard transport)──►
+    com ComDaemon `from_sup` receiver (TIPC 0x80010008)  ──►  SupFirehose
+    (process-global singleton; nanopb→reassemble→libprotobuf TreeSnapshot)  ──►
+    ComGrpcProxy Subscribe streams (gRPC fan-out)
+
+The messages are theia-native (nanopb over the standard transport). What's NOT
+theia-native is the REGISTRATION: `register_firehose_casts(com_daemon_cfg)`
+installs custom cast-sink entries on ComDaemon's binding, and it was CALLED FROM
+THE GENERATED main.cc — so the gen-app regen (c31d3a3) wiped it. That hand-call-
+in-generated-main is the fragile, non-theia-native part.
+
+### The runnable-owned fix (per user)
+
+Runnable nodes own their init in `do_start` (ComGrpcProxy already does: it
+builds the gRPC server + starts SupLink there). The firehose receiver
+registration belongs in a runnable's `do_start` too — hand-owned, regen-safe by
+construction — NOT in the generated main. Symmetric with the future
+TraceForwarder (a runnable that owns its log[trace] subscription in do_start).
+
+Knot to resolve in impl: the firehose currently arrives on COMDAEMON's binding
+(gen_server, 0x80010008), but the gRPC server is on COMGRPCPROXY (runnable,
+0x80010009). Options:
+  (i)  ComGrpcProxy's do_start registers the firehose casts on the process mux
+       for ComDaemon's address (the registration is address-keyed, not node-
+       keyed — it installs InboundEntry on the NodeBinding). Keep ComDaemon as
+       the firehose receiver; just move the REGISTER call out of generated main
+       into ComGrpcProxy::do_start (which runs after the binds).
+  (ii) Make the firehose arrive on ComGrpcProxy directly (give the runnable its
+       own from_sup receiver) so one runnable owns subscribe+reassemble+fanout —
+       cleanest, matches TraceForwarder, but moves the .art receiver port.
+Lean (i) for Phase A (minimal: relocate the existing call into do_start), revisit
+(ii) when adding TraceForwarder so both runnables are symmetric.
+
+## Phase A — concrete work (investigated)
+
+A1. **Control address** DONE — sup_link `0x80020003` → `0x80020001` (the gen-app
+    SupervisorCtl; supervisor unified ctl+firehose there; matches tdb's probe).
+
+A2. **Firehose registration → ComGrpcProxy::do_start** (runnable-owned, regen-
+    safe). register_firehose_casts(NodeBinding*) installs cast-sinks on
+    ComDaemon's binding. do_start needs ComDaemon's binding → add a runtime
+    accessor `process_mux()->binding_for(type, instance)` (TipcMux has bindings_
+    but no public lookup). Then ComGrpcProxy::do_start:
+    `register_firehose_casts(process_mux()->binding_for(ComDaemon::kTipcType,
+    inst))`. Remove nothing from generated main (the call was already wiped).
+
+A3. **Proto package re-point** (the build blocker — com won't compile without it):
+    - com's BUILD deps point at DEAD targets `//platform/supervisor:supervisor_
+      {pb_cpp,nanopb,codecs_hdr}` (the old CMake supervisor's protos, deleted).
+    - The supervisor messages now live in `//platform/proto/system/supervisor:
+      supervisor_pb` (NANOPB exists), package `system_supervisor` (was
+      `services_supervisor`).
+    - Work: (a) repoint the nanopb deps; (b) ADD a libprotobuf C++ target for
+      system_supervisor (the gRPC edge needs the .pb.cc classes — the old
+      `supervisor_pb_cpp` no longer exists; new genrule, like com_bridge_grpc's
+      host-protoc pattern); (c) rename 43 `services_supervisor_*` →
+      `system_supervisor_*` across 6 com impl files (sup_link, sup_firehose,
+      sup_firehose_register, ComGrpcProxy_handlers, sup_firehose_test, +hpp);
+      (d) supervisor_bridge.proto: `package services.com` import paths → the
+      system_supervisor proto.
+
+A4. Build `//services/com/main:com` clean (still hidden from the cluster).
+
 ## Status
 
-Planned. com architecture is sound; this is a re-alignment (dead address →
+Phase A in progress. A1 DONE (address). A2 (firehose→do_start + runtime
+binding_for accessor) + A3 (proto repoint: 43 renames + new libprotobuf
+supervisor target + BUILD deps) are the remaining build-blocking work — bounded
+but multi-file. Then A4 build, B live-test, C TraceForwarder, D unhide, E GUI.
+
+com architecture is sound; this is a re-alignment (dead address →
 0x80020001, wire the firehose call, fix the proto package), then unhide + rebuild
 the GUI. com-first (A→B→C), GUI-second (D). The op surface is tdb's, live-proven.

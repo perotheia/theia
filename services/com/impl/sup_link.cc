@@ -28,10 +28,13 @@ namespace services_com {
 
 namespace {
 
-// Control address — MUST match SupervisorControlNode::kTipcType/Instance in
-// platform/supervisor/include/supervisor/control_node.h (the distinct control
-// type, NOT the publisher's 0x80020001).
-constexpr uint32_t kSupCtlTipcType     = 0x80020003u;
+// Control address — the gen-app supervisor's SupervisorCtl node (system.art:
+// `node atomic SupervisorCtl { tipc type=0x80020001 instance=0 }`). The current
+// supervisor UNIFIED control + the event/health/firehose on this one address
+// (the old split-out 0x80020003 control node is gone). This is exactly what
+// tdb's probe resolves SupervisorCtl to. Instance is per-machine (central=0,
+// compute=1) — see sup_instance below.
+constexpr uint32_t kSupCtlTipcType     = 0x80020001u;
 constexpr uint32_t kSupCtlTipcInstance = 0u;
 
 // RemoteRef needs a NodeType only for the trace tag (NodeType::kNodeName) and

@@ -289,6 +289,36 @@ firehose pending the cluster re-enable (C/D). Next: Phase C (TraceForwarder +
 delete CMake log) then D (re-add com to cluster.art/manifest with the
 events→from_sup connect — this also lights up the firehose), then E (GUI).
 
+## Phase D — DEEPER than "re-add com": the firehose has no remote egress
+
+Re-adding com to the cluster (DONE) is necessary but NOT sufficient for the
+firehose. The real finding: the supervisor's `events` is an IN-PROCESS subscriber
+list. `SupervisorCtl::broadcast_events_edge(m)` iterates `events_edge_subs_`
+(std::function callbacks registered by LOCAL code via subscribe_events_edge()).
+There is:
+  - NO remote-subscribe protocol (a remote peer can't register an in-proc cb),
+  - NO `cast(*this, edge, netgraph::com)` — the `events` sender port exists in the
+    .art but broadcast_events_* never casts to a netgraph peer.
+So the firehose has NEVER egressed over TIPC to com. SupervisorCtl_netgraph.hh
+confirms: "no .art-declared outbound peers". The control path works (com dials
+the supervisor with a RemoteRef); the firehose is the gap.
+
+To light the firehose to com, ONE of:
+  (D-a) connect arrow `supervisor_ctl.events to com_daemon.from_sup` in the
+        cluster → gen-app emits netgraph::com on SupervisorCtl; THEN the
+        supervisor's emit path (impl/core/runtime.cpp + SupervisorCtl_handlers
+        broadcast_events_*) must ALSO `cast(*this, m, netgraph::com)` for each
+        firehose message — a supervisor impl change. (Prototype-name collision:
+        both Supervisor + ComputeSupervisor name their ctl `supervisor_ctl`;
+        the connect must disambiguate or the compositions rename.)
+  (D-b) a remote SUBSCRIBE op on SupervisorCtl: com calls Subscribe(my_addr);
+        the handler registers a subscriber that casts each event to that addr
+        over TIPC. More moving parts but matches "subscriber" semantics + lets
+        com (and tdb) come/go without a static connect.
+
+This is net-new firehose-to-remote plumbing, not a config flip. Needs a decision
+before implementing. Control + ConfigureTrace/LogLevel already work without it.
+
 (history below)
 - A1 DONE (control address 0x80020001).
 - A3 proto repoint DONE + BUILDS: supervisor_bridge.proto → one `supervisor.proto`

@@ -177,19 +177,37 @@ anyone. tdb never used it either: `tdb ps` uses the `GetTree` one-shot PULL.
     is the DMZ-edge endpoint machines.json already advertises (com_endpoint) —
     now serving BOTH SupervisorView (control+tree-poll) and TraceStream (trace).
 
-### Phase E — supervisor-gui rebuild + re-align
-11. Fix the GUI's removed-TraceStream dependency: point grpc_client's TraceStream
-    stub at com's NEW TraceForwarder gRPC service (Phase C) — same :7700 endpoint
-    as SupervisorView, just a different service. (The old GUI already expected
-    both on one com endpoint; this restores that.) Update machines.yaml→.json
-    comments.
-12. Fix the GUI BUILD (//platform/supervisor:proto_srcs → the real
-    system_supervisor proto target); get `bazel build //tools/supervisor-gui`
-    green (or keep CMake as the canonical build, like before, and just fix the
-    proto path).
-13. Live: GUI on the admin host → gRPC to com → renders the supervisor tree
-    (SupervisorView) + the trace stream (TraceForwarder), drives restart / trace /
-    log-level. The remote-observability goal.
+### Phase E — supervisor-gui rebuild + re-align  ✅ DONE
+11. ✅ Proto re-align (the build breakage): the GUI protoc'd the RETIRED
+    `platform/supervisor/generated/proto/*` (per-message, package
+    `services.supervisor`). Repointed CMakeLists + BUILD.bazel at the SAME wire
+    com builds — `supervisor_bridge.proto` + the consolidated
+    `platform/proto/system/supervisor/supervisor.proto` (package
+    `system_supervisor`) + the `platform_runtime/runtime.proto` it imports (3
+    protoc steps, com's `-I` roots). Source renamed `services::supervisor::` →
+    `system_supervisor::` (TreeSnapshot/HealthBeacon/SupervisionEvent/
+    ControlReply, 9 sites) + per-message `#include`s → `supervisor.pb.h`.
+12. ✅ ConfigureTrace bug: grpc_client called `TraceStream::Configure` (no such
+    RPC). Fixed to `SupervisorView::ConfigureTrace` (control stays on
+    SupervisorView :7700; TraceStream is the EGRESS service on :7710). BUILD.bazel
+    `//platform/supervisor:proto_srcs` → `:supervisor_proto` + runtime proto.
+    Direct CMake is the canonical/working build (the cmake() Bazel wrapper was
+    never exercised — its `../../platform/...` sandbox paths are a pre-existing
+    structural gap, out of scope).
+13. ✅ LIVE: `cmake --build` green; the binary launched against live com,
+    `grpc_client[localhost]: subscribed to 127.0.0.1:7700`, com logged
+    `gRPC subscriber attached (GetTree poll)`, the Machines panel shows
+    `● localhost` connected (green), etcd panel loaded 130 keys. The remote-
+    observability path works: GUI → gRPC → com → supervisor.
+
+    NOTE — the snapshot panels (tree / processes / applications) render from the
+    Subscribe poll-stream. The event/health panels (TracePanel SupervisionEvent,
+    SystemPanel/LoadCharts HealthBeacon) stay EMPTY by design: com's Subscribe is
+    snapshot-ONLY (the pull model — the supervisor firehose has no remote egress,
+    see Phase D), so no event/health frames are emitted. The trace PANEL is the
+    egress-stream consumer → wire it to the TraceForwarder TraceStream :7710
+    (rtdb logcat already proves that path) as a follow-up; control (ConfigureTrace)
+    already works.
 
 ## Task docs — filtered
 

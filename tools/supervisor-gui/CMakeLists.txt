@@ -39,34 +39,50 @@ find_package(etcd-cpp-api REQUIRED CONFIG
 find_program(PROTOC_EXECUTABLE protoc           REQUIRED)
 find_program(GRPC_CPP_PLUGIN   grpc_cpp_plugin  REQUIRED)
 
-# Supervisor's .proto pile — wire-side message types.
-set(SUP_PROTO_DIR  ${CMAKE_CURRENT_SOURCE_DIR}/../../platform/supervisor/generated/proto)
-# services/com's bridge .proto — gRPC service surface.
+# Proto roots — mirror services/com's genrule (the GUI links the SAME wire).
+# The supervisor messages were consolidated (psp-retirement) into ONE proto,
+# package `system_supervisor`, importing the runtime proto for shared enums.
+#   supervisor_bridge.proto  → import "supervisor.proto"      (the gRPC service)
+#   supervisor.proto         → import "platform_runtime/runtime.proto"
 set(COM_PROTO_DIR  ${CMAKE_CURRENT_SOURCE_DIR}/../../services/com/proto)
+set(SUP_PROTO_DIR  ${CMAKE_CURRENT_SOURCE_DIR}/../../platform/proto/system/supervisor)
+set(RT_PROTO_ROOT  ${CMAKE_CURRENT_SOURCE_DIR}/../../platform/runtime/proto)
 set(PROTO_GEN_DIR  ${CMAKE_CURRENT_BINARY_DIR}/generated)
 file(MAKE_DIRECTORY ${PROTO_GEN_DIR})
 
-# All supervisor protos.
-file(GLOB SUP_PROTO_FILES ${SUP_PROTO_DIR}/*.proto)
-set(SUP_PROTO_GEN_SRCS)
-foreach(PROTO_FILE ${SUP_PROTO_FILES})
-    get_filename_component(PROTO_NAME ${PROTO_FILE} NAME_WE)
-    set(PB_CC ${PROTO_GEN_DIR}/${PROTO_NAME}.pb.cc)
-    set(PB_H  ${PROTO_GEN_DIR}/${PROTO_NAME}.pb.h)
-    add_custom_command(
-        OUTPUT ${PB_CC} ${PB_H}
-        COMMAND ${PROTOC_EXECUTABLE}
-                --proto_path=${SUP_PROTO_DIR}
-                --cpp_out=${PROTO_GEN_DIR}
-                ${PROTO_FILE}
-        DEPENDS ${PROTO_FILE}
-        COMMENT "protoc ${PROTO_NAME}.proto"
-        VERBATIM
-    )
-    list(APPEND SUP_PROTO_GEN_SRCS ${PB_CC})
-endforeach()
+# runtime.proto (package platform_runtime) — shared enums (LogLevelValue,
+# TraceKind). Keep its platform_runtime/ path prefix so the import resolves.
+set(RT_PB_CC ${PROTO_GEN_DIR}/platform_runtime/runtime.pb.cc)
+set(RT_PB_H  ${PROTO_GEN_DIR}/platform_runtime/runtime.pb.h)
+add_custom_command(
+    OUTPUT ${RT_PB_CC} ${RT_PB_H}
+    COMMAND ${PROTOC_EXECUTABLE}
+            --proto_path=${RT_PROTO_ROOT}
+            --cpp_out=${PROTO_GEN_DIR}
+            ${RT_PROTO_ROOT}/platform_runtime/runtime.proto
+    DEPENDS ${RT_PROTO_ROOT}/platform_runtime/runtime.proto
+    COMMENT "protoc runtime.proto"
+    VERBATIM
+)
 
-# Bridge .proto — message types + gRPC client stubs.
+# supervisor.proto (package system_supervisor) — TreeSnapshot, HealthBeacon,
+# SupervisionEvent, ControlReply, … the consolidated wire-side message types.
+set(SUP_PB_CC ${PROTO_GEN_DIR}/supervisor.pb.cc)
+set(SUP_PB_H  ${PROTO_GEN_DIR}/supervisor.pb.h)
+add_custom_command(
+    OUTPUT ${SUP_PB_CC} ${SUP_PB_H}
+    COMMAND ${PROTOC_EXECUTABLE}
+            --proto_path=${SUP_PROTO_DIR}
+            --proto_path=${RT_PROTO_ROOT}
+            --cpp_out=${PROTO_GEN_DIR}
+            ${SUP_PROTO_DIR}/supervisor.proto
+    DEPENDS ${SUP_PROTO_DIR}/supervisor.proto ${RT_PB_H}
+    COMMENT "protoc supervisor.proto"
+    VERBATIM
+)
+
+# Bridge .proto — gRPC service surface (SupervisorView + TraceStream) +
+# the services.com bridge messages. Imports supervisor.proto (system_supervisor).
 set(BRIDGE_PB_CC   ${PROTO_GEN_DIR}/supervisor_bridge.pb.cc)
 set(BRIDGE_PB_H    ${PROTO_GEN_DIR}/supervisor_bridge.pb.h)
 set(BRIDGE_GRPC_CC ${PROTO_GEN_DIR}/supervisor_bridge.grpc.pb.cc)
@@ -77,17 +93,19 @@ add_custom_command(
     COMMAND ${PROTOC_EXECUTABLE}
             --proto_path=${COM_PROTO_DIR}
             --proto_path=${SUP_PROTO_DIR}
+            --proto_path=${RT_PROTO_ROOT}
             --cpp_out=${PROTO_GEN_DIR}
             --grpc_out=${PROTO_GEN_DIR}
             --plugin=protoc-gen-grpc=${GRPC_CPP_PLUGIN}
             ${COM_PROTO_DIR}/supervisor_bridge.proto
-    DEPENDS ${COM_PROTO_DIR}/supervisor_bridge.proto
+    DEPENDS ${COM_PROTO_DIR}/supervisor_bridge.proto ${SUP_PB_H}
     COMMENT "protoc (+grpc) supervisor_bridge.proto"
     VERBATIM
 )
 
 add_library(supervisor_gui_proto OBJECT
-    ${SUP_PROTO_GEN_SRCS}
+    ${RT_PB_CC}
+    ${SUP_PB_CC}
     ${BRIDGE_PB_CC}
     ${BRIDGE_GRPC_CC}
 )

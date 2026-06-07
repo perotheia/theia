@@ -28,11 +28,14 @@ filegroup(
         ],
         allow_empty = False,
     ) + [
-        # supervisor-gui's CMakeLists pulls .protos from two sibling
-        # directories via ${CMAKE_CURRENT_SOURCE_DIR}/.. — they have
-        # to live in the sandbox too.
+        # supervisor-gui's CMakeLists protocs the SAME wire com does:
+        # supervisor_bridge.proto (services/com) + the CONSOLIDATED supervisor
+        # proto (package system_supervisor, psp-retirement) + the runtime proto
+        # it imports. They reach the sandbox via these labels (the old
+        # //platform/supervisor:proto_srcs is retired).
         "//services/com:proto_srcs",
-        "//platform/supervisor:proto_srcs",
+        "//platform/proto/system/supervisor:supervisor_proto",
+        "//platform/runtime:runtime_proto_src",
     ],
 )
 

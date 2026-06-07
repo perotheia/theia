@@ -44,23 +44,25 @@ int GrpcClient::configure_trace(const std::string& target_node,
                                 const std::string& msg_type,
                                 bool enabled) {
     // Use a fresh short-lived channel to keep the streaming thread's
-    // channel untouched. Same host:port though — both gRPC services
-    // (SupervisorView + TraceStream) live on the same com bridge.
+    // channel untouched. The trace CONTROL path (enable/disable a node's
+    // tracer) is ConfigureTrace on SupervisorView (:7700) — the SAME RPC
+    // rtdb / tdb drive. (TraceStream is the EGRESS stream on :7710, a
+    // separate service; control stays on SupervisorView.)
     auto chan = grpc::CreateChannel(host_port_,
                                     grpc::InsecureChannelCredentials());
     auto ci = std::static_pointer_cast< ::grpc::ChannelInterface>(chan);
-    auto stub = ::services::com::TraceStream::NewStub(ci);
+    auto stub = ::services::com::SupervisorView::NewStub(ci);
 
     ::services::com::TraceConfigRequest req;
     req.set_target_node(target_node);
     req.set_msg_type(msg_type);
     req.set_enabled(enabled);
 
-    ::services::supervisor::ControlReply rep;
+    ::system_supervisor::ControlReply rep;
     grpc::ClientContext ctx;
     ctx.set_deadline(std::chrono::system_clock::now() +
                      std::chrono::seconds(3));
-    auto status = stub->Configure(&ctx, req, &rep);
+    auto status = stub->ConfigureTrace(&ctx, req, &rep);
     if (!status.ok()) {
         std::fprintf(stderr,
             "grpc_client[%s]: configure_trace RPC failed: %s\n",

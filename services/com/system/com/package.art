@@ -106,6 +106,27 @@ node runnable ComGrpcProxy {
     tag = "COMG"
 }
 
+// ---- TraceForwarder (the trace EGRESS gRPC thread) ----------------------
+//
+// Phase C: a SECOND runnable in the com process that forwards the trace
+// stream over gRPC. It is SEPARATE from ComGrpcProxy on purpose — trace is
+// high-volume best-effort fan-out (vs ComGrpcProxy's sync control RPCs), and
+// it should be independently restartable. It:
+//   - binds its own SEQPACKET TIPC subscriber socket (0x8001000A),
+//   - gen_call SubscribeReq to log[trace]'s TraceCtl (0x80010014/0) with that
+//     address, so the hub fans TraceRecord casts to it (the SAME path tdb
+//     logcat / artheia.observer uses),
+//   - re-streams each record over its own gRPC TraceStream service to the
+//     GUI / rf-theia / rtdb logcat.
+//
+// reporting=false, its own TIPC address (…0A) clear of the FC range, ComDaemon
+// (…08) and ComGrpcProxy (…09). do_* bodies in impl/TraceForwarder_handlers.cc.
+node runnable TraceForwarder {
+    tipc type=0x8001000A instance=0
+    reporting = false
+    tag = "TRCF"
+}
+
 // ---- Probe (test agent) -------------------------------------------------
 //
 // A SECOND node in the com process whose job is to impersonate ANY

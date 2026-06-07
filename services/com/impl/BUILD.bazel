@@ -84,11 +84,41 @@ cc_library(
     ],
 )
 
+# Phase C — trace_link is a SEPARATE cc_library, isolated from com_bridge_grpc
+# on the same rationale as sup_link: it includes the NANOPB log headers
+# (log_codecs.hh → nanopb log.pb.h, C structs) for the SubscribeReq gen_call,
+# while com_impl's gRPC edge needs the LIBPROTOBUF TraceRecord. Keeping the
+# nanopb side in its own target means only the nanopb include dir is on its
+# command line. TraceForwarder_handlers.cc sees only trace_link.hpp's
+# primitive surface (a raw-bytes sink — no proto type crosses it), then
+# ParseFromString's the bytes into the libprotobuf services.com.TraceRecord.
+cc_library(
+    name = "trace_link",
+    srcs = ["trace_link.cc"],
+    hdrs = ["trace_link.hpp"],
+    includes = [".."],
+    copts = [
+        "-std=c++17",
+        "-Wall",
+        "-Wextra",
+        "-fPIC",
+    ],
+    deps = [
+        # NodeRef/TipcMux/RemoteRef + RemoteCodec (hash_msg_type_). NO
+        # com_bridge_grpc — keeps the libprotobuf TraceRecord off this TU.
+        "//platform/runtime:runtime",
+        # nanopb SubscribeReq/TraceEmpty structs (system/services/log/log.pb.h)
+        # + log_codecs.hh (RemoteCodec specializations), via log_lib.
+        "//services/log/lib:log_lib",
+    ],
+)
+
 cc_library(
     name = "com_impl",
     srcs = [
         "ComDaemon_handlers.cc",
         "ComGrpcProxy_handlers.cc",
+        "TraceForwarder_handlers.cc",
         # ProbeDaemon_handlers.cc parked (services/com/backup/, see .art BACKUP).
     ],
     # `..` so ComGrpcProxy_handlers.cc resolves `#include "lib/ComGrpcProxy.hh"`
@@ -103,12 +133,16 @@ cc_library(
     deps = [
         "//services/com/lib:com_lib",
         # grpc++ + supervisor_bridge.{pb,grpc.pb} + supervisor message types
-        # (libprotobuf — the gRPC edge codec).
+        # (libprotobuf — the gRPC edge codec). Also carries the TraceStream
+        # service + TraceRecord that TraceForwarder_handlers.cc serves.
         "//services/com:com_bridge_grpc",
         # #418 — the standard-transport control link (nanopb, isolated above).
         # ComGrpcProxy_handlers.cc only sees sup_link.hpp's primitive surface.
         # Subscribe's live-tree stream is a GetTree POLL via SupLink::get_tree()
         # (the supervisor's in-process event firehose has no remote egress).
         ":sup_link",
+        # Phase C — the trace egress link (nanopb, isolated above).
+        # TraceForwarder_handlers.cc only sees trace_link.hpp's raw-bytes sink.
+        ":trace_link",
     ],
 )

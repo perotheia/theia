@@ -2,11 +2,11 @@
 // control surface (#418).
 //
 // This replaces the control half of TipcUplink::send_control_request. The
-// supervisor's control node is a gen_server bound on TipcMux at the DISTINCT
-// control address (TIPC type 0x80020003, instance 0 — NOT the publisher's
-// 0x80020001, which still carries the event/health/snapshot firehose that
-// TipcUplink's reader keeps consuming). com drives the control surface with a
-// RemoteRef<…,0x80020003,0> + a dedicated reply-pump TipcMux, both owned here.
+// supervisor's control node (gen-app SupervisorCtl) is a gen_server bound on
+// TipcMux at TIPC type 0x80020001, instance 0 — the current supervisor UNIFIED
+// control + the event/health/snapshot firehose on this one address (the old
+// split-out 0x80020003 control node is gone). com drives the control surface
+// with a RemoteRef<…,0x80020001,0> + a dedicated reply-pump TipcMux, both here.
 //
 // The gRPC edge (ComGrpcProxy_handlers.cc) builds a NANOPB
 // services_supervisor_ControlRequest from the inbound gRPC call, hands it to
@@ -72,7 +72,7 @@ class SupLink {
 public:
     static SupLink& instance();
 
-    // Connect the RemoteRef (TIPC type 0x80020003/0) and start the reply
+    // Connect the RemoteRef (TIPC type 0x80020001/0) and start the reply
     // pump. Returns false if the supervisor isn't reachable. Idempotent.
     bool start(int connect_timeout_ms = 3000);
 

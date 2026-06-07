@@ -425,11 +425,12 @@ _PlatformAppOverlay = ApplicationManifest(
 _ComputeApp = ApplicationManifest(
     name="compute_app",
     host_machine=ComputeHost.name,
-    # Compute hosts only the demo per-process binaries. Platform
-    # fabric (supervisor / gateway) lives in _PlatformAppOverlay
-    # above; FCs (incl. shwa) live in ServicesSoftware → platform_app, with
-    # a PTM entry pinning shwa to compute (see _PTM_ENTRIES).
-    components=list(DEMO_BINARIES),
+    # Compute hosts the demo per-process binaries PLUS the platform fabric
+    # (supervisor) — every machine runs its own supervisor, so the supervisor
+    # binary must be in EACH machine's bundle (it's per-machine fabric, not
+    # central-only). FCs (incl. shwa) come via ServicesSoftware with a PTM entry
+    # pinning shwa to compute (see _PTM_ENTRIES).
+    components=list(DEMO_BINARIES) + list(_PLATFORM_FABRIC_COMPONENTS),
 )
 
 DemoSpecLayer = SoftwareSpecification(

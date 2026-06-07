@@ -39,15 +39,28 @@ def _arch(machine_json: str) -> str:
     return {"x86_64": "amd64", "aarch64": "arm64"}.get(cpu, cpu)
 
 
-def _wanted(app_json: str) -> dict[str, str]:
-    """name → /opt/theia/bin/<name> for every buildable component on this host."""
+def _target_pkg_path(bazel_target: str) -> str:
+    """`//demo/Demo3WayP1/main:demo` → `demo/Demo3WayP1/main/demo` — the path
+    segment that uniquely identifies the binary (so the demo p1/p2/p3, which are
+    ALL named `demo`, are distinguished by package, not basename)."""
+    label = bazel_target.lstrip("/")
+    pkg, _, name = label.partition(":")
+    return f"{pkg}/{name}" if name else pkg
+
+
+def _wanted(app_json: str) -> dict[str, tuple[str, str]]:
+    """component name → (/opt/theia/bin/<name>, target_pkg_path) for every
+    buildable component on this host."""
     with open(app_json) as f:
         doc = json.load(f)
-    out: dict[str, str] = {}
+    out: dict[str, tuple[str, str]] = {}
     for app in doc.get("applications", []):
         for c in app.get("components", []):
             if c.get("bazel_buildable"):
-                out[c["name"]] = "/opt/theia/bin/" + c["name"]
+                out[c["name"]] = (
+                    "/opt/theia/bin/" + c["name"],
+                    _target_pkg_path(c["bazel_target"]),
+                )
     return out
 
 
@@ -65,13 +78,19 @@ def main(argv: list[str]) -> int:
                          "(e.g. libetcd-cpp-api.so for per)")
     args = ap.parse_args(argv)
 
-    wanted = _wanted(args.app)           # name → dest
+    wanted = _wanted(args.app)           # name → (dest, target_pkg_path)
     arch = _arch(args.machine)
 
-    # Match each candidate binary's basename to a wanted component name. A
-    # candidate not wanted by this host is simply skipped (over-declared dep).
-    by_name = {os.path.basename(p): p for p in args.bin}
-    missing = [n for n in wanted if n not in by_name]
+    # Match each wanted component to a candidate binary by the target's package
+    # path (a suffix of the binary's bazel-out path) — NOT basename, because the
+    # demo p1/p2/p3 binaries are all named `demo`. A candidate not wanted by
+    # this host is simply skipped (over-declared dep). name → resolved src path.
+    resolved: dict[str, str] = {}
+    for name, (_dest, pkg_path) in wanted.items():
+        hit = next((p for p in args.bin if p.endswith("/" + pkg_path)), None)
+        if hit:
+            resolved[name] = hit
+    missing = [n for n in wanted if n not in resolved]
     if missing:
         sys.stderr.write(
             f"pack_ipk: {args.package}: components in application.json have no "
@@ -86,10 +105,11 @@ def main(argv: list[str]) -> int:
 
         # data tree: copy each wanted binary to its dest, mode 0755 (executable;
         # bazel-out is read-only 0555).
-        for name, dest in sorted(wanted.items()):
-            dst = data + dest          # dest is absolute → data/opt/theia/bin/<name>
+        for name in sorted(wanted):
+            dest = wanted[name][0]     # /opt/theia/bin/<name>
+            dst = data + dest          # → data/opt/theia/bin/<name>
             os.makedirs(os.path.dirname(dst), exist_ok=True)
-            with open(by_name[name], "rb") as r, open(dst, "wb") as w:
+            with open(resolved[name], "rb") as r, open(dst, "wb") as w:
                 w.write(r.read())
             os.chmod(dst, 0o755)
 

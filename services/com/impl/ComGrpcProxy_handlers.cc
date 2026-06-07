@@ -217,6 +217,39 @@ public:
         return grpc::Status::OK;
     }
 
+    // Host facts read-back — backs `rtdb supervisor` / `info`. The supervisor
+    // serves SystemInfo over TIPC; we get the raw bytes from SupLink and
+    // unpack into the caller's libprotobuf SystemInfo.
+    grpc::Status GetSystemInfo(
+            grpc::ServerContext*,
+            const services::com::GetSystemInfoCall*,
+            system_supervisor::SystemInfo* out) override {
+        services_com::SupReply r;
+        if (!services_com::SupLink::instance().get_system_info(r))
+            return unavailable();
+        if (!r.system_info.empty() && !out->ParseFromString(r.system_info)) {
+            return grpc::Status(grpc::StatusCode::INTERNAL,
+                                "malformed SystemInfo from supervisor");
+        }
+        return grpc::Status::OK;
+    }
+
+    // Per-child log-level read-back — backs `rtdb loglevel` (no level arg).
+    grpc::Status GetLogLevelConfig(
+            grpc::ServerContext*,
+            const services::com::GetLogLevelConfigCall*,
+            system_supervisor::LogLevelConfigList* out) override {
+        services_com::SupReply r;
+        if (!services_com::SupLink::instance().get_log_level_config(r))
+            return unavailable();
+        if (!r.log_level_list.empty() &&
+            !out->ParseFromString(r.log_level_list)) {
+            return grpc::Status(grpc::StatusCode::INTERNAL,
+                                "malformed LogLevelConfigList from supervisor");
+        }
+        return grpc::Status::OK;
+    }
+
 private:
     static grpc::Status unavailable() {
         return grpc::Status(grpc::StatusCode::UNAVAILABLE,

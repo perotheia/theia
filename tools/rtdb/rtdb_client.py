@@ -1,0 +1,207 @@
+#!/usr/bin/env python3
+"""rtdb_client — gRPC-backed clients with the SAME method surface tdb_client's
+TIPC-backed ones expose, so rtdb reuses tdb's shared command + render layer
+(tools/tdb/tdb_commands) verbatim.
+
+SupervisorClient drives services/com's SupervisorView gRPC (the "tdb over gRPC"
+proxy): control RPCs + the GetTree-poll live tree (Subscribe). Its methods
+return the protobuf reply objects directly — tdb_commands._g reads fields off a
+dict OR a protobuf message via getattr, so no dict conversion is needed.
+
+TraceClient drives the collector's TraceStream gRPC (logcat). It wraps each
+gRPC TraceRecord in a small adapter exposing the same attrs tdb's
+artheia.observer records do (src/kind/msg_type/corr_id/ts_ns/content/to_dict),
+so the shared cmd_logcat renders identically.
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+from typing import Any, Iterator
+
+import grpc
+
+# The grpc_tools-generated stubs use flat-style imports (import Foo_pb2), so
+# their dir must be on sys.path before we import them. Regenerate with
+# tools/rtdb/gen_protos.sh.
+_GEN = Path(__file__).resolve().parent / "_gen"
+sys.path.insert(0, str(_GEN))
+
+import supervisor_bridge_pb2 as _br          # noqa: E402
+import supervisor_bridge_pb2_grpc as _brg    # noqa: E402
+import supervisor_pb2 as _sup                # noqa: E402,F401
+
+# TraceStream is optional (the trace EGRESS gRPC; moves into com later).
+try:
+    import trace_stream_pb2 as _ts           # noqa: E402
+    import trace_stream_pb2_grpc as _tsg      # noqa: E402
+    _HAVE_TRACE = True
+except ImportError:                          # pragma: no cover
+    _HAVE_TRACE = False
+
+_DEFAULT_TARGET = "127.0.0.1:7700"
+# The collector's TraceStream gRPC endpoint (services/log egress-direct; moves
+# into com's TraceForwarder later). Distinct from the SupervisorView :7700.
+_DEFAULT_COLLECTOR = "127.0.0.1:7710"
+
+_LEVELS = {"trace": 0, "debug": 1, "info": 2, "warn": 3, "error": 4}
+_KIND_NAMES = {0: "OTHER", 1: "CAST_OUT", 2: "CAST_IN",
+               3: "CALL_OUT", 4: "CALL_IN", 5: "STATEM"}
+
+
+class SupervisorClient:
+    """gRPC mirror of tdb_client.SupervisorClient. Drop-in for the shared
+    cmd_* functions: same method names, same kwargs, returns protobuf replies
+    (read via tdb_commands._g)."""
+
+    def __init__(self, target: str = _DEFAULT_TARGET) -> None:
+        self._target = target
+        self._channel = grpc.insecure_channel(target)
+        self._stub = _brg.SupervisorViewStub(self._channel)
+
+    # tdb_client parity: from_workspace(repo, instance). rtdb is transport-only
+    # (no workspace .art), so repo is ignored; instance has no meaning over a
+    # single com endpoint (one com per machine) — accepted + ignored.
+    @classmethod
+    def from_workspace(cls, repo: Any = None, instance: int = 0,
+                       target: str = _DEFAULT_TARGET) -> "SupervisorClient":
+        return cls(target)
+
+    # ---- live tree --------------------------------------------------------
+    def get_tree(self, timeout: float = 2.0) -> Any:
+        """One TreeSnapshot. com has no unary GetTree rpc — the live tree is the
+        Subscribe poll-stream (the supervisor's event firehose has no remote
+        egress). Pull a single snapshot and return it (cmd_ps reads .children).
+        cmd_ps --follow just calls this on an interval, same as tdb."""
+        stream = self._stub.Subscribe(_br.SubscribeRequest(), timeout=timeout)
+        try:
+            for obs in stream:
+                if obs.WhichOneof("kind") == "snapshot":
+                    return obs.snapshot
+        except grpc.RpcError:
+            pass
+        finally:
+            stream.cancel()
+        return _sup.TreeSnapshot()        # empty → cmd_ps prints "(empty tree)"
+
+    # ---- host facts -------------------------------------------------------
+    def get_system_info(self, timeout: float = 2.0) -> Any:
+        return self._stub.GetSystemInfo(_br.GetSystemInfoCall(), timeout=timeout)
+
+    # ---- trace ------------------------------------------------------------
+    def configure_trace(self, *, target_node: str, msg_type: str = "",
+                        enabled: bool, kind: int = 0,
+                        timeout: float = 2.0) -> Any:
+        return self._stub.ConfigureTrace(
+            _br.TraceConfigRequest(target_node=target_node, msg_type=msg_type,
+                                   enabled=enabled, kind=kind),
+            timeout=timeout)
+
+    def get_trace_config(self, timeout: float = 2.0) -> Any:
+        return self._stub.GetTraceConfig(_br.GetTraceConfigCall(), timeout=timeout)
+
+    # ---- log level --------------------------------------------------------
+    def configure_log_level(self, *, target_node: str, level: str,
+                            timeout: float = 2.0) -> Any:
+        # com's LogLevelCall carries the level by NAME (the gRPC edge maps it to
+        # the LogLevelValue ordinal in sup_link). Pass the name straight through.
+        return self._stub.ConfigureLogLevel(
+            _br.LogLevelCall(target_node=target_node, level=level.lower()),
+            timeout=timeout)
+
+    def get_log_level_config(self, timeout: float = 2.0) -> Any:
+        return self._stub.GetLogLevelConfig(_br.GetLogLevelConfigCall(),
+                                            timeout=timeout)
+
+    # ---- child lifecycle --------------------------------------------------
+    def restart_child(self, name: str, timeout: float = 2.0) -> Any:
+        return self._stub.RestartChild(
+            _sup.ChildSelector(name=name, no_restart=False), timeout=timeout)
+
+    def terminate_hold(self, name: str, timeout: float = 2.0) -> Any:
+        return self._stub.TerminateChild(
+            _sup.ChildSelector(name=name, no_restart=True), timeout=timeout)
+
+    def stop(self) -> None:
+        self._channel.close()
+
+
+# ---------------------------------------------------------------------------
+# trace (logcat) — gRPC TraceStream, adapted to tdb's record shape
+# ---------------------------------------------------------------------------
+
+class _RecordView:
+    """Wraps a gRPC TraceRecord so the shared cmd_logcat sees the SAME attrs
+    artheia.observer records expose. content is the decoded inner message dict
+    when a decoder is available, else None (cmd_logcat prints raw header only)."""
+
+    def __init__(self, rec, content=None) -> None:
+        self.ts_ns    = rec.ts_ns
+        self.src      = rec.node_name        # tdb names this `src`
+        self.dst      = rec.dst
+        self.msg_type = rec.msg_type
+        self.corr_id  = rec.corr_id
+        self.kind     = _KIND_NAMES.get(rec.kind, str(rec.kind))
+        self.payload  = rec.payload
+        self.content  = content
+
+    def to_dict(self, ts: str = "") -> dict:
+        d = {
+            "ts": ts,
+            "ts_ns": self.ts_ns,
+            "src": self.src,
+            "dst": self.dst,
+            "kind": self.kind,
+            "msg_type": self.msg_type,
+            "corr_id": self.corr_id,
+        }
+        if self.content is not None:
+            d["content"] = self.content
+        else:
+            d["payload_len"] = len(self.payload)
+        return d
+
+
+class TraceClient:
+    """gRPC TraceStream subscriber, yielding _RecordView (tdb record shape).
+
+    Optional payload decode via rf_theia's libtrace_decoder.so (same FFI tdb's
+    observer uses); falls back to raw (content=None) when unavailable."""
+
+    def __init__(self, target: str = _DEFAULT_COLLECTOR, *, kind: int = 0,
+                 node: str = "", decode: bool = True) -> None:
+        if not _HAVE_TRACE:
+            raise RuntimeError(
+                "rtdb logcat needs trace_stream stubs — run "
+                "tools/rtdb/gen_protos.sh (services/log/proto/trace_stream.proto "
+                "must exist)")
+        self._channel = grpc.insecure_channel(target)
+        self._stub = _tsg.TraceStreamStub(self._channel)
+        self._kind = kind
+        self._node = node
+        self._decoder = None
+        if decode:
+            try:
+                from rf_theia.adapters.trace_decoder import open_default
+                self._decoder = open_default()
+            except Exception:
+                self._decoder = None       # raw fallback
+
+    @classmethod
+    def from_workspace(cls, repo: Any = None,
+                       target: str = _DEFAULT_COLLECTOR) -> "TraceClient":
+        return cls(target)
+
+    def records(self, timeout: float = 5.0) -> Iterator[_RecordView]:
+        req = _ts.TraceSubscribeRequest(kind=self._kind, target_node=self._node)
+        for rec in self._stub.Subscribe(req, timeout=timeout):
+            content = None
+            if self._decoder is not None and rec.payload:
+                try:
+                    content = self._decoder.decode(rec.msg_type, rec.payload)
+                except Exception:
+                    content = None
+            yield _RecordView(rec, content)
+
+    def stop(self) -> None:
+        self._channel.close()

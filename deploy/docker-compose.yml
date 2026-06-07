@@ -126,4 +126,9 @@ services:
       # Avoid a :7700 collision with central's com bridge on the shared host
       # network (com is currently hidden from the build; harmless either way).
       - THEIA_COM_LISTEN=0.0.0.0:7701
+      # compute's supervisor binds TIPC instance 1 (central's is 0) so the two
+      # don't collide on the shared host TIPC namespace. `tdb -i 1` targets it.
+      # (The .art ComputeSupervisor prototype models this; the env is how the
+      # same binary picks its instance per machine until executor.json carries it.)
+      - THEIA_SUPERVISOR_INSTANCE=1
     restart: unless-stopped

@@ -57,6 +57,24 @@ both distinct.
 - CentralSoftware/ComputeSoftware partition shwa correctly; DemoSoftware (squash)
   does not. ← (0)
 
-## Status
-Planned, 4 steps + prereq. Build 0 → a → b → c → d, testing each. End goal:
-`tdb -i 0,1 ps` renders both machines' trees distinctly with both containers up.
+## Status — DONE 2026-06-07 (steps 0, a, b, d; c via env)
+
+`tdb -i 0,1 ps` renders BOTH machines' trees distinctly with both containers up:
+  -i 0 (central) → sm/log/per/ucm + p1/p2
+  -i 1 (compute) → shwa + p3
+TIPC nametable shows 0x80020001 at instance 0 AND 1 (no collision); both
+containers RestartCount=0.
+
+- Step 0 ✓ shwa→compute (DemoSoftware from partitioned per-machine apps).
+- Step a ✓ ComputeSupervisor .art prototype at tipc instance=1.
+- Step b ✓ supervisor main.cc reads THEIA_SUPERVISOR_INSTANCE (default kTipcInstance);
+  binds ctl/worker at that instance.
+- Step d ✓ tdb -i/--instance: SupervisorClient targets an instance-overridden
+  SupervisorCtl ref; `-i 0,1` runs the command per instance with a header.
+- Step c (PARTIAL — env, not the artheia field): compute's instance is set by
+  THEIA_SUPERVISOR_INSTANCE=1 in docker-compose, NOT yet by a
+  SoftwareSpecification.executor field flowing through execution.json. The
+  proper modeling (ARA Executor concept: supervisor implements Executor; the
+  per-machine executor carries its instance into execution.json so run-supervisor
+  reads it from the manifest, not a hardcoded compose env) is the remaining
+  follow-up. Works today via the env.

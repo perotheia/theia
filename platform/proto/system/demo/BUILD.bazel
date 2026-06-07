@@ -27,3 +27,33 @@ genrule(
 filegroup(name = "demo_pb_c", srcs = ["demo.pb.c"])
 filegroup(name = "demo_pb_h", srcs = ["demo.pb.h"])
 filegroup(name = "demo_proto", srcs = ["demo.proto"])
+
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+# libprotobuf (C++ reflection) bindings — distinct from the nanopb demo_pb
+# above. Needed by libtrace_decoder, which decodes a record's payload via
+# google::protobuf reflection. Same `cpp/` out-dir pattern as sm_pb_cpp so
+# callers `#include "demo.pb.h"`.
+genrule(
+    name = "demo_pb_cpp_gen",
+    srcs = ["demo.proto"],
+    outs = [
+        "cpp/demo.pb.cc",
+        "cpp/demo.pb.h",
+    ],
+    cmd = "set -e;"
+        + " in_dir=$$(dirname $(location demo.proto));"
+        + " out_dir=$$(dirname $$(dirname $(location cpp/demo.pb.cc)));"
+        + " mkdir -p $$out_dir/cpp;"
+        + " protoc -I $$in_dir --cpp_out=$$out_dir/cpp demo.proto;",
+    local = True,
+)
+
+cc_library(
+    name = "demo_pb_cpp",
+    srcs = ["cpp/demo.pb.cc"],
+    hdrs = ["cpp/demo.pb.h"],
+    includes = ["cpp"],
+    deps = ["//third_party:system_protobuf"],
+    visibility = ["//visibility:public"],
+)

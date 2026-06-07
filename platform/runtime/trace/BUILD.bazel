@@ -49,6 +49,9 @@ cc_library(
     deps = [
         ":trace_decoder",
         "//platform/proto/system/services/sm:sm_pb_cpp",
+        # demo message set (Inc/Get/GetReply) — the records the GUI/rtdb show
+        # against the running demo, so the decoder can render them too.
+        "//platform/proto/system/demo:demo_pb_cpp",
     ],
     alwayslink = True,
 )

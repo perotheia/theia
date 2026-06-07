@@ -122,6 +122,7 @@ add_executable(supervisor-gui
     src/main_frame.cpp
     src/grpc_client.cpp
     src/machines.cpp
+    src/trace_decoder_lib.cpp
     src/panels/system_panel.cpp
     src/panels/load_charts_panel.cpp
     src/panels/applications_panel.cpp
@@ -157,6 +158,8 @@ target_link_libraries(supervisor-gui PRIVATE
     # link dependencies via INTERFACE_LINK_LIBRARIES.
     etcd-cpp-api
     pthread
+    # dlopen/dlsym for libtrace_decoder_ctypes.so (trace_decoder_lib.cpp).
+    ${CMAKE_DL_LIBS}
 )
 
 install(TARGETS supervisor-gui RUNTIME DESTINATION bin)

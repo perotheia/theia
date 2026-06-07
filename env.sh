@@ -61,7 +61,7 @@ if [ -n "${ZSH_VERSION:-}" ]; then
     _tdb_complete() { compadd ps supervisor info trace trace-config loglevel restart terminate logcat get-snapshot help quit }
     compdef _tdb_complete tdb
     # rtdb = the same verbs over gRPC (no get-snapshot — TIPC/per-only).
-    _rtdb_complete() { compadd ps supervisor info trace trace-config loglevel restart terminate logcat help quit }
+    _rtdb_complete() { compadd ps supervisor info trace trace-config loglevel restart terminate logcat schemas snapshot help quit }
     compdef _rtdb_complete rtdb
 elif [ -n "${BASH_VERSION:-}" ]; then
     # bash fallback (you're on zsh per the project default, but keep this
@@ -69,7 +69,7 @@ elif [ -n "${BASH_VERSION:-}" ]; then
     eval "$(_ARTHEIA_COMPLETE=bash_source artheia)"
     complete -W "rig provision orchestrate dist install compdb" theia
     complete -W "ps supervisor info trace trace-config loglevel restart terminate logcat get-snapshot help quit" tdb
-    complete -W "ps supervisor info trace trace-config loglevel restart terminate logcat help quit" rtdb
+    complete -W "ps supervisor info trace trace-config loglevel restart terminate logcat schemas snapshot help quit" rtdb
 fi
 
 echo "theia env ready: .venv active; theia + tdb linked; completion for artheia + theia + tdb"

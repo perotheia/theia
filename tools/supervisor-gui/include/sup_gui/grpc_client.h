@@ -18,6 +18,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace sup_gui {
 
@@ -60,6 +61,17 @@ public:
     int configure_trace(const std::string& target_node,
                          const std::string& msg_type,
                          bool enabled);
+
+    // ---- Persistency (services/per) proxy — PerView on the SAME :7700 -----
+    // One (config_type, digest) schema-registry row.
+    struct SchemaRow { std::string config_type; std::string digest; };
+    // ListSchemas(config_type="" → all). Returns the registry rows (empty on
+    // RPC failure — check ok). Synchronous, from the wx main thread.
+    std::vector<SchemaRow> list_schemas(const std::string& config_type,
+                                        bool* ok = nullptr);
+    // Snapshot(label) — trigger a per config backup. Returns per's status
+    // (0 = OK) + fills msg with per's reply message; negative on RPC failure.
+    int snapshot(const std::string& label, std::string* msg = nullptr);
 
 private:
     void run();          // SupervisorView Subscribe (:7700) + GetSystemInfo

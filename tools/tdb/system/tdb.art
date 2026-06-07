@@ -39,7 +39,7 @@ extern node atomic SupervisorCtl { }
 // log[trace]'s subscribe control node (tipc 0x80010014) — system.services.log.
 extern node atomic TraceCtl { }
 
-// per's config-gatekeeper nodes — system.services.per. PerManager (0x80010008)
+// per's config-gatekeeper nodes — system.services.per. PerManager (0x80010016)
 // for Snapshot/schema/migrate; PerClient (0x80010007) for Get/Put/Watch config.
 extern node atomic PerManager { }
 extern node atomic PerClient { }

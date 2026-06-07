@@ -245,3 +245,47 @@ service TraceStream {
     // Clients open one per machine and read until they close the stream.
     rpc Subscribe(TraceSubscribeRequest) returns (stream TraceRecord);
 }
+
+
+// ---- Persistency (services/per) proxy — served by ComGrpcProxy -----------
+//
+// com proxies services/per's MANAGER surface (the ops/tooling API on
+// PerManager, TIPC 0x80010008) over gRPC so the GUI/rtdb can inspect the
+// config store from outside the DMZ — WITHOUT a second etcd client (per is the
+// sole etcd client; the GUI's direct etcd_panel is the raw mirror, this is the
+// typed per view). ComDaemon's `to_per` PersistencyIf client reaches per; a
+// PerLink (mirror of SupLink) RemoteRef-calls PerManager. Read/ops only:
+// ListSchemas (the schema registry) + Snapshot (trigger a config backup). The
+// config hot path (Get/Put/Watch) stays node↔per — it needs schema-aware
+// decode the GUI can't do generically.
+//
+// These mirror system_services_per.{SchemaInfo,SchemaList,...} field-for-field
+// (the bridge can't import per's proto package; PerLink re-encodes between the
+// nanopb per structs and these libprotobuf messages).
+message PerSchemaInfo {
+    string config_type = 1;
+    string digest      = 2;
+}
+message PerSchemaList {
+    repeated PerSchemaInfo schemas = 1;
+}
+message ListSchemasCall {
+    string config_type = 1;   // "" = all schemas
+}
+message SnapshotCall {
+    string label = 1;         // tags the .persnap backup
+}
+message PerReply {
+    uint32 status  = 1;       // 0 = OK
+    string message = 2;
+    uint64 mod_rev = 3;
+}
+
+service PerView {
+    // The schema registry — every (config_type, digest) per knows. Backs a
+    // GUI "Persistency" panel + an `rtdb schemas` verb.
+    rpc ListSchemas (ListSchemasCall) returns (PerSchemaList);
+    // Trigger an operational snapshot of per's /theia/config/ keyspace to a
+    // <snapshot_dir>/<label>.persnap backup file. Returns per's PerReply.
+    rpc Snapshot (SnapshotCall) returns (PerReply);
+}

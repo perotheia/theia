@@ -122,6 +122,28 @@ class SupervisorClient:
         self._channel.close()
 
 
+class PerClient:
+    """gRPC client for com's PerView service — proxies services/per's manager
+    ops (ListSchemas / Snapshot) the SAME way the GUI's Persistency panel does.
+    On the SAME :7700 endpoint as SupervisorView."""
+
+    def __init__(self, target: str = _DEFAULT_TARGET) -> None:
+        self._channel = grpc.insecure_channel(target)
+        self._stub = _brg.PerViewStub(self._channel)
+
+    def list_schemas(self, config_type: str = "", timeout: float = 3.0):
+        rep = self._stub.ListSchemas(
+            _br.ListSchemasCall(config_type=config_type), timeout=timeout)
+        return [(s.config_type, s.digest) for s in rep.schemas]
+
+    def snapshot(self, label: str, timeout: float = 5.0):
+        rep = self._stub.Snapshot(_br.SnapshotCall(label=label), timeout=timeout)
+        return rep.status, rep.message, rep.mod_rev
+
+    def stop(self) -> None:
+        self._channel.close()
+
+
 # ---------------------------------------------------------------------------
 # trace (logcat) — gRPC TraceStream, adapted to tdb's record shape
 # ---------------------------------------------------------------------------

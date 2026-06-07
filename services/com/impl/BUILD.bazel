@@ -113,6 +113,30 @@ cc_library(
     ],
 )
 
+# per (persistency) proxy link — isolated nanopb TU like sup_link/trace_link.
+# Includes the NANOPB per headers (per_codecs.hh → per.pb.h, C structs) for the
+# ListSchemas/Snapshot RemoteRef-calls to PerManager (0x80010016); com_impl's
+# gRPC edge sees only per_link.hpp's primitive PerSchema/PerOpReply surface.
+cc_library(
+    name = "per_link",
+    srcs = ["per_link.cc"],
+    hdrs = ["per_link.hpp"],
+    includes = [".."],
+    copts = [
+        "-std=c++17",
+        "-Wall",
+        "-Wextra",
+        "-fPIC",
+    ],
+    deps = [
+        # NodeRef/TipcMux/RemoteRef. NO com_bridge_grpc on this nanopb TU.
+        "//platform/runtime:runtime",
+        # nanopb per structs (system/services/per/per.pb.h) + per_codecs.hh
+        # (RemoteCodec specializations), via per_lib.
+        "//services/per/lib:per_lib",
+    ],
+)
+
 cc_library(
     name = "com_impl",
     srcs = [
@@ -144,5 +168,9 @@ cc_library(
         # Phase C — the trace egress link (nanopb, isolated above).
         # TraceForwarder_handlers.cc only sees trace_link.hpp's raw-bytes sink.
         ":trace_link",
+        # per (persistency) proxy link (nanopb, isolated above).
+        # ComGrpcProxy_handlers.cc's PerView only sees per_link.hpp's
+        # primitive PerSchema/PerOpReply surface.
+        ":per_link",
     ],
 )

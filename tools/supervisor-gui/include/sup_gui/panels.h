@@ -263,6 +263,32 @@ private:
     std::unique_ptr<EtcdPanelImpl> impl_;
 };
 
+// "Persistency" — services/per's TYPED view, proxied through com's PerView
+// gRPC (distinct from the raw etcd Table Viewer): the schema registry
+// (ListSchemas) + a Snapshot button (trigger a config backup). Does NOT
+// inherit PanelBase — it's request/response (not driven by the Subscribe
+// frame stream). main_frame wires its two callbacks to the focused machine's
+// GrpcClient (list_schemas / snapshot), like the ConfigureTrace callback.
+class PersistencyPanelImpl;
+class PersistencyPanel : public wxPanel {
+public:
+    explicit PersistencyPanel(wxWindow* parent);
+    ~PersistencyPanel() override;
+
+    // (config_type="" → all) → rows + ok flag. Set by main_frame.
+    struct Schema { std::string config_type; std::string digest; };
+    using ListSchemasCallback =
+        std::function<std::vector<Schema>(const std::string& config_type,
+                                          bool* ok)>;
+    // (label) → (status, message). Set by main_frame.
+    using SnapshotCallback =
+        std::function<int(const std::string& label, std::string* msg)>;
+    void set_callbacks(ListSchemasCallback ls, SnapshotCallback snap);
+
+private:
+    std::unique_ptr<PersistencyPanelImpl> impl_;
+};
+
 // "Trace" — Wireshark-style: virtual list of live trace records on top
 // (TIME | MACHINE | KIND | SRC | DST | MSG TYPE), lazy tree-decode of the
 // selected row below (Header / Subject / Raw payload). Driven by the

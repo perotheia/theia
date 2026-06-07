@@ -25,6 +25,7 @@ class LoadChartsPanel;
 class ApplicationsPanel;
 class ProcessesPanel;
 class EtcdPanel;
+class PersistencyPanel;
 class TracePanel;
 class MachinesPanel;
 
@@ -44,6 +45,10 @@ private:
     void on_menu(wxCommandEvent& evt);
     void on_machine_focus(wxCommandEvent& evt);
 
+    // The GrpcClient for the focused machine (falls back to the first one).
+    // nullptr only when no machines are configured.
+    GrpcClient* client_for_focus();
+
     void post_frame_from_thread(const std::string& machine_name,
                                  uint16_t tag,
                                  std::string payload);
@@ -55,6 +60,7 @@ private:
     ApplicationsPanel*       applications_{nullptr};
     ProcessesPanel*          processes_{nullptr};
     EtcdPanel*               etcd_panel_{nullptr};
+    PersistencyPanel*        persistency_{nullptr};
     TracePanel*              trace_{nullptr};
 
     std::vector<std::unique_ptr<GrpcClient>> clients_;

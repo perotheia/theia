@@ -104,12 +104,22 @@ missing call, fix the proto package, then unhide + rebuild the GUI.
 4. Build `//services/com/main:com` standalone (still hidden from the cluster).
    Iterate until it builds clean.
 
-### Phase B — com live test against the running supervisor
+### Phase B — com live test against the running supervisor  ✅ DONE
 5. Run com against central's supervisor (instance 0). Verify via a gRPC probe
    (grpcurl or a tiny client): Subscribe yields snapshots (firehose reassembles),
    RestartChild/ConfigureTrace forward to the supervisor and return ControlReply.
    This is the "com == tdb over gRPC" equivalence check: `tdb ps` and a gRPC
    Subscribe must show the SAME tree.
+
+   **RESULT (host install/ tree, supervisor instance 0):**
+   - Control path GREEN: `ConfigureLogLevel(sm→debug)` over gRPC →
+     `status=0 "log level applied"`. (Phase A control wire re-aligned to the
+     current per-op typed SupervisorCtl surface.)
+   - Subscribe GREEN via the **GetTree POLL** (see Phase D below) — NOT the
+     supervisor event firehose. A gRPC `Subscribe` streamed full `TreeSnapshot`
+     observations (36 children, every FC + the supervision tree) on a 1s
+     interval, identical to `tdb ps`. The "com == tdb over gRPC" equivalence
+     holds: same tree, same source call (GetTree).
 6. The instance question: com targets instance 0 today. For compute (instance 1),
    com needs the same THEIA_SUPERVISOR_INSTANCE awareness as run-supervisor.sh
    (or one com per machine, like one supervisor per machine). Decide: one com per
@@ -133,12 +143,30 @@ missing call, fix the proto package, then unhide + rebuild the GUI.
    the others). Verify log still builds + traces still flow to tdb (unchanged —
    the TIPC hub is untouched).
 
-### Phase D — re-enable com in the build/deploy
+### Phase D — firehose: the PULL model (the supervisor firehose has no egress)  ✅ DONE
+**Finding (do NOT touch the supervisor firehose, per user):** the supervisor's
+`broadcast_events_edge` iterates an IN-PROCESS `events_edge_subs_` std::function
+list. It has NO remote egress — it never casts NodeEdge/NodeState over TIPC to
+anyone. tdb never used it either: `tdb ps` uses the `GetTree` one-shot PULL.
+
+**Resolution — mirror tdb's pull, in tdb first then com:**
+- `tdb ps --follow [interval]` (tools/tdb/tdb.py): polls `GetTree` on an interval
+  (default 1s), clears + re-renders the tree, Ctrl-C to stop. Proves the model.
+- com's gRPC `Subscribe` (ComGrpcProxy_handlers.cc): now POLLS
+  `SupLink::get_tree()` (new — raw `TreeSnapshot` bytes, mirrors `get_trace_config`)
+  every `THEIA_COM_POLL_MS` (default 1000ms) and emits each snapshot as a
+  `SupervisorObservation.snapshot`. The dead `SupFirehose`/`register_firehose_casts`
+  path is removed from com (the supervisor never cast to ComDaemon anyway). The
+  GUI subscribes once and gets live tree frames; it diffs successive snapshots if
+  it wants edge/health deltas. No new supervisor plumbing.
+
+### Phase D2 — re-enable com in the build/deploy
 9. Re-add com to system/services/cluster.art + services/manifest (reverse the
    90df135 hiding). com becomes a packaged FC again (its .ipk component).
+   (cluster.art already re-adds com; manifest/build wiring still to confirm.)
 10. com runs as a supervised child on central (+ compute). Its :7700/:7701 gRPC
     is the DMZ-edge endpoint machines.json already advertises (com_endpoint) —
-    now serving BOTH SupervisorView (control+firehose) and TraceStream (trace).
+    now serving BOTH SupervisorView (control+tree-poll) and TraceStream (trace).
 
 ### Phase E — supervisor-gui rebuild + re-align
 11. Fix the GUI's removed-TraceStream dependency: point grpc_client's TraceStream

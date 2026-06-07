@@ -41,15 +41,24 @@ from pathlib import Path
 from robot.api.deco import keyword, library
 
 # scenarios/services/log/ → repo root: log[0] services[1] scenarios[2]
+# STALE (Phase C): this scenario was written against the OLD egress design — a
+# standalone `services-log` CMake collector that served its OWN gRPC TraceStream
+# on :7710, started separately from com. That collector is DELETED. The trace
+# egress now lives in com's TraceForwarder runnable (one `com` binary serves
+# BOTH SupervisorView :7700 AND TraceStream :7710). The gRPC client is rtdb
+# (tools/rtdb), not supdbg. This lib needs a rewrite to: start ONLY `com`
+# (no separate collector), drive control via rtdb/com :7700, and subscribe to
+# the TraceStream on com :7710. Until then it will not run as-is.
+#
 # rf_theia[3] testing[4] theia[5].
 _WS = Path(__file__).resolve().parents[5]
-_SUPDBG = _WS / "tools" / "supdbg"
-for p in (str(_SUPDBG), str(_SUPDBG / "_gen")):
+_RTDB = _WS / "tools" / "rtdb"
+for p in (str(_RTDB), str(_RTDB / "_gen"), str(_WS / "tools" / "tdb")):
     if p not in sys.path:
         sys.path.insert(0, p)
 
 CENTRAL_DIR = _WS / "install" / "central"
-COLLECTOR = CENTRAL_DIR / "services-log"
+# Phase C: the egress is com's TraceForwarder, not a standalone collector.
 COM_BRIDGE = _WS / "bazel-bin" / "services" / "com" / "main" / "com"
 COLLECTOR_ENDPOINT = os.environ.get("THEIA_COLLECTOR_ENDPOINT", "127.0.0.1:7710")
 COM_ENDPOINT = os.environ.get("THEIA_COM_ENDPOINT", "localhost:7700")

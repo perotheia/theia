@@ -9,15 +9,17 @@
 
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <thread>
 
 namespace sup_gui {
 
 namespace {
-constexpr uint16_t kTagEvent      = 0x0001;
-constexpr uint16_t kTagHealth     = 0x0002;
-constexpr uint16_t kTagSnapshot   = 0x0003;
-constexpr uint16_t kTagSystemInfo = 0x0004;   // GetSystemInfo (host + build facts)
+constexpr uint16_t kTagEvent       = 0x0001;
+constexpr uint16_t kTagHealth      = 0x0002;
+constexpr uint16_t kTagSnapshot    = 0x0003;
+constexpr uint16_t kTagSystemInfo  = 0x0004;   // GetSystemInfo (host + build facts)
+constexpr uint16_t kTagTraceRecord = 0x0005;   // TraceStream egress (:7710)
 }  // namespace
 
 GrpcClient::GrpcClient(std::string machine_name,
@@ -31,14 +33,55 @@ GrpcClient::~GrpcClient() { stop(); }
 
 void GrpcClient::start() {
     if (running_.exchange(true)) return;
-    thread_ = std::thread([this] { run(); });
+    thread_       = std::thread([this] { run(); });
+    trace_thread_ = std::thread([this] { run_trace(); });
 }
 
 void GrpcClient::stop() {
     if (!running_.exchange(false)) return;
-    // Channel shutdown wakes any blocked Read().
+    // Channel shutdown wakes any blocked Read() on either stream.
     channel_.reset();
-    if (thread_.joinable()) thread_.join();
+    trace_channel_.reset();
+    if (thread_.joinable())       thread_.join();
+    if (trace_thread_.joinable()) trace_thread_.join();
+}
+
+// SupervisorView is host:7700; TraceStream (com's TraceForwarder) is host:7710.
+// Swap the port; honor an explicit override.
+std::string GrpcClient::trace_endpoint() const {
+    if (const char* e = std::getenv("THEIA_COM_TRACE_LISTEN")) return e;
+    const auto colon = host_port_.rfind(':');
+    const std::string host = (colon == std::string::npos)
+                                 ? host_port_ : host_port_.substr(0, colon);
+    return host + ":7710";
+}
+
+// TraceStream egress: subscribe to com's TraceForwarder and post each
+// TraceRecord to the panel as tag 0x0005. The records are the live message
+// traces (node→node casts/calls) that `tdb logcat` / `rtdb logcat` show — a
+// SEPARATE stream + port from SupervisorView, so its own thread + channel.
+void GrpcClient::run_trace() {
+    const std::string endpoint = trace_endpoint();
+    while (running_.load()) {
+        trace_channel_ = grpc::CreateChannel(
+            endpoint, grpc::InsecureChannelCredentials());
+        auto ci = std::static_pointer_cast< ::grpc::ChannelInterface>(
+            trace_channel_);
+        auto stub = ::services::com::TraceStream::NewStub(ci);
+        ::services::com::TraceSubscribeRequest req;   // kind=0, all nodes
+        grpc::ClientContext ctx;
+        auto reader = stub->Subscribe(&ctx, req);
+
+        ::services::com::TraceRecord rec;
+        while (running_.load() && reader->Read(&rec)) {
+            if (callback_)
+                callback_(machine_name_, kTagTraceRecord,
+                          rec.SerializeAsString());
+        }
+        reader->Finish();
+        if (running_.load())
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
 }
 
 int GrpcClient::configure_trace(const std::string& target_node,

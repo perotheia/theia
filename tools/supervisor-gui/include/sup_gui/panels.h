@@ -263,10 +263,11 @@ private:
     std::unique_ptr<EtcdPanelImpl> impl_;
 };
 
-// "Trace" — Wireshark-style: virtual list of events on top, lazy
-// tree-decode of the selected row on the bottom. Tombstone events
-// (kind=3 with tombstone_path set) surface here too — the Tombstone
-// detail group reads the file's tail.
+// "Trace" — Wireshark-style: virtual list of live trace records on top
+// (TIME | MACHINE | KIND | SRC | DST | MSG TYPE), lazy tree-decode of the
+// selected row below (Header / Subject / Raw payload). Driven by the
+// TraceStream egress (tag 0x0005) from com's TraceForwarder (:7710) — the
+// SAME message traces `tdb logcat` / `rtdb logcat` show.
 class TracePanelImpl;  // defined in trace_panel.cpp
 class TracePanel : public PanelBase {
 public:

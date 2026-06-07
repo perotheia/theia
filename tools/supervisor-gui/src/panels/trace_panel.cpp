@@ -1,22 +1,24 @@
 // Trace panel — Wireshark-style. Spec:
 // docs/tasks/BACKLOG/GUI-trace-panel-wireshark-style.md
 //
+// DATA SOURCE: live message traces from com's TraceForwarder TraceStream
+// (:7710, tag 0x0005) — the SAME records `tdb logcat` / `rtdb logcat` show
+// (node→node casts/calls). (The supervisor-lifecycle SupervisionEvent feed is
+// not emitted under the snapshot-only pull model; this panel now follows the
+// message trace egress instead.)
+//
 // Layout (top-down):
 //   filter [substring or key:value tokens] [Clear]
-//   wxListCtrl (virtual)  — TIME | MACHINE | KIND | CHILD | PARENT | DETAIL
+//   wxListCtrl (virtual)  — TIME | MACHINE | KIND | SRC | DST | MSG TYPE
 //   wxTreeCtrl            — lazy-decoded selection: Header / Subject /
-//                            Cause / Tombstone / Raw groups
+//                            Raw payload groups
 //
 // Top list is wxLC_VIRTUAL so we only format the rows wx asks
 // about. Storage is a deque<EventRow> capped at 5000 (kRingCapacity).
-//
-// Tombstones aren't a separate tab — they show up here with
-// kind=3 / tombstone_path set, and the Tombstone tree group
-// renders the file's tail.
 
 #include "sup_gui/panels.h"
 
-#include "supervisor.pb.h"
+#include "supervisor_bridge.pb.h"   // services.com.TraceRecord
 
 #include <wx/wx.h>
 #include <wx/listctrl.h>
@@ -36,42 +38,42 @@ namespace sup_gui {
 
 namespace {
 
-constexpr uint16_t kTagEvent      = 0x0001;
-constexpr size_t   kRingCapacity  = 5000;
+constexpr uint16_t kTagTraceRecord = 0x0005;
+constexpr size_t   kRingCapacity   = 5000;
 
+// One trace record row. Maps services.com.TraceRecord
+// (node_name/dst/msg_type/corr_id/ts_ns/kind/payload) onto the list model.
 struct EventRow {
-    int64_t      t_ms_local{};
+    int64_t      t_ms_local{};   // ts_ns/1e6 — local wall time for display
     std::string  machine;
-    uint32_t     kind{};
-    std::string  child;
-    std::string  parent;
-    int32_t      pid{};
-    int32_t      exit_code{};
-    std::string  strategy;
-    std::string  tombstone_path;
-    std::string  detail;
-    std::string  raw_payload;
+    uint32_t     kind{};         // TraceKind
+    std::string  src;            // node_name (emitter)
+    std::string  dst;            // peer node, "" if none
+    std::string  msg_type;       // proto message type name
+    uint32_t     corr_id{};      // pairs Send/Recv/Dispatch
+    std::string  raw_payload;    // proto-wire-v3 bytes
 };
 
+// TraceKind ordinal → name (platform_runtime.TraceKind, same as tdb).
 const char* kind_name(uint32_t k) {
     switch (k) {
-        case 0: return "STARTED";
-        case 1: return "EXITED";
-        case 2: return "RESTART_CASCADE";
-        case 3: return "TOMBSTONE";
-        case 4: return "ESCALATION";
-        case 5: return "TREE_CHANGED";
+        case 0: return "OTHER";
+        case 1: return "CAST_OUT";
+        case 2: return "CAST_IN";
+        case 3: return "CALL_OUT";
+        case 4: return "CALL_IN";
+        case 5: return "STATEM";
         default: return "?";
     }
 }
 
 wxColour kind_color(uint32_t k) {
     switch (k) {
-        case 0: return wxColour(0xE0, 0xF5, 0xE0);
-        case 1: return wxColour(0xFF, 0xF6, 0xC0);
-        case 2: return wxColour(0xFF, 0xE0, 0xB0);
-        case 3: return wxColour(0xFF, 0xC0, 0xC0);
-        case 4: return wxColour(0xD8, 0xB6, 0xFF);
+        case 1: return wxColour(0xE0, 0xF5, 0xE0);   // CAST_OUT  green
+        case 2: return wxColour(0xE0, 0xF0, 0xFF);   // CAST_IN   blue
+        case 3: return wxColour(0xFF, 0xF6, 0xC0);   // CALL_OUT  yellow
+        case 4: return wxColour(0xFF, 0xE8, 0xC8);   // CALL_IN   orange
+        case 5: return wxColour(0xD8, 0xB6, 0xFF);   // STATEM    purple
         default: return *wxWHITE;
     }
 }
@@ -100,22 +102,6 @@ wxString hex_dump(const std::string& bytes) {
     return out;
 }
 
-wxString tail_file(const std::string& path, int max_lines = 50) {
-    if (path.empty()) return wxString("(no tombstone)");
-    FILE* f = std::fopen(path.c_str(), "rb");
-    if (!f) return wxString::Format("(cannot open %s: %s)",
-                                      path.c_str(), std::strerror(errno));
-    std::deque<std::string> lines;
-    char buf[4096];
-    while (std::fgets(buf, sizeof(buf), f)) {
-        lines.emplace_back(buf);
-        if (static_cast<int>(lines.size()) > max_lines) lines.pop_front();
-    }
-    std::fclose(f);
-    std::string out;
-    for (const auto& l : lines) out += l;
-    return wxString::FromUTF8(out.c_str(), out.size());
-}
 
 }  // namespace
 
@@ -130,12 +116,12 @@ public:
         : wxListCtrl(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize,
                       wxLC_REPORT | wxLC_VIRTUAL | wxLC_SINGLE_SEL),
           rows_(rows), visible_(visible), mtx_(mtx) {
-        AppendColumn("Time",    wxLIST_FORMAT_LEFT,  140);
-        AppendColumn("Machine", wxLIST_FORMAT_LEFT,   90);
-        AppendColumn("Kind",    wxLIST_FORMAT_LEFT,  130);
-        AppendColumn("Child",   wxLIST_FORMAT_LEFT,  160);
-        AppendColumn("Parent",  wxLIST_FORMAT_LEFT,  120);
-        AppendColumn("Detail",  wxLIST_FORMAT_LEFT,  400);
+        AppendColumn("Time",     wxLIST_FORMAT_LEFT, 140);
+        AppendColumn("Machine",  wxLIST_FORMAT_LEFT,  90);
+        AppendColumn("Kind",     wxLIST_FORMAT_LEFT, 100);
+        AppendColumn("Src",      wxLIST_FORMAT_LEFT, 150);
+        AppendColumn("Dst",      wxLIST_FORMAT_LEFT, 150);
+        AppendColumn("Msg type", wxLIST_FORMAT_LEFT, 280);
     }
 
 protected:
@@ -158,22 +144,9 @@ protected:
             }
             case 1: return wxString::FromUTF8(r.machine.c_str(), r.machine.size());
             case 2: return wxString::FromAscii(kind_name(r.kind));
-            case 3: return wxString::FromUTF8(r.child.c_str(), r.child.size());
-            case 4: return wxString::FromUTF8(r.parent.c_str(), r.parent.size());
-            case 5: {
-                wxString d = wxString::FromUTF8(r.detail.c_str(), r.detail.size());
-                if (!r.tombstone_path.empty()) {
-                    if (!d.IsEmpty()) d += " — ";
-                    d += "tombstone=";
-                    d += wxString::FromUTF8(r.tombstone_path.c_str(),
-                                              r.tombstone_path.size());
-                }
-                if (r.exit_code != 0) {
-                    if (!d.IsEmpty()) d += " — ";
-                    d += wxString::Format("exit=%d", r.exit_code);
-                }
-                return d;
-            }
+            case 3: return wxString::FromUTF8(r.src.c_str(), r.src.size());
+            case 4: return wxString::FromUTF8(r.dst.c_str(), r.dst.size());
+            case 5: return wxString::FromUTF8(r.msg_type.c_str(), r.msg_type.size());
         }
         return wxString();
     }
@@ -251,15 +224,20 @@ struct TracePanelImpl {
             bool ok = true;
             for (const auto& t : terms) {
                 bool m = false;
-                if (t.first.empty() || t.first == "detail")
-                    m = ci_find(r.detail, t.second);
+                // Bare token matches src/dst/msg_type (the common case).
+                if (t.first.empty())
+                    m = ci_find(r.src, t.second) || ci_find(r.dst, t.second) ||
+                        ci_find(r.msg_type, t.second);
                 else if (t.first == "kind") {
                     std::string k = kind_name(r.kind);
                     for (auto& c : k) c = static_cast<char>(std::tolower(c));
                     m = k.find(t.second) != std::string::npos;
                 }
-                else if (t.first == "child")   m = ci_find(r.child,   t.second);
-                else if (t.first == "parent")  m = ci_find(r.parent,  t.second);
+                else if (t.first == "src" || t.first == "node")
+                                               m = ci_find(r.src,      t.second);
+                else if (t.first == "dst")     m = ci_find(r.dst,      t.second);
+                else if (t.first == "msg" || t.first == "type")
+                                               m = ci_find(r.msg_type, t.second);
                 else if (t.first == "machine") m = ci_find(r.machine, t.second);
                 if (!m) { ok = false; break; }
             }
@@ -270,7 +248,8 @@ struct TracePanelImpl {
     void rebuild_tree(const EventRow& r) {
         tree->DeleteAllItems();
         wxTreeItemId root = tree->AddRoot(
-            wxString::Format("event: %s", kind_name(r.kind)));
+            wxString::Format("trace: %s %s", kind_name(r.kind),
+                             r.msg_type.c_str()));
 
         wxTreeItemId hdr = tree->AppendItem(root, "Header");
         {
@@ -287,40 +266,16 @@ struct TracePanelImpl {
             tree->AppendItem(hdr,
                 wxString::Format("kind:       %s (%u)",
                                   kind_name(r.kind), r.kind));
+            tree->AppendItem(hdr,
+                wxString::Format("corr_id:    0x%X", r.corr_id));
         }
 
         wxTreeItemId subj = tree->AppendItem(root, "Subject");
-        tree->AppendItem(subj, wxString::Format("child:       %s",  r.child.c_str()));
-        tree->AppendItem(subj, wxString::Format("supervisor:  %s",  r.parent.c_str()));
-        tree->AppendItem(subj, wxString::Format("pid:         %d",  r.pid));
-
-        if (r.exit_code != 0 || !r.strategy.empty() || !r.detail.empty()) {
-            wxTreeItemId cause = tree->AppendItem(root, "Cause");
-            tree->AppendItem(cause,
-                wxString::Format("exit_code: %d", r.exit_code));
-            if (!r.strategy.empty())
-                tree->AppendItem(cause,
-                    wxString::Format("strategy:  %s", r.strategy.c_str()));
-            if (!r.detail.empty())
-                tree->AppendItem(cause,
-                    wxString::Format("detail:    %s", r.detail.c_str()));
-        }
-
-        if (!r.tombstone_path.empty()) {
-            wxTreeItemId tomb = tree->AppendItem(root, "Tombstone");
-            tree->AppendItem(tomb,
-                wxString::Format("path: %s", r.tombstone_path.c_str()));
-            tree->AppendItem(tomb, "tail:");
-            wxString tail = tail_file(r.tombstone_path);
-            wxString line;
-            for (size_t i = 0; i < tail.size(); ++i) {
-                if (tail[i] == '\n') {
-                    tree->AppendItem(tomb, line);
-                    line.Clear();
-                } else line += tail[i];
-            }
-            if (!line.IsEmpty()) tree->AppendItem(tomb, line);
-        }
+        tree->AppendItem(subj, wxString::Format("src (node):  %s", r.src.c_str()));
+        tree->AppendItem(subj, wxString::Format("dst (peer):  %s",
+            r.dst.empty() ? "—" : r.dst.c_str()));
+        tree->AppendItem(subj, wxString::Format("msg_type:    %s",
+            r.msg_type.c_str()));
 
         if (!r.raw_payload.empty()) {
             wxTreeItemId raw = tree->AppendItem(root, "Raw payload");
@@ -413,24 +368,22 @@ TracePanel::TracePanel(wxWindow* parent) : PanelBase(parent) {
 void TracePanel::on_frame(const std::string& machine_name,
                             uint16_t tag,
                             const std::string& payload) {
-    if (tag != kTagEvent) return;
+    if (tag != kTagTraceRecord) return;
     if (!impl_) return;
 
-    system_supervisor::SupervisionEvent ev;
-    if (!ev.ParseFromString(payload)) return;
+    services::com::TraceRecord tr;
+    if (!tr.ParseFromString(payload)) return;
 
     EventRow r;
-    r.t_ms_local      = static_cast<int64_t>(ev.timestamp_ms());
-    r.machine         = machine_name;
-    r.kind            = ev.kind();
-    r.child           = ev.child_name();
-    r.parent          = ev.supervisor_name();
-    r.pid             = ev.pid();
-    r.exit_code       = ev.exit_code();
-    r.strategy        = ev.strategy();
-    r.tombstone_path  = ev.tombstone_path();
-    r.detail          = ev.detail();
-    r.raw_payload     = payload;
+    // ts_ns is the emitter's steady_clock ns; render as local wall ms.
+    r.t_ms_local  = static_cast<int64_t>(tr.ts_ns() / 1000000ULL);
+    r.machine     = machine_name;
+    r.kind        = tr.kind();
+    r.src         = tr.node_name();
+    r.dst         = tr.dst();
+    r.msg_type    = tr.msg_type();
+    r.corr_id     = tr.corr_id();
+    r.raw_payload = tr.payload();
 
     long new_count = 0;
     {

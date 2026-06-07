@@ -84,8 +84,9 @@ missing call, fix the proto package, then unhide + rebuild the GUI.
 
 - com's two-codec isolation (sup_link nanopb / com_bridge_grpc libprotobuf),
   the grpc++ host-genrule wiring, ComGrpcProxy runnable + gRPC server thread.
-- sup_firehose's name-keyed NodeEdge/NodeState reassembler (matches the current
-  topo-pair firehose tdb consumes via on_edge/on_node_state).
+- ~~sup_firehose's name-keyed reassembler~~ DELETED: the supervisor firehose has
+  no remote egress, so com pulls (Subscribe POLLs GetTree) instead of
+  reassembling a remote stream. sup_firehose{,_register,_test}.cc are gone.
 - The GUI's gRPC client (modern, reconnecting), machine discovery (machines.json
   + per-machine manifest dir), the 7 panels (system/apps/processes/trace/etc.).
 - The op surface itself — identical to tdb's, which is live-proven.

@@ -24,12 +24,22 @@
 class theia::provisioning (
     String $machine,
     String $manifest_dir = "/etc/theia/manifest",
+    String $ipk_path     = "/opt/theia/ipk/${machine}.ipk",
 ) {
     $machine_json_path = "${manifest_dir}/machine.json"
 
     file { $manifest_dir:
         ensure => directory,
         mode   => '0755',
+    }
+
+    # Install the per-machine bundle (demo-<machine>.ipk). This drops every
+    # binary — the FC daemons AND the supervisor — at /opt/theia/bin/<name>.
+    # The opkg_artifacts loop below only adds systemd units on top; there is
+    # NO standalone supervisor.ipk (the supervisor rides in this bundle).
+    class { 'theia':
+        machine  => $machine,
+        ipk_path => $ipk_path,
     }
 
     # Parse the per-machine manifest. parsejson() is a core Puppet function
@@ -51,29 +61,23 @@ class theia::provisioning (
         }
     }
 
-    # ----- 2. Theia opkg artifacts under /opt/theia/ ----------------------
+    # ----- 2. Theia opkg artifacts — systemd units ------------------------
     #
-    # Each artifact's .ipk was built by `bazel build <bazel_target>` (the
-    # rig packages it) and shipped in /opt/theia/ipk/. Install it, drop the
-    # systemd unit, enable + start. The supervisor/gateway live here.
+    # The artifact BINARIES (supervisor, gateway) are NOT installed as
+    # standalone .ipks here — they ride in the per-machine bundle
+    # (demo-<machine>.ipk) that `theia::install` dpkg-installs, landing at
+    # ${target_dir}/<name> (= /opt/theia/bin/<name>). Provisioning's job for
+    # each artifact is to drop its systemd UNIT (ExecStart points at that
+    # path) and enable the service. So this loop requires Class['theia::
+    # install'] (the bundle), not a per-artifact package{}.
     $spec['opkg_artifacts'].each |$art| {
-        $art_ipk = "/opt/theia/ipk/${art['name']}.ipk"
-
-        # dpkg --install: the pkg_opkg archive is .deb-compatible on amd64.
-        # On a Yocto/OpenWrt target switch provider to 'opkg'.
-        package { "theia-${art['name']}":
-            ensure   => 'installed',
-            provider => 'dpkg',
-            source   => $art_ipk,
-        }
-
         file { $art['systemd_unit']:
             ensure  => 'file',
             content => epp('theia/theia-unit.service.epp', {
                 'name'       => $art['name'],
                 'target_dir' => $art['target_dir'],
             }),
-            require => Package["theia-${art['name']}"],
+            require => Class['theia::install'],
             notify  => Service["theia-${art['name']}"],
         }
 
@@ -87,10 +91,10 @@ class theia::provisioning (
     # ----- 2b. File capabilities (setcap) ---------------------------------
     #
     # The cap CONTRACT lives once in theia::postinstall (shared with the local
-    # dev path); apply it at the deploy root AFTER the artifacts are installed.
+    # dev path); apply it at the deploy root AFTER the bundle is installed.
     class { 'theia::postinstall':
-        root    => '/opt/theia',
-        require => Package[$spec['opkg_artifacts'].map |$a| { "theia-${a['name']}" }],
+        root    => '/opt/theia/bin',
+        require => Class['theia::install'],
     }
 
     # ----- 3. services/per schema migration (DEFERRED) --------------------

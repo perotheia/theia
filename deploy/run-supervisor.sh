@@ -76,7 +76,15 @@ esac
 # 2. Verify supervisor is installed.
 # -----------------------------------------------------------------------------
 
-SUPERVISOR_BIN="/usr/bin/theia-supervisor"
+# Supervisor binary: the per-machine bundle installs it at
+# /opt/theia/bin/supervisor (same dir as the FC daemons). In the dev compose
+# we ALSO bind-mount the host build at /usr/bin/theia-supervisor — prefer that
+# when present so an edit-rebuild on the host is picked up without re-packaging.
+SUPERVISOR_BIN="/opt/theia/bin/supervisor"
+if [[ -x "/usr/bin/theia-supervisor" ]]; then
+    SUPERVISOR_BIN="/usr/bin/theia-supervisor"
+fi
+
 # Supervisor tree is JSON-only since #380. Prefer executor.json; fall
 # back to a legacy executor.yaml path only if an old image still ships
 # one (the supervisor parses JSON regardless of extension).
@@ -86,10 +94,10 @@ if [[ ! -f "$EXECUTOR_JSON" && -f "/etc/theia/executor.yaml" ]]; then
 fi
 
 if [[ ! -x "$SUPERVISOR_BIN" ]]; then
-    log "ERROR: supervisor binary not found at $SUPERVISOR_BIN after Puppet apply"
-    log "       Puppet should have installed it via opkg or bind-mount."
-    log "       Check the Puppet manifest's theia::install / opkg::package"
-    log "       resource — it may not have run, or the .ipk may be missing."
+    log "ERROR: supervisor binary not found at /opt/theia/bin/supervisor"
+    log "       (nor the dev bind-mount /usr/bin/theia-supervisor) after Puppet"
+    log "       apply. The per-machine bundle (theia::install) should drop it;"
+    log "       check the .ipk was staged + dpkg-installed."
     exit 3
 fi
 

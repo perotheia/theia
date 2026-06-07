@@ -263,9 +263,33 @@ nanopb request + RemoteRef::call<ReplyType>() — exactly mirroring tdb_client.p
 per-op `self.probe.call("RestartChild", ...)`. This IS "com is tdb-over-gRPC":
 sup_link calls the SAME per-op messages tdb does.
 
+## Phase B — live test result (against central's running supervisor)
+
+com runs on the host (gRPC :7702, targets SupervisorCtl 0x80020001/0):
+  ✓ ComDaemon + ComGrpcProxy up; firehose cast-sinks installed on ComDaemon;
+    control link up (RemoteRef 0x80020001/0); gRPC SupervisorView listening.
+  ✓ CONTROL PATH WORKS end-to-end (the "com == tdb over gRPC" proof):
+      gRPC GetTraceConfig → com → supervisor → ControlReply (0 configs).
+      gRPC ConfigureLogLevel(sm, info) → status=0 "log level applied".
+    A gRPC client drove the live supervisor through com exactly like tdb does
+    over TIPC. The sup_link per-op rewrite is verified live.
+  ✗ FIREHOSE (Subscribe) does NOT flow yet — deadline, no snapshot. ROOT CAUSE:
+    the supervisor BROADCASTS the firehose through SupervisorCtl's `events`
+    sender to its .art-declared netgraph PEERS, but com is HIDDEN from the
+    cluster → there is no `connect` arrow SupervisorCtl.events → com.from_sup, so
+    broadcast_events_* has nowhere to send. The control path uses a direct
+    RemoteRef (no netgraph), which is why it works standalone; the firehose is
+    push and needs the cluster wiring. → Phase C/D: the firehose comes alive once
+    com is re-added to the cluster with the events→from_sup connect.
+
 ## Status
 
-Phase A in progress.
+Phase A DONE — com builds + runs; control path live-proven. Phase B: control ✓,
+firehose pending the cluster re-enable (C/D). Next: Phase C (TraceForwarder +
+delete CMake log) then D (re-add com to cluster.art/manifest with the
+events→from_sup connect — this also lights up the firehose), then E (GUI).
+
+(history below)
 - A1 DONE (control address 0x80020001).
 - A3 proto repoint DONE + BUILDS: supervisor_bridge.proto → one `supervisor.proto`
   import + system_supervisor qualifier; com_bridge_grpc_gen genrule protocs the

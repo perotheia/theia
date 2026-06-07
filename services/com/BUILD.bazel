@@ -42,23 +42,39 @@ genrule(
     name = "com_bridge_grpc_gen",
     srcs = [
         "proto/supervisor_bridge.proto",
-        "//platform/supervisor:proto_srcs",
+        # The consolidated supervisor proto (package system_supervisor) the
+        # bridge imports, + the runtime proto IT imports. No libprotobuf
+        # supervisor_pb_cpp target exists, so we protoc the supervisor +
+        # runtime .pb.cc HERE alongside the bridge (one TU set, one -I world).
+        "//platform/proto/system/supervisor:supervisor_proto",
+        "//platform/runtime:runtime_proto_src",
     ],
     outs = [
         "cpp/supervisor_bridge.pb.cc",
         "cpp/supervisor_bridge.pb.h",
         "cpp/supervisor_bridge.grpc.pb.cc",
         "cpp/supervisor_bridge.grpc.pb.h",
+        "cpp/supervisor.pb.cc",
+        "cpp/supervisor.pb.h",
+        "cpp/platform_runtime/runtime.pb.cc",
+        "cpp/platform_runtime/runtime.pb.h",
     ],
     cmd = ("set -e;" +
            " com_dir=$$(dirname $(location proto/supervisor_bridge.proto));" +
-           " sup_dir=$$(dirname $$(echo '$(locations //platform/supervisor:proto_srcs)'" +
-           "   | tr ' ' '\\n' | grep -m1 'ChildState.proto'));" +
+           " sup_proto=$(location //platform/proto/system/supervisor:supervisor_proto);" +
+           " sup_dir=$$(dirname $$sup_proto);" +
+           " rt_proto=$(location //platform/runtime:runtime_proto_src);" +
+           " rt_root=$$(dirname $$(dirname $$rt_proto));" +
            " out_dir=$$(dirname $(location cpp/supervisor_bridge.pb.cc));" +
-           " protoc -I $$com_dir -I $$sup_dir" +
+           # bridge imports supervisor.proto (flat, on sup_dir); supervisor.proto
+           # imports platform_runtime/runtime.proto (on rt_root). protoc all
+           # three so the .pb.cc for the supervisor + runtime messages exist.
+           " protoc -I $$com_dir -I $$sup_dir -I $$rt_root" +
            "   --cpp_out=$$out_dir --grpc_out=$$out_dir" +
            "   --plugin=protoc-gen-grpc=$$(which grpc_cpp_plugin)" +
-           "   $$com_dir/supervisor_bridge.proto;"),
+           "   $$com_dir/supervisor_bridge.proto;" +
+           " protoc -I $$sup_dir -I $$rt_root --cpp_out=$$out_dir $$sup_proto;" +
+           " protoc -I $$rt_root --cpp_out=$$out_dir $$rt_proto;"),
     # host-installed protoc + grpc_cpp_plugin, same policy as the supervisor
     # and nanopb genrules.
     local = True,
@@ -69,10 +85,14 @@ cc_library(
     srcs = [
         "cpp/supervisor_bridge.pb.cc",
         "cpp/supervisor_bridge.grpc.pb.cc",
+        "cpp/supervisor.pb.cc",
+        "cpp/platform_runtime/runtime.pb.cc",
     ],
     hdrs = [
         "cpp/supervisor_bridge.pb.h",
         "cpp/supervisor_bridge.grpc.pb.h",
+        "cpp/supervisor.pb.h",
+        "cpp/platform_runtime/runtime.pb.h",
     ],
     # `cpp/` is the include root so callers write
     # `#include "supervisor_bridge.grpc.pb.h"` and the generated .pb.cc find
@@ -84,9 +104,9 @@ cc_library(
         "-Wno-unused-parameter",
     ],
     deps = [
-        # The supervisor message types (ChildState, ControlReply, …) that
-        # supervisor_bridge.{pb,grpc.pb} reference — libprotobuf C++ bindings.
-        "//platform/supervisor:supervisor_pb_cpp",
+        # libprotobuf (the system C++ runtime). The supervisor + runtime .pb.cc
+        # are compiled in THIS library now (no separate supervisor_pb_cpp).
+        "//third_party:system_protobuf",
     ],
     # grpc++ + its deps from the host toolchain (not in bzlmod). protobuf is
     # already pulled transitively by supervisor_pb_cpp → //third_party:

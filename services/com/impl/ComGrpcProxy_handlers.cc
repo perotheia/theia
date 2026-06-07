@@ -152,7 +152,7 @@ public:
     // ---- Unary mutators — #418 over the standard transport via SupLink -----
     grpc::Status StartChild(grpc::ServerContext*,
                             const services::com::StartChildCall* req,
-                            services::supervisor::ControlReply* reply) override {
+                            system_supervisor::ControlReply* reply) override {
         const auto& gs = req->spec();
         services_com::SupChildSpec spec;
         spec.name              = gs.name();
@@ -170,17 +170,17 @@ public:
     }
     grpc::Status DeleteChild(grpc::ServerContext*,
                              const services::com::DeleteChildCall* req,
-                             services::supervisor::ControlReply* reply) override {
+                             system_supervisor::ControlReply* reply) override {
         return name_op(kOpDeleteChild, req->name(), reply);
     }
     grpc::Status RestartChild(grpc::ServerContext*,
-                              const ::services::supervisor::ChildSelector* sel,
-                              services::supervisor::ControlReply* reply) override {
+                              const ::system_supervisor::ChildSelector* sel,
+                              system_supervisor::ControlReply* reply) override {
         return name_op(kOpRestartChild, sel->name(), reply);
     }
     grpc::Status TerminateChild(grpc::ServerContext*,
-                                const ::services::supervisor::ChildSelector* sel,
-                                services::supervisor::ControlReply* reply) override {
+                                const ::system_supervisor::ChildSelector* sel,
+                                system_supervisor::ControlReply* reply) override {
         return name_op(kOpTerminateChild, sel->name(), reply);
     }
 
@@ -189,7 +189,7 @@ public:
     grpc::Status ConfigureLogLevel(
             grpc::ServerContext*,
             const services::com::LogLevelCall* req,
-            services::supervisor::ControlReply* reply) override {
+            system_supervisor::ControlReply* reply) override {
         services_com::SupReply r;
         if (!services_com::SupLink::instance().configure_log_level(
                 req->target_node(), req->level(), r))
@@ -205,7 +205,7 @@ public:
     grpc::Status ConfigureTrace(
             grpc::ServerContext*,
             const services::com::TraceConfigRequest* req,
-            services::supervisor::ControlReply* reply) override {
+            system_supervisor::ControlReply* reply) override {
         services_com::SupReply r;
         if (!services_com::SupLink::instance().configure_trace(
                 req->target_node(), req->msg_type(), req->enabled(),
@@ -222,7 +222,7 @@ public:
     grpc::Status GetTraceConfig(
             grpc::ServerContext*,
             const services::com::GetTraceConfigCall*,
-            services::supervisor::TraceConfigList* out) override {
+            system_supervisor::TraceConfigList* out) override {
         services_com::SupReply r;
         if (!services_com::SupLink::instance().get_trace_config(r))
             return unavailable();
@@ -240,7 +240,7 @@ private:
         return grpc::Status(grpc::StatusCode::UNAVAILABLE,
                             "supervisor control link unavailable / timeout");
     }
-    static void fill(::services::supervisor::ControlReply* out,
+    static void fill(::system_supervisor::ControlReply* out,
                      const services_com::SupReply& r) {
         out->set_status(r.status);
         out->set_message(r.message);
@@ -249,7 +249,7 @@ private:
             out->set_trace_config_list(r.trace_config_list);
     }
     grpc::Status name_op(uint32_t op_kind, const std::string& name,
-                         ::services::supervisor::ControlReply* reply) {
+                         ::system_supervisor::ControlReply* reply) {
         services_com::SupReply r;
         if (!services_com::SupLink::instance().name_op(op_kind, name, r))
             return unavailable();

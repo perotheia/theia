@@ -243,12 +243,39 @@ A3. **Proto package re-point** (the build blocker — com won't compile without 
 
 A4. Build `//services/com/main:com` clean (still hidden from the cluster).
 
+## A3 deepened — sup_link's CONTROL WIRE is for the old supervisor
+
+The proto repoint surfaced the real mismatch: com's sup_link builds ONE
+`ControlRequest{op_kind, ...}` envelope + a switch — that was the OLD supervisor's
+wire. The CURRENT supervisor (what tdb calls) has PER-OP typed request messages:
+  register_call<StartChildRequest,     ControlReply>   "StartChild"
+  register_call<DeleteChildRequest,    ControlReply>   "DeleteChild"
+  register_call<ChildSelector,         ControlReply>   "RestartChild"/"TerminateChild"
+  register_call<Stop,                  ControlReply>   "Stop"
+  register_call<ConfigureTraceRequest, ControlReply>   "ConfigureTrace"
+  register_call<GetTraceConfigRequest, TraceConfigList> "GetTraceConfig"
+  register_call<ConfigureLogLevelRequest, ControlReply> "ConfigureLogLevel"
+  register_call<GetTreeRequest,        TreeSnapshot>   "GetTree"
+  register_call<GetSystemInfoRequest,  SystemInfo>     "GetSystemInfo"
+`system_supervisor_ControlRequest` doesn't even exist in the new proto. So
+sup_link's do_call layer needs a REWRITE: each SupLink op builds the SPECIFIC
+nanopb request + RemoteRef::call<ReplyType>() — exactly mirroring tdb_client.py's
+per-op `self.probe.call("RestartChild", ...)`. This IS "com is tdb-over-gRPC":
+sup_link calls the SAME per-op messages tdb does.
+
 ## Status
 
-Phase A in progress. A1 DONE (address). A2 (firehose→do_start + runtime
-binding_for accessor) + A3 (proto repoint: 43 renames + new libprotobuf
-supervisor target + BUILD deps) are the remaining build-blocking work — bounded
-but multi-file. Then A4 build, B live-test, C TraceForwarder, D unhide, E GUI.
+Phase A in progress.
+- A1 DONE (control address 0x80020001).
+- A3 proto repoint DONE + BUILDS: supervisor_bridge.proto → one `supervisor.proto`
+  import + system_supervisor qualifier; com_bridge_grpc_gen genrule protocs the
+  bridge + supervisor + runtime .pb.cc (libprotobuf, no dead supervisor_pb_cpp);
+  43 `services_supervisor_`→`system_supervisor_` renames; impl/BUILD deps →
+  supervisor_lib (nanopb) + com_bridge_grpc (libprotobuf). `//services/com:
+  com_bridge_grpc` builds clean.
+- NEXT (A3 cont.): rewrite sup_link's per-op control calls to the current
+  supervisor's typed request messages (StartChildRequest/ChildSelector/etc.) —
+  the same surface tdb proves. Then A2 (firehose→do_start), A4 build com.
 
 com architecture is sound; this is a re-alignment (dead address →
 0x80020001, wire the firehose call, fix the proto package), then unhide + rebuild

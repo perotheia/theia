@@ -37,6 +37,22 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
+# per's etcd client (libetcd-cpp-api.so, bundled in the .ipk at /opt/theia/lib)
+# links these system libs at runtime. They are apt-standard; install them here
+# rather than bundling the whole transitive .so chain. (libcap2-bin above gives
+# setcap; these are per-specific.) NOT the old grpc-bridge cruft — same names,
+# but a real runtime dep of a packaged FC.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        libcpprest2.10 \
+        libssl3 \
+        libgrpc++1 \
+        libgrpc10 \
+        libprotobuf23 \
+        && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
 # Theia per-machine layout (provisioning fills these):
 #   /opt/theia/bin/      — supervisor + FC binaries (from the .ipk)
 #   /opt/theia/config/   — executor.json (the supervision tree)

@@ -36,6 +36,11 @@ mkdir -p /var/lib/puppet/code /var/lib/puppet/var /var/lib/puppet/conf
 # $machine reaches the machine-generic classes via FACTER_theia_machine.
 export FACTER_theia_machine="$MACHINE"
 
+# Bundled shared libs (e.g. libetcd-cpp-api.so for per) land at /opt/theia/lib
+# from the .ipk; the supervisor + its execvp'd children inherit this so they
+# resolve them at runtime.
+export LD_LIBRARY_PATH="/opt/theia/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
 puppet_apply() {  # $1 = site manifest (provisioning.pp / orchestration.pp)
     log "puppet apply $1 (machine=$MACHINE)"
     puppet apply \

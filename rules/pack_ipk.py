@@ -60,6 +60,9 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--version", default="1.0.0")
     ap.add_argument("--bin", action="append", default=[],
                     help="path to a candidate binary (the fixed filegroup)")
+    ap.add_argument("--lib", action="append", default=[],
+                    help="shared lib to bundle at /opt/theia/lib/<basename> "
+                         "(e.g. libetcd-cpp-api.so for per)")
     args = ap.parse_args(argv)
 
     wanted = _wanted(args.app)           # name → dest
@@ -87,6 +90,16 @@ def main(argv: list[str]) -> int:
             dst = data + dest          # dest is absolute → data/opt/theia/bin/<name>
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             with open(by_name[name], "rb") as r, open(dst, "wb") as w:
+                w.write(r.read())
+            os.chmod(dst, 0o755)
+
+        # shared libs → /opt/theia/lib/<basename> (e.g. libetcd-cpp-api.so for
+        # per). run-supervisor.sh puts /opt/theia/lib on LD_LIBRARY_PATH so the
+        # children resolve them.
+        for lib in args.lib:
+            dst = os.path.join(data, "opt/theia/lib", os.path.basename(lib))
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            with open(lib, "rb") as r, open(dst, "wb") as w:
                 w.write(r.read())
             os.chmod(dst, 0o755)
 

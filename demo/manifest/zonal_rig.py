@@ -114,7 +114,7 @@ _PLATFORM_OPKG_ARTIFACTS = [
 ]
 
 CentralHost = MachineManifest(
-    name="central_host",
+    name="central",
     hardware=HardwareResource(
         cpu=CpuResource(architecture=CpuArchitecture.X86_64),
     ),
@@ -138,7 +138,7 @@ CentralHost = MachineManifest(
 )
 
 ComputeHost = MachineManifest(
-    name="compute_host",
+    name="compute",
     hardware=HardwareResource(
         cpu=CpuResource(architecture=CpuArchitecture.AARCH64),
     ),
@@ -166,7 +166,7 @@ ComputeHost = MachineManifest(
 # from this Machine + the rig's TARGET machines so the GUI knows
 # what to connect to without further config.
 AdminHost = MachineManifest(
-    name="admin_host",
+    name="admin",
     kind="host",   # MachineKind.HOST.value — string-typed; "target" default elsewhere
     hardware=HardwareResource(
         cpu=CpuResource(architecture=CpuArchitecture.X86_64),

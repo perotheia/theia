@@ -82,6 +82,13 @@ public:
     NodeBinding* bind_node(GenServerBase& node,
                             uint32_t tipc_type, uint32_t tipc_instance);
 
+    // Look up an already-bound node's binding by its TIPC address. Lets a
+    // runnable's do_start() install extra dispatch entries on ANOTHER node's
+    // binding (e.g. com's ComGrpcProxy registering the firehose casts on
+    // ComDaemon's binding) without threading the pointer through main.cc.
+    // Returns nullptr if no node is bound at (type, instance).
+    NodeBinding* binding_for(uint32_t tipc_type, uint32_t tipc_instance);
+
     // Register a remote handle_cast handler for typed message Msg on
     // the given binding. Sender stamps service_id = djb2_low16("Msg");
     // receiver's `node` exposes handle_cast(const Msg&, State&).

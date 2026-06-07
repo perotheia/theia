@@ -37,24 +37,21 @@
 // (ComDaemon's TIPC wire) — the deliberate two-codec, one-process design.
 
 #include "lib/ComGrpcProxy.hh"
+#include "lib/ComDaemon.hh"       // ComDaemon::kTipcType (firehose receiver addr)
 
-#include "impl/sup_firehose.hpp"  // #432 firehose: ComDaemon-fed topo-pair stream
+#include "impl/sup_firehose.hpp"          // #432 firehose: reassembled stream
+#include "impl/sup_firehose_register.hpp" // #432 install firehose cast-sinks
 #include "impl/sup_link.hpp"      // #418 control path over the standard transport
+
+#include "TipcMux.hh"             // process_mux()->binding_for(...)
 
 #include "supervisor_bridge.grpc.pb.h"
 
-// supervisor's own protos — reused verbatim (the wire types com bridges).
-#include "ChildSelector.pb.h"
-#include "ChildSpec.pb.h"
-#include "ControlReply.pb.h"
-#include "ControlRequest.pb.h"
-#include "DeleteChildRequest.pb.h"
-#include "HealthBeacon.pb.h"
-#include "StartChildRequest.pb.h"
-#include "SupervisionEvent.pb.h"
-#include "TraceConfig.pb.h"
-#include "TraceConfigList.pb.h"
-#include "TreeSnapshot.pb.h"
+// The supervisor's wire types com bridges — now ONE consolidated libprotobuf
+// header (package system_supervisor; ChildSelector, ChildSpec, ControlReply,
+// SupervisionEvent, TraceConfigList, TreeSnapshot, …). The old per-message
+// ChildSelector.pb.h / ControlRequest.pb.h / etc. are gone.
+#include "supervisor.pb.h"
 
 #include <grpcpp/server.h>
 #include <grpcpp/server_builder.h>
@@ -277,24 +274,37 @@ std::atomic<bool>                           g_up{false};
 void ComGrpcProxy::do_start() {
     std::fprintf(stderr, "[%s] runnable starting\n", kNodeName);
 
-    // #432 — the firehose no longer needs a connect-or-fail uplink: the
-    // supervisor CASTs the #429 topo-pair stream to ComDaemon (bound by
-    // main.cc) which feeds SupFirehose; Subscribe reads from it. So do_start
-    // no longer hard-fails when the supervisor is down — Subscribe just sees
-    // no frames until the supervisor comes up and casts a snapshot.
+    // #432 — install the firehose cast-sinks on ComDaemon's binding (the
+    // supervisor CASTs the #429 topo-pair stream to ComDaemon's TIPC name).
+    // This is RUNNABLE-OWNED (here in do_start), NOT in the gen-app generated
+    // main.cc, so a gen-app regen can't wipe it. ComDaemon is bound by main.cc
+    // before the runnables start; we look its binding up by address. Without
+    // this, the firehose messages land on ComDaemon and are dropped, and
+    // Subscribe streams stay empty.
+    if (auto* mux = ::theia::runtime::process_mux()) {
+        if (auto* com_daemon_b = mux->binding_for(
+                ComDaemon::kTipcType, ComDaemon::kTipcInstance)) {
+            services_com::register_firehose_casts(com_daemon_b);
+            std::fprintf(stderr, "[%s] firehose cast-sinks installed on "
+                         "ComDaemon (0x%x)\n", kNodeName, ComDaemon::kTipcType);
+        } else {
+            std::fprintf(stderr, "[%s] WARN: ComDaemon binding not found; "
+                         "firehose Subscribe will be empty\n", kNodeName);
+        }
+    }
 
-    // #418 — control link over the standard transport (RemoteRef → control
-    // node at 0x80020003/0). Best-effort: if the supervisor's control node
-    // isn't reachable yet, control RPCs return UNAVAILABLE until a restart,
-    // but the firehose still serves. We do NOT hard-fail do_start on it.
+    // #418 — control link over the standard transport (RemoteRef → SupervisorCtl
+    // at 0x80020001/0). Best-effort: if the supervisor isn't reachable yet,
+    // control RPCs return UNAVAILABLE until a restart, but the firehose still
+    // serves. We do NOT hard-fail do_start on it.
     if (!services_com::SupLink::instance().start()) {
         std::fprintf(stderr,
                      "[%s] WARN: supervisor control link (RemoteRef "
-                     "0x80020003/0) not reachable; control RPCs will return "
+                     "0x80020001/0) not reachable; control RPCs will return "
                      "UNAVAILABLE until it connects\n", kNodeName);
     } else {
         std::fprintf(stderr,
-                     "[%s] supervisor control link up (RemoteRef 0x80020003/0)\n",
+                     "[%s] supervisor control link up (RemoteRef 0x80020001/0)\n",
                      kNodeName);
     }
 

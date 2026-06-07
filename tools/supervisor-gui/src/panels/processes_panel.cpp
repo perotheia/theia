@@ -27,7 +27,7 @@
 
 #include "sup_gui/panels.h"
 
-#include "TreeSnapshot.pb.h"
+#include "supervisor.pb.h"
 
 #include <wx/wx.h>
 #include <wx/treelist.h>
@@ -106,7 +106,7 @@ void ProcessesPanel::on_frame(const std::string& machine_name,
                               uint16_t tag,
                               const std::string& payload) {
     if (tag != 0x0003) return;   // only TreeSnapshot
-    services::supervisor::TreeSnapshot snap;
+    system_supervisor::TreeSnapshot snap;
     if (!snap.ParseFromString(payload)) return;
 
     // Rebuild this machine's rows. Multi-machine: rows from other

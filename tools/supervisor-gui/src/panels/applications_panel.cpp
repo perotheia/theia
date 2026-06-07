@@ -20,7 +20,7 @@
 
 #include "sup_gui/panels.h"
 
-#include "TreeSnapshot.pb.h"
+#include "supervisor.pb.h"
 
 #include <wx/wx.h>
 #include <wx/dcbuffer.h>
@@ -60,7 +60,7 @@ struct Node {
 
 // Build hierarchy from flat list. Returns root nodes (parent_name="").
 std::vector<std::unique_ptr<Node>>
-build_tree(const services::supervisor::TreeSnapshot& snap,
+build_tree(const system_supervisor::TreeSnapshot& snap,
            std::vector<Node*>& roots_out) {
     std::vector<std::unique_ptr<Node>> nodes;
     nodes.reserve(snap.children_size());
@@ -189,7 +189,7 @@ public:
     }
 
     void set_snapshot(const std::string& machine,
-                      services::supervisor::TreeSnapshot snap) {
+                      system_supervisor::TreeSnapshot snap) {
         std::lock_guard<std::mutex> lk(mtx_);
         snapshots_[machine] = std::move(snap);
         Refresh(false);
@@ -353,7 +353,7 @@ private:
     }
 
     std::mutex mtx_;
-    std::map<std::string, services::supervisor::TreeSnapshot> snapshots_;
+    std::map<std::string, system_supervisor::TreeSnapshot> snapshots_;
     ConfigureCallback configure_cb_;
 };
 
@@ -368,7 +368,7 @@ void ApplicationsPanel::on_frame(const std::string& machine_name,
                                  uint16_t tag,
                                  const std::string& payload) {
     if (tag != 0x0003) return;  // only TreeSnapshot
-    services::supervisor::TreeSnapshot snap;
+    system_supervisor::TreeSnapshot snap;
     if (!snap.ParseFromString(payload)) return;
     canvas_->set_snapshot(machine_name, std::move(snap));
 }

@@ -16,7 +16,7 @@
 
 #include "sup_gui/panels.h"
 
-#include "SupervisionEvent.pb.h"
+#include "supervisor.pb.h"
 
 #include <wx/wx.h>
 #include <wx/listctrl.h>
@@ -416,7 +416,7 @@ void TracePanel::on_frame(const std::string& machine_name,
     if (tag != kTagEvent) return;
     if (!impl_) return;
 
-    services::supervisor::SupervisionEvent ev;
+    system_supervisor::SupervisionEvent ev;
     if (!ev.ParseFromString(payload)) return;
 
     EventRow r;

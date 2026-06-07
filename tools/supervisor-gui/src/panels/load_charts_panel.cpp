@@ -20,7 +20,7 @@
 
 #include "sup_gui/panels.h"
 
-#include "HealthBeacon.pb.h"
+#include "supervisor.pb.h"
 
 #include <wx/wx.h>
 #include <wx/dcbuffer.h>
@@ -224,7 +224,7 @@ void LoadChartsPanel::on_frame(const std::string& machine_name,
     if (tag != kTagHealth) return;
     if (!canvas_) return;
 
-    ::services::supervisor::HealthBeacon hb;
+    ::system_supervisor::HealthBeacon hb;
     if (!hb.ParseFromString(payload)) return;
 
     Sample s;

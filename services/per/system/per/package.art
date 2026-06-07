@@ -27,8 +27,6 @@
 //       + bulk migrate. Rare, privileged, ops/tooling only; separate port so it
 //       can be ACL'd / firewalled independently and never collides with the
 //       client hot path.
-//
-// per is also a SENDER on LogStream (it logs migrations + CAS conflicts).
 
 package system.services.per
 
@@ -38,9 +36,9 @@ package system.services.per
 // also lives in platform.runtime; per is a SENDER of it.
 import platform.runtime.*
 
-// Forward decl of the LogStream interface owned by system.services.log.
-// Cross-package import is by FQN; the body lives in log/package.art.
-interface senderReceiver LogStream { }
+// (Logging does NOT flow over a TIPC interface. Each node logs directly to its
+// runtime sink — file / syslog / null, selected by THEIA_LOGGER (Logger.hh).
+// svc/log[trace] handles TRACES, not logs; per has no LogStream port.)
 
 // ─── Config client messages (binary-proto values, digest-versioned) ──────
 
@@ -111,7 +109,7 @@ message ListSchemasReq  { string config_type }     // "" = all
 message SchemaList      { repeated SchemaInfo schemas }
 
 // Bulk-rewrite every stored value of a config type from one schema to another,
-// through the registered transform chain. Progress reported via LogStream;
+// through the registered transform chain. Progress logged to per's own sink;
 // crash-safe resume via a lease-bound marker (handler detail).
 message MigrateBulkReq {
     string config_type
@@ -142,7 +140,7 @@ interface clientServer PerManagerIf {
 // Config client API — Get/Put/Watch. Every app is a client; this is the single
 // server. Also the SENDER of ConfigUpdated casts to watching nodes (it requires
 // the runtime ChildControlIf-style push, realized via a RemoteRef in the
-// handler) and a LogStream sender for migration/CAS logging.
+// handler). Migration/CAS events log to per's own runtime sink (THEIA_LOGGER).
 node atomic PerClient {
     tipc type=0x80010007 instance=0
     tag = "PER"
@@ -157,7 +155,6 @@ node atomic PerClient {
         // override; this port models the intent. Mirrors the supervisor's
         // `sender child_ctrl provides ChildControlIf`.
         sender config_out provides ChildControlIf
-        sender to_log     provides LogStream  best_effort
     }
     params {
         // Per-cast connect budget (ms) for the ConfigUpdated push — a DOWN
@@ -175,7 +172,6 @@ node atomic PerManager {
     tag = "PER"
     ports {
         server manager_api provides PerManagerIf
-        sender to_log      provides LogStream  best_effort
     }
     params {
         // Where Snapshot writes / RestoreSnapshot reads the config-prefix

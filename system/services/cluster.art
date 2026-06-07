@@ -33,6 +33,7 @@
 
 package system.services
 
+import system.services.com.*
 import system.services.log.*
 import system.services.per.*
 import system.services.sm.*
@@ -49,6 +50,7 @@ import system.services.shwa.*
 // aren't packaged. They live in the source tree only as TIPC-slot
 // placeholders; add a forward-decl + import here when one grows a daemon.
 
+composition Com      { }
 composition Log      { }
 composition Per      { }
 composition Sm       { }
@@ -60,6 +62,7 @@ composition Shwa     { }
 // Exactly the FCs that have a daemon (one installable package each).
 
 cluster Services {
+    composition Com   com
     composition Log   log
     composition Per   per
     composition Sm    sm

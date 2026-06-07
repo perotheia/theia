@@ -624,3 +624,47 @@ ComputeSoftware: SoftwareSpecification = SoftwareSpecification(
 # install/central/executor.json and install/compute/executor.json.
 CentralRig: Rig = CentralSoftware.to_rig()
 ComputeRig: Rig = ComputeSoftware.to_rig()
+
+
+# ---------------------------------------------------------------------------
+# DemoSoftware — the deploy spec. The full 2(+admin)-machine vehicle, built
+# from the PARTITIONED per-machine apps (NOT the squash) so each component lands
+# on its real machine: shwa + p3 on compute, the rest on central. `theia
+# manifest` / `theia dist` emit from this.
+#
+# (The earlier squash-based DemoSoftware mis-bound shwa to central — its PTM
+# moved the process to compute but not the component. Building from the explicit
+# per-machine apps binds the COMPONENT correctly too.)
+# ---------------------------------------------------------------------------
+DemoSoftware: SoftwareSpecification = SoftwareSpecification(
+    vehicle=VehicleIdentity(name="demo", make="theia",
+                            model="gen_server-demo"),
+    machines=cast(set[SetTransformTypes], {
+        Append(CentralHost), Append(ComputeHost), Append(AdminHost),
+    }),
+    applications=cast(set[SetTransformTypes], {
+        # central: platform FCs (minus shwa) + the supervisor fabric + central apps.
+        Append(_mk_app("platform_app", CentralHost.name,
+                       _central_fc_components + _PLATFORM_FABRIC_COMPONENTS)),
+        Append(_mk_app("central_app", CentralHost.name,
+                       _central_app_components)),
+        # compute: shwa + its supervisor fabric + the compute apps (p3).
+        Append(_mk_app("compute_app", ComputeHost.name,
+                       _compute_fc_components + _PLATFORM_FABRIC_COMPONENTS
+                       + _compute_app_components)),
+    }),
+    execution_manifests=cast(set[SetTransformTypes], {
+        Append(p) for p in (
+            _central_fc_processes + _central_app_processes
+            + _compute_fc_processes + _compute_app_processes)
+    }),
+    service_manifests=cast(set[SetTransformTypes], {
+        Append(_sm) for _sm in DemoRig.service_manifests
+    }),
+    supervisors=cast(set[SetTransformTypes], {
+        # central reuses the platform tree; compute's machine-local tree is
+        # sliced per-machine by build_supervisor_tree(machine=...).
+        Append(s) for s in _central_supervisors
+    }),
+)
+

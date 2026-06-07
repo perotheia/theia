@@ -54,20 +54,28 @@ class SupervisorClient:
     the .art.
     """
 
-    def __init__(self, ctx) -> None:
+    def __init__(self, ctx, instance: int = 0) -> None:
         self.ctx = ctx
         self.probe = ctx.probe("TdbSup", instance=_unique_instance()).start()
+        # The TARGET supervisor. central's SupervisorCtl is instance 0; compute's
+        # ComputeSupervisorCtl is the same TYPE at instance 1 (they coexist on one
+        # host TIPC namespace). `tdb -i <n>` picks which one. Override the .art ref
+        # (instance 0) so the call targets the right supervisor.
+        import dataclasses
+        self._target = dataclasses.replace(
+            ctx.ref("SupervisorCtl"), tipc_instance=instance)
+        self.instance = instance
 
     @classmethod
-    def from_workspace(cls, repo: str | Path) -> "SupervisorClient":
-        return cls(_ctx(repo))
+    def from_workspace(cls, repo: str | Path, instance: int = 0) -> "SupervisorClient":
+        return cls(_ctx(repo), instance=instance)
 
     # ---- control ops (each a single nanopb CALL over TIPC) ----------------
     def get_tree(self, timeout: float = 2.0) -> dict[str, Any]:
-        return self.probe.call("SupervisorCtl", "GetTree", timeout=timeout)
+        return self.probe.call(self._target, "GetTree", timeout=timeout)
 
     def get_system_info(self, timeout: float = 2.0) -> dict[str, Any]:
-        return self.probe.call("SupervisorCtl", "GetSystemInfo", timeout=timeout)
+        return self.probe.call(self._target, "GetSystemInfo", timeout=timeout)
 
     def configure_trace(self, *, target_node: str, msg_type: str = "",
                         enabled: bool, kind: int = 0,
@@ -76,12 +84,12 @@ class SupervisorClient:
         #   platform.runtime.TraceControlPush trace_ctrl } }). msg_type is no
         # longer carried (kept as an accepted-but-ignored kwarg for callers).
         return self.probe.call(
-            "SupervisorCtl", "ConfigureTrace", timeout=timeout,
+            self._target, "ConfigureTrace", timeout=timeout,
             config=dict(target_node=target_node,
                         trace_ctrl=dict(kind=kind, enabled=enabled)))
 
     def get_trace_config(self, timeout: float = 2.0) -> dict[str, Any]:
-        return self.probe.call("SupervisorCtl", "GetTraceConfig", timeout=timeout)
+        return self.probe.call(self._target, "GetTraceConfig", timeout=timeout)
 
     _LEVELS = {"trace": 0, "debug": 1, "info": 2, "warn": 3, "error": 4}
 
@@ -91,7 +99,7 @@ class SupervisorClient:
         # embeds TraceControlPush). level name → LogLevelValue ordinal.
         lvl = self._LEVELS.get(level.lower(), 2)
         return self.probe.call(
-            "SupervisorCtl", "ConfigureLogLevel", timeout=timeout,
+            self._target, "ConfigureLogLevel", timeout=timeout,
             config=dict(target_node=target_node, log_level=dict(level=lvl)))
 
     # LogLevelValue ordinal → name (inverse of _LEVELS).
@@ -99,16 +107,16 @@ class SupervisorClient:
 
     def get_log_level_config(self, timeout: float = 2.0) -> dict[str, Any]:
         # Every reporting node's effective level (boot ⊕ override).
-        return self.probe.call("SupervisorCtl", "GetLogLevelConfig",
+        return self.probe.call(self._target, "GetLogLevelConfig",
                                timeout=timeout)
 
     def restart_child(self, name: str, timeout: float = 2.0) -> dict[str, Any]:
-        return self.probe.call("SupervisorCtl", "RestartChild", timeout=timeout,
+        return self.probe.call(self._target, "RestartChild", timeout=timeout,
                                name=name, no_restart=False)
 
     def terminate_hold(self, name: str, timeout: float = 2.0) -> dict[str, Any]:
         # TerminateChild with no_restart=true = stop-and-hold (test mocking).
-        return self.probe.call("SupervisorCtl", "TerminateChild", timeout=timeout,
+        return self.probe.call(self._target, "TerminateChild", timeout=timeout,
                                name=name, no_restart=True)
 
     # ---- firehose (SupervisorEventIf: NodeEdge / NodeState / snap_*) -------

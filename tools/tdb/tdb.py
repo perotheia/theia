@@ -503,13 +503,14 @@ _HELP = """tdb — Theia Debug Bridge. commands:
 # ---------------------------------------------------------------------------
 
 class _Session:
-    def __init__(self) -> None:
+    def __init__(self, instance: int = 0) -> None:
         self._sup = None
+        self._instance = instance      # which supervisor (TIPC instance) to target
 
     @property
     def sup(self) -> SupervisorClient:
         if self._sup is None:
-            self._sup = SupervisorClient.from_workspace(REPO)
+            self._sup = SupervisorClient.from_workspace(REPO, instance=self._instance)
         return self._sup
 
     def trace_factory(self) -> TraceClient:
@@ -570,18 +571,36 @@ def repl(sess: _Session) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
+
+    # -i / --instance <n>[,<n>...] : which supervisor(s) to target by TIPC
+    # instance (central=0, compute=1 on a shared host TIPC namespace). A list
+    # (`-i 0,1`) runs the command against each, with a header. Parsed before the
+    # verb so the rest of the CLI is unchanged.
+    instances = [0]
+    if argv and argv[0] in ("-i", "--instance"):
+        if len(argv) < 2:
+            print("tdb: -i needs an instance (e.g. -i 1 or -i 0,1)", file=sys.stderr)
+            return 2
+        instances = [int(x) for x in argv[1].split(",") if x != ""]
+        argv = argv[2:]
+
     if not argv:
-        return repl(_Session())
+        return repl(_Session(instances[0]))
 
     if argv[0] in ("help", "-h", "--help"):
         print(_HELP)
         return 0
 
-    sess = _Session()
-    try:
-        return _dispatch(sess, argv[0], argv[1:])
-    finally:
-        sess.close()
+    rc = 0
+    for inst in instances:
+        if len(instances) > 1:
+            print(f"=== supervisor instance {inst} ===")
+        sess = _Session(inst)
+        try:
+            rc = _dispatch(sess, argv[0], argv[1:]) or rc
+        finally:
+            sess.close()
+    return rc
 
 
 if __name__ == "__main__":

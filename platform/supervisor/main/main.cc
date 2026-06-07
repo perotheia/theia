@@ -46,6 +46,16 @@ int main() {
         boot_level = ::theia::runtime::parse_log_level(lvl);
     }
 
+    // TIPC instance for THIS supervisor. central + compute run the SAME binary
+    // on the SAME host TIPC namespace (network_mode: host), so they'd collide at
+    // the lib's baked kTipcInstance (0). THEIA_SUPERVISOR_INSTANCE (set per
+    // machine from the .art ComputeSupervisor prototype's instance, via
+    // executor.json's env) shifts compute to instance 1. tdb -i <n> targets it.
+    uint32_t sup_instance = SupervisorCtl::kTipcInstance;
+    if (const char* inst = std::getenv("THEIA_SUPERVISOR_INSTANCE")) {
+        sup_instance = static_cast<uint32_t>(std::strtoul(inst, nullptr, 10));
+    }
+
     ::theia::runtime::TimerService timers;
     (void)timers;  // no node requires_timers
 
@@ -83,13 +93,13 @@ int main() {
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
-                      SupervisorCtl::kTipcType, SupervisorCtl::kTipcInstance);
+                      SupervisorCtl::kTipcType, sup_instance);
         supervisor_ctl.log().info(_tipc);
     }
 
     if (auto* supervisor_ctl_cfg = config_mux.bind_node(
             supervisor_ctl, SupervisorCtl::kTipcType,
-            SupervisorCtl::kTipcInstance)) {
+            sup_instance)) {
         config_mux.register_cast<platform_runtime_LogLevelPush>(
             supervisor_ctl_cfg, supervisor_ctl);
         // Trace control (#403): supervisor pushes TraceControlPush to flip
@@ -150,7 +160,7 @@ int main() {
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
-                      SupervisorWorker::kTipcType, SupervisorWorker::kTipcInstance);
+                      SupervisorWorker::kTipcType, sup_instance);
         supervisor_worker.log().info(_tipc);
     }
 

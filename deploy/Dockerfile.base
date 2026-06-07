@@ -31,6 +31,7 @@ RUN apt-get update && \
         bash \
         coreutils \
         dpkg \
+        libcap2-bin \
         puppet \
         && \
     apt-get clean && \

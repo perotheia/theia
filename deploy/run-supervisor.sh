@@ -1,39 +1,80 @@
 #!/usr/bin/env bash
-# deploy/run-supervisor.sh — container entrypoint.
+# deploy/run-supervisor.sh — container entrypoint + puppet convergence driver.
 #
-# This is NOT a provisioner. The container does no self-provisioning: it just
-# runs whatever has already been installed on disk. Provisioning + orchestration
-# are driven FROM OUTSIDE (puppet pushed in by an operator / CI), which lays down
-#   /opt/theia/bin/supervisor          — the supervisor binary (per-machine .ipk)
-#   /opt/theia/config/executor.json    — the supervision tree for this machine
-# On the NEXT container start the entrypoint picks them up and runs.
+# Puppet is the always-on lifecycle agent. On a real host systemd runs it; in
+# docker this entrypoint runs it on each (re)start:
 #
-# Until both exist, the entrypoint LOOPS with a "waiting for orchestration"
-# message rather than exiting — so the container stays alive for an operator to
-# provision into, and a reboot after provisioning Just Works.
+#   1. puppet apply theia::provisioning   — etcd (one per cluster) + EMPTY
+#                                            executor.json (supervisor can boot).
+#   2. puppet apply theia::orchestration  — install the per-machine .ipk
+#                                            (supervisor + FCs) + the REAL
+#                                            executor.json + setcap.
+#   3. exec /opt/theia/bin/supervisor with the (real) executor.json.
 #
-# `exec` the supervisor so Docker's signals (docker stop → SIGTERM) reach it
-# directly for graceful shutdown.
+# If the supervisor exits abnormally, we FALL BACK to puppet (re-converge:
+# re-run orchestration, then re-exec) rather than just dying — a transient
+# config/binary issue self-heals on the next pass.
+#
+# $machine = $HOSTNAME (compose sets central / compute). Manifests are
+# machine-generic: provisioning/orchestration read <machine>/{machine,
+# application,execution,executor}.json. No per-host .pp.
 
-set -euo pipefail
+set -uo pipefail
 
 log() { echo "[run-supervisor] $*" >&2; }
 
+MACHINE="${HOSTNAME:-$(hostname)}"
+PUPPET_MODULES="/etc/puppet/modules"
+PUPPET_SITE="/etc/puppet"
+HIERA="/etc/puppet/hiera.yaml"
 SUPERVISOR_BIN="/opt/theia/bin/supervisor"
 EXECUTOR_JSON="/opt/theia/config/executor.json"
 
-# Wait until provisioning has put both the binary and the config in place.
-while [[ ! -x "$SUPERVISOR_BIN" || ! -f "$EXECUTOR_JSON" ]]; do
-    log "waiting for orchestration: need $SUPERVISOR_BIN (exec) + $EXECUTOR_JSON"
-    sleep 10
+# Puppet needs writable working dirs (the bind-mounted /etc/puppet is read-only).
+mkdir -p /var/lib/puppet/code /var/lib/puppet/var /var/lib/puppet/conf
+
+# $machine reaches the machine-generic classes via FACTER_theia_machine.
+export FACTER_theia_machine="$MACHINE"
+
+puppet_apply() {  # $1 = site manifest (provisioning.pp / orchestration.pp)
+    log "puppet apply $1 (machine=$MACHINE)"
+    puppet apply \
+        --confdir=/var/lib/puppet/conf \
+        --codedir=/var/lib/puppet/code \
+        --vardir=/var/lib/puppet/var \
+        --modulepath="$PUPPET_MODULES" \
+        --hiera_config="$HIERA" \
+        "$PUPPET_SITE/$1"
+}
+
+converge() {
+    puppet_apply provisioning.pp  || log "WARN: provisioning had errors"
+    puppet_apply orchestration.pp || log "WARN: orchestration had errors"
+}
+
+# 1+2. Provision then orchestrate.
+converge
+
+# 3. Run the supervisor; on abnormal exit, re-converge and retry (bounded).
+attempt=0
+while true; do
+    if [[ -x "$SUPERVISOR_BIN" && -f "$EXECUTOR_JSON" ]]; then
+        log "starting supervisor (machine=$MACHINE, manifest=$EXECUTOR_JSON)"
+        export THEIA_SUPERVISOR_MANIFEST="$EXECUTOR_JSON"
+        export THEIA_ROOT_DIR="/opt/theia"
+        "$SUPERVISOR_BIN"
+        rc=$?
+        log "supervisor exited rc=$rc"
+        [[ $rc -eq 0 ]] && exit 0   # clean shutdown (docker stop)
+    else
+        log "supervisor binary or executor.json missing after converge"
+    fi
+    attempt=$((attempt + 1))
+    if (( attempt > 5 )); then
+        log "FATAL: supervisor failed to stay up after $attempt converge attempts"
+        exit 1
+    fi
+    log "re-converging (attempt $attempt) — puppet fallback"
+    sleep 3
+    converge
 done
-
-log "supervisor ready — starting (foreground)"
-log "  binary:   $SUPERVISOR_BIN"
-log "  manifest: $EXECUTOR_JSON"
-
-# The supervisor (gen-app FC) takes NO argv — it reads its manifest + child
-# working-dir root from the environment.
-export THEIA_SUPERVISOR_MANIFEST="$EXECUTOR_JSON"
-export THEIA_ROOT_DIR="/opt/theia"
-exec "$SUPERVISOR_BIN"

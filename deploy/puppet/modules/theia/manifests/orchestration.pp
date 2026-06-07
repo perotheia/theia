@@ -1,69 +1,71 @@
-# theia::orchestration — Phase 2 of the two-phase deploy model.
+# theia::orchestration — Phase 2: install the binaries + the REAL config.
+# Machine-generic (reads <machine>/{application,execution}.json).
 #
-# When this runs:
-#   - Day-to-day application updates (FC daemons, demo binaries, …)
-#   - Anything that does NOT touch supervisor / gateway / schema
+# Provisioning (Phase 1) left an empty executor.json and (on the etcd host) etcd.
+# Orchestration does the frequent work:
+#   1. Install the per-machine .ipk bundle → /opt/theia/bin/<name> (supervisor +
+#      FC/app binaries). dpkg (opkg on a Yocto target).
+#   2. setcap the binaries (theia::postinstall) — caps clear on a fresh copy.
+#   3. Write the REAL executor.json from execution.json.supervisor_tree (replaces
+#      the empty tree provisioning seeded) + machines.json.
+#   4. Notify the supervisor to reload (tdb) — or, in the docker flow, the
+#      entrypoint restart picks up the new executor.json.
 #
-# What it does:
-#   1. For every bazel_buildable component in application.json, install /
-#      upgrade /opt/theia/apps/<name>.ipk.
-#   2. Notify the supervisor to reload its child table (no restart) via tdb.
-#
-# Per-machine config source: ${manifest_dir}/application.json — same
-#   Distribution tarball as machine.json. Orchestration runs are triggered
-#   remotely (push) when a new application release is published: the operator
-#   pushes a fresh .ipk + an updated application.json side-by-side, then runs
-#   `puppet apply orchestration.pp`.
-#
-# Full updates (supervisor / gateway) DO NOT use this path — they go through
-# theia::provisioning, which restarts the stack and runs any per migration.
+# $machine from FACTER_theia_machine; reads ${manifest_dir}/<machine>/*. No
+# per-host .pp.
 
 class theia::orchestration (
     String $machine,
-    String $manifest_dir     = "/etc/theia/manifest",
-    String $app_install_root = "/opt/theia/apps",
-    String $tdb_bin          = "/opt/theia/bin/tdb",
+    String $manifest_dir = "/etc/theia/manifest",
+    String $ipk_dir      = "/opt/theia/ipk",
+    String $tdb_bin      = "/opt/theia/bin/tdb",
 ) {
-    $application_json_path = "${manifest_dir}/application.json"
+    $executor_src = "${manifest_dir}/${machine}/executor.json"
+    $ipk_path     = "${ipk_dir}/${machine}.ipk"
 
-    file { $app_install_root:
+    notice("theia::orchestration: ${machine} ← ${ipk_path} + real executor.json")
+
+    file { ['/opt/theia', '/opt/theia/config']:
         ensure => directory,
         mode   => '0755',
     }
 
-    $manifest = parsejson(file($application_json_path))
-
-    notice("theia::orchestration: ${application_json_path} → machine '${machine}'")
-
-    # ----- 1. Install / upgrade application .ipks -------------------------
-    #
-    # Flatten applications[].components[] to the buildable ones; each has a
-    # /opt/theia/apps/<name>.ipk staged beside the manifest. ensure => latest:
-    # the operator's push moves the .ipk to the new bits before this runs and
-    # dpkg compares versions. A version bump notifies the supervisor reload.
-    $components = $manifest['applications'].reduce([]) |$acc, $app| {
-        $acc + $app['components'].filter |$c| { $c['bazel_buildable'] }
+    # ----- 1. Install the per-machine .ipk bundle -------------------------
+    # The bundle drops every binary (supervisor + FCs) at /opt/theia/bin/<name>.
+    # dpkg handles the opkg ar+tar.gz archive; switch to provider opkg on Yocto.
+    package { "theia-${machine}":
+        ensure   => 'latest',
+        provider => 'dpkg',
+        source   => $ipk_path,
     }
 
-    $components.each |$cmp| {
-        package { "theia-app-${cmp['name']}":
-            ensure   => 'latest',
-            provider => 'dpkg',
-            source   => "${app_install_root}/${cmp['name']}.ipk",
-            require  => File[$app_install_root],
-            notify   => Exec['theia-supervisor-reload'],
-        }
+    # ----- 2. setcap (caps clear on a fresh binary copy) ------------------
+    class { 'theia::postinstall':
+        root    => '/opt/theia/bin',
+        require => Package["theia-${machine}"],
     }
 
-    # ----- 2. Tell the supervisor to reload (no restart) ------------------
-    #
-    # The supervisor exposes a control plane (services/com gRPC bridge ↔ the
-    # Theia transport) that tdb drives. A reload re-reads the executor tree so
-    # added/removed children are picked up. refreshonly: only fires on a .ipk
-    # change above. No blanket restarts — that's a provisioning concern.
+    # ----- 3. REAL executor.json (the supervisor tree) --------------------
+    # Replaces the empty tree provisioning seeded. `theia manifest` already
+    # extracted execution.json.supervisor_tree into a ready-to-run executor.json
+    # per host, so puppet just COPIES it (no JSON re-serialize / stdlib needed).
+    file { '/opt/theia/config/executor.json':
+        ensure  => 'file',
+        mode    => '0644',
+        source  => $executor_src,
+        require => [File['/opt/theia/config'], Package["theia-${machine}"]],
+        notify  => Exec['theia-supervisor-reload'],
+    }
+
+    # ----- 4. Reload the supervisor (no blanket restart) ------------------
+    # Fires only when executor.json changed, and ONLY if tdb is present — on a
+    # live host tdb reload is the no-downtime path; in docker tdb isn't packaged
+    # yet and the entrypoint restart re-reads the config instead, so a missing
+    # tdb must not fail the catalog.
     exec { 'theia-supervisor-reload':
         command     => "${tdb_bin} reload",
         refreshonly => true,
+        onlyif      => "/usr/bin/test -x ${tdb_bin}",
         path        => ['/usr/bin', '/bin', '/opt/theia/bin'],
     }
 }

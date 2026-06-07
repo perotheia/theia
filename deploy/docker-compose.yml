@@ -34,6 +34,33 @@
 
 services:
 
+  # etcd — ONE per cluster (central's machine.json declares it). Behind the
+  # `etcd` profile because in a dev box the HOST already runs etcd on
+  # 127.0.0.1:2379 (and under network_mode: host a second one would collide on
+  # :2380). Bring it up only on a clean machine with no host etcd:
+  #     docker compose --profile etcd up
+  # Either way central treats etcd as externally provided (FACTER_theia_etcd_
+  # external) and connects at 127.0.0.1:2379 (machine.json etcd_endpoint).
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.12
+    container_name: theia-etcd
+    profiles: ["etcd"]
+    network_mode: host
+    command:
+      - /usr/local/bin/etcd
+      - --name=theia0
+      - --data-dir=/var/lib/theia-etcd
+      - --listen-client-urls=http://127.0.0.1:2379
+      - --advertise-client-urls=http://127.0.0.1:2379
+      - --listen-peer-urls=http://127.0.0.1:2380
+      - --initial-advertise-peer-urls=http://127.0.0.1:2380
+      - --initial-cluster=theia0=http://127.0.0.1:2380
+      - --initial-cluster-state=new
+      - --initial-cluster-token=theia-etcd-token
+    volumes:
+      - ./logs/etcd:/var/lib/theia-etcd
+    restart: unless-stopped
+
   central:
     image: theia-central:latest
     build:
@@ -57,12 +84,21 @@ services:
       - NET_RAW
       - NET_ADMIN
     volumes:
-      # Logs persist to ./logs/ for inspection after teardown. Everything else
-      # under /opt/theia is provisioned from outside, not mounted.
+      # Puppet drives provisioning/orchestration in-container (run-supervisor.sh).
+      # It needs: the puppet module tree + site manifests, the per-machine JSON
+      # manifests, and the built .ipk bundles. All read-only — puppet copies out
+      # of them into /opt/theia.
+      - ./puppet:/etc/puppet:ro
+      - ../dist/manifest:/etc/theia/manifest:ro
+      - ../bazel-bin/dist/manifest:/opt/theia/ipk:ro
       - ./logs/central:/var/log/theia
     environment:
       - HOSTNAME=central
       - TZ=UTC
+      # etcd is provided by the compose `etcd` service (not apt-installed into
+      # this minimal container); provisioning reads FACTER_theia_etcd_external and
+      # skips the in-image etcd install while honouring machine.json's etcd decl.
+      - FACTER_theia_etcd_external=1
     restart: unless-stopped
 
   compute:
@@ -79,6 +115,10 @@ services:
       - NET_RAW
       - NET_ADMIN
     volumes:
+      # Same puppet-driven provisioning inputs as central (compute has no etcd).
+      - ./puppet:/etc/puppet:ro
+      - ../dist/manifest:/etc/theia/manifest:ro
+      - ../bazel-bin/dist/manifest:/opt/theia/ipk:ro
       - ./logs/compute:/var/log/theia
     environment:
       - HOSTNAME=compute

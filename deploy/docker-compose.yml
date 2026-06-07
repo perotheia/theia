@@ -41,6 +41,21 @@ services:
       dockerfile: central/Dockerfile
     container_name: theia-central
     network_mode: host
+    # Capabilities the Theia binaries hold (the setcap contract in
+    # theia::postinstall, applied at provisioning). cap_add raises the
+    # container's bounding/ambient set so the file caps (+eip) actually take on
+    # exec; without it setcap'd binaries silently run uncapped under Docker's
+    # default cap drop:
+    #   SYS_NICE — supervisor: realtime sched (SCHED_FIFO/RR) + CPU affinity on
+    #              the FC node threads, raised into ambient so forked children
+    #              inherit it.
+    #   NET_RAW + NET_ADMIN — gateway: AF_PACKET / raw CAN+UDP for ASAM-CMP
+    #              capture (gateway is dropped from the build today; kept here
+    #              so it works the moment it's re-added).
+    cap_add:
+      - SYS_NICE
+      - NET_RAW
+      - NET_ADMIN
     volumes:
       # Logs persist to ./logs/ for inspection after teardown. Everything else
       # under /opt/theia is provisioned from outside, not mounted.
@@ -57,6 +72,12 @@ services:
       dockerfile: compute/Dockerfile
     container_name: theia-compute
     network_mode: host
+    # Same cap contract as central (see its comment) — supervisor needs
+    # SYS_NICE; NET_RAW/NET_ADMIN for the gateway when re-added.
+    cap_add:
+      - SYS_NICE
+      - NET_RAW
+      - NET_ADMIN
     volumes:
       - ./logs/compute:/var/log/theia
     environment:

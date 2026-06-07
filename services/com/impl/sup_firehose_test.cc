@@ -57,7 +57,7 @@ const std::vector<N> kTree = {
 
 // Drive one full snapshot through SupFirehose in the given visit order, and
 // return the reassembled TreeSnapshot (read off a fresh subscriber).
-::services::supervisor::TreeSnapshot drive(const std::vector<N>& order,
+::system_supervisor::TreeSnapshot drive(const std::vector<N>& order,
                                            uint64_t generation) {
     auto sub = SupFirehose::instance().subscribe();
 
@@ -76,7 +76,7 @@ const std::vector<N> kTree = {
     SupFirehose::instance().on_snapshot_end(generation);
 
     // The reassembled snapshot is the one Frame now on the subscriber queue.
-    ::services::supervisor::TreeSnapshot snap;
+    ::system_supervisor::TreeSnapshot snap;
     {
         std::lock_guard<std::mutex> lk(sub->mtx);
         assert(!sub->queue.empty() && "no snapshot frame was produced");
@@ -93,7 +93,7 @@ const std::vector<N> kTree = {
 // can compare two snapshots independent of child-list ORDER (order is
 // cosmetic; the structural truth is the parent_name links).
 std::map<std::string, std::string> normalise(
-        const ::services::supervisor::TreeSnapshot& snap) {
+        const ::system_supervisor::TreeSnapshot& snap) {
     std::map<std::string, std::string> m;
     for (const auto& c : snap.children()) {
         char buf[256];

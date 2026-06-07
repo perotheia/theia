@@ -76,7 +76,7 @@ cc_library(
     deps = [
         # libprotobuf supervisor message types (the gRPC-edge codec it
         # reassembles INTO). No grpc, no nanopb.
-        "//platform/supervisor:supervisor_pb_cpp",
+        "//services/com:com_bridge_grpc",
     ],
 )
 
@@ -90,7 +90,7 @@ cc_test(
     copts = ["-std=c++17", "-Wall", "-Wextra"],
     deps = [
         ":sup_firehose",
-        "//platform/supervisor:supervisor_pb_cpp",
+        "//services/com:com_bridge_grpc",
     ],
 )
 
@@ -120,8 +120,11 @@ cc_library(
         # RemoteCodec specializations. NO com_bridge_grpc — keeps the
         # libprotobuf ControlRequest.pb.h off this TU's include path.
         "//platform/runtime:runtime",
-        "//platform/supervisor:supervisor_nanopb",
-        "//platform/supervisor:supervisor_codecs_hdr",
+        # nanopb supervisor structs (system/supervisor/supervisor.pb.h) +
+        # supervisor_codecs.hh (RemoteCodec specializations), both via the
+        # supervisor lib (includes=[".."] + platform_protos). NO com_bridge_grpc
+        # — keeps the libprotobuf supervisor cpp/*.pb.h off this nanopb TU.
+        "//platform/supervisor/lib:supervisor_lib",
     ],
 )
 
@@ -153,8 +156,11 @@ cc_library(
         # NO com_bridge_grpc — keeps the libprotobuf supervisor cpp/*.pb.h off
         # this TU's include path.
         "//platform/runtime:runtime",
-        "//platform/supervisor:supervisor_nanopb",
-        "//platform/supervisor:supervisor_codecs_hdr",
+        # nanopb supervisor structs (system/supervisor/supervisor.pb.h) +
+        # supervisor_codecs.hh (RemoteCodec specializations), both via the
+        # supervisor lib (includes=[".."] + platform_protos). NO com_bridge_grpc
+        # — keeps the libprotobuf supervisor cpp/*.pb.h off this nanopb TU.
+        "//platform/supervisor/lib:supervisor_lib",
     ],
 )
 

@@ -23,9 +23,9 @@ struct SupFirehose::Build {
     uint64_t generation = 0;
     uint64_t timestamp_ms = 0;
     std::vector<std::string> order;                 // names, topo order
-    std::map<std::string, ::services::supervisor::ChildState> rows;
+    std::map<std::string, ::system_supervisor::ChildState> rows;
 
-    ::services::supervisor::ChildState& row(const std::string& name) {
+    ::system_supervisor::ChildState& row(const std::string& name) {
         auto it = rows.find(name);
         if (it == rows.end()) {
             order.push_back(name);
@@ -137,7 +137,7 @@ void SupFirehose::on_snapshot_end(uint64_t generation) {
             build_.reset();
             return;
         }
-        ::services::supervisor::TreeSnapshot snap;
+        ::system_supervisor::TreeSnapshot snap;
         snap.set_generation(build_->generation);
         snap.set_timestamp_ms(build_->timestamp_ms);
         for (const auto& nm : build_->order) {

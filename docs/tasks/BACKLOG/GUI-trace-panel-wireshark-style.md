@@ -1,5 +1,18 @@
 # Trace panel — Wireshark-style layout
 
+> **STATUS (implemented + live):** the panel ships in
+> `tools/supervisor-gui/src/panels/trace_panel.cpp` — virtual `wxListCtrl` top
+> + lazy `wxTreeCtrl` detail + filter, exactly this spec. **Data source CHANGED**
+> from the spec below: it now follows com's **TraceForwarder TraceStream**
+> (:7710, tag 0x0005) — the live message traces `tdb logcat` / `rtdb logcat`
+> show (node→node casts/calls) — NOT the etcd `/theia/events/` SupervisionEvent
+> feed (the supervisor lifecycle firehose has no remote egress under the
+> snapshot-only pull model). Columns are TIME｜MACHINE｜KIND｜SRC｜DST｜MSG TYPE;
+> detail groups are Header / Subject / Raw payload. The KIND coloring,
+> key:value filter (`src:`/`dst:`/`msg:`/`kind:`/`machine:`), and lazy hex
+> payload all work. Deferred from this spec: tombstone tail group (lifecycle-
+> only), Save-to-`.tracelog`, filter presets, per-FC custom dissectors.
+
 Refines Phase 10 of `extend-supervisor-GUI.md` (Trace Overview rework)
 with a concrete look modeled on Wireshark's three-pane window: list
 on top, decoded tree below, optional bytes pane at the bottom.

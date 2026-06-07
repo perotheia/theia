@@ -23,9 +23,12 @@ namespace sup_gui {
 
 // Same shape as the old TcpClient callback so panels still take
 // (machine_name, tag, payload). Tag values:
-//   0x0001 SupervisionEvent
+//   0x0001 SupervisionEvent   (supervisor lifecycle — not emitted under the
+//                              snapshot-only pull model; reserved)
 //   0x0002 HealthBeacon
 //   0x0003 TreeSnapshot
+//   0x0004 SystemInfo         (GetSystemInfo — host + build facts)
+//   0x0005 TraceRecord        (TraceStream egress — live message traces :7710)
 using FrameCallback =
     std::function<void(const std::string& machine_name,
                        uint16_t type_tag,
@@ -59,7 +62,12 @@ public:
                          bool enabled);
 
 private:
-    void run();
+    void run();          // SupervisorView Subscribe (:7700) + GetSystemInfo
+    void run_trace();    // TraceStream Subscribe (:7710) — live trace records
+
+    // Derive the trace endpoint from host_port_: same host, port 7710 (com's
+    // TraceForwarder). Overridable via $THEIA_COM_TRACE_LISTEN host:port.
+    std::string trace_endpoint() const;
 
     std::string             machine_name_;
     std::string             host_port_;
@@ -67,7 +75,9 @@ private:
     std::atomic<bool>       running_  {false};
     std::atomic<bool>       connected_{false};
     std::thread             thread_;
+    std::thread             trace_thread_;
     std::shared_ptr<grpc::Channel> channel_;
+    std::shared_ptr<grpc::Channel> trace_channel_;
 };
 
 }  // namespace sup_gui

@@ -57,7 +57,7 @@ using RestoreSnapshotReq = system_services_per_RestoreSnapshotReq;
 class PerManager : public ::theia::runtime::GenServer<PerManager, PerManagerState> {
 public:
     static constexpr const char* kNodeName = "per_manager";
-    static constexpr uint32_t kTipcType     = 0x80010008u;
+    static constexpr uint32_t kTipcType     = 0x80010016u;
     static constexpr uint32_t kTipcInstance = 0u;
 
     // AUTOSAR Reporting / Non-Reporting flag (per .art `reporting`

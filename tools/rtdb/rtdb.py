@@ -34,10 +34,52 @@ from pathlib import Path
 # rtdb_client + the shared command layer.
 sys.path.insert(0, str(Path(__file__).resolve().parent))           # rtdb_client
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tdb"))  # tdb_commands
-from rtdb_client import SupervisorClient, TraceClient  # noqa: E402
-from tdb_commands import _COMMANDS, _HELP              # noqa: E402
+from rtdb_client import SupervisorClient, TraceClient, PerClient  # noqa: E402
+from tdb_commands import _COMMANDS as _SHARED_COMMANDS, _HELP, _g  # noqa: E402
+import shlex  # noqa: E402,F811  (re-import safe; used by repl)
 
 _DEFAULT_TARGET = "127.0.0.1:7700"
+
+
+# ---------------------------------------------------------------------------
+# rtdb-only verbs: per (persistency) proxy via com's PerView gRPC. tdb reaches
+# per directly via the probe (get-snapshot); rtdb reaches it through com.
+# ---------------------------------------------------------------------------
+
+def cmd_schemas(args, sup, _tf) -> int:
+    """schemas [<config_type>] — per's schema registry via com PerView."""
+    target = getattr(sup, "_target", _DEFAULT_TARGET)
+    pc = PerClient(target)
+    try:
+        ct = args[0] if args else ""
+        rows = pc.list_schemas(ct, timeout=4.0)
+        if not rows:
+            print("(no schemas registered)")
+            return 0
+        for config_type, digest in rows:
+            print(f"{config_type:40} {digest}")
+        return 0
+    finally:
+        pc.stop()
+
+
+def cmd_snapshot(args, sup, _tf) -> int:
+    """snapshot [<label>] — trigger a per config backup via com PerView."""
+    target = getattr(sup, "_target", _DEFAULT_TARGET)
+    pc = PerClient(target)
+    try:
+        label = args[0] if args else "rtdb"
+        status, message, _rev = pc.snapshot(label, timeout=5.0)
+        print(f"snapshot {label!r} -> status={status}  {message}")
+        return 0 if status == 0 else 1
+    finally:
+        pc.stop()
+
+
+# rtdb's command map = the shared verbs + the PerView-only schemas/snapshot.
+_COMMANDS = dict(_SHARED_COMMANDS)
+_COMMANDS["schemas"]  = cmd_schemas
+_COMMANDS["snapshot"] = cmd_snapshot
 
 # rtdb's help is the shared one with the tdb-specific intro line swapped + the
 # transport note. We just print the shared body (verb list is identical).

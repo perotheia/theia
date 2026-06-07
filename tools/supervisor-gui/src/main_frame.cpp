@@ -88,12 +88,14 @@ MainFrame::MainFrame(std::vector<MachineEndpoint> machines)
     applications_   = new ApplicationsPanel (notebook_);
     processes_      = new ProcessesPanel    (notebook_);
     etcd_panel_     = new EtcdPanel         (notebook_);
+    persistency_    = new PersistencyPanel  (notebook_);
     trace_          = new TracePanel        (notebook_);
     notebook_->AddPage(system_panel_, "System");
     notebook_->AddPage(load_charts_,  "Load Charts");
     notebook_->AddPage(applications_, "Applications");
     notebook_->AddPage(processes_,    "Processes");
     notebook_->AddPage(etcd_panel_,   "Table Viewer");
+    notebook_->AddPage(persistency_,  "Persistency");
     notebook_->AddPage(trace_,        "Trace");
 
     splitter->SplitVertically(machines_panel_, notebook_, 220);
@@ -145,6 +147,27 @@ MainFrame::MainFrame(std::vector<MachineEndpoint> machines)
             }
         });
 
+    // Persistency panel — route ListSchemas / Snapshot to the FOCUSED machine's
+    // GrpcClient (falling back to the first one). per is one-per-cluster, so a
+    // single machine's com proxies it; the focused machine is the right target.
+    persistency_->set_callbacks(
+        [this](const std::string& config_type, bool* ok)
+            -> std::vector<PersistencyPanel::Schema> {
+            GrpcClient* c = client_for_focus();
+            if (!c) { if (ok) *ok = false; return {}; }
+            std::vector<PersistencyPanel::Schema> out;
+            bool inner_ok = false;
+            for (auto& s : c->list_schemas(config_type, &inner_ok))
+                out.push_back({s.config_type, s.digest});
+            if (ok) *ok = inner_ok;
+            return out;
+        },
+        [this](const std::string& label, std::string* msg) -> int {
+            GrpcClient* c = client_for_focus();
+            if (!c) { if (msg) *msg = "no machine connected"; return -1; }
+            return c->snapshot(label, msg);
+        });
+
     // One GrpcClient per machine.
     for (auto& m : machines) {
         std::string host_port = m.address + ":" + std::to_string(m.port);
@@ -155,6 +178,16 @@ MainFrame::MainFrame(std::vector<MachineEndpoint> machines)
             }));
         clients_.back()->start();
     }
+}
+
+GrpcClient* MainFrame::client_for_focus() {
+    const std::string focus = machines_panel_ ? machines_panel_->focused()
+                                              : std::string();
+    if (!focus.empty()) {
+        for (auto& c : clients_)
+            if (c && c->machine_name() == focus) return c.get();
+    }
+    return clients_.empty() ? nullptr : clients_.front().get();
 }
 
 MainFrame::~MainFrame() {

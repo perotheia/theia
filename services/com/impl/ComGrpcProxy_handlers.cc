@@ -39,6 +39,7 @@
 #include "lib/ComGrpcProxy.hh"
 
 #include "impl/sup_link.hpp"      // #418 control path over the standard transport
+#include "impl/per_link.hpp"      // per (persistency) proxy — ListSchemas/Snapshot
 
 #include "supervisor_bridge.grpc.pb.h"
 
@@ -274,12 +275,57 @@ private:
     // No firehose member: Subscribe POLLS SupLink::get_tree() (the pull model).
 };
 
+// ---- gRPC service: PerView — proxy services/per's manager ops -------------
+// com proxies per's schema-registry + snapshot ops over gRPC (so the GUI/rtdb
+// inspect the config store without a second etcd client). PerLink RemoteRef-
+// calls PerManager (TIPC 0x80010016); this edge translates per's primitive
+// PerSchema/PerOpReply ↔ the libprotobuf PerView messages.
+class PerViewImpl final : public services::com::PerView::Service {
+public:
+    grpc::Status ListSchemas(
+            grpc::ServerContext*,
+            const services::com::ListSchemasCall* req,
+            services::com::PerSchemaList* out) override {
+        std::vector<services_com::PerSchema> schemas;
+        if (!services_com::PerLink::instance().list_schemas(
+                req ? req->config_type() : "", schemas))
+            return per_unavailable();
+        for (const auto& s : schemas) {
+            auto* row = out->add_schemas();
+            row->set_config_type(s.config_type);
+            row->set_digest(s.digest);
+        }
+        return grpc::Status::OK;
+    }
+
+    grpc::Status Snapshot(
+            grpc::ServerContext*,
+            const services::com::SnapshotCall* req,
+            services::com::PerReply* out) override {
+        services_com::PerOpReply r;
+        if (!services_com::PerLink::instance().snapshot(
+                req ? req->label() : "", r))
+            return per_unavailable();
+        out->set_status(r.status);
+        out->set_message(r.message);
+        out->set_mod_rev(r.mod_rev);
+        return grpc::Status::OK;
+    }
+
+private:
+    static grpc::Status per_unavailable() {
+        return grpc::Status(grpc::StatusCode::UNAVAILABLE,
+                            "persistency link (per) unavailable / timeout");
+    }
+};
+
 // ---- File-static runnable state (one ComGrpcProxy per process) -----------
 // Held here rather than as ComGrpcProxy members so lib/ComGrpcProxy.hh stays
 // byte-stable against gen-app. do_start builds them; do_stop tears them down.
 // No firehose uplink: the live tree is a GetTree poll (SupLink), so com needs
 // no ComDaemon cast-sink wiring — Subscribe pulls on an interval.
 std::unique_ptr<SupervisorViewImpl>         g_sup_svc;
+std::unique_ptr<PerViewImpl>                g_per_svc;
 std::unique_ptr<grpc::Server>               g_server;
 std::atomic<bool>                           g_up{false};
 
@@ -307,21 +353,39 @@ void ComGrpcProxy::do_start() {
                      kNodeName);
     }
 
+    // per (persistency) proxy link — RemoteRef → PerManager (0x80010016).
+    // Best-effort like the supervisor link: PerView RPCs return UNAVAILABLE
+    // until per is reachable. (per may be down or absent on a machine.)
+    if (!services_com::PerLink::instance().start()) {
+        std::fprintf(stderr,
+                     "[%s] WARN: persistency link (per 0x80010016) not "
+                     "reachable; PerView RPCs return UNAVAILABLE\n", kNodeName);
+    } else {
+        std::fprintf(stderr,
+                     "[%s] persistency link up (RemoteRef 0x80010016/0)\n",
+                     kNodeName);
+    }
+
     g_sup_svc = std::make_unique<SupervisorViewImpl>();
+    g_per_svc = std::make_unique<PerViewImpl>();
 
     const std::string listen = listen_addr();
     grpc::ServerBuilder b;
     b.AddListeningPort(listen, grpc::InsecureServerCredentials());
     b.RegisterService(g_sup_svc.get());
+    b.RegisterService(g_per_svc.get());
     g_server = b.BuildAndStart();
     if (!g_server) {
         std::fprintf(stderr, "[%s] gRPC server failed to start on %s\n",
                      kNodeName, listen.c_str());
         g_sup_svc.reset();
+        g_per_svc.reset();
         services_com::SupLink::instance().stop();
+        services_com::PerLink::instance().stop();
         return;
     }
-    std::fprintf(stderr, "[%s] gRPC SupervisorView listening on %s\n",
+    std::fprintf(stderr,
+                 "[%s] gRPC SupervisorView + PerView listening on %s\n",
                  kNodeName, listen.c_str());
     g_up.store(true);
 }
@@ -352,7 +416,9 @@ void ComGrpcProxy::do_stop() {
         g_server.reset();
     }
     g_sup_svc.reset();
+    g_per_svc.reset();
     services_com::SupLink::instance().stop();
+    services_com::PerLink::instance().stop();
     g_up.store(false);
 }
 

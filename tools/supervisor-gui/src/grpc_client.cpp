@@ -116,6 +116,54 @@ int GrpcClient::configure_trace(const std::string& target_node,
     return static_cast<int>(rep.status());
 }
 
+// ---- Persistency proxy (PerView on the SAME :7700 SupervisorView endpoint) --
+
+std::vector<GrpcClient::SchemaRow>
+GrpcClient::list_schemas(const std::string& config_type, bool* ok) {
+    std::vector<SchemaRow> out;
+    auto chan = grpc::CreateChannel(host_port_,
+                                    grpc::InsecureChannelCredentials());
+    auto ci = std::static_pointer_cast< ::grpc::ChannelInterface>(chan);
+    auto stub = ::services::com::PerView::NewStub(ci);
+    ::services::com::ListSchemasCall req;
+    req.set_config_type(config_type);
+    ::services::com::PerSchemaList rep;
+    grpc::ClientContext ctx;
+    ctx.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(3));
+    auto status = stub->ListSchemas(&ctx, req, &rep);
+    if (!status.ok()) {
+        std::fprintf(stderr, "grpc_client[%s]: ListSchemas failed: %s\n",
+                     machine_name_.c_str(), status.error_message().c_str());
+        if (ok) *ok = false;
+        return out;
+    }
+    for (const auto& s : rep.schemas())
+        out.push_back({s.config_type(), s.digest()});
+    if (ok) *ok = true;
+    return out;
+}
+
+int GrpcClient::snapshot(const std::string& label, std::string* msg) {
+    auto chan = grpc::CreateChannel(host_port_,
+                                    grpc::InsecureChannelCredentials());
+    auto ci = std::static_pointer_cast< ::grpc::ChannelInterface>(chan);
+    auto stub = ::services::com::PerView::NewStub(ci);
+    ::services::com::SnapshotCall req;
+    req.set_label(label);
+    ::services::com::PerReply rep;
+    grpc::ClientContext ctx;
+    ctx.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(5));
+    auto status = stub->Snapshot(&ctx, req, &rep);
+    if (!status.ok()) {
+        std::fprintf(stderr, "grpc_client[%s]: Snapshot failed: %s\n",
+                     machine_name_.c_str(), status.error_message().c_str());
+        if (msg) *msg = status.error_message();
+        return -1;
+    }
+    if (msg) *msg = rep.message();
+    return static_cast<int>(rep.status());
+}
+
 void GrpcClient::run() {
     while (running_.load()) {
         channel_ = grpc::CreateChannel(host_port_,

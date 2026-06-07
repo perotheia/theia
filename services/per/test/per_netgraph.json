@@ -2,7 +2,7 @@
   "package": "system.services.per",
   "nodes": [
     { "name": "PerClient",  "tipc": { "type": "0x80010007", "instance": "0" } },
-    { "name": "PerManager", "tipc": { "type": "0x80010008", "instance": "0" } },
+    { "name": "PerManager", "tipc": { "type": "0x80010016", "instance": "0" } },
     { "name": "test_sub",   "tipc": { "type": "0x800100ff", "instance": "0" } }
   ]
 }

@@ -167,8 +167,11 @@ node atomic PerClient {
 }
 
 // Manager API — schema registry + snapshot + bulk migrate. Ops/tooling only.
+// Address 0x80010016 (was 0x80010008, which COLLIDED with com's ComDaemon —
+// TIPC names are cluster-global, so two nodes sharing a type load-balance
+// connects across both ports; com's PerLink would land on its own ComDaemon).
 node atomic PerManager {
-    tipc type=0x80010008 instance=0
+    tipc type=0x80010016 instance=0
     tag = "PER"
     ports {
         server manager_api provides PerManagerIf

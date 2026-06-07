@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import shlex
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -87,10 +88,27 @@ def _render_tree(rows) -> str:
 # ---------------------------------------------------------------------------
 
 def cmd_ps(args, sup, _tf) -> int:
-    reply = sup.get_tree(timeout=3.0)
-    rows = list(_g(reply, "children", []) or [])
-    print(_render_tree(rows))
-    return 0
+    # `ps --follow [interval]` streams the tree by POLLING GetTree on an
+    # interval (default 1s) and re-rendering — the pull model (the supervisor's
+    # firehose has no remote egress; GetTree is the live source, same as a plain
+    # `ps`). com's gRPC Subscribe mirrors this poll-stream.
+    follow = "--follow" in args or "-f" in args
+    if not follow:
+        reply = sup.get_tree(timeout=3.0)
+        print(_render_tree(list(_g(reply, "children", []) or [])))
+        return 0
+    nums = [a for a in args if not a.startswith("-")]
+    interval = float(nums[0]) if nums else 1.0
+    try:
+        while True:
+            reply = sup.get_tree(timeout=3.0)
+            sys.stdout.write("\x1b[2J\x1b[H")   # clear + home
+            print(f"tdb ps --follow  (every {interval}s, Ctrl-C to stop)\n")
+            print(_render_tree(list(_g(reply, "children", []) or [])))
+            sys.stdout.flush()
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        return 0
 
 
 def cmd_supervisor(args, sup, _tf) -> int:

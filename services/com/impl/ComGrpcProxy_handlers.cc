@@ -19,15 +19,15 @@
 // typed nanopb CALL. Each RPC translates its libprotobuf gRPC args into the
 // SupLink primitives, gets a SupReply back, and fills the libprotobuf reply.
 //
-// FIREHOSE path (Subscribe: event/health/snapshot fan-out) now rides the
-// STANDARD transport too (#432): the supervisor CASTs a #429 topo-pair stream
-// (SnapshotBegin/NodeEdge/NodeState/SnapshotEnd) to com's ComDaemon (TIPC
-// 0x80010008/0); main.cc register_casts the four service_ids and feeds the
-// decoded values to SupFirehose (impl/sup_firehose), which REASSEMBLES a
-// libprotobuf TreeSnapshot and fans it out here as the SAME tagged Frame the
-// Subscribe loop already consumes. The legacy TipcUplink reader on the
-// publisher socket (0x80020001) is RETIRED. The gRPC edge stays libprotobuf;
-// the nanopb world is confined to impl/sup_link.cc + main.cc's decode.
+// FIREHOSE path (Subscribe: live tree stream) is a GetTree POLL, not a push.
+// The supervisor's in-process event firehose (broadcast_events_edge) has NO
+// remote egress — it never crosses TIPC to com. So Subscribe mirrors
+// `tdb ps --follow`: poll SupLink::get_tree() on an interval (THEIA_COM_POLL_MS,
+// default 1s) and emit each TreeSnapshot as a `snapshot` observation. GetTree
+// is the live source of truth — the same call `tdb ps` uses one-shot. The gRPC
+// client diffs successive snapshots if it wants deltas; com does not fabricate
+// event/health frames from a feed that never arrives. The gRPC edge stays
+// libprotobuf; nanopb is confined to impl/sup_link.cc.
 //
 // BUILD NOTE: grpc++ + the supervisor bridge .pb/.grpc.pb come from native
 // Bazel targets — the //services/com:com_bridge_grpc cc_library (host protoc +
@@ -37,13 +37,8 @@
 // (ComDaemon's TIPC wire) — the deliberate two-codec, one-process design.
 
 #include "lib/ComGrpcProxy.hh"
-#include "lib/ComDaemon.hh"       // ComDaemon::kTipcType (firehose receiver addr)
 
-#include "impl/sup_firehose.hpp"          // #432 firehose: reassembled stream
-#include "impl/sup_firehose_register.hpp" // #432 install firehose cast-sinks
 #include "impl/sup_link.hpp"      // #418 control path over the standard transport
-
-#include "TipcMux.hh"             // process_mux()->binding_for(...)
 
 #include "supervisor_bridge.grpc.pb.h"
 
@@ -57,6 +52,7 @@
 #include <grpcpp/server_builder.h>
 #include <grpcpp/server_context.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -69,11 +65,6 @@
 namespace ara::com {
 
 namespace {
-
-// ---- Frame tags (shared with TipcUplink's reader) ------------------------
-constexpr uint16_t kTagEvent    = 0x0001;
-constexpr uint16_t kTagHealth   = 0x0002;
-constexpr uint16_t kTagSnapshot = 0x0003;
 
 // op_kind values shared with platform/supervisor/src/runtime.cpp.
 constexpr uint32_t kOpStartChild        = 3;
@@ -98,50 +89,44 @@ class SupervisorViewImpl final
 public:
     SupervisorViewImpl() = default;
 
-    // ---- Streaming firehose ----------------------------------------------
+    // ---- Streaming firehose — GetTree POLL (the pull model) --------------
+    // The supervisor's in-process event firehose (broadcast_events_edge) has
+    // no remote egress — it never reaches com over TIPC. So Subscribe mirrors
+    // `tdb ps --follow`: poll GetTree on an interval and emit each TreeSnapshot
+    // as a `snapshot` observation. GetTree is the live source of truth (same
+    // call `tdb ps` uses one-shot). The client diffs successive snapshots if it
+    // wants edge/health deltas; com no longer fabricates them from a dead feed.
+    //
+    // Interval: THEIA_COM_POLL_MS (default 1000ms), Ctrl-C/cancel-aware.
     grpc::Status Subscribe(
             grpc::ServerContext* ctx,
             const services::com::SubscribeRequest*,
             grpc::ServerWriter<services::com::SupervisorObservation>* writer)
             override {
-        auto sub = services_com::SupFirehose::instance().subscribe();
-        std::fprintf(stderr, "com: gRPC subscriber attached\n");
-        while (!ctx->IsCancelled()) {
-            services_com::Frame f;
-            {
-                std::unique_lock<std::mutex> lk(sub->mtx);
-                sub->cv.wait_for(lk, std::chrono::milliseconds(200),
-                                 [&] {
-                                     return sub->closed || !sub->queue.empty();
-                                 });
-                if (sub->closed && sub->queue.empty()) break;
-                if (sub->queue.empty()) continue;
-                f = std::move(sub->queue.front());
-                sub->queue.pop_front();
-            }
-            services::com::SupervisorObservation obs;
-            switch (f.tag) {
-                case kTagEvent: {
-                    auto* e = obs.mutable_event();
-                    if (!e->ParseFromString(f.payload)) continue;
-                    break;
-                }
-                case kTagHealth: {
-                    auto* h = obs.mutable_health();
-                    if (!h->ParseFromString(f.payload)) continue;
-                    break;
-                }
-                case kTagSnapshot: {
-                    auto* s = obs.mutable_snapshot();
-                    if (!s->ParseFromString(f.payload)) continue;
-                    break;
-                }
-                default:
-                    continue;          // unknown — skip
-            }
-            if (!writer->Write(obs)) break;        // client gone
+        int poll_ms = 1000;
+        if (const char* e = std::getenv("THEIA_COM_POLL_MS")) {
+            int v = std::atoi(e);
+            if (v >= 50) poll_ms = v;
         }
-        services_com::SupFirehose::instance().unsubscribe(sub);
+        std::fprintf(stderr, "com: gRPC subscriber attached "
+                     "(GetTree poll every %dms)\n", poll_ms);
+        while (!ctx->IsCancelled()) {
+            services_com::SupReply r;
+            if (services_com::SupLink::instance().get_tree(r) &&
+                !r.tree_snapshot.empty()) {
+                services::com::SupervisorObservation obs;
+                auto* s = obs.mutable_snapshot();
+                if (s->ParseFromString(r.tree_snapshot)) {
+                    if (!writer->Write(obs)) break;   // client gone
+                }
+            }
+            // Sleep in short slices so cancellation is responsive.
+            for (int slept = 0; slept < poll_ms && !ctx->IsCancelled();
+                 slept += 100) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(
+                    std::min(100, poll_ms - slept)));
+            }
+        }
         std::fprintf(stderr, "com: gRPC subscriber detached\n");
         return grpc::Status::OK;
     }
@@ -253,14 +238,14 @@ private:
         fill(reply, r);
         return grpc::Status::OK;
     }
-    // No firehose member: Subscribe reads from SupFirehose::instance() (#432).
+    // No firehose member: Subscribe POLLS SupLink::get_tree() (the pull model).
 };
 
 // ---- File-static runnable state (one ComGrpcProxy per process) -----------
 // Held here rather than as ComGrpcProxy members so lib/ComGrpcProxy.hh stays
 // byte-stable against gen-app. do_start builds them; do_stop tears them down.
-// No firehose uplink anymore (#432): the firehose arrives over the runtime
-// via ComDaemon → SupFirehose, which Subscribe reads from directly.
+// No firehose uplink: the live tree is a GetTree poll (SupLink), so com needs
+// no ComDaemon cast-sink wiring — Subscribe pulls on an interval.
 std::unique_ptr<SupervisorViewImpl>         g_sup_svc;
 std::unique_ptr<grpc::Server>               g_server;
 std::atomic<bool>                           g_up{false};
@@ -274,29 +259,10 @@ std::atomic<bool>                           g_up{false};
 void ComGrpcProxy::do_start() {
     std::fprintf(stderr, "[%s] runnable starting\n", kNodeName);
 
-    // #432 — install the firehose cast-sinks on ComDaemon's binding (the
-    // supervisor CASTs the #429 topo-pair stream to ComDaemon's TIPC name).
-    // This is RUNNABLE-OWNED (here in do_start), NOT in the gen-app generated
-    // main.cc, so a gen-app regen can't wipe it. ComDaemon is bound by main.cc
-    // before the runnables start; we look its binding up by address. Without
-    // this, the firehose messages land on ComDaemon and are dropped, and
-    // Subscribe streams stay empty.
-    if (auto* mux = ::theia::runtime::process_mux()) {
-        if (auto* com_daemon_b = mux->binding_for(
-                ComDaemon::kTipcType, ComDaemon::kTipcInstance)) {
-            services_com::register_firehose_casts(com_daemon_b);
-            std::fprintf(stderr, "[%s] firehose cast-sinks installed on "
-                         "ComDaemon (0x%x)\n", kNodeName, ComDaemon::kTipcType);
-        } else {
-            std::fprintf(stderr, "[%s] WARN: ComDaemon binding not found; "
-                         "firehose Subscribe will be empty\n", kNodeName);
-        }
-    }
-
     // #418 — control link over the standard transport (RemoteRef → SupervisorCtl
     // at 0x80020001/0). Best-effort: if the supervisor isn't reachable yet,
-    // control RPCs return UNAVAILABLE until a restart, but the firehose still
-    // serves. We do NOT hard-fail do_start on it.
+    // control RPCs (and the Subscribe GetTree poll) return UNAVAILABLE until a
+    // restart. We do NOT hard-fail do_start on it.
     if (!services_com::SupLink::instance().start()) {
         std::fprintf(stderr,
                      "[%s] WARN: supervisor control link (RemoteRef "

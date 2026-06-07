@@ -53,12 +53,15 @@ struct SupChildSpec {
 
 // A decoded ControlReply, in primitives. trace_config_list holds the raw
 // serialized services.supervisor.TraceConfigList bytes (wire-v3 identical to
-// the libprotobuf encoding) for the GetTraceConfig read-back.
+// the libprotobuf encoding) for the GetTraceConfig read-back. tree_snapshot
+// holds the raw system_supervisor.TreeSnapshot bytes for the GetTree poll
+// (the firehose Subscribe streams these on an interval — the pull model).
 struct SupReply {
     uint32_t    status = 0;
     std::string message;
     std::string child_name;
     std::string trace_config_list;   // raw proto bytes (may be empty)
+    std::string tree_snapshot;       // raw TreeSnapshot bytes (GetTree)
 };
 
 // Singleton link to the supervisor control node. Opened once by
@@ -95,6 +98,12 @@ public:
                          const std::string& msg_type, bool enabled,
                          uint32_t kind, SupReply& out, int timeout_ms = 5000);
     bool get_trace_config(SupReply& out, int timeout_ms = 5000);
+
+    // GetTree — a point-in-time TreeSnapshot. The firehose Subscribe polls
+    // this on an interval and re-emits each snapshot (the supervisor's event
+    // firehose has no remote egress; GetTree is the live source — same model
+    // as `tdb ps --follow`). Raw TreeSnapshot bytes land in out.tree_snapshot.
+    bool get_tree(SupReply& out, int timeout_ms = 3000);
 
 private:
     SupLink();

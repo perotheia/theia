@@ -240,4 +240,29 @@ bool SupLink::get_trace_config(SupReply& out, int timeout_ms) {
     return true;
 }
 
+bool SupLink::get_tree(SupReply& out, int timeout_ms) {
+    if (!impl_->started) return false;
+    std::lock_guard<std::mutex> lk(impl_->call_mu);
+    system_supervisor_GetTreeRequest req =
+        system_supervisor_GetTreeRequest_init_zero;
+    // Reply is a TreeSnapshot (not ControlReply). Re-serialize it to raw proto
+    // bytes for the gRPC Subscribe stream (SupReply.tree_snapshot), wire-
+    // identical to the libprotobuf TreeSnapshot the gRPC client decodes.
+    auto result = theia::runtime::call<system_supervisor_TreeSnapshot>(
+        impl_->ref, req, /*act=*/0, timeout_ms);
+    if (result.tag != theia::runtime::CallTag::Reply) return false;
+    // TreeSnapshot.children is max_count:64, each ChildState up to ~360B →
+    // ~23KB worst case. 48KB matches the runtime's bumped reply ceiling.
+    static uint8_t buf[48 * 1024];
+    pb_ostream_t os = pb_ostream_from_buffer(buf, sizeof(buf));
+    if (pb_encode(&os,
+            theia::runtime::RemoteCodec<system_supervisor_TreeSnapshot>::fields(),
+            &result.reply)) {
+        out.tree_snapshot.assign(reinterpret_cast<const char*>(buf),
+                                 os.bytes_written);
+    }
+    out.status = 0;
+    return true;
+}
+
 }  // namespace services_com

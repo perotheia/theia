@@ -171,8 +171,8 @@ cc_library(
         "ComGrpcProxy_handlers.cc",
         # ProbeDaemon_handlers.cc parked (services/com/backup/, see .art BACKUP).
     ],
-    # `..` so ComGrpcProxy_handlers.cc resolves `#include "impl/sup_firehose.hpp"`
-    # and `#include "lib/ComGrpcProxy.hh"` from the services/com/ root.
+    # `..` so ComGrpcProxy_handlers.cc resolves `#include "lib/ComGrpcProxy.hh"`
+    # and `#include "impl/sup_link.hpp"` from the services/com/ root.
     includes = [".."],
     copts = [
         "-std=c++17",
@@ -183,17 +183,17 @@ cc_library(
     deps = [
         "//services/com/lib:com_lib",
         # grpc++ + supervisor_bridge.{pb,grpc.pb} + supervisor message types
-        # (libprotobuf — also what sup_firehose reassembles into).
+        # (libprotobuf — the gRPC edge codec).
         "//services/com:com_bridge_grpc",
-        # #432 — the reassembler (libprotobuf TreeSnapshot; its own grpc-free
-        # lib so the unit test can link it standalone).
-        ":sup_firehose",
         # #418 — the standard-transport control link (nanopb, isolated above).
         # ComGrpcProxy_handlers.cc only sees sup_link.hpp's primitive surface.
+        # Subscribe's live-tree stream is a GetTree POLL via SupLink::get_tree()
+        # (the supervisor's in-process event firehose has no remote egress), so
+        # com_impl no longer links the sup_firehose reassembler / its nanopb
+        # register side — those targets remain standalone for if/when the
+        # supervisor grows a real remote firehose push. (sup_firehose_test is
+        # currently stale — it includes the pre-consolidation TreeSnapshot.pb.h;
+        # fix or drop it when the firehose path is revived.)
         ":sup_link",
-        # #432 — the firehose decode/register (nanopb, isolated). main.cc calls
-        # register_firehose_casts via sup_firehose_register.hpp; expose it here
-        # so the cc_binary links it.
-        ":sup_firehose_register",
     ],
 )

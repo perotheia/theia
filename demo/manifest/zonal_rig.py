@@ -148,8 +148,9 @@ ComputeHost = MachineManifest(
         address=IPv4Address("127.0.0.1"),
         port=7701,
     ),
+    # etcd is ONE per cluster — it lives on central only (CentralHost above).
+    # compute connects to central's etcd; it does not run its own.
     os_packages=[
-        OsPackage(name="etcd-server", source="opkg"),
         OsPackage(name="libsystemd0", source="opkg"),
     ],
     opkg_artifacts=list(_PLATFORM_OPKG_ARTIFACTS),

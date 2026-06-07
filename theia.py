@@ -221,7 +221,7 @@ def _emit_manifest_build_files(mdir: Path, machines: list[dict]) -> None:
             "as bazel labels.\n"
             'package(default_visibility = ["//visibility:public"])\n'
             'exports_files(["machine.json", "application.json", '
-            '"service.json", "execution.json"])\n'
+            '"service.json", "execution.json", "executor.json"])\n'
         )
     targets = [m["name"] for m in machines if m.get("kind") == "target"]
     lines = [

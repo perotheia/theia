@@ -71,10 +71,12 @@ containers RestartCount=0.
   binds ctl/worker at that instance.
 - Step d ✓ tdb -i/--instance: SupervisorClient targets an instance-overridden
   SupervisorCtl ref; `-i 0,1` runs the command per instance with a header.
-- Step c (PARTIAL — env, not the artheia field): compute's instance is set by
-  THEIA_SUPERVISOR_INSTANCE=1 in docker-compose, NOT yet by a
-  SoftwareSpecification.executor field flowing through execution.json. The
-  proper modeling (ARA Executor concept: supervisor implements Executor; the
-  per-machine executor carries its instance into execution.json so run-supervisor
-  reads it from the manifest, not a hardcoded compose env) is the remaining
-  follow-up. Works today via the env.
+- Step c ✓ DONE — the instance flows through the MANIFEST, not a compose env:
+  artheia `Supervisor` dataclass (its TIPC instance) + `Rig/SoftwareSpecification
+  .supervisor` (machine name → Supervisor; the term is `supervisor`, the
+  supervisor IMPLEMENTS the ARA Executor — `executor` is the artheia node-tree
+  term). DemoSoftware sets supervisor={compute: Supervisor(instance=1)}. Emits
+  <machine>/execution.json.supervisor_instance; run-supervisor.sh reads it →
+  THEIA_SUPERVISOR_INSTANCE. The THEIA_SUPERVISOR_INSTANCE=1 compose env is
+  REMOVED. Verified: both containers log "supervisor TIPC instance=N (from
+  manifest)" (central 0, compute 1); tdb -i 0,1 ps distinguishes them.

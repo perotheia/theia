@@ -55,6 +55,7 @@ from artheia.manifest import (
     MachineManifest,
     RestartStrategy,
     Rig,
+    Supervisor,
     SupervisorNode,
     SwComponent,
     VehicleIdentity,
@@ -666,5 +667,10 @@ DemoSoftware: SoftwareSpecification = SoftwareSpecification(
         # sliced per-machine by build_supervisor_tree(machine=...).
         Append(s) for s in _central_supervisors
     }),
+    # Per-machine supervisor identity (ARA Executor). Two supervisors on one host
+    # TIPC namespace must bind distinct instances: central=0 (default), compute=1
+    # — matching the system.art ComputeSupervisor prototype. Flows into
+    # <machine>/execution.json.supervisor_instance → THEIA_SUPERVISOR_INSTANCE.
+    supervisor={ComputeHost.name: Supervisor(instance=1)},
 )
 

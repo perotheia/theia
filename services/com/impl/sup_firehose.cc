@@ -8,8 +8,7 @@
 #include "impl/sup_firehose.hpp"
 
 // libprotobuf supervisor message types (the gRPC-edge codec).
-#include "ChildState.pb.h"
-#include "TreeSnapshot.pb.h"
+#include "supervisor.pb.h"   // libprotobuf (consolidated: ChildState, TreeSnapshot, ...)
 
 #include <map>
 #include <utility>

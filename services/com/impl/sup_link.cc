@@ -2,21 +2,20 @@
 // control node. See sup_link.hpp.
 //
 // This is the ONLY com TU that touches the nanopb supervisor control structs
-// (services_supervisor_ControlRequest/Reply). The gRPC edge stays on
+// (system_supervisor_ControlRequest/Reply). The gRPC edge stays on
 // libprotobuf; we translate to/from primitives at this boundary so the
 // same-basename ControlRequest.pb.h never meets the libprotobuf one.
 
 #include "impl/sup_link.hpp"
 
 // Standard transport + the supervisor control codecs. supervisor_codecs.hh
-// brings RemoteCodec<services_supervisor_ControlRequest/Reply> so RemoteRef
+// brings RemoteCodec<system_supervisor_ControlRequest/Reply> so RemoteRef
 // dispatches by the same service_id the supervisor's register_call uses.
 #include "NodeRef.hh"
 #include "TipcMux.hh"
-#include "supervisor/supervisor_codecs.hh"
-
-#include "ControlRequest.pb.h"   // nanopb
-#include "ControlReply.pb.h"
+#include "system/supervisor/supervisor.pb.h"   // nanopb (consolidated)
+#include "lib/supervisor_codecs.hh"      // RemoteCodec specializations
+#include <pb_encode.h>                   // GetTraceConfig re-encode
 
 #include <atomic>
 #include <cstdint>
@@ -50,6 +49,17 @@ void set_str(char* dst, size_t cap, const std::string& s) {
     std::snprintf(dst, cap, "%s", s.c_str());
 }
 
+// Log-level name → LogLevelValue ordinal (the same map tdb uses). Defaults to
+// info (2) on an unknown name.
+uint32_t level_ordinal(const std::string& level) {
+    if (level == "trace") return 0;
+    if (level == "debug") return 1;
+    if (level == "info")  return 2;
+    if (level == "warn")  return 3;
+    if (level == "error") return 4;
+    return 2;
+}
+
 }  // namespace
 
 struct SupLink::Impl {
@@ -61,20 +71,22 @@ struct SupLink::Impl {
                                         // at a time keeps the contract simple.
     std::atomic<uint32_t>   corr{1};
 
-    // Encode req, RemoteRef-call, decode reply into out. Caller holds call_mu.
-    bool do_call(const services_supervisor_ControlRequest& req,
-                 SupReply& out, int timeout_ms) {
-        auto result =
-            theia::runtime::call<services_supervisor_ControlReply>(
-                ref, req, /*act=*/0, timeout_ms);
+    // The current supervisor exposes PER-OP typed request messages (each a
+    // distinct service_id via register_call<Req, Rep>), called by name — the
+    // SAME surface tdb's probe calls. So each op builds its specific nanopb
+    // request and RemoteRef-calls it with the matching reply type. (The old
+    // single ControlRequest{op_kind} envelope is gone.)
+    //
+    // ControlReply ops → fill SupReply{status,message,child_name}.
+    template <typename Req>
+    bool call_reply(const Req& req, SupReply& out, int timeout_ms) {
+        auto result = theia::runtime::call<system_supervisor_ControlReply>(
+            ref, req, /*act=*/0, timeout_ms);
         if (result.tag != theia::runtime::CallTag::Reply) return false;
         const auto& rep = result.reply;
         out.status     = rep.status;
         out.message    = rep.message;
         out.child_name = rep.child_name;
-        out.trace_config_list.assign(
-            reinterpret_cast<const char*>(rep.trace_config_list.bytes),
-            rep.trace_config_list.size);
         return true;
     }
 };
@@ -116,14 +128,10 @@ bool SupLink::start_child(const SupChildSpec& spec, SupReply& out,
                           int timeout_ms) {
     if (!impl_->started) return false;
     std::lock_guard<std::mutex> lk(impl_->call_mu);
-    services_supervisor_ControlRequest req =
-        services_supervisor_ControlRequest_init_zero;
-    req.op_kind        = kSupOpStartChild;
-    req.correlation_id = next_correlation_id();
-    req.has_start_child = true;
-    auto& s = req.start_child;
-    s.has_spec = true;
-    auto& sp = s.spec;
+    system_supervisor_StartChildRequest req =
+        system_supervisor_StartChildRequest_init_zero;
+    req.has_spec = true;
+    auto& sp = req.spec;
     set_str(sp.name, sizeof(sp.name), spec.name);
     set_str(sp.parent_supervisor, sizeof(sp.parent_supervisor),
             spec.parent_supervisor);
@@ -145,46 +153,33 @@ bool SupLink::start_child(const SupChildSpec& spec, SupReply& out,
         set_str(sp.modules[sp.modules_count], sizeof(sp.modules[0]), m);
         ++sp.modules_count;
     }
-    return impl_->do_call(req, out, timeout_ms);
+    return impl_->call_reply(req, out, timeout_ms);
 }
 
 bool SupLink::name_op(uint32_t op_kind, const std::string& name, SupReply& out,
                       int timeout_ms) {
     if (!impl_->started) return false;
     std::lock_guard<std::mutex> lk(impl_->call_mu);
-    services_supervisor_ControlRequest req =
-        services_supervisor_ControlRequest_init_zero;
-    req.op_kind        = op_kind;
-    req.correlation_id = next_correlation_id();
-    switch (op_kind) {
-        case kSupOpDeleteChild:
-            req.has_delete_child = true;
-            set_str(req.delete_child.name, sizeof(req.delete_child.name), name);
-            break;
-        case kSupOpRestartChild:
-            req.has_restart_child = true;
-            set_str(req.restart_child.name, sizeof(req.restart_child.name),
-                    name);
-            break;
-        case kSupOpTerminateChild:
-            req.has_terminate_child = true;
-            set_str(req.terminate_child.name, sizeof(req.terminate_child.name),
-                    name);
-            break;
-        default:
-            return false;
+    // Delete has its own request; Restart + Terminate share ChildSelector
+    // (no_restart distinguishes terminate-and-hold from restart).
+    if (op_kind == kSupOpDeleteChild) {
+        system_supervisor_DeleteChildRequest req =
+            system_supervisor_DeleteChildRequest_init_zero;
+        set_str(req.name, sizeof(req.name), name);
+        return impl_->call_reply(req, out, timeout_ms);
     }
-    return impl_->do_call(req, out, timeout_ms);
+    system_supervisor_ChildSelector req =
+        system_supervisor_ChildSelector_init_zero;
+    set_str(req.name, sizeof(req.name), name);
+    req.no_restart = (op_kind == kSupOpTerminateChild);
+    return impl_->call_reply(req, out, timeout_ms);
 }
 
 bool SupLink::stop_supervisor(SupReply& out, int timeout_ms) {
     if (!impl_->started) return false;
     std::lock_guard<std::mutex> lk(impl_->call_mu);
-    services_supervisor_ControlRequest req =
-        services_supervisor_ControlRequest_init_zero;
-    req.op_kind        = kSupOpStop;
-    req.correlation_id = next_correlation_id();
-    return impl_->do_call(req, out, timeout_ms);
+    system_supervisor_Stop req = system_supervisor_Stop_init_zero;
+    return impl_->call_reply(req, out, timeout_ms);
 }
 
 bool SupLink::configure_log_level(const std::string& target_node,
@@ -192,45 +187,57 @@ bool SupLink::configure_log_level(const std::string& target_node,
                                   int timeout_ms) {
     if (!impl_->started) return false;
     std::lock_guard<std::mutex> lk(impl_->call_mu);
-    services_supervisor_ControlRequest req =
-        services_supervisor_ControlRequest_init_zero;
-    req.op_kind        = kSupOpConfigureLogLevel;
-    req.correlation_id = next_correlation_id();
-    req.has_configure_log_level = true;
-    req.configure_log_level.has_config = true;
-    auto& cfg = req.configure_log_level.config;
+    system_supervisor_ConfigureLogLevelRequest req =
+        system_supervisor_ConfigureLogLevelRequest_init_zero;
+    req.has_config = true;
+    auto& cfg = req.config;
     set_str(cfg.target_node, sizeof(cfg.target_node), target_node);
-    set_str(cfg.level, sizeof(cfg.level), level);
-    return impl_->do_call(req, out, timeout_ms);
+    // level name → LogLevelValue ordinal (same map tdb uses).
+    cfg.has_log_level = true;
+    cfg.log_level.level =
+        (platform_runtime_LogLevelValue)level_ordinal(level);
+    return impl_->call_reply(req, out, timeout_ms);
 }
 
 bool SupLink::configure_trace(const std::string& target_node,
-                              const std::string& msg_type, bool enabled,
+                              const std::string& /*msg_type*/, bool enabled,
                               uint32_t kind, SupReply& out, int timeout_ms) {
     if (!impl_->started) return false;
     std::lock_guard<std::mutex> lk(impl_->call_mu);
-    services_supervisor_ControlRequest req =
-        services_supervisor_ControlRequest_init_zero;
-    req.op_kind        = kSupOpConfigureTrace;
-    req.correlation_id = next_correlation_id();
-    req.has_configure_trace = true;
-    req.configure_trace.has_config = true;
-    auto& cfg = req.configure_trace.config;
+    system_supervisor_ConfigureTraceRequest req =
+        system_supervisor_ConfigureTraceRequest_init_zero;
+    req.has_config = true;
+    auto& cfg = req.config;
     set_str(cfg.target_node, sizeof(cfg.target_node), target_node);
-    set_str(cfg.msg_type, sizeof(cfg.msg_type), msg_type);
-    cfg.enabled = enabled;
-    cfg.kind    = kind;
-    return impl_->do_call(req, out, timeout_ms);
+    // (msg_type is no longer carried — trace is a per-node kind bitmask.)
+    cfg.has_trace_ctrl = true;
+    cfg.trace_ctrl.kind    = (platform_runtime_TraceKind)kind;
+    cfg.trace_ctrl.enabled = enabled;
+    return impl_->call_reply(req, out, timeout_ms);
 }
 
 bool SupLink::get_trace_config(SupReply& out, int timeout_ms) {
     if (!impl_->started) return false;
     std::lock_guard<std::mutex> lk(impl_->call_mu);
-    services_supervisor_ControlRequest req =
-        services_supervisor_ControlRequest_init_zero;
-    req.op_kind        = kSupOpGetTraceConfig;
-    req.correlation_id = next_correlation_id();
-    return impl_->do_call(req, out, timeout_ms);
+    system_supervisor_GetTraceConfigRequest req =
+        system_supervisor_GetTraceConfigRequest_init_zero;
+    // Reply is a TraceConfigList (not ControlReply): re-serialize it to raw
+    // proto bytes for the gRPC read-back (SupReply.trace_config_list).
+    auto result = theia::runtime::call<system_supervisor_TraceConfigList>(
+        impl_->ref, req, /*act=*/0, timeout_ms);
+    if (result.tag != theia::runtime::CallTag::Reply) return false;
+    // Encode the nanopb TraceConfigList back to bytes (wire-identical to the
+    // libprotobuf encoding the gRPC client decodes).
+    uint8_t buf[4096];
+    pb_ostream_t os = pb_ostream_from_buffer(buf, sizeof(buf));
+    if (pb_encode(&os,
+            theia::runtime::RemoteCodec<system_supervisor_TraceConfigList>::fields(),
+            &result.reply)) {
+        out.trace_config_list.assign(reinterpret_cast<const char*>(buf),
+                                     os.bytes_written);
+    }
+    out.status = 0;
+    return true;
 }
 
 }  // namespace services_com

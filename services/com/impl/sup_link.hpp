@@ -9,8 +9,8 @@
 // with a RemoteRef<…,0x80020001,0> + a dedicated reply-pump TipcMux, both here.
 //
 // The gRPC edge (ComGrpcProxy_handlers.cc) builds a NANOPB
-// services_supervisor_ControlRequest from the inbound gRPC call, hands it to
-// SupLink::call(), and gets a nanopb services_supervisor_ControlReply back,
+// system_supervisor_ControlRequest from the inbound gRPC call, hands it to
+// SupLink::call(), and gets a nanopb system_supervisor_ControlReply back,
 // which it translates to the libprotobuf reply the gRPC client expects.
 //
 // nanopb-only header surface — no libprotobuf here. The supervisor control

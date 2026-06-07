@@ -81,6 +81,15 @@ NodeBinding* TipcMux::bind_node(GenServerBase& node,
     return raw;
 }
 
+NodeBinding* TipcMux::binding_for(uint32_t tipc_type, uint32_t tipc_instance) {
+    std::lock_guard<std::mutex> lk(mu_);
+    for (auto& b : bindings_) {
+        if (b->tipc_type == tipc_type && b->tipc_instance == tipc_instance)
+            return b.get();
+    }
+    return nullptr;
+}
+
 void TipcMux::watch_fd_for_replies_(
     int fd,
     std::function<void(uint32_t, const uint8_t*, uint16_t)> sink) {

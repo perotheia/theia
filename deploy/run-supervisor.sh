@@ -1,127 +1,39 @@
 #!/usr/bin/env bash
 # deploy/run-supervisor.sh — container entrypoint.
 #
-# Lifecycle:
-#   1. Apply Puppet manifest at /etc/puppet/manifests/<host>.pp.
-#      Puppet's `theia` module installs the .ipk (if present),
-#      drops executor.json + machines.json, writes the systemd
-#      unit, and `notify`s the supervisor service.
-#   2. Detect whether supervisor is now installed. If not, fail
-#      fast — there's no useful work to do.
-#   3. Foreground-exec the supervisor binary with the executor.json
-#      so it inherits Docker's signal handling (Ctrl-C / docker stop
-#      → SIGTERM → graceful shutdown).
+# This is NOT a provisioner. The container does no self-provisioning: it just
+# runs whatever has already been installed on disk. Provisioning + orchestration
+# are driven FROM OUTSIDE (puppet pushed in by an operator / CI), which lays down
+#   /opt/theia/bin/supervisor          — the supervisor binary (per-machine .ipk)
+#   /opt/theia/config/executor.json    — the supervision tree for this machine
+# On the NEXT container start the entrypoint picks them up and runs.
 #
-# Env vars:
-#   HOSTNAME    — used to pick /etc/puppet/manifests/$HOSTNAME.pp
-#                 (also forwarded to the supervisor as --hostname,
-#                 if that flag exists; it currently doesn't but the
-#                 wiring is here).
-#   PUPPET_FLAGS — extra args to `puppet apply` (default: --detailed-exitcodes).
+# Until both exist, the entrypoint LOOPS with a "waiting for orchestration"
+# message rather than exiting — so the container stays alive for an operator to
+# provision into, and a reboot after provisioning Just Works.
+#
+# `exec` the supervisor so Docker's signals (docker stop → SIGTERM) reach it
+# directly for graceful shutdown.
 
 set -euo pipefail
 
-readonly LOG_PREFIX="[run-supervisor]"
+log() { echo "[run-supervisor] $*" >&2; }
 
-log() { echo "$LOG_PREFIX $*" >&2; }
-
-# -----------------------------------------------------------------------------
-# 1. Apply Puppet manifest.
-# -----------------------------------------------------------------------------
-
-HOSTNAME="${HOSTNAME:-$(hostname)}"
-MANIFEST="/etc/puppet/manifests/${HOSTNAME}.pp"
-
-if [[ ! -f "$MANIFEST" ]]; then
-    log "ERROR: no Puppet manifest at $MANIFEST"
-    log "       expected one of: $(ls /etc/puppet/manifests/ 2>/dev/null | tr '\n' ' ')"
-    exit 2
-fi
-
-log "applying Puppet manifest $MANIFEST"
-
-# `--detailed-exitcodes` returns:
-#   0 — no changes, no errors
-#   2 — changes applied, no errors
-#   4 — errors (no changes attempted)
-#   6 — errors AND changes attempted
-# We treat 0 and 2 as success.
-PUPPET_FLAGS="${PUPPET_FLAGS:---detailed-exitcodes --verbose}"
-
-# Puppet wants writable directories for its `codedir`, `vardir`,
-# and `confdir` working state. The bind-mounted /etc/puppet is
-# read-only (we don't want a Puppet apply to scribble back into
-# the workspace). Point Puppet's writable dirs into /var/lib/puppet
-# inside the container.
-mkdir -p /var/lib/puppet/code /var/lib/puppet/var /var/lib/puppet/conf
-
-set +e
-puppet apply $PUPPET_FLAGS \
-    --confdir=/var/lib/puppet/conf \
-    --codedir=/var/lib/puppet/code \
-    --vardir=/var/lib/puppet/var \
-    --modulepath=/etc/puppet/modules \
-    "$MANIFEST"
-rc=$?
-set -e
-
-case "$rc" in
-    0) log "Puppet: no changes" ;;
-    2) log "Puppet: changes applied successfully" ;;
-    4|6) log "ERROR: Puppet apply failed (rc=$rc)"; exit "$rc" ;;
-    *) log "ERROR: unexpected Puppet exit code $rc"; exit "$rc" ;;
-esac
-
-# -----------------------------------------------------------------------------
-# 2. Verify supervisor is installed.
-# -----------------------------------------------------------------------------
-
-# Supervisor binary: the per-machine bundle installs it at
-# /opt/theia/bin/supervisor (same dir as the FC daemons). In the dev compose
-# we ALSO bind-mount the host build at /usr/bin/theia-supervisor — prefer that
-# when present so an edit-rebuild on the host is picked up without re-packaging.
 SUPERVISOR_BIN="/opt/theia/bin/supervisor"
-if [[ -x "/usr/bin/theia-supervisor" ]]; then
-    SUPERVISOR_BIN="/usr/bin/theia-supervisor"
-fi
+EXECUTOR_JSON="/opt/theia/config/executor.json"
 
-# Supervisor tree is JSON-only since #380. Prefer executor.json; fall
-# back to a legacy executor.yaml path only if an old image still ships
-# one (the supervisor parses JSON regardless of extension).
-EXECUTOR_JSON="/etc/theia/executor.json"
-if [[ ! -f "$EXECUTOR_JSON" && -f "/etc/theia/executor.yaml" ]]; then
-    EXECUTOR_JSON="/etc/theia/executor.yaml"
-fi
+# Wait until provisioning has put both the binary and the config in place.
+while [[ ! -x "$SUPERVISOR_BIN" || ! -f "$EXECUTOR_JSON" ]]; do
+    log "waiting for orchestration: need $SUPERVISOR_BIN (exec) + $EXECUTOR_JSON"
+    sleep 10
+done
 
-if [[ ! -x "$SUPERVISOR_BIN" ]]; then
-    log "ERROR: supervisor binary not found at /opt/theia/bin/supervisor"
-    log "       (nor the dev bind-mount /usr/bin/theia-supervisor) after Puppet"
-    log "       apply. The per-machine bundle (theia::install) should drop it;"
-    log "       check the .ipk was staged + dpkg-installed."
-    exit 3
-fi
+log "supervisor ready — starting (foreground)"
+log "  binary:   $SUPERVISOR_BIN"
+log "  manifest: $EXECUTOR_JSON"
 
-if [[ ! -f "$EXECUTOR_JSON" ]]; then
-    log "ERROR: no executor.json at /etc/theia/executor.json after Puppet apply"
-    log "       Puppet should have dropped one for this host. Check the"
-    log "       theia::config resource in the manifest."
-    exit 4
-fi
-
-# -----------------------------------------------------------------------------
-# 3. Exec the supervisor as PID 1 (or close to it — `exec` swaps the
-#    current process, so signals from `docker stop` reach the
-#    supervisor directly).
-# -----------------------------------------------------------------------------
-
-log "supervisor binary ready: $SUPERVISOR_BIN"
-log "executor.json ready:    $EXECUTOR_JSON"
-log "starting supervisor (foreground)"
-
-# The ara::exec supervisor (gen-app FC) takes NO argv — it reads its manifest
-# + child working-dir root from the environment (THEIA_SUPERVISOR_MANIFEST /
-# THEIA_ROOT_DIR). (The old `run <json> --root-dir` argv was the pre-gen-app
-# CMake binary.) `exec` so docker stop's SIGTERM reaches it directly.
+# The supervisor (gen-app FC) takes NO argv — it reads its manifest + child
+# working-dir root from the environment.
 export THEIA_SUPERVISOR_MANIFEST="$EXECUTOR_JSON"
 export THEIA_ROOT_DIR="/opt/theia"
 exec "$SUPERVISOR_BIN"

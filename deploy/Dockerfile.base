@@ -1,85 +1,48 @@
 # deploy/Dockerfile.base — common base image for theia per-machine containers.
 #
-# Provides:
-#   - Ubuntu 24.04 base
-#   - opkg (for installing the per-machine .ipk produced by
-#     `bazel build @rig_<name>//<machine>:image`)
-#   - puppet-agent (apply-mode, no master needed)
-#   - systemd (PID 1) for graceful supervisor lifecycle
-#   - bash + coreutils for the run-supervisor entrypoint
+# A clean base: Ubuntu + puppet (the agent provisioning is pushed into from
+# OUTSIDE) + dpkg (to install the per-machine .ipk) + the entrypoint. Nothing
+# else. The container does NOT self-provision — run-supervisor.sh just runs
+# whatever provisioning has laid down on disk (see that script).
 #
 # Per-machine images (central, compute) layer on top:
 #   FROM theia-base:latest
-#   COPY <machine>.ipk + run-supervisor.sh + puppet manifest
+#   ENV HOSTNAME=<machine>
 #
 # Build: docker build -f deploy/Dockerfile.base -t theia-base:latest deploy/
 
 FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
-# Force a UTF-8 locale so Ruby/Puppet doesn't barf on non-ASCII bytes
-# in exec output (default LANG in a vanilla container is C/POSIX).
+# Force a UTF-8 locale so Ruby/Puppet doesn't barf on non-ASCII bytes in exec
+# output (default LANG in a vanilla container is C/POSIX).
 ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
 
-# Base distro matched to the workspace host (Ubuntu 22.04 / jammy) so
-# the bind-mounted supervisor binary's shared-lib deps (libyaml-cpp0.7,
-# libprotobuf23, libstdc++) all resolve via the system loader. Switching
-# to 24.04 would require either relinking the supervisor against newer
-# libs (libyaml-cpp0.8, libprotobuf32t64) or shipping libs in the .ipk.
-#
-# Ubuntu's `opkg` package doesn't exist in jammy either, so we use
-# `dpkg` (which handles the same ar+tar.gz archive format) since
-# pkg_opkg now emits `amd64` arch (`rules/rig.bzl`'s `arch = "amd64"`).
-# On a real opkg target (OpenWrt / Yocto), install the `opkg`
-# userspace there instead — the artifact format is identical.
+# Just the essentials:
+#   dpkg     — install the per-machine .ipk (ar+tar.gz; opkg-compatible).
+#   puppet   — apply-mode agent; provisioning/orchestration pushed from outside.
+#   bash/coreutils — the entrypoint script.
+# C.UTF-8 is built into glibc on Ubuntu 22.04 — no `locales` package /
+# locale-gen needed (the ENV above is enough). FC/supervisor binaries bring
+# their own shared-lib needs; this base stays clean — runtime libs ride in the
+# .ipk or a bind-mount, not baked here.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        ca-certificates \
-        curl \
-        gnupg \
         bash \
         coreutils \
         dpkg \
-        locales \
         puppet \
-        libyaml-cpp0.7 \
-        libprotobuf23 \
-        libgrpc++1 \
-        libgrpc10 \
-        libabsl20210324 \
-        libstdc++6 \
-        libcpprest2.10 \
-        libboost-system1.74.0 \
-        libboost-thread1.74.0 \
         && \
-    locale-gen C.UTF-8 && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# Jammy's `puppet` package installs to /usr/bin/puppet directly — no
-# /opt/puppetlabs trampoline needed. (Kept for reference: on
-# Puppetlabs' upstream `puppet-agent` package the binary lives at
-# /opt/puppetlabs/bin/puppet and would need PATH adjustment here.)
+# Theia per-machine layout (provisioning fills these):
+#   /opt/theia/bin/      — supervisor + FC binaries (from the .ipk)
+#   /opt/theia/config/   — executor.json (the supervision tree)
+#   /var/log/theia/      — supervisor logs + tombstones
+RUN mkdir -p /opt/theia/bin /opt/theia/config /var/log/theia/tombstones
 
-# Theia per-machine layout:
-#   /opt/theia/         — install root (opkg --offline-root pivot)
-#   /etc/theia/         — config (executor.json, machines.json)
-#   /var/log/theia/     — supervisor logs + tombstones
-#   /etc/puppet/        — puppet manifests + modules
-RUN mkdir -p /opt/theia /etc/theia /var/log/theia/tombstones /etc/puppet
-
-# Mounted in by docker-compose:
-#   /opt/theia/ipk/<machine>.ipk   the per-machine deploy bundle
-#   /etc/puppet/manifests/<host>.pp
-#   /etc/puppet/modules/theia/     shared puppet module
-
-# Entrypoint: applies puppet, then execs systemd as PID 1.
 COPY run-supervisor.sh /usr/local/bin/run-supervisor.sh
 RUN chmod +x /usr/local/bin/run-supervisor.sh
-
-# Trap: systemd-as-PID-1 inside Docker requires --privileged or specific
-# cgroup configuration. For the dev compose we skip systemd and run the
-# supervisor binary in foreground from run-supervisor.sh (the script
-# autodetects whether systemd is usable).
 
 ENTRYPOINT ["/usr/local/bin/run-supervisor.sh"]

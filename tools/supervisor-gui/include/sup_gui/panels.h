@@ -54,10 +54,14 @@ public:
                           const std::string& payload) = 0;
 };
 
-// "System" — basic facts about the supervisor: uptime, generation,
-// total workers / active workers, total restarts, total tombstones.
-// Driven from HealthBeacon (tag 0x0002). One wxStaticBox per machine,
-// laid out vertically.
+// "System" — host + build + supervisor facts, one wxStaticBox per machine.
+// Two groups, the same surface `tdb info` / `rtdb info` show:
+//   - SystemInfo (tag 0x0004, GetSystemInfo): hostname, kernel, os, cpus,
+//     ram (MB/GB), uptime (Dd Hh Mm), git sha, build ts, started (local).
+//   - HealthBeacon (tag 0x0002): generation, workers, restarts, tombstones,
+//     last heartbeat. (Empty until the supervisor emits health frames — com's
+//     Subscribe is snapshot-only under the pull model; SystemInfo is the live
+//     content today.)
 class SystemPanel : public PanelBase {
 public:
     explicit SystemPanel(wxWindow* parent);
@@ -65,15 +69,21 @@ public:
                   const std::string& payload) override;
 
 private:
+    // SystemInfo = 9 rows; HealthBeacon = 5 rows. Pre-allocated key/value
+    // wxStaticTexts updated in place to avoid relayout churn.
+    static constexpr int kInfoRows   = 9;
+    static constexpr int kHealthRows = 5;
     struct MachineRows {
         wxStaticBox*       box{nullptr};
         wxStaticBoxSizer*  sizer{nullptr};
         wxFlexGridSizer*   grid{nullptr};
-        wxStaticText*      keys[6]{nullptr, nullptr, nullptr,
-                                   nullptr, nullptr, nullptr};
-        wxStaticText*      values[6]{nullptr, nullptr, nullptr,
-                                     nullptr, nullptr, nullptr};
+        wxStaticText*      info_keys[kInfoRows]{};
+        wxStaticText*      info_vals[kInfoRows]{};
+        wxStaticText*      health_keys[kHealthRows]{};
+        wxStaticText*      health_vals[kHealthRows]{};
     };
+
+    MachineRows& ensure_box(const std::string& machine_name);
 
     wxBoxSizer*                       container_{nullptr};
     std::map<std::string, MachineRows> machine_boxes_;

@@ -14,9 +14,10 @@
 namespace sup_gui {
 
 namespace {
-constexpr uint16_t kTagEvent    = 0x0001;
-constexpr uint16_t kTagHealth   = 0x0002;
-constexpr uint16_t kTagSnapshot = 0x0003;
+constexpr uint16_t kTagEvent      = 0x0001;
+constexpr uint16_t kTagHealth     = 0x0002;
+constexpr uint16_t kTagSnapshot   = 0x0003;
+constexpr uint16_t kTagSystemInfo = 0x0004;   // GetSystemInfo (host + build facts)
 }  // namespace
 
 GrpcClient::GrpcClient(std::string machine_name,
@@ -88,6 +89,21 @@ void GrpcClient::run() {
         connected_.store(true);
         std::fprintf(stderr, "grpc_client[%s]: subscribed to %s\n",
                      machine_name_.c_str(), host_port_.c_str());
+
+        // One-shot host + build facts on connect (the `tdb info` surface). It's
+        // per-boot-static (hostname/kernel/ram fixed; sha/build_ts/started per
+        // supervisor process), so polling it once per (re)connect is enough.
+        // GetSystemInfo is a unary RPC on the SAME SupervisorView stub.
+        {
+            ::services::com::GetSystemInfoCall si_req;
+            ::system_supervisor::SystemInfo si;
+            grpc::ClientContext si_ctx;
+            si_ctx.set_deadline(std::chrono::system_clock::now() +
+                                std::chrono::seconds(3));
+            if (stub->GetSystemInfo(&si_ctx, si_req, &si).ok() && callback_) {
+                callback_(machine_name_, kTagSystemInfo, si.SerializeAsString());
+            }
+        }
 
         ::services::com::SupervisorObservation obs;
         while (running_.load() && reader->Read(&obs)) {

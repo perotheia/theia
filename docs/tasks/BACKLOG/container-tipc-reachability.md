@@ -50,7 +50,30 @@ packages the FC binaries (see `rig-image-packages-only-supervisor.md`); option 1
 
 ## Status
 
-Not started. Independent of the rig-packaging gap, but BOTH must land before a
-host-driven `docker compose` + `tdb ps` works end-to-end. The
-`clients-via-art-probe` + swappable-transport design means option 4 is the
-clean long-term answer (change runtime + probe, tdb keeps working).
+**Option 1 DONE 2026-06-07** — compose switched to `network_mode: host` on both
+services (dropped the bridge network / aliases / port maps; compute overrides
+THEIA_COM_LISTEN→7701 against a future com :7700 collision). Verified: with
+central up, host-side `tdb ps` renders the full supervision tree from the
+containerized supervisor over the shared host TIPC namespace (sm/log/per/ucm/
+shwa + nodes, with tipc addresses). This is the dev default.
+
+Surfaced a real adjacent fix: the docker IMAGE had a STALE baked
+run-supervisor.sh (the old `supervisor run <json> --root-dir` argv form) — the
+gen-app supervisor takes NO argv and reads THEIA_SUPERVISOR_MANIFEST, so it fell
+back to `supervisor_tree.json` and crash-looped. Rebuilding `theia-base` (which
+COPYs run-supervisor.sh) then `theia-central` fixed it. **Gotcha for next time:
+`docker compose build` does NOT rebuild `theia-base` — rebuild it explicitly
+(`docker build -f deploy/Dockerfile.base -t theia-base:latest deploy/`) whenever
+run-supervisor.sh changes.**
+
+Options 2 (TIPC links across a bridge) and 4 (tdb over gRPC) remain the answer
+for the REAL multi-ECU topology, where containers must NOT share one host TIPC
+namespace. Host mode is dev-only.
+
+Still-open adjacent gaps observed during this verification (tracked elsewhere):
+- `per` fails to exec in-container: `libetcd-cpp-api.so` not found — per links
+  libetcd, and the etcd lib mount was removed when etcd was cut from compose.
+  per is the etcd client (not the supervisor); restore JUST that lib mount.
+- p1/p2/p3 (compute-bound) still listed in the CentralRig executor tree →
+  execvp failures on central (see rig-image-packages-only-supervisor.md, the
+  executor-tree-slicing gap).

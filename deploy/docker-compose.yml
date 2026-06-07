@@ -1,33 +1,37 @@
-# deploy/docker-compose.yml — two-host Theia bringup in Docker.
+# deploy/docker-compose.yml — two-host Theia bringup in Docker (host network).
 #
 # Topology (matches demo/manifest/zonal_rig.py::DemoSoftware):
 #
-#   central — services (the FC daemons) + gateway, exposes gRPC on host:7700.
-#   compute — demo binaries, exposes gRPC on host:7701.
+#   central — services (the FC daemons) + gateway.
+#   compute — demo binaries.
 #
-# Both containers share a bridge network so gRPC + TIPC traffic crosses
-# cleanly. The artheia rig manifest's machines.json records the gRPC
-# endpoints; a GUI / tdb client on the host connects to both.
+# Both services run on `network_mode: host` so they share the HOST network
+# AND the host TIPC namespace — the supervisor + FC nodes bind to localhost,
+# and a host-side `tdb` (which speaks TIPC via artheia.probe) can reach the
+# containerized supervisor directly. This is the dev default until proper
+# cross-container TIPC links land (see
+# docs/tasks/BACKLOG/container-tipc-reachability.md).
+#
+# Consequences of host networking:
+#   - No `ports:` mapping (containers bind host ports directly).
+#   - No custom bridge network / aliases (those are bridge-only). Service
+#     name resolution between containers is by localhost, not DNS aliases.
+#   - `hostname:` is ignored (the container sees the host's hostname);
+#     run-supervisor.sh keys off the HOSTNAME env var instead, set below.
+#   - com's gRPC bridge (when re-enabled — currently hidden from the build)
+#     would collide on :7700; compute overrides THEIA_COM_LISTEN to :7701.
+#     tdb itself uses TIPC, not gRPC, so this doesn't affect `tdb ps`.
 #
 # Pre-flight (run from workspace root, venv on PATH):
 #
 #   export PATH="$PWD/.venv/bin:$PATH"
-#
-#   # 1. Build the per-machine .ipks + the supervisor binary via Bazel.
 #   theia dist                       # bazel build the @rig_zonal bundles
 #   bazel build //platform/supervisor/main:supervisor
-#
-#   # 2. Stage artifacts into deploy/.staging/ (compose's bind-mount source).
-#   ./deploy/stage.sh                # see deploy/stage.sh
-#
-#   # 3. Build the base + per-host images, then bring it up.
+#   ./deploy/stage.sh                # stage into deploy/.staging/
 #   docker compose -f deploy/docker-compose.yml build
 #   docker compose -f deploy/docker-compose.yml up
 #
-#   # 4. Inside each container the entrypoint runs `theia provision` then
-#   #    `theia orchestrate` (Puppet phase 1 + 2) before exec'ing the
-#   #    supervisor. Drive it from the host with tdb.
-#
+# Drive it from the host:  tdb ps   (shares the host TIPC namespace).
 # Tear-down:  Ctrl-C, then `docker compose -f deploy/docker-compose.yml down`.
 #
 # NOTE: the supervisor dropped etcd — live state flows over the TIPC
@@ -41,12 +45,7 @@ services:
       context: .                       # deploy/
       dockerfile: central/Dockerfile
     container_name: theia-central
-    hostname: central
-    networks:
-      theia_net:
-        aliases: [central, central_host]
-    ports:
-      - "7700:7700"     # supervisor → host: services/com gRPC bridge
+    network_mode: host
     volumes:
       # Per-machine .ipk + executor.json + machines.json Bazel emits via
       # @rig_zonal//:all. stage.sh copies them into
@@ -71,15 +70,7 @@ services:
       context: .
       dockerfile: compute/Dockerfile
     container_name: theia-compute
-    hostname: compute
-    networks:
-      theia_net:
-        aliases: [compute, compute_host]
-    ports:
-      # services-com listens on its hardcoded default 0.0.0.0:7700 inside
-      # the container; host-side we map that to 7701 so it doesn't clash
-      # with central's 7700 publish.
-      - "7701:7700"
+    network_mode: host
     volumes:
       - ./.staging/compute_host/ipk:/opt/theia/ipk:ro
       - ./puppet:/etc/puppet:ro
@@ -88,17 +79,11 @@ services:
     environment:
       - HOSTNAME=compute
       - TZ=UTC
+      # Avoid a :7700 collision with central's com bridge on the shared host
+      # network (com is currently hidden from the build; harmless either way).
+      - THEIA_COM_LISTEN=0.0.0.0:7701
     restart: unless-stopped
-    # compute can't start until central is up — the gateway lives on
-    # central and the demo's TIPC clients dial central via the bridge.
+    # compute can't start until central is up — the gateway lives on central
+    # and the demo's TIPC clients reach it via the shared host TIPC namespace.
     depends_on:
       - central
-
-networks:
-  theia_net:
-    driver: bridge
-    # Static subnet so the artheia machines.json addresses are stable
-    # across `compose down/up` cycles.
-    ipam:
-      config:
-        - subnet: 172.30.0.0/24

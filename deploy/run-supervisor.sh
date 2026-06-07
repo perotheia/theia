@@ -41,6 +41,18 @@ export FACTER_theia_machine="$MACHINE"
 # resolve them at runtime.
 export LD_LIBRARY_PATH="/opt/theia/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
+# This machine's supervisor TIPC instance, from the manifest (ARA Executor
+# identity — central=0, compute=1, so two supervisors on one host TIPC namespace
+# don't collide). Read from <machine>/execution.json.supervisor_instance; the
+# supervisor binary picks it up via THEIA_SUPERVISOR_INSTANCE. Default 0.
+_exec_json="/etc/theia/manifest/${MACHINE}/execution.json"
+if [[ -f "$_exec_json" ]]; then
+    _inst="$(grep -o '"supervisor_instance"[[:space:]]*:[[:space:]]*[0-9]*' "$_exec_json" \
+             | sed 's/.*:[[:space:]]*//')"
+    export THEIA_SUPERVISOR_INSTANCE="${_inst:-0}"
+    log "supervisor TIPC instance=${THEIA_SUPERVISOR_INSTANCE} (from manifest)"
+fi
+
 puppet_apply() {  # $1 = site manifest (provisioning.pp / orchestration.pp)
     log "puppet apply $1 (machine=$MACHINE)"
     puppet apply \

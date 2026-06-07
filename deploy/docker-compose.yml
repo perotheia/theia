@@ -127,8 +127,8 @@ services:
       # network (com is currently hidden from the build; harmless either way).
       - THEIA_COM_LISTEN=0.0.0.0:7701
       # compute's supervisor binds TIPC instance 1 (central's is 0) so the two
-      # don't collide on the shared host TIPC namespace. `tdb -i 1` targets it.
-      # (The .art ComputeSupervisor prototype models this; the env is how the
-      # same binary picks its instance per machine until executor.json carries it.)
-      - THEIA_SUPERVISOR_INSTANCE=1
+      # don't collide on the shared host TIPC namespace. The instance is NOT set
+      # here — run-supervisor.sh reads it from the manifest
+      # (<machine>/execution.json.supervisor_instance, set by the rig's
+      # SoftwareSpecification.supervisor). Manifest-driven, no hardcoded env.
     restart: unless-stopped

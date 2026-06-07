@@ -39,7 +39,6 @@ namespace ara::log {
 // generator prefixes types with the libc-safe proto package
 // (system_services_log_*); aliasing them here keeps callers'
 // signatures readable.
-using LogRecord = system_services_log_LogRecord;
 
 
 
@@ -115,8 +114,6 @@ public:
     // TraceControl) the handler signature is identical and only
     // gets emitted once. handle_call/handle_cast dispatch by
     // request type, not by port.
-
-    void handle_cast(const LogRecord& msg, LogDaemonState& s);
 
 
 

@@ -11,8 +11,6 @@
 //   subscribes.
 
 package system.services.shwa
-
-interface senderReceiver LogStream     { }  // from system.services.log
 interface clientServer   PersistencyIf { }  // from system.services.per
 
 message GpuSample {
@@ -34,6 +32,5 @@ node atomic ShwaDaemon {
     ports {
         sender telemetry provides AccelTelemetry
         client to_per    requires PersistencyIf
-        sender to_log    provides LogStream  best_effort
     }
 }

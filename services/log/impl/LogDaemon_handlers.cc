@@ -27,16 +27,9 @@ void LogDaemon::init(LogDaemonState& /*s*/) {
 void LogDaemon::handle_info(const char* /*info*/, LogDaemonState& /*s*/) {
 }
 
-
-void LogDaemon::handle_cast(const LogRecord& /*msg*/,
-                                 LogDaemonState& /*s*/) {
-    // TODO: react to LogRecord (dispatched by message type; one
-    // or more receiver ports may deliver it).
-    std::fprintf(stderr, "[%s] received LogRecord\n",
-                 kNodeName);
-}
-
-
+// (No log-ingest handler: logging is direct-to-sink, not a TIPC LogStream.
+// LogDaemon has no ports — the old handle_cast(LogRecord) was removed with the
+// phantom LogStream interface.)
 
 
 }  // namespace ara::log

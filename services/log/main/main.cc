@@ -13,6 +13,7 @@
 #include "TimerService.hh"
 #include "Logger.hh"     // parse_log_level / process_logger / set_process_logger
 #include "NodeAffinity.hh"  // apply_node_affinity($THEIA_NODE_CFG) per node
+#include "ParamsConfig.hh"  // init_config(fc) / get_config() — static params JSON
 
 #include "TipcMux.hh"    // config-service receiver for reporting nodes (#386)
 
@@ -46,6 +47,13 @@ int main() {
     if (const char* lvl = std::getenv("THEIA_LOG_LEVEL")) {
         boot_level = ::theia::runtime::parse_log_level(lvl);
     }
+
+    // Static params (#params): load this FC's deployment-config JSON ONCE,
+    // before any node is constructed, so a node's ctor / init() can read its
+    // knobs via ::theia::runtime::get_config().node(kNodeName).u32(...). A
+    // missing file is fine — every lookup falls back to the caller's default.
+    // Path from $THEIA_CONFIG / $THEIA_CONFIG_DIR / ./config/log.json.
+    ::theia::runtime::init_config("log");
 
     ::theia::runtime::TimerService timers;
     (void)timers;  // no node requires_timers
@@ -97,11 +105,15 @@ int main() {
         // this node's Tracer kind filter — same path as LogLevelPush.
         config_mux.register_cast<platform_runtime_TraceControlPush>(
             log_daemon_cfg, log_daemon);
+        // Config update: services/per casts ConfigUpdated when a watched
+        // config changes — same framework path; GenServer base handle_cast
+        // applies it (decode + on_config_update hook).
+        config_mux.register_cast<platform_runtime_ConfigUpdated>(
+            log_daemon_cfg, log_daemon);
         // Receiver ports (#387): register the node's declared inbound
         // types so a real peer — or a robot-test inject via services/com
         // — lands on the same handle_call / handle_cast path. clientServer
         // ops → register_call; senderReceiver `in` data → register_cast.
-        config_mux.register_cast<LogRecord>(log_daemon_cfg, log_daemon);
     } else {
         log_daemon.log().warn("config service bind failed; live log-level "
                                  "push + signal inject disabled");
@@ -165,6 +177,11 @@ int main() {
         // Trace control (#403): supervisor pushes TraceControlPush to flip
         // this node's Tracer kind filter — same path as LogLevelPush.
         config_mux.register_cast<platform_runtime_TraceControlPush>(
+            trace_ctl_cfg, trace_ctl);
+        // Config update: services/per casts ConfigUpdated when a watched
+        // config changes — same framework path; GenServer base handle_cast
+        // applies it (decode + on_config_update hook).
+        config_mux.register_cast<platform_runtime_ConfigUpdated>(
             trace_ctl_cfg, trace_ctl);
         // Receiver ports (#387): register the node's declared inbound
         // types so a real peer — or a robot-test inject via services/com

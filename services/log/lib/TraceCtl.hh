@@ -41,15 +41,12 @@ namespace ara::log {
 // signatures readable.
 using SubscribeReq = system_services_log_SubscribeReq;
 using TraceEmpty = system_services_log_TraceEmpty;
-using LogRecord = system_services_log_LogRecord;
 
 
 
 // One subscriber on every sender-port broadcast. Free-function so
 // the daemon doesn't care whether delivery is in-process, TIPC, or
 // gRPC. Subscribers MUST be best-effort.
-using To_logRecordSubscriber =
-    std::function<void(const LogRecord&)>;
 
 
 class TraceCtl : public ::theia::runtime::GenServer<TraceCtl, TraceCtlState> {
@@ -99,11 +96,6 @@ public:
 
     // ---- Subscriber registration ----------------------------------
 
-    // to_log.record broadcast subscribers.
-    uint32_t subscribe_to_log_record(
-        To_logRecordSubscriber s);
-    void     unsubscribe_to_log_record(uint32_t id);
-
 
     // ---- GenServer plumbing: terminate default
     //
@@ -148,55 +140,13 @@ public:
 
     // ---- send helpers — bodies in impl (the broadcast fan-out)
 
-    void broadcast_to_log_record(const LogRecord& msg);
-
 
 private:
-
-    struct To_logRecordEntry {
-        uint32_t id;
-        To_logRecordSubscriber fn;
-    };
-    std::mutex to_log_record_mu_;
-    uint32_t to_log_record_next_id_{1};
-    std::vector<To_logRecordEntry>
-        to_log_record_subs_;
 
 };
 
 // Subscriber registration — defined in the lib slice (not impl) so
 // it stays auto-generated. The user touches handle_* in impl.
-
-inline uint32_t TraceCtl::subscribe_to_log_record(
-        To_logRecordSubscriber s) {
-    std::lock_guard<std::mutex> lk(to_log_record_mu_);
-    uint32_t id = to_log_record_next_id_++;
-    to_log_record_subs_.push_back({id, std::move(s)});
-    return id;
-}
-
-inline void TraceCtl::unsubscribe_to_log_record(uint32_t id) {
-    std::lock_guard<std::mutex> lk(to_log_record_mu_);
-    auto& v = to_log_record_subs_;
-    v.erase(std::remove_if(v.begin(), v.end(),
-              [id](const auto& e) { return e.id == id; }), v.end());
-}
-
-inline void TraceCtl::broadcast_to_log_record(const LogRecord& msg) {
-    std::vector<To_logRecordEntry> snap;
-    {
-        std::lock_guard<std::mutex> lk(to_log_record_mu_);
-        snap = to_log_record_subs_;
-    }
-    for (const auto& e : snap) {
-        try { e.fn(msg); }
-        catch (...) {
-            std::fprintf(stderr,
-                "[%s] subscriber %u threw on to_log.record — dropping\n",
-                kNodeName, e.id);
-        }
-    }
-}
 
 
 

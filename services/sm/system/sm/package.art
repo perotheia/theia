@@ -18,7 +18,6 @@
 package system.services.sm
 
 // Forward decls of foreign interfaces.
-interface senderReceiver LogStream     { }  // from system.services.log
 interface clientServer   PersistencyIf { }  // from system.services.per
 
 enum SmState {
@@ -80,7 +79,6 @@ node atomic SmDaemon {
         sender broadcast provides SmStateStream
         server ctl       provides StateMgmtCtl
         client to_per    requires PersistencyIf
-        sender to_log    provides LogStream  best_effort
     }
 
     // The FSM — generated codegen emits SmDaemonStateMBase.hh deriving

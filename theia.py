@@ -46,6 +46,33 @@ def _run(argv: list[str]) -> int:
         return 130
 
 
+# TIPC address-collision gate. The .art aggregators that, followed recursively,
+# union the WIDEST cross-FC node set for the deploy — so a duplicate (type,
+# instance) across DIFFERENT FCs (e.g. com's ComDaemon vs per's PerManager both
+# claiming 0x80010008) is caught here, before manifests/dist are built. TIPC
+# routes purely by address, so a collision is a silent runtime mis-wire.
+_ADDRESS_CHECK_ARTS = (
+    "system/services/cluster.art",   # all platform FCs (com + per + …)
+    "system/system.art",             # demo + supervisor + gateway
+)
+
+
+def _check_tipc_addresses() -> int:
+    """Run `artheia check-addresses` over the deploy aggregators before any
+    manifest/dist generation. Returns 0 if all node TIPC addresses are
+    distinct system-wide; non-zero (and prints the clash) otherwise — the
+    caller MUST abort generation on a non-zero return."""
+    for art in _ADDRESS_CHECK_ARTS:
+        if not (WORKSPACE / art).is_file():
+            continue                       # aggregator absent in this layout
+        if (rc := _run(["artheia", "check-addresses", art])) != 0:
+            print(f"theia: TIPC address collision in {art} — fix the .art "
+                  "(pick a distinct `tipc type=…`) before generating "
+                  "manifests.", file=sys.stderr)
+            return rc
+    return 0
+
+
 # --- commands: each takes pass-through args, returns an exit code -----------
 
 def cmd_rig(args: list[str]) -> int:
@@ -131,6 +158,11 @@ def cmd_install(args: list[str]) -> int:
     machine = next((a for a in args if not a.startswith("-")), "central")
     rig = {"central": "CentralRig"}.get(machine, "CentralRig")
     dest = WORKSPACE / "install" / machine
+
+    # 0. Address-collision gate — fail BEFORE building/staging if two nodes
+    #    share a TIPC (type, instance) anywhere in the deployed FC set.
+    if (rc := _check_tipc_addresses()) != 0:
+        return rc
 
     # 1. bazel build — the supervisor + every child binary.
     targets = [_LOCAL_SUPERVISOR, *_LOCAL_BINARIES.values()]
@@ -244,6 +276,10 @@ def cmd_manifest(args: list[str]) -> int:
     Dev iteration stays on `bazel build @rig_zonal//<host>:image` (rules/rig.bzl)
     — that path is untouched."""
     import json
+    # Address-collision gate FIRST: a duplicate TIPC (type, instance) across FCs
+    # silently mis-wires the runtime, so fail before emitting any manifest.
+    if (rc := _check_tipc_addresses()) != 0:
+        return rc
     module = next((a for a in args if not a.startswith("-")), _ZONAL_RIG_MODULE)
     rig_attr = _ZONAL_RIG_ATTR if module == _ZONAL_RIG_MODULE else None
     out = WORKSPACE / _MANIFEST_DIR

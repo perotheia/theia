@@ -34,6 +34,15 @@ filegroup(
     ),
 )
 
+# Just the one .so the per binary links at runtime, as a FILE (cc_import's
+# :etcd_cpp_so doesn't expose it via DefaultInfo). dist_ipk bundles this into
+# /opt/theia/lib/ so per resolves it under LD_LIBRARY_PATH on the target.
+filegroup(
+    name = "etcd_cpp_so_file",
+    srcs = ["etcd-cpp-apiv3/install/lib/libetcd-cpp-api.so"],
+    visibility = ["//visibility:public"],
+)
+
 # Alias under the dir name so consumers can write
 # //third_party/etcd-cpp-apiv3:install and read intent at the
 # call site.

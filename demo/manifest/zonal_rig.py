@@ -140,7 +140,10 @@ CentralHost = MachineManifest(
 ComputeHost = MachineManifest(
     name="compute",
     hardware=HardwareResource(
-        cpu=CpuResource(architecture=CpuArchitecture.AARCH64),
+        # x86_64 for now — both demo containers are amd64 (the aarch64/rpi4
+        # cross-toolchain isn't registered; dropped for the demo). Flip back to
+        # AARCH64 + register the rpi4 cc toolchain for a real zonal split.
+        cpu=CpuResource(architecture=CpuArchitecture.X86_64),
     ),
     # The compute container exposes a distinct gRPC port so a multi-
     # machine GUI can talk to both supervisors (one tab per machine).

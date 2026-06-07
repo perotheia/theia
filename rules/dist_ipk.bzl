@@ -42,10 +42,19 @@ ALL_BINARIES = [
     "//demo/Demo3WayP3/main:demo",
 ]
 
+# Shared libs bundled at /opt/theia/lib/<basename> for every host (harmless if a
+# host's binaries don't need them). per links libetcd-cpp-api.so at runtime;
+# run-supervisor.sh adds /opt/theia/lib to LD_LIBRARY_PATH so the children find
+# them.
+DEFAULT_LIBS = [
+    "//third_party:etcd_cpp_so_file",
+]
+
 
 def _dist_ipk_impl(ctx):
     out_ipk = ctx.actions.declare_file(ctx.attr.package + ".ipk")
     bins = ctx.files.binaries
+    libs = ctx.files.libs
     args = ctx.actions.args()
     args.add("--app", ctx.file.application_json)
     args.add("--machine", ctx.file.machine_json)
@@ -54,11 +63,14 @@ def _dist_ipk_impl(ctx):
     args.add("--version", ctx.attr.version)
     for b in bins:
         args.add("--bin", b)
+    for l in libs:
+        args.add("--lib", l)
 
     ctx.actions.run(
         executable = ctx.executable._packer,
         arguments = [args],
-        inputs = depset([ctx.file.application_json, ctx.file.machine_json] + bins),
+        inputs = depset(
+            [ctx.file.application_json, ctx.file.machine_json] + bins + libs),
         outputs = [out_ipk],
         mnemonic = "PackIpk",
         progress_message = "Packing %s.ipk from application.json" % ctx.attr.package,
@@ -74,6 +86,7 @@ _dist_ipk = rule(
         "application_json": attr.label(allow_single_file = [".json"], mandatory = True),
         "machine_json": attr.label(allow_single_file = [".json"], mandatory = True),
         "binaries": attr.label_list(allow_files = True, default = ALL_BINARIES),
+        "libs": attr.label_list(allow_files = True, default = DEFAULT_LIBS),
         "_packer": attr.label(
             default = "//rules:pack_ipk",
             executable = True,

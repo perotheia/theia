@@ -9,8 +9,8 @@
 # it to `central`).
 
 class { 'theia':
-    machine       => 'central_host',
-    ipk_path      => '/opt/theia/ipk/central_host.ipk',
+    machine       => 'central',
+    ipk_path      => '/opt/theia/ipk/central.ipk',
     executor_json => '/opt/theia/ipk/executor.json',
     machines_json => '/opt/theia/ipk/machines.json',
 }

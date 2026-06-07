@@ -191,26 +191,63 @@ def cmd_install(args: list[str]) -> int:
     ])
 
 
+# The distributed rig: one module + the full-vehicle SoftwareSpecification
+# export (DemoSoftware has all machines; CentralRig/ComputeRig are the
+# materialized per-machine rigs). Everything `theia dist` needs derives from it.
+_ZONAL_RIG_MODULE = "demo.manifest.zonal_rig"
+_ZONAL_RIG_ATTR = "DemoSoftware"
+_ZONAL_RIG_REPO = "rig_zonal"   # the @rig_zonal bazel extension repo
+
+
+def _zonal_image_targets() -> list[str]:
+    """Derive the per-machine `:image` bazel labels from the rig itself (not a
+    hardcoded list). Ask `artheia rig-deps` for the machines + their buildable
+    components; a machine with at least one buildable component gets an
+    @rig_zonal//<machine>:image target. Host-role machines with no buildable
+    components (e.g. admin_host) are skipped."""
+    import json
+    proc = subprocess.run(
+        ["artheia", "rig-deps", _ZONAL_RIG_MODULE, "--rig", _ZONAL_RIG_ATTR],
+        capture_output=True, text=True,
+    )
+    if proc.returncode != 0:
+        print(proc.stderr, file=sys.stderr)
+        return []
+    rig = json.loads(proc.stdout)
+    flat = rig.get("flat_components", [])
+    buildable = {
+        c["machine"] for c in flat if c.get("bazel_buildable")
+    }
+    return [
+        f"@{_ZONAL_RIG_REPO}//{m['name']}:image"
+        for m in rig["machines"]
+        if m["name"] in buildable
+    ]
+
+
 def cmd_dist(args: list[str]) -> int:
     """bazel build the per-machine .ipk deploy bundles for the DISTRIBUTED
-    (2-machine central+compute) deploy — @rig_zonal (demo.manifest.zonal_rig) —
-    AND emit the per-machine AUTOSAR manifest set (machine/application/service/
-    execution.json) to dist/manifest/<machine>/.
-    Pass machine image labels to narrow; default builds central + compute.
+    deploy AND emit the per-machine AUTOSAR manifest set (machine/application/
+    service/execution.json) to dist/manifest/<machine>/.
 
-    (The single-machine local host bundle is `theia install` → @rig_demo.)"""
-    targets = args or [
-        "@rig_zonal//central_host:image",
-        "@rig_zonal//compute_host:image",
-    ]
+    Both the .ipk targets and the manifests derive from the SAME rig spec —
+    `demo.manifest.zonal_rig --rig DemoSoftware` (the full-vehicle spec). The
+    image labels are NOT hardcoded: `artheia rig-deps` enumerates the machines
+    and which have buildable components. Pass explicit bazel labels to narrow.
+
+    (The single-machine local host bundle is `theia install`.)"""
+    targets = args or _zonal_image_targets()
+    if not targets:
+        print("theia dist: no buildable machine images derived from "
+              f"{_ZONAL_RIG_MODULE} --rig {_ZONAL_RIG_ATTR}", file=sys.stderr)
+        return 1
     if (rc := _run(["bazel", "build", *targets])) != 0:
         return rc
-    # The four AUTOSAR manifest kinds per machine → dist/manifest/<machine>/.
-    # zonal rig has several *Software exports; --rig DemoSoftware is the full
-    # multi-machine one (the same attr @rig_zonal passes the rig extension).
+    # The four AUTOSAR manifest kinds per machine → dist/manifest/<machine>/,
+    # from the SAME rig+attr the image targets derive from.
     return _run([
-        "artheia", "generate-manifest", "demo.manifest.zonal_rig",
-        "--rig", "DemoSoftware",
+        "artheia", "generate-manifest", _ZONAL_RIG_MODULE,
+        "--rig", _ZONAL_RIG_ATTR,
         "--out", str(WORKSPACE / "dist" / "manifest"),
     ])
 

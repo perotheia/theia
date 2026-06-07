@@ -17,6 +17,7 @@
 // about. Storage is a deque<EventRow> capped at 5000 (kRingCapacity).
 
 #include "sup_gui/panels.h"
+#include "sup_gui/trace_decoder_lib.h"
 
 #include "supervisor_bridge.pb.h"   // services.com.TraceRecord
 
@@ -33,6 +34,7 @@
 #include <deque>
 #include <mutex>
 #include <string>
+#include <vector>
 
 namespace sup_gui {
 
@@ -76,6 +78,55 @@ wxColour kind_color(uint32_t k) {
         case 5: return wxColour(0xD8, 0xB6, 0xFF);   // STATEM    purple
         default: return *wxWHITE;
     }
+}
+
+// Split a compact JSON object ({"n":2,"label":"x"}) into "key: value" strings,
+// one per top-level field, for the Decoded tree leaves. Depth-aware so nested
+// objects/arrays + quoted commas/colons don't split mid-value. Best-effort
+// pretty-print, not a validating parser — the canonical JSON is shown above it.
+std::vector<std::string> _split_json_fields(const std::string& json) {
+    std::vector<std::string> out;
+    size_t i = 0, n = json.size();
+    while (i < n && json[i] != '{') ++i;
+    if (i >= n) return out;
+    ++i;                                   // past '{'
+    std::string field;
+    int depth = 0;
+    bool in_str = false, esc = false;
+    for (; i < n; ++i) {
+        char c = json[i];
+        if (esc) { field.push_back(c); esc = false; continue; }
+        if (in_str) {
+            field.push_back(c);
+            if (c == '\\') esc = true;
+            else if (c == '"') in_str = false;
+            continue;
+        }
+        if (c == '"') { in_str = true; field.push_back(c); continue; }
+        if (c == '{' || c == '[') { ++depth; field.push_back(c); continue; }
+        if (c == '}' || c == ']') {
+            if (depth == 0) break;         // closing the top object
+            --depth; field.push_back(c); continue;
+        }
+        if (c == ',' && depth == 0) {
+            if (!field.empty()) out.push_back(field);
+            field.clear();
+            continue;
+        }
+        field.push_back(c);
+    }
+    if (!field.empty()) out.push_back(field);
+    // Tidy each `"key":value` → `key: value`.
+    for (auto& f : out) {
+        const size_t colon = f.find(':');
+        if (colon != std::string::npos) {
+            std::string k = f.substr(0, colon), v = f.substr(colon + 1);
+            if (k.size() >= 2 && k.front() == '"' && k.back() == '"')
+                k = k.substr(1, k.size() - 2);
+            f = k + ": " + v;
+        }
+    }
+    return out;
 }
 
 wxString hex_dump(const std::string& bytes) {
@@ -179,70 +230,81 @@ struct TracePanelImpl {
     wxTreeCtrl*           tree{nullptr};
 
     std::deque<EventRow>  ring;
-    std::vector<size_t>   visible;
+    std::vector<size_t>   visible;     // ring indices currently shown
     std::string           current_filter;
     std::mutex            mtx;
+    bool                  follow{true};   // auto-scroll to newest (Wireshark)
+    TraceDecoderLib       decoder;        // libtrace_decoder.so (payload → JSON)
 
-    void apply_filter() {  // caller holds mtx
-        visible.clear();
-        if (current_filter.empty()) {
-            for (size_t i = 0; i < ring.size(); ++i) visible.push_back(i);
-            return;
-        }
-        // Tokenize on whitespace; each token is "[key:]substring" with
-        // case-insensitive match.
-        std::vector<std::pair<std::string,std::string>> terms;
-        {
-            std::string cur;
-            for (char c : current_filter) {
-                if (c == ' ' || c == '\t') {
-                    if (!cur.empty()) {
-                        terms.emplace_back(std::string(), cur);
-                        cur.clear();
-                    }
-                } else cur.push_back(c);
-            }
-            if (!cur.empty()) terms.emplace_back(std::string(), cur);
-        }
-        for (auto& kv : terms) {
-            size_t colon = kv.second.find(':');
+    // Parsed filter terms, recomputed only when the filter STRING changes —
+    // not per record. Each is (key, substring), lower-cased.
+    std::vector<std::pair<std::string, std::string>> terms_;
+
+    static void to_lower(std::string& s) {
+        for (auto& c : s) c = static_cast<char>(std::tolower(c));
+    }
+
+    // (Re)parse current_filter into terms_. Call on filter change only.
+    void parse_filter() {
+        terms_.clear();
+        std::string cur;
+        auto flush = [&] {
+            if (cur.empty()) return;
+            std::string key, sub = cur;
+            size_t colon = sub.find(':');
             if (colon != std::string::npos) {
-                kv.first  = kv.second.substr(0, colon);
-                kv.second = kv.second.substr(colon + 1);
+                key = sub.substr(0, colon);
+                sub = sub.substr(colon + 1);
             }
-            for (auto& c : kv.first)  c = static_cast<char>(std::tolower(c));
-            for (auto& c : kv.second) c = static_cast<char>(std::tolower(c));
+            to_lower(key);
+            to_lower(sub);
+            terms_.emplace_back(std::move(key), std::move(sub));
+            cur.clear();
+        };
+        for (char c : current_filter) {
+            if (c == ' ' || c == '\t') flush();
+            else cur.push_back(c);
         }
+        flush();
+    }
+
+    // Does one row pass the current (already-parsed) filter? O(terms), not
+    // O(ring) — so it's cheap to call per incoming record.
+    bool matches(const EventRow& r) const {
         auto ci_find = [](const std::string& hay, const std::string& needle) {
             if (needle.empty()) return true;
             std::string h; h.reserve(hay.size());
             for (char c : hay) h.push_back(static_cast<char>(std::tolower(c)));
             return h.find(needle) != std::string::npos;
         };
-        for (size_t i = 0; i < ring.size(); ++i) {
-            const EventRow& r = ring[i];
-            bool ok = true;
-            for (const auto& t : terms) {
-                bool m = false;
-                // Bare token matches src/dst/msg_type (the common case).
-                if (t.first.empty())
-                    m = ci_find(r.src, t.second) || ci_find(r.dst, t.second) ||
-                        ci_find(r.msg_type, t.second);
-                else if (t.first == "kind") {
-                    std::string k = kind_name(r.kind);
-                    for (auto& c : k) c = static_cast<char>(std::tolower(c));
-                    m = k.find(t.second) != std::string::npos;
-                }
-                else if (t.first == "src" || t.first == "node")
-                                               m = ci_find(r.src,      t.second);
-                else if (t.first == "dst")     m = ci_find(r.dst,      t.second);
-                else if (t.first == "msg" || t.first == "type")
-                                               m = ci_find(r.msg_type, t.second);
-                else if (t.first == "machine") m = ci_find(r.machine, t.second);
-                if (!m) { ok = false; break; }
+        for (const auto& t : terms_) {
+            bool m = false;
+            if (t.first.empty())
+                m = ci_find(r.src, t.second) || ci_find(r.dst, t.second) ||
+                    ci_find(r.msg_type, t.second);
+            else if (t.first == "kind") {
+                std::string k = kind_name(r.kind);
+                to_lower(k);
+                m = k.find(t.second) != std::string::npos;
             }
-            if (ok) visible.push_back(i);
+            else if (t.first == "src" || t.first == "node")
+                                           m = ci_find(r.src,      t.second);
+            else if (t.first == "dst")     m = ci_find(r.dst,      t.second);
+            else if (t.first == "msg" || t.first == "type")
+                                           m = ci_find(r.msg_type, t.second);
+            else if (t.first == "machine") m = ci_find(r.machine, t.second);
+            if (!m) return false;
         }
+        return true;
+    }
+
+    // Full rebuild of `visible` from `ring`. Only on filter change / Clear /
+    // ring eviction — NOT per record (that was O(N²) and froze under bursts).
+    void apply_filter() {  // caller holds mtx
+        parse_filter();
+        visible.clear();
+        for (size_t i = 0; i < ring.size(); ++i)
+            if (terms_.empty() || matches(ring[i])) visible.push_back(i);
     }
 
     void rebuild_tree(const EventRow& r) {
@@ -277,6 +339,24 @@ struct TracePanelImpl {
         tree->AppendItem(subj, wxString::Format("msg_type:    %s",
             r.msg_type.c_str()));
 
+        // Decoded fields — the spec's centerpiece. libtrace_decoder.so renders
+        // the payload to JSON via libprotobuf reflection (same .so tdb/rtdb
+        // use); one tree leaf per top-level field. Lazy: only the SELECTED
+        // row is decoded. Falls back to the raw hex group when the .so isn't
+        // available or the type isn't registered.
+        wxTreeItemId decoded_id;
+        std::string json;
+        if (!r.raw_payload.empty() &&
+            decoder.decode(r.msg_type, r.raw_payload, json)) {
+            decoded_id = tree->AppendItem(root, "Decoded");
+            // The JSON is compact ({"n":2}); show it whole + split top-level
+            // "key": value pairs into leaves for grep-ability.
+            tree->AppendItem(decoded_id,
+                wxString::FromUTF8(json.c_str(), json.size()));
+            for (const auto& kv : _split_json_fields(json))
+                tree->AppendItem(decoded_id, wxString::FromUTF8(kv.c_str()));
+        }
+
         if (!r.raw_payload.empty()) {
             wxTreeItemId raw = tree->AppendItem(root, "Raw payload");
             tree->AppendItem(raw,
@@ -294,6 +374,7 @@ struct TracePanelImpl {
         tree->Expand(root);
         tree->Expand(hdr);
         tree->Expand(subj);
+        if (decoded_id.IsOk()) tree->Expand(decoded_id);
     }
 };
 
@@ -311,8 +392,16 @@ TracePanel::TracePanel(wxWindow* parent) : PanelBase(parent) {
                                           wxTE_PROCESS_ENTER);
     top->Add(impl_->filter_input, 1, wxRIGHT, 4);
     auto* clear_btn = new wxButton(this, wxID_ANY, "Clear");
-    top->Add(clear_btn, 0);
+    top->Add(clear_btn, 0, wxRIGHT, 8);
+    auto* follow_cb = new wxCheckBox(this, wxID_ANY, "Follow new events");
+    follow_cb->SetValue(true);
+    top->Add(follow_cb, 0, wxALIGN_CENTER_VERTICAL);
     sizer->Add(top, 0, wxEXPAND | wxALL, 4);
+
+    follow_cb->Bind(wxEVT_CHECKBOX, [this](wxCommandEvent& e) {
+        std::lock_guard<std::mutex> lk(impl_->mtx);
+        impl_->follow = e.IsChecked();
+    });
 
     impl_->split = new wxSplitterWindow(this, wxID_ANY,
                                           wxDefaultPosition, wxDefaultSize,
@@ -386,16 +475,38 @@ void TracePanel::on_frame(const std::string& machine_name,
     r.raw_payload = tr.payload();
 
     long new_count = 0;
+    bool follow = false;
     {
         std::lock_guard<std::mutex> lk(impl_->mtx);
+        const bool evicted = impl_->ring.size() >= kRingCapacity;
+
+        // INCREMENTAL filter — O(terms), not O(ring). The new row goes to the
+        // back; if it passes the filter, its index is appended to `visible`.
+        // (The old code re-scanned the whole ring per record → O(N²) freeze.)
         impl_->ring.push_back(std::move(r));
-        while (impl_->ring.size() > kRingCapacity) impl_->ring.pop_front();
-        impl_->apply_filter();
+        const size_t new_idx = impl_->ring.size() - 1;
+        const bool show = impl_->terms_.empty() ||
+                          impl_->matches(impl_->ring.back());
+        if (show) impl_->visible.push_back(new_idx);
+
+        // Ring eviction shifts every ring index down by one. Rather than
+        // rewrite all of `visible`, drop a now-stale leading entry and
+        // decrement the rest — O(visible) once per eviction, amortized O(1)
+        // since eviction happens at most once per record at steady state.
+        if (evicted) {
+            impl_->ring.pop_front();
+            if (!impl_->visible.empty() && impl_->visible.front() == 0)
+                impl_->visible.erase(impl_->visible.begin());
+            for (auto& v : impl_->visible) --v;
+        }
         new_count = static_cast<long>(impl_->visible.size());
+        follow = impl_->follow;
     }
     impl_->list->SetItemCount(new_count);
     impl_->list->Refresh();
-    if (new_count > 0) impl_->list->EnsureVisible(new_count - 1);
+    // Only yank to the newest row when "Follow new events" is on — otherwise
+    // the operator can scroll back through history during a live stream.
+    if (follow && new_count > 0) impl_->list->EnsureVisible(new_count - 1);
 }
 
 }  // namespace sup_gui

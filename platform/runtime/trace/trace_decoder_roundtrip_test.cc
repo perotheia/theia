@@ -49,7 +49,7 @@ void test_roundtrip_basic() {
     uint8_t buf[64];
     int n = nanopb_encode_sm_state(
         buf, sizeof(buf),
-        system_services_sm_SmState_RUNNING,
+        system_services_sm_SmState_SmState_RUNNING,
         1700000000123456789ULL);
     assert(n > 0);
     std::printf("nanopb wrote %d bytes\n", n);
@@ -72,8 +72,10 @@ void test_roundtrip_basic() {
 
     // Verify the JSON contains both fields with the values we encoded.
     // Enum surfaces as its string name, ts_ns as a string (proto3 JSON
-    // serializes uint64/int64 as strings to dodge JS precision loss).
-    assert(result.json.find("\"state\":\"RUNNING\"") != std::string::npos);
+    // serializes uint64/int64 as strings to dodge JS precision loss). The
+    // value name carries the proto's `SmState_` prefix (enum SmState {
+    // SmState_RUNNING = 2; … }).
+    assert(result.json.find("\"state\":\"SmState_RUNNING\"") != std::string::npos);
     assert(result.json.find("\"tsNs\":\"1700000000123456789\"")
                != std::string::npos);
 }
@@ -99,7 +101,7 @@ void test_empty_payload_decodes_to_default() {
     auto result = dec.decode("SmStateMsg", nullptr, 0);
     assert(result.ok);
     std::printf("empty-payload JSON: %s\n", result.json.c_str());
-    assert(result.json.find("\"state\":\"OFF\"") != std::string::npos);
+    assert(result.json.find("\"state\":\"SmState_OFF\"") != std::string::npos);
     assert(result.json.find("\"tsNs\":\"0\"") != std::string::npos);
 }
 

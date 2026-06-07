@@ -43,9 +43,29 @@ cluster Applications { }
 composition Supervisor     { }
 composition GatewayBridge  { }
 
+// ---- compute supervisor: same nodes, TIPC instance 1 --------------------
+//
+// A SECOND supervisor for the compute machine. Two supervisors on one TIPC
+// namespace (network_mode: host) would COLLIDE at the same address, so compute's
+// supervisor binds the same TIPC types at instance=1 (central's is instance=0).
+// `prototype` is attribute-replacement: ComputeSupervisorCtl IS a SupervisorCtl
+// at a different address. `tdb -i 1` targets this one; `tdb -i 0` central's.
+node atomic ComputeSupervisorCtl prototype SupervisorCtl {
+    tipc type=0x80020001 instance=1
+}
+node runnable ComputeSupervisorWorker prototype SupervisorWorker {
+    tipc type=0x80020002 instance=1
+}
+composition ComputeSupervisor {
+    prototype ComputeSupervisorCtl    supervisor_ctl
+    prototype ComputeSupervisorWorker supervisor_worker
+}
+
 // ---- local cluster: the platform-fabric components ----------------------
 
 cluster Platform {
-    composition Supervisor     sup
-    composition GatewayBridge  gw
+    composition Supervisor         sup
+    composition ComputeSupervisor  compute_sup
+    composition GatewayBridge      gw
 }
+

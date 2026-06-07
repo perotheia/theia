@@ -8,11 +8,10 @@
 //   `ComBridge` is a clientServer exposed to external gRPC peers (the
 //   `supervisor_bridge.proto` shape already wired in services-com).
 //   Inside the host ComDaemon acts as a CLIENT of the supervisor and
-//   per (to read certificates) and as a SENDER on LogStream.
+//   per (to read certificates).
 
 package system.services.com
 
-interface senderReceiver LogStream     { }  // from system.services.log
 interface clientServer   PersistencyIf { }  // from system.services.per
 interface senderReceiver SmStateStream { }  // from system.services.sm
 
@@ -23,7 +22,7 @@ interface senderReceiver SmStateStream { }  // from system.services.sm
 // (RemoteRef / GwMessageHeader over TIPC) — ComDaemon is already a gen_server
 // on the network, so it reaches the supervisor through the runtime, not a
 // hand-rolled socket (retires services/com/impl/tipc_uplink). Declared here
-// as empty placeholders (com's cross-FC idiom — same as LogStream/SmStateStream
+// as empty placeholders (com's cross-FC idiom — same as SmStateStream
 // above): the real message types (ControlRequest/Reply, SupervisionEvent, …)
 // live in package system.supervisor; the impl uses them via the supervisor
 // RemoteCodecs (platform/supervisor supervisor_codecs.hh, #416). The ports
@@ -71,7 +70,6 @@ node atomic ComDaemon {
         server   ctl      provides ComCtl
         receiver from_sm  requires SmStateStream
         client   to_per   requires PersistencyIf
-        sender   to_log   provides LogStream  best_effort
         // Supervisor edge (standard transport, replaces the tipc_uplink
         // socket). `to_sup` = the outbound control client (ComGrpcProxy
         // forwards gRPC mutators through it as RemoteRef call/send_request to

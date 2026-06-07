@@ -15,7 +15,6 @@
 package system.services.ucm
 
 interface senderReceiver SmStateStream { }  // from system.services.sm
-interface senderReceiver LogStream     { }  // from system.services.log
 interface clientServer   PersistencyIf { }  // from system.services.per
 
 message UcmRequest { string package_id    string version }
@@ -50,6 +49,5 @@ node atomic UcmDaemon {
         receiver from_sm requires SmStateStream
         client   to_sm   requires StateMgmtCtl
         client   to_per  requires PersistencyIf
-        sender   to_log  provides LogStream  best_effort
     }
 }

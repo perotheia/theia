@@ -7,9 +7,11 @@
 //   Crash dump    — VM memory snapshot             →  supervisor → tombstone
 //   Lifecycle     — supervision/restart events     →  both lanes
 //
-// LogDaemon is the syslog sink: every FC's `sender to_log` fans into its
-// single `LogStream` receiver, fire-and-forget / best-effort so log
-// emission never blocks application logic. LogDaemon calls no one.
+// LogDaemon is the syslog sink. Logging does NOT flow over a TIPC interface:
+// each node logs directly to its runtime sink (file / syslog / null, selected
+// by THEIA_LOGGER; Logger.hh). LogDaemon holds the syslog TIPC slot but has no
+// log-ingest port — the old `sender to_log → LogStream` fan-in was a phantom
+// path nothing ever used (removed).
 //
 // TraceCollector is the trace fan-out service — NOT a logger. It carries
 // runtime EXECUTION INSTRUMENTATION (the dispatcher-level
@@ -50,22 +52,6 @@ package system.services.log
 interface clientServer SupervisorControlIf { }  // from system.supervisor
 
 
-// ─── Log wire types + the syslog fan-in ──────────────────────────────
-
-message LogRecord {
-    string context
-    uint32 level     // 0=trace 1=debug 2=info 3=warn 4=error 5=fatal
-    uint64 ts_ns
-    string text
-}
-
-// LogStream — every FC has a `sender to_log` (self-reference; declared
-// here because we ARE the log package). senderReceiver fan-in: every FC
-// is a SENDER; LogDaemon is the single RECEIVER. best_effort so emission
-// is fire-and-forget.
-interface senderReceiver LogStream {
-    data LogRecord record
-}
 
 
 // ─── Trace wire types ─────────────────────────────────────────────────
@@ -186,12 +172,10 @@ interface clientServer TraceStreamSub {
 
 // ─── Nodes ─────────────────────────────────────────────────────────────
 
-// The syslog sink. tipc 0x80010003.
+// The syslog sink. tipc 0x80010003. No ports — logging is direct-to-sink
+// (THEIA_LOGGER), not a TIPC ingest. Holds the slot + node identity.
 node atomic LogDaemon {
     tipc type=0x80010003 instance=0
-    ports {
-        receiver log_in requires LogStream best_effort
-    }
 }
 
 // The trace fan-out. tipc 0x80010013.
@@ -206,8 +190,8 @@ node atomic LogDaemon {
 //   to_supervisor          outbound client for ConfigureTrace /
 //                          GetTraceConfig — THIS is where trace config
 //                          flows so it survives restart
-//   to_log                 ad-hoc operational events from the collector to
-//                          syslog (e.g. "subscriber attached")
+//   (operational events — e.g. "subscriber attached" — log to the node's
+//    own runtime sink, not a TIPC port)
 // The trace hub is TWO nodes sharing one process-global TraceHub (ring +
 // subscriber registry, mutex-guarded; impl/trace_hub.hpp):
 //
@@ -249,6 +233,5 @@ node atomic TraceCtl {
         // (TraceControl.Configure) + to_supervisor relay were dropped — see
         // feedback-trace-config-ownership.
         server   ctl_sub        provides TraceStreamSub
-        sender   to_log         provides LogStream  best_effort
     }
 }

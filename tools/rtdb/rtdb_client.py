@@ -32,16 +32,12 @@ import supervisor_bridge_pb2_grpc as _brg    # noqa: E402
 import supervisor_pb2 as _sup                # noqa: E402,F401
 
 # TraceStream is optional (the trace EGRESS gRPC; moves into com later).
-try:
-    import trace_stream_pb2 as _ts           # noqa: E402
-    import trace_stream_pb2_grpc as _tsg      # noqa: E402
-    _HAVE_TRACE = True
-except ImportError:                          # pragma: no cover
-    _HAVE_TRACE = False
-
 _DEFAULT_TARGET = "127.0.0.1:7700"
-# The collector's TraceStream gRPC endpoint (services/log egress-direct; moves
-# into com's TraceForwarder later). Distinct from the SupervisorView :7700.
+# com's TraceForwarder gRPC endpoint (Phase C: the trace egress moved INTO com,
+# served by the TraceForwarder runnable — TraceStream now lives in
+# supervisor_bridge.proto, NOT the retired services/log trace_stream.proto).
+# Distinct port from the SupervisorView :7700 so the two runnables are
+# independently restartable.
 _DEFAULT_COLLECTOR = "127.0.0.1:7710"
 
 _LEVELS = {"trace": 0, "debug": 1, "info": 2, "warn": 3, "error": 4}
@@ -170,13 +166,9 @@ class TraceClient:
 
     def __init__(self, target: str = _DEFAULT_COLLECTOR, *, kind: int = 0,
                  node: str = "", decode: bool = True) -> None:
-        if not _HAVE_TRACE:
-            raise RuntimeError(
-                "rtdb logcat needs trace_stream stubs — run "
-                "tools/rtdb/gen_protos.sh (services/log/proto/trace_stream.proto "
-                "must exist)")
+        # TraceStream lives in supervisor_bridge (com's TraceForwarder).
         self._channel = grpc.insecure_channel(target)
-        self._stub = _tsg.TraceStreamStub(self._channel)
+        self._stub = _brg.TraceStreamStub(self._channel)
         self._kind = kind
         self._node = node
         self._decoder = None
@@ -193,7 +185,7 @@ class TraceClient:
         return cls(target)
 
     def records(self, timeout: float = 5.0) -> Iterator[_RecordView]:
-        req = _ts.TraceSubscribeRequest(kind=self._kind, target_node=self._node)
+        req = _br.TraceSubscribeRequest(kind=self._kind, target_node=self._node)
         for rec in self._stub.Subscribe(req, timeout=timeout):
             content = None
             if self._decoder is not None and rec.payload:

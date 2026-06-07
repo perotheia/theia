@@ -126,18 +126,26 @@ missing call, fix the proto package, then unhide + rebuild the GUI.
    (or one com per machine, like one supervisor per machine). Decide: one com per
    machine (mirrors the supervisor) — simplest, matches the deploy.
 
-### Phase C — trace-gRPC into com (TraceForwarder), delete the CMake log
-7. NEW com runnable `TraceForwarder` (own TIPC addr, own gRPC service — distinct
-   from ComGrpcProxy; trace is high-volume best-effort vs sync control, and it
-   should be independently restartable). It:
-   - subscribes to log[trace]'s `TraceStreamSub.Subscribe` over TIPC (long-
-     running, the SAME path tdb logcat / artheia.observer uses),
-   - re-streams each `TraceRecord` over a gRPC server-streaming socket to the GUI
-     / rf-theia.
-   Mirror the ComGrpcProxy pattern (TIPC in → gRPC fan-out, mutex-guarded
-   subscriber list, a do_start/do_loop/do_stop runnable owning the gRPC server).
-   Move `trace_stream.proto` into com's proto set (it defines the gRPC
-   TraceStream the GUI calls).
+### Phase C — trace-gRPC into com (TraceForwarder), delete the CMake log  ✅ DONE (7)
+7. ✅ NEW com runnable `TraceForwarder` (TIPC 0x8001000A, gRPC :7710 — distinct
+   from ComGrpcProxy's :7700, independently restartable). It:
+   - `impl/trace_link.cc` (isolated nanopb TU, like sup_link): binds a SEQPACKET
+     subscriber socket (0x80010015/pid), gen_calls `SubscribeReq` to log[trace]'s
+     `TraceCtl` (0x80010014/0), accepts the hub's connection, recvs `TraceRecord`
+     casts (service_id = djb2 of the record type) — the SAME path tdb logcat /
+     artheia.observer use. Hands each record's RAW bytes to a sink.
+   - `impl/TraceForwarder_handlers.cc` (libprotobuf gRPC edge): fans the raw
+     bytes out to all `TraceStream.Subscribe` gRPC subscribers, `ParseFromString`
+     into `services.com.TraceRecord` (byte-identical), per-stream kind/node
+     filter, drop-oldest bounded queues so a slow client can't stall the recv.
+   - `TraceStream` service + `TraceSubscribeRequest` added to
+     `supervisor_bridge.proto` (com's existing genrule emits the stubs; the old
+     `services/log/proto/trace_stream.proto` is now redundant → deleted in step 8).
+   LIVE-PROVEN: `rtdb trace incrementer CAST_OUT` then a gRPC `TraceStream.Subscribe`
+   on :7710 streamed `incrementer→counter system_demo_Inc` records; `tdb logcat`
+   (TIPC) AND `rtdb logcat` (gRPC via com) both receive the same records
+   simultaneously (the hub fans out to both subscribers). rtdb's TraceClient
+   default repointed to com :7710 (was the retired collector).
 8. DELETE the orphaned CMake log: `services/log/src/`, `services/log/CMakeLists
    .txt`, `services/log/proto/trace_stream.proto` (moved to com), the foreign_cc
    `services/log/BUILD.bazel` → log becomes a clean gen-app FC (main/ only, like

@@ -5,7 +5,7 @@
 // runnable`). A runnable is a GenRunnable free worker: it owns a thread and
 // runs its own loop (typically a blocking server, e.g. a gRPC proxy) rather
 // than reacting to a message mailbox. User code lives in
-// impl/ComGrpcProxy_handlers.cc (the do_* bodies). Regenerated on every
+// impl/TraceForwarder_handlers.cc (the do_* bodies). Regenerated on every
 // gen-app run.
 
 #pragma once
@@ -18,12 +18,12 @@
 namespace ara::com {
 
 
-// ---- ComGrpcProxy (runnable) -----------------------------------------------
+// ---- TraceForwarder (runnable) -----------------------------------------------
 
-class ComGrpcProxy : public ::theia::runtime::GenRunnable<ComGrpcProxy> {
+class TraceForwarder : public ::theia::runtime::GenRunnable<TraceForwarder> {
 public:
-    static constexpr const char* kNodeName = "com_grpc_proxy";
-    static constexpr uint32_t kTipcType     = 0x80010009u;
+    static constexpr const char* kNodeName = "trace_forwarder";
+    static constexpr uint32_t kTipcType     = 0x8001000Au;
     static constexpr uint32_t kTipcInstance = 0u;
 
     // AUTOSAR Reporting / Non-Reporting (per .art `reporting`). The base

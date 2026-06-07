@@ -220,6 +220,28 @@ message TraceConfigRequest {
     uint32 kind        = 4;   // TraceKind value; 0 = all kinds
 }
 
-// NOTE: TraceSubscribeRequest + the TraceStream service now live in
-// services/log/proto/trace_stream.proto (the collector serves egress
-// directly). It imports this file for TraceRecord.
+// ---- Trace EGRESS — served by com's TraceForwarder runnable -------------
+//
+// Phase C: the trace gRPC moved INTO com (TraceForwarder), so com governs the
+// DMZ for BOTH the trace byte path AND the control path. TraceForwarder
+// subscribes to log[trace]'s TIPC TraceStream hub (TraceCtl.Subscribe at
+// 0x80010014) and re-streams each record over this gRPC service. log[trace]
+// stays a pure-TIPC hub (no gRPC of its own); the old
+// services/log/proto/trace_stream.proto + its CMake daemon are retired.
+//
+// Per-stream subscribe request. Optional filters applied stream-side:
+//   kind        — TraceKind value (call/cast × in/out, statem); 0 = all
+//   target_node — restrict to one source node (component name); "" = all
+// (Enabling/disabling a node's tracer is the separate CONTROL path,
+// ConfigureTrace → supervisor → node; this filter is just stream selection.)
+message TraceSubscribeRequest {
+    uint32 kind        = 1;   // TraceKind value; 0 = all kinds
+    string target_node = 2;   // component name; "" = all nodes
+}
+
+service TraceStream {
+    // Server-streaming firehose of trace records. TraceForwarder subscribes
+    // to the TIPC hub once and fans every record out to all gRPC subscribers.
+    // Clients open one per machine and read until they close the stream.
+    rpc Subscribe(TraceSubscribeRequest) returns (stream TraceRecord);
+}

@@ -95,11 +95,18 @@ from services.manifest.service import ServicesSoftware
 # layer. The default below is the multi-host shape.
 # ---------------------------------------------------------------------------
 
+# Platform opkg_artifacts. NOTE: the supervisor BINARY is NOT shipped as a
+# standalone .ipk — it rides in the per-machine bundle (demo-<machine>.ipk,
+# installed at /opt/theia/bin/supervisor by theia::install). These entries
+# exist so theia::provisioning can drop the systemd UNIT + enable the service;
+# the binary is already on disk from the bundle. target_dir is /opt/theia/bin/
+# to match where the bundle lands it (= the executor start_cmd `bin/<name>`
+# convention under THEIA_ROOT_DIR=/opt/theia).
 _PLATFORM_OPKG_ARTIFACTS = [
     OpkgArtifact(
         name="supervisor",
         bazel_target="//platform/supervisor/main:supervisor",
-        target_dir="/opt/theia/supervisor/",
+        target_dir="/opt/theia/bin/",
         systemd_unit="/etc/systemd/system/theia-supervisor.service",
     ),
     # (gateway dropped — stale FC; needs its own gen-app modernization. Re-add

@@ -85,6 +85,20 @@ SwComponents isn't reaching the rig extension's per-machine component filegroup.
 Verified: a containerized supervisor now execs all 5 FC daemons
 (sm/log/per/ucm/shwa) cleanly from the .ipk — no execvp errors.
 
+**Supervisor packaging RESOLVED 2026-06-07:** decided the supervisor rides in
+the per-machine bundle (NOT a standalone supervisor.ipk). Reconciled the
+three-way path contradiction → all land at `/opt/theia/bin/supervisor`:
+- zonal_rig.py opkg_artifacts target_dir `/opt/theia/supervisor/` → `/opt/theia/bin/`.
+- provisioning.pp: the opkg_artifacts loop no longer dpkg-installs a standalone
+  supervisor.ipk (it doesn't exist) — it declares the `theia` class (per-machine
+  bundle install) + drops the systemd UNIT + setcap at `/opt/theia/bin`.
+- run-supervisor.sh prefers the dev bind-mount `/usr/bin/theia-supervisor` but
+  falls back to the bundle path `/opt/theia/bin/supervisor`.
+Verified: `puppet apply central.pp` with NO supervisor bind-mount installs the
+supervisor (+ FCs) from the bundle at `/opt/theia/bin/supervisor`. This is the
+Pi path too — it just additionally needs arm64 cross-build + a build-host→Pi
+.ipk transport step (see container-tipc-reachability.md / the Pi notes).
+
 **STILL OPEN — executor tree slicing (separate bug):** the `CentralRig`
 executor.json still lists `app_sup` children p1/p2/p3, which are
 compute_host-bound (correctly NOT in central's .ipk). So central's supervisor

@@ -342,12 +342,13 @@ def cmd_compdb(args: list[str]) -> int:
         f'mnemonic("CppCompile", {pattern})',
         "--output=jsonproto",
         "--include_artifacts=false",  # we read the source from the args
-        # Tolerate packages that fail to load/analyze (e.g. the retired
-        # //platform/supervisor:* bindings still referenced by the CMake/grpc
-        # edge in services/com + services/log:all_srcs on psp-retirement).
-        # aquery still emits valid jsonproto for everything that DID analyze;
-        # we index that and report the skips. Drop this once those consumers
-        # are repointed off the retired supervisor proto targets.
+        # Defensive: tolerate any package that fails to load/analyze, indexing
+        # everything that DID. (The original offender — services/log:all_srcs +
+        # com referencing the retired //platform/supervisor:proto_srcs over a
+        # CMake/grpc edge — is GONE: log is a clean gen-app FC and com's trace
+        # gRPC moved to TraceForwarder. //services/... loads clean now. Kept as
+        # a safety net so a future broken package degrades to a partial compdb
+        # instead of aborting the whole regen.)
         "--keep_going",
     ]
     print(f"$ {' '.join(shlex.quote(a) for a in aquery)}", file=sys.stderr)

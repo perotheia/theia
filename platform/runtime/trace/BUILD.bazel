@@ -11,7 +11,7 @@
 #
 # Apps + services on Hercules/RPi4 do NOT depend on this — the
 # reflection lib is ~6 MB and pointless on a microcontroller.
-# Only host tools (supdbg, supervisor-gui) link it.
+# Only host tools (rtdb, supervisor-gui) link it.
 
 package(default_visibility = ["//visibility:public"])
 
@@ -54,7 +54,7 @@ cc_library(
 )
 
 
-# The shippable .so for ctypes consumers (rf-theia, supdbg). Combines
+# The shippable .so for ctypes consumers (rf-theia, rtdb). Combines
 # the decoder lib with its proto registrar — the .so a Python caller
 # dlopen()s already knows about every type at the moment of the first
 # call.

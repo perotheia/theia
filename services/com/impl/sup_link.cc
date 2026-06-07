@@ -265,4 +265,45 @@ bool SupLink::get_tree(SupReply& out, int timeout_ms) {
     return true;
 }
 
+bool SupLink::get_system_info(SupReply& out, int timeout_ms) {
+    if (!impl_->started) return false;
+    std::lock_guard<std::mutex> lk(impl_->call_mu);
+    system_supervisor_GetSystemInfoRequest req =
+        system_supervisor_GetSystemInfoRequest_init_zero;
+    auto result = theia::runtime::call<system_supervisor_SystemInfo>(
+        impl_->ref, req, /*act=*/0, timeout_ms);
+    if (result.tag != theia::runtime::CallTag::Reply) return false;
+    uint8_t buf[2048];   // SystemInfo: ~9 fields, longest str max_size:128
+    pb_ostream_t os = pb_ostream_from_buffer(buf, sizeof(buf));
+    if (pb_encode(&os,
+            theia::runtime::RemoteCodec<system_supervisor_SystemInfo>::fields(),
+            &result.reply)) {
+        out.system_info.assign(reinterpret_cast<const char*>(buf),
+                               os.bytes_written);
+    }
+    out.status = 0;
+    return true;
+}
+
+bool SupLink::get_log_level_config(SupReply& out, int timeout_ms) {
+    if (!impl_->started) return false;
+    std::lock_guard<std::mutex> lk(impl_->call_mu);
+    system_supervisor_GetLogLevelConfigRequest req =
+        system_supervisor_GetLogLevelConfigRequest_init_zero;
+    auto result = theia::runtime::call<system_supervisor_LogLevelConfigList>(
+        impl_->ref, req, /*act=*/0, timeout_ms);
+    if (result.tag != theia::runtime::CallTag::Reply) return false;
+    // LogLevelConfigList.configs is max_count:64 × ~80B ≈ 5KB; 8KB is safe.
+    static uint8_t buf[8 * 1024];
+    pb_ostream_t os = pb_ostream_from_buffer(buf, sizeof(buf));
+    if (pb_encode(&os,
+            theia::runtime::RemoteCodec<system_supervisor_LogLevelConfigList>::fields(),
+            &result.reply)) {
+        out.log_level_list.assign(reinterpret_cast<const char*>(buf),
+                                  os.bytes_written);
+    }
+    out.status = 0;
+    return true;
+}
+
 }  // namespace services_com

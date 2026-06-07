@@ -5,7 +5,7 @@
 // REGISTER line below.
 //
 // This file is intentionally separate from trace_decoder.cc so the
-// core library stays proto-agnostic — useful when supdbg or the
+// core library stays proto-agnostic — useful when rtdb or the
 // supervisor-gui want their own message subset.
 
 #include "trace_decoder.hh"

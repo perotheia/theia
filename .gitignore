@@ -83,9 +83,9 @@ build-*/
 deploy/.staging/
 deploy/logs/
 
-# supdbg's grpc_tools.protoc output. Regenerate with:
-#   tools/supdbg/gen_protos.sh
-/tools/supdbg/_gen/
+# rtdb's grpc_tools.protoc output. Regenerate with:
+#   tools/rtdb/gen_protos.sh
+/tools/rtdb/_gen/
 
 # aarch64 sysroots for cross-compilation. The bootstrapped rootfs is
 # ~450 MB of .debs; gitignore the contents but keep the setup scripts.

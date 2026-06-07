@@ -47,7 +47,7 @@ filegroup(
 
 # ---------------------------------------------------------------------------
 # Google libprotobuf companion — REFLECTION-capable C++ binding of the
-# same .proto. Host-only (libtrace_decoder, supdbg). Apps + services on
+# same .proto. Host-only (libtrace_decoder, rtdb). Apps + services on
 # Hercules/RPi4 keep using the nanopb `sm_pb_c`/`sm_pb_h` targets above.
 #
 # protoc writes `sm.pb.cc` / `sm.pb.h` — `sm.pb.h` would collide with

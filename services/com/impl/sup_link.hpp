@@ -62,6 +62,8 @@ struct SupReply {
     std::string child_name;
     std::string trace_config_list;   // raw proto bytes (may be empty)
     std::string tree_snapshot;       // raw TreeSnapshot bytes (GetTree)
+    std::string system_info;         // raw SystemInfo bytes (GetSystemInfo)
+    std::string log_level_list;      // raw LogLevelConfigList bytes
 };
 
 // Singleton link to the supervisor control node. Opened once by
@@ -104,6 +106,13 @@ public:
     // firehose has no remote egress; GetTree is the live source — same model
     // as `tdb ps --follow`). Raw TreeSnapshot bytes land in out.tree_snapshot.
     bool get_tree(SupReply& out, int timeout_ms = 3000);
+
+    // Read-back ops backing rtdb's `supervisor`/`info` and `loglevel` (no-arg)
+    // verbs — the same supervisor TIPC calls tdb's probe makes. Raw proto bytes
+    // land in out.system_info / out.log_level_list (re-encoded wire-identical
+    // to the libprotobuf the gRPC client decodes).
+    bool get_system_info(SupReply& out, int timeout_ms = 3000);
+    bool get_log_level_config(SupReply& out, int timeout_ms = 3000);
 
 private:
     SupLink();

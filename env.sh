@@ -34,13 +34,16 @@ else
 fi
 
 # --- workspace-CLI symlinks (idempotent) ---------------------------------
-# `theia` (workspace dispatcher) and `tdb` (Theia Debug Bridge) are plain
+# `theia` (workspace dispatcher), `tdb` (local TIPC debug bridge) and `rtdb`
+# (the SAME bridge over gRPC to com, for remote/out-of-DMZ operation) are plain
 # script entrypoints, not pip console_scripts — link them into .venv/bin so
 # they're on PATH alongside `artheia`. `ln -sf` makes re-sourcing a no-op.
 # (The .venv is gitignored, so this is where the symlinks get (re)created.)
-ln -sf "$_THEIA_ROOT/theia.py"         "$_THEIA_ROOT/.venv/bin/theia"
-ln -sf "$_THEIA_ROOT/tools/tdb/tdb.py" "$_THEIA_ROOT/.venv/bin/tdb"
-chmod +x "$_THEIA_ROOT/theia.py" "$_THEIA_ROOT/tools/tdb/tdb.py" 2>/dev/null
+ln -sf "$_THEIA_ROOT/theia.py"           "$_THEIA_ROOT/.venv/bin/theia"
+ln -sf "$_THEIA_ROOT/tools/tdb/tdb.py"   "$_THEIA_ROOT/.venv/bin/tdb"
+ln -sf "$_THEIA_ROOT/tools/rtdb/rtdb.py" "$_THEIA_ROOT/.venv/bin/rtdb"
+chmod +x "$_THEIA_ROOT/theia.py" "$_THEIA_ROOT/tools/tdb/tdb.py" \
+         "$_THEIA_ROOT/tools/rtdb/rtdb.py" 2>/dev/null
 
 # --- shell completion ----------------------------------------------------
 if [ -n "${ZSH_VERSION:-}" ]; then
@@ -55,14 +58,18 @@ if [ -n "${ZSH_VERSION:-}" ]; then
     # their fixed verb sets with small functions registered via compdef.
     _theia_complete() { compadd rig provision orchestrate dist install compdb }
     compdef _theia_complete theia
-    _tdb_complete() { compadd ps supervisor trace trace-config restart terminate logcat help quit }
+    _tdb_complete() { compadd ps supervisor info trace trace-config loglevel restart terminate logcat get-snapshot help quit }
     compdef _tdb_complete tdb
+    # rtdb = the same verbs over gRPC (no get-snapshot — TIPC/per-only).
+    _rtdb_complete() { compadd ps supervisor info trace trace-config loglevel restart terminate logcat help quit }
+    compdef _rtdb_complete rtdb
 elif [ -n "${BASH_VERSION:-}" ]; then
     # bash fallback (you're on zsh per the project default, but keep this
     # so sourcing from a bash subshell still works).
     eval "$(_ARTHEIA_COMPLETE=bash_source artheia)"
     complete -W "rig provision orchestrate dist install compdb" theia
-    complete -W "ps supervisor trace trace-config restart terminate logcat help quit" tdb
+    complete -W "ps supervisor info trace trace-config loglevel restart terminate logcat get-snapshot help quit" tdb
+    complete -W "ps supervisor info trace trace-config loglevel restart terminate logcat help quit" rtdb
 fi
 
 echo "theia env ready: .venv active; theia + tdb linked; completion for artheia + theia + tdb"

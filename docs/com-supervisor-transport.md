@@ -1,6 +1,6 @@
 # com ↔ supervisor transport
 
-How the GUI / supdbg reach the supervisor, and how the link between
+How the GUI / rtdb reach the supervisor, and how the link between
 `services/com` and `platform/supervisor` is built on the **standard Theia
 transport** (`platform/runtime`: `TipcMux` + `RemoteRef` + `RemoteCodec`,
 nanopb `GwMessageHeader` over TIPC) — *not* a hand-rolled wire.
@@ -17,7 +17,7 @@ There are two protobuf *runtimes* in play, on purpose:
 
 | | who | encoding | why |
 |---|---|---|---|
-| **libprotobuf** | GUI, supdbg (gRPC clients), the com gRPC edge | full C++ reflection | rich host tooling; gRPC needs it |
+| **libprotobuf** | GUI, rtdb (gRPC clients), the com gRPC edge | full C++ reflection | rich host tooling; gRPC needs it |
 | **nanopb** | the supervisor + every FC on the TIPC wire | fixed structs, no heap | embedded-grade; Hercules/RPi4 |
 
 The load-bearing fact: **proto wire-v3 is identical between them.** A message
@@ -93,7 +93,7 @@ through untouched.
 ## 4. End-to-end: trace set / get (the control path)
 
 ```
- GUI / supdbg                    services/com                    platform/supervisor
+ GUI / rtdb                    services/com                    platform/supervisor
  (libprotobuf, gRPC)             (gRPC edge + TIPC client)        (gen_server on TipcMux)
  ───────────────────            ─────────────────────────        ────────────────────────
  ConfigureTraceRequest
@@ -121,7 +121,7 @@ through untouched.
                                   call() future wakes (corr match)
                                   ControlReply (nanopb) → fields
    ◀──gRPC reply──  ControlReply (libprotobuf) ParseFromString
- GUI/supdbg reads status / trace_config_list
+ GUI/rtdb reads status / trace_config_list
 ```
 
 GetTraceConfig is identical, returning the supervisor's stored
@@ -188,7 +188,7 @@ removable:
 
 com then becomes a routing shim between two header formats. Caveats:
 `correlation_id` moves from the body into the `GwMessageHeader` (check
-supdbg/GUI); the firehose (push) is unaffected; the supervisor's nanopb
+rtdb/GUI); the firehose (push) is unaffected; the supervisor's nanopb
 `pb_decode` becomes the single validator. This is a larger `.art` reshape than
 the envelope-kept swap above, so it lands **after** the basic transport swap
 is proven by the trace set/get/crash test.

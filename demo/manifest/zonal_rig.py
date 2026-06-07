@@ -160,7 +160,7 @@ ComputeHost = MachineManifest(
     opkg_artifacts=list(_PLATFORM_OPKG_ARTIFACTS),
 )
 
-# Admin console — runs supervisor-gui + supdbg, no supervisor of
+# Admin console — runs supervisor-gui + rtdb, no supervisor of
 # its own. Packaged as a .deb (rules/rig.bzl will branch on
 # kind="host"). Its manifest carries the operator's view of the
 # rig: every TARGET machine's com_endpoint + etcd_endpoint, plus
@@ -182,7 +182,7 @@ AdminHost = MachineManifest(
     #
     # Operator workstation: a Theia .deb is installed via apt, no
     # opkg, no supervisor/gateway. The .deb itself ships the
-    # supervisor-gui + supdbg binaries and reads
+    # supervisor-gui + rtdb and reads
     # /etc/theia/machines.yaml to find the TARGET endpoints.
     os_packages=[
         OsPackage(name="theia-admin", source="apt"),

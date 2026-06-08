@@ -476,6 +476,8 @@ void TracePanel::on_frame(const std::string& machine_name,
 
     long new_count = 0;
     bool follow = false;
+    bool show = false;
+    EventRow newest;
     {
         std::lock_guard<std::mutex> lk(impl_->mtx);
         const bool evicted = impl_->ring.size() >= kRingCapacity;
@@ -485,9 +487,9 @@ void TracePanel::on_frame(const std::string& machine_name,
         // (The old code re-scanned the whole ring per record → O(N²) freeze.)
         impl_->ring.push_back(std::move(r));
         const size_t new_idx = impl_->ring.size() - 1;
-        const bool show = impl_->terms_.empty() ||
-                          impl_->matches(impl_->ring.back());
+        show = impl_->terms_.empty() || impl_->matches(impl_->ring.back());
         if (show) impl_->visible.push_back(new_idx);
+        newest = impl_->ring.back();   // copy for the decode pane (lock-free use)
 
         // Ring eviction shifts every ring index down by one. Rather than
         // rewrite all of `visible`, drop a now-stale leading entry and
@@ -504,9 +506,19 @@ void TracePanel::on_frame(const std::string& machine_name,
     }
     impl_->list->SetItemCount(new_count);
     impl_->list->Refresh();
-    // Only yank to the newest row when "Follow new events" is on — otherwise
-    // the operator can scroll back through history during a live stream.
-    if (follow && new_count > 0) impl_->list->EnsureVisible(new_count - 1);
+    // Following: yank to the newest visible row AND drive the detail/decode
+    // pane to it — otherwise the list scrolls but the bottom pane stays on an
+    // old (or empty) selection. Not following: leave the user's scroll +
+    // selection alone so they can inspect history during a live stream.
+    if (follow && new_count > 0) {
+        impl_->list->EnsureVisible(new_count - 1);
+        // Drive the decode pane to the newest row. We rebuild directly rather
+        // than via SetItemState(SELECTED) — that would re-fire our own
+        // ITEM_SELECTED handler (double rebuild) and the virtual list shows
+        // the follow tail anyway. Only when the new row passes the filter
+        // (else it isn't the visible tail).
+        if (show) impl_->rebuild_tree(newest);
+    }
 }
 
 }  // namespace sup_gui

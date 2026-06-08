@@ -124,6 +124,19 @@ struct LogLevelRow {
     uint32_t    boot_level{0};   // manifest THEIA_LOG_LEVEL ordinal
 };
 
+// One thread's snapshot in a TreeRow (mirrors the ThreadSample wire message),
+// so GetTree carries the same per-thread breakdown the firehose does.
+struct TreeThreadRow {
+    uint32_t  tid{0};
+    std::string comm;
+    uint32_t  cpu_pct{0};
+    uint32_t  sched_policy{0};
+    uint32_t  sched_priority{0};
+    int32_t   nice{0};
+    uint64_t  cpu_affinity_mask{0};
+    uint32_t  last_cpu{0};
+};
+
 // One row of the supervisor tree for GetTree (a flat, parent-keyed list — the
 // caller reassembles the hierarchy by name, same shape the firehose streams).
 // kind: 0=worker, 1=supervisor. state: 0=stopped, 2=running, 3=terminating.
@@ -138,6 +151,18 @@ struct TreeRow {
     uint32_t    flags{0};
     std::string strategy;       // supervisors only
     std::string start_cmd;      // workers only
+    // Resource metrics (workers only; 0 for supervisors/nodes). Sampled from
+    // /proc by the engine each tick (sample_[pid]) — the SAME data the
+    // NodeState firehose carries, so GetTree (tdb ps / GUI poll) and the
+    // firehose agree. uptime_ms = now - last_start.
+    uint64_t    uptime_ms{0};
+    uint32_t    cpu_pct{0};      // hundredths of a percent
+    uint64_t    rss_kb{0};
+    uint64_t    vsz_kb{0};
+    uint64_t    shared_kb{0};
+    uint64_t    data_kb{0};
+    uint32_t    threads{0};
+    std::vector<TreeThreadRow> threads_detail;
 };
 
 // ---- The executor command (actor ingress) --------------------------------

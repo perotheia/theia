@@ -66,28 +66,111 @@ def _render_tree(rows) -> str:
 # command handlers — each takes (args: list[str], sup, trace_factory)
 # ---------------------------------------------------------------------------
 
+def _fmt_uptime_ms(ms: int) -> str:
+    """uptime ms → 'Dd Hh Mm Ss' (largest non-zero unit first)."""
+    if not ms:
+        return "0s"
+    sec = int(ms // 1000)
+    d, rem = divmod(sec, 86400)
+    h, rem = divmod(rem, 3600)
+    m, s = divmod(rem, 60)
+    parts = []
+    if d:
+        parts.append(f"{d}d")
+    if h or d:
+        parts.append(f"{h}h")
+    if m or h or d:
+        parts.append(f"{m}m")
+    parts.append(f"{s}s")
+    return " ".join(parts)
+
+
+def _fmt_kb(kb: int) -> str:
+    """kB → human MB (with the raw kB). e.g. 17604 → '17.2 MB'."""
+    if not kb:
+        return "0"
+    mb = kb / 1024.0
+    return f"{mb:,.1f} MB" if mb >= 1.0 else f"{kb} kB"
+
+
+def _find_child(reply, name: str):
+    """The ChildState row for a worker/node named `name`, or None."""
+    for ch in (_g(reply, "children", []) or []):
+        if _g(ch, "name") == name:
+            return ch
+    return None
+
+
 def cmd_ps(args, sup, _tf) -> int:
-    # `ps --follow [interval]` streams the tree by POLLING GetTree on an
-    # interval (default 1s) and re-rendering — the pull model (the supervisor's
-    # firehose has no remote egress; GetTree is the live source, same as a plain
-    # `ps`). com's gRPC Subscribe mirrors this poll-stream.
+    # `ps`                  — the whole supervisor tree
+    # `ps <name>`           — metrics for one process/node (uptime/cpu/mem/...)
+    # `ps --follow [int]`   — poll the tree on an interval (pull model: the
+    #                         supervisor firehose has no remote egress; GetTree
+    #                         is the live source. com's gRPC Subscribe mirrors it)
+    # `ps <name> --follow`  — poll one process's metrics
     follow = "--follow" in args or "-f" in args
-    if not follow:
-        reply = sup.get_tree(timeout=3.0)
-        print(_render_tree(list(_g(reply, "children", []) or [])))
-        return 0
-    nums = [a for a in args if not a.startswith("-")]
+    positional = [a for a in args if not a.startswith("-")]
+    # A non-numeric positional is a process NAME (numeric = the follow interval).
+    name = next((a for a in positional if not _is_number(a)), None)
+    nums = [a for a in positional if _is_number(a)]
     interval = float(nums[0]) if nums else 1.0
+
+    def render() -> str:
+        reply = sup.get_tree(timeout=3.0)
+        if name:
+            ch = _find_child(reply, name)
+            if ch is None:
+                return f"no process/node named {name!r} in the supervisor tree"
+            return _render_proc(ch)
+        return _render_tree(list(_g(reply, "children", []) or []))
+
+    if not follow:
+        print(render())
+        return 0
+    label = f"ps {name}" if name else "ps"
     try:
         while True:
-            reply = sup.get_tree(timeout=3.0)
             sys.stdout.write("\x1b[2J\x1b[H")   # clear + home
-            print(f"tdb ps --follow  (every {interval}s, Ctrl-C to stop)\n")
-            print(_render_tree(list(_g(reply, "children", []) or [])))
+            print(f"tdb {label} --follow  (every {interval}s, Ctrl-C to stop)\n")
+            print(render())
             sys.stdout.flush()
             time.sleep(interval)
     except KeyboardInterrupt:
         return 0
+
+
+def _is_number(s: str) -> bool:
+    try:
+        float(s)
+        return True
+    except ValueError:
+        return False
+
+
+def _render_proc(ch) -> str:
+    """One process/node's metrics, key/value (the `ps <name>` detail view).
+    Reads the ChildState fields the supervisor now fills from its /proc sample
+    (uptime_ms, cpu_pct hundredths-of-%, rss/shared/data/vsz kB, threads)."""
+    kind = {1: "supervisor", 0: "process", 2: "node"}.get(_g(ch, "kind"), "node")
+    state = _STATE.get(_g(ch, "state", 0), str(_g(ch, "state")))
+    pid = _g(ch, "pid", -1)
+    rows = [
+        ("name",        _g(ch, "name")),
+        ("kind",        kind),
+        ("parent",      _g(ch, "parent_name", "")),
+        ("state",       state),
+        ("pid",         pid if pid and pid > 0 else "—"),
+        ("uptime",      _fmt_uptime_ms(_g(ch, "uptime_ms", 0))),
+        ("cpu",         f"{_g(ch, 'cpu_pct', 0) / 100.0:.2f} %"),
+        ("rss",         _fmt_kb(_g(ch, "rss_kb", 0))),
+        ("shared",      _fmt_kb(_g(ch, "shared_kb", 0))),
+        ("data",        _fmt_kb(_g(ch, "data_kb", 0))),
+        ("vsz",         _fmt_kb(_g(ch, "vsz_kb", 0))),
+        ("threads",     _g(ch, "threads", 0)),
+        ("restarts",    _g(ch, "restart_count", 0)),
+        ("last_exit",   _g(ch, "last_exit_code", 0)),
+    ]
+    return "\n".join(f"{k:12} {v}" for k, v in rows)
 
 
 def cmd_supervisor(args, sup, _tf) -> int:

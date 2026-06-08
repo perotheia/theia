@@ -1,3 +1,4 @@
 {
-    "artheia.serverCommand": "/home/axadmin/repo/theia/.venv/bin/artheia-lsp"
+    "artheia.serverCommand": "/home/axadmin/repo/theia/.venv/bin/artheia-lsp",
+    "bazel.buildifierExecutable": "/home/axadmin/.local/bin/buildifier"
 }

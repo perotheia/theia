@@ -365,6 +365,38 @@ std::vector<TreeRow> Supervisor::ctl_get_tree() {
                         if (i) r.start_cmd += ' ';
                         r.start_cmd += w.start_cmd[i];
                     }
+                    // Resource metrics — same source cast_node_state() uses, so
+                    // GetTree (tdb ps / GUI poll) carries the live cpu/mem/uptime
+                    // instead of zeros. uptime = now - last_start; cpu/mem/threads
+                    // from the per-tick /proc sample (sample_[pid]).
+                    if (w.pid > 0) {
+                        r.uptime_ms = static_cast<uint64_t>(
+                            std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now()
+                                - w.last_start).count());
+                        auto sit = sample_.find(w.pid);
+                        if (sit != sample_.end()) {
+                            const auto& ps = sit->second;
+                            r.cpu_pct   = ps.cpu_pct;
+                            r.rss_kb    = ps.rss_kb;
+                            r.vsz_kb    = ps.vsz_kb;
+                            r.shared_kb = ps.shared_kb;
+                            r.data_kb   = ps.data_kb;
+                            r.threads   = ps.threads;
+                            for (const auto& te : ps.threads_detail) {
+                                TreeThreadRow tt;
+                                tt.tid               = te.second.tid;
+                                tt.comm              = te.second.comm;
+                                tt.cpu_pct           = te.second.cpu_pct;
+                                tt.sched_policy      = te.second.sched_policy;
+                                tt.sched_priority    = te.second.sched_priority;
+                                tt.nice              = te.second.nice;
+                                tt.cpu_affinity_mask = te.second.cpu_affinity_mask;
+                                tt.last_cpu          = te.second.last_cpu;
+                                r.threads_detail.push_back(std::move(tt));
+                            }
+                        }
+                    }
                     out.push_back(std::move(r));
 
                     // One leaf row per artheia node hosted in this worker

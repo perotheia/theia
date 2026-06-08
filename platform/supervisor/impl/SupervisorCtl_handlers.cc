@@ -298,6 +298,18 @@ TreeSnapshot SupervisorCtl::handle_call(
         std::snprintf(c.strategy, sizeof(c.strategy), "%s", r.strategy.c_str());
         std::snprintf(c.start_cmd, sizeof(c.start_cmd), "%s",
                       r.start_cmd.c_str());
+        // Resource metrics (workers only; 0 for supervisors/nodes) — carried in
+        // the GetTree snapshot so `tdb ps` + the GUI Processes panel show live
+        // cpu/mem/uptime, not zeros. (Per-thread threads_detail is max_count:0
+        // in the GetTree wire — only the scalar aggregates ride here; the
+        // per-thread breakdown stays on the NodeState firehose.)
+        c.uptime_ms = r.uptime_ms;
+        c.cpu_pct   = r.cpu_pct;
+        c.rss_kb    = r.rss_kb;
+        c.vsz_kb    = r.vsz_kb;
+        c.shared_kb = r.shared_kb;
+        c.data_kb   = r.data_kb;
+        c.threads   = r.threads;
     }
     return snap;
 }

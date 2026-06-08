@@ -109,6 +109,45 @@ ProcessesPanel::ProcessesPanel(wxWindow* parent) : PanelBase(parent) {
         dv->Bind(wxEVT_DATAVIEW_COLUMN_HEADER_CLICK,
                  &ProcessesPanel::on_col_click, this);
     }
+
+    // Right-click a process → Kill / Remove context menu.
+    list_->Bind(wxEVT_TREELIST_ITEM_CONTEXT_MENU,
+                &ProcessesPanel::on_context_menu, this);
+}
+
+namespace { enum { ID_PROC_KILL = wxID_HIGHEST + 1001, ID_PROC_REMOVE }; }
+
+void ProcessesPanel::on_context_menu(wxTreeListEvent& evt) {
+    auto item = evt.GetItem();
+    if (!item.IsOk()) return;
+    // Resolve the PROCESS row (a thread child → its parent process). The tree
+    // column (0) holds the name; machine is column 3 (on process rows only).
+    auto parent = list_->GetItemParent(item);
+    auto proc = (parent.IsOk() && parent != list_->GetRootItem()) ? parent : item;
+    const std::string name    = std::string(list_->GetItemText(proc, 0).ToUTF8());
+    const std::string machine = std::string(list_->GetItemText(proc, 3).ToUTF8());
+    if (name.empty()) return;
+
+    wxMenu menu;
+    menu.Append(ID_PROC_KILL,
+                wxString::Format("Kill '%s' (restart)", name.c_str()));
+    menu.Append(ID_PROC_REMOVE,
+                wxString::Format("Remove '%s' (stop, no restart)", name.c_str()));
+
+    menu.Bind(wxEVT_MENU, [this, machine, name](wxCommandEvent& e) {
+        if (!child_op_cb_) return;
+        const char* op = (e.GetId() == ID_PROC_KILL) ? "kill" : "remove";
+        const std::string status = child_op_cb_(machine, name, op);
+        if (auto* tlw = wxGetTopLevelParent(this)) {
+            if (auto* frame = wxDynamicCast(tlw, wxFrame))
+                frame->SetStatusText(wxString::FromUTF8(status.c_str()), 0);
+        }
+    });
+    PopupMenu(&menu);
+}
+
+void ProcessesPanel::set_child_op_callback(ChildOpCallback cb) {
+    child_op_cb_ = std::move(cb);
 }
 
 void ProcessesPanel::on_col_click(wxDataViewEvent& evt) {

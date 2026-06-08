@@ -132,19 +132,41 @@ MainFrame::MainFrame(std::vector<MachineEndpoint> machines)
     // dialog to the matching machine's GrpcClient.
     applications_->set_configure_trace_callback(
         [this](const std::string& machine, const std::string& node,
-               const std::string& msg, bool enabled) {
+               const std::string& msg, bool enabled, uint32_t kind) {
+            static const char* kKind[] = {"ALL", "CAST_OUT", "CAST_IN",
+                                          "CALL_OUT", "CALL_IN", "STATEM"};
+            const char* kn = (kind < 6) ? kKind[kind] : "?";
             for (auto& c : clients_) {
                 if (c && c->machine_name() == machine) {
-                    int rc = c->configure_trace(node, msg, enabled);
+                    int rc = c->configure_trace(node, msg, enabled, kind);
                     wxString s = wxString::Format(
-                        "trace %s for %s/%s on %s: rc=%d",
-                        enabled ? "enabled" : "disabled",
-                        node.c_str(), msg.c_str(),
-                        machine.c_str(), rc);
+                        "trace %s %s on %s: rc=%d",
+                        enabled ? "enabled" : "disabled", kn,
+                        node.c_str(), rc);
                     SetStatusText(s, 0);
                     return;
                 }
             }
+        });
+
+    // Processes panel right-click → Kill / Remove on the matching machine's
+    // GrpcClient. kill = RestartChild (restarts); remove = TerminateChild
+    // (no_restart=true, stop-and-hold).
+    processes_->set_child_op_callback(
+        [this](const std::string& machine, const std::string& name,
+               const std::string& op) -> std::string {
+            for (auto& c : clients_) {
+                if (c && c->machine_name() == machine) {
+                    std::string msg;
+                    const int rc = (op == "remove")
+                        ? c->terminate_child(name, &msg)
+                        : c->restart_child(name, &msg);
+                    return (op == "remove" ? "remove " : "kill ") + name +
+                           " on " + machine + ": rc=" + std::to_string(rc) +
+                           (msg.empty() ? "" : "  " + msg);
+                }
+            }
+            return "no client for machine " + machine;
         });
 
     // Persistency panel — route ListSchemas / Snapshot to the FOCUSED machine's

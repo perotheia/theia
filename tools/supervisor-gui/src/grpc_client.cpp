@@ -98,7 +98,7 @@ void GrpcClient::run_trace() {
 
 int GrpcClient::configure_trace(const std::string& target_node,
                                 const std::string& msg_type,
-                                bool enabled) {
+                                bool enabled, uint32_t kind) {
     // Use a fresh short-lived channel to keep the streaming thread's
     // channel untouched. The trace CONTROL path (enable/disable a node's
     // tracer) is ConfigureTrace on SupervisorView (:7700) — the SAME RPC
@@ -113,6 +113,8 @@ int GrpcClient::configure_trace(const std::string& target_node,
     req.set_target_node(target_node);
     req.set_msg_type(msg_type);
     req.set_enabled(enabled);
+    req.set_kind(kind);   // TraceKind (0 = all kinds) — the supervisor keys the
+                          // per-node trace filter on kind (a bitmask), #403.
 
     ::system_supervisor::ControlReply rep;
     grpc::ClientContext ctx;
@@ -169,6 +171,42 @@ int GrpcClient::snapshot(const std::string& label, std::string* msg) {
     if (!status.ok()) {
         std::fprintf(stderr, "grpc_client[%s]: Snapshot failed: %s\n",
                      machine_name_.c_str(), status.error_message().c_str());
+        if (msg) *msg = status.error_message();
+        return -1;
+    }
+    if (msg) *msg = rep.message();
+    return static_cast<int>(rep.status());
+}
+
+// ---- child lifecycle (Processes panel right-click) ----------------------
+// Kill = RestartChild (no_restart=false): kill + supervisor restarts it.
+// Remove = TerminateChild (no_restart=true): stop-and-hold, no policy restart.
+// Both are ChildSelector → ControlReply on SupervisorView. Synchronous unary,
+// fresh channel (don't touch the stream threads).
+int GrpcClient::restart_child(const std::string& name, std::string* msg) {
+    return child_op(name, /*no_restart=*/false, "RestartChild", msg);
+}
+int GrpcClient::terminate_child(const std::string& name, std::string* msg) {
+    return child_op(name, /*no_restart=*/true, "TerminateChild", msg);
+}
+int GrpcClient::child_op(const std::string& name, bool no_restart,
+                         const char* which, std::string* msg) {
+    auto chan = grpc::CreateChannel(host_port_,
+                                    grpc::InsecureChannelCredentials());
+    auto ci = std::static_pointer_cast< ::grpc::ChannelInterface>(chan);
+    auto stub = ::services::com::SupervisorView::NewStub(ci);
+    ::system_supervisor::ChildSelector sel;
+    sel.set_name(name);
+    sel.set_no_restart(no_restart);
+    ::system_supervisor::ControlReply rep;
+    grpc::ClientContext ctx;
+    ctx.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(3));
+    grpc::Status status = no_restart ? stub->TerminateChild(&ctx, sel, &rep)
+                                     : stub->RestartChild(&ctx, sel, &rep);
+    if (!status.ok()) {
+        std::fprintf(stderr, "grpc_client[%s]: %s(%s) failed: %s\n",
+                     machine_name_.c_str(), which, name.c_str(),
+                     status.error_message().c_str());
         if (msg) *msg = status.error_message();
         return -1;
     }

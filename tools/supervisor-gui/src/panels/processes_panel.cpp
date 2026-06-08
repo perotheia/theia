@@ -177,6 +177,22 @@ void ProcessesPanel::refresh_list() {
         expanded[{machine, name}] = list_->IsExpanded(item);
     }
 
+    // Remember the SELECTED row by (machine, name) — without this, DeleteAll
+    // below drops the selection every refresh, so a 1Hz snapshot keeps clearing
+    // whatever the user clicked. A selected THREAD child keys off its parent
+    // process (we re-select the process row; thread identity isn't tracked).
+    std::pair<std::string, std::string> sel_key;
+    bool had_sel = false;
+    if (auto s = list_->GetSelection(); s.IsOk()) {
+        auto parent = list_->GetItemParent(s);
+        // For a thread (child) row, the process row is its parent; for a
+        // process row, parent is the (invisible) root, so use the row itself.
+        auto proc = (parent.IsOk() && parent != list_->GetRootItem()) ? parent : s;
+        sel_key = { std::string(list_->GetItemText(proc, 3).ToUTF8()),
+                    std::string(list_->GetItemText(proc, 0).ToUTF8()) };
+        had_sel = true;
+    }
+
     list_->Freeze();
     list_->DeleteAllItems();
     auto root = list_->GetRootItem();
@@ -222,6 +238,12 @@ void ProcessesPanel::refresh_list() {
         auto it = expanded.find({r.machine, r.name});
         if (it != expanded.end() && it->second) {
             list_->Expand(item);
+        }
+
+        // Re-select the row the user had selected before the rebuild.
+        if (had_sel && sel_key == std::make_pair(r.machine, r.name)) {
+            list_->Select(item);
+            list_->EnsureVisible(item);
         }
     }
     list_->Thaw();

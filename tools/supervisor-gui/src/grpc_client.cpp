@@ -39,7 +39,17 @@ void GrpcClient::start() {
 
 void GrpcClient::stop() {
     if (!running_.exchange(false)) return;
-    // Channel shutdown wakes any blocked Read() on either stream.
+    // CANCEL any in-flight stream Read() — resetting the channel alone does
+    // NOT (the reader keeps its own ref). Without this, the trace thread hangs
+    // in reader->Read() until the next record, which never arrives when no
+    // trace is enabled → Quit hangs on the join below.
+    {
+        std::lock_guard<std::mutex> lk(ctx_mu_);
+        if (sub_ctx_)
+            static_cast<grpc::ClientContext*>(sub_ctx_)->TryCancel();
+        if (trace_ctx_)
+            static_cast<grpc::ClientContext*>(trace_ctx_)->TryCancel();
+    }
     channel_.reset();
     trace_channel_.reset();
     if (thread_.joinable())       thread_.join();
@@ -70,6 +80,7 @@ void GrpcClient::run_trace() {
         auto stub = ::services::com::TraceStream::NewStub(ci);
         ::services::com::TraceSubscribeRequest req;   // kind=0, all nodes
         grpc::ClientContext ctx;
+        { std::lock_guard<std::mutex> lk(ctx_mu_); trace_ctx_ = &ctx; }
         auto reader = stub->Subscribe(&ctx, req);
 
         ::services::com::TraceRecord rec;
@@ -79,6 +90,7 @@ void GrpcClient::run_trace() {
                           rec.SerializeAsString());
         }
         reader->Finish();
+        { std::lock_guard<std::mutex> lk(ctx_mu_); trace_ctx_ = nullptr; }
         if (running_.load())
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
@@ -175,6 +187,7 @@ void GrpcClient::run() {
         auto stub = ::services::com::SupervisorView::NewStub(ci);
         ::services::com::SubscribeRequest req;
         grpc::ClientContext ctx;
+        { std::lock_guard<std::mutex> lk(ctx_mu_); sub_ctx_ = &ctx; }
         auto reader = stub->Subscribe(&ctx, req);
 
         connected_.store(true);
@@ -219,6 +232,7 @@ void GrpcClient::run() {
             if (callback_) callback_(machine_name_, tag, std::move(payload));
         }
         reader->Finish();
+        { std::lock_guard<std::mutex> lk(ctx_mu_); sub_ctx_ = nullptr; }
         connected_.store(false);
         std::fprintf(stderr, "grpc_client[%s]: stream ended\n",
                      machine_name_.c_str());

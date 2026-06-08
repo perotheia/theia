@@ -116,14 +116,15 @@ public:
     void on_frame(const std::string& machine_name, uint16_t tag,
                   const std::string& payload) override;
 
-    // #365 — wire a callback the panel calls when the user clicks
-    // Apply in the ConfigureTrace right-click dialog. main_frame
-    // sets this to look up the matching GrpcClient and call
-    // configure_trace(node, msg, enabled). Lifetime: the panel
+    // #365 — wire a callback the panel calls when the user clicks Apply in the
+    // right-click ConfigureTrace dialog. main_frame looks up the matching
+    // GrpcClient and calls configure_trace(node, msg, enabled, kind). `kind` is
+    // a TraceKind ordinal (0=all, 1=CAST_OUT … 5=STATEM) — the dimension the
+    // supervisor's per-node trace filter keys on (#403). Lifetime: the panel
     // captures by value, so the closure may safely outlive the call.
     using ConfigureTraceCallback = std::function<void(
         const std::string& /*machine*/, const std::string& /*node*/,
-        const std::string& /*msg_type*/, bool /*enabled*/)>;
+        const std::string& /*msg_type*/, bool /*enabled*/, uint32_t /*kind*/)>;
     void set_configure_trace_callback(ConfigureTraceCallback cb);
 
 private:
@@ -180,10 +181,20 @@ public:
     void on_frame(const std::string& machine_name, uint16_t tag,
                   const std::string& payload) override;
 
+    // Right-click → Kill / Remove. main_frame wires this to the matching
+    // machine's GrpcClient. `op` is "kill" (RestartChild) or "remove"
+    // (TerminateChild, no_restart=true). Returns a human status line.
+    using ChildOpCallback = std::function<std::string(
+        const std::string& /*machine*/, const std::string& /*name*/,
+        const std::string& /*op: kill|remove*/)>;
+    void set_child_op_callback(ChildOpCallback cb);
+
 private:
     void on_sampler_update(wxThreadEvent& evt);   // legacy, no-op now
     void refresh_list();
     void on_col_click(wxDataViewEvent& evt);      // header click → set sort
+    void on_context_menu(wxTreeListEvent& evt);   // right-click → kill/remove
+    ChildOpCallback child_op_cb_;
 
     // Latest rows, indexed by machine_name. Each snapshot replaces
     // that machine's vector; rows from other machines stay intact.

@@ -170,13 +170,12 @@ void draw_node(wxDC& dc, const Node* n) {
 
 class ApplicationsCanvas : public wxScrolledWindow {
 public:
-    // configure_cb: called when the user clicks Apply in the
-    // right-click ConfigureTrace dialog. The panel wires this to
-    // GrpcClient::configure_trace on the matching machine. Receives
-    // (machine, node, msg_type, enabled).
+    // configure_cb: called when the user clicks Apply in the right-click
+    // ConfigureTrace dialog. Wired to GrpcClient::configure_trace on the
+    // matching machine. (machine, node, msg_type, enabled, kind).
     using ConfigureCallback = std::function<void(
         const std::string& /*machine*/, const std::string& /*node*/,
-        const std::string& /*msg_type*/, bool /*enabled*/)>;
+        const std::string& /*msg_type*/, bool /*enabled*/, uint32_t /*kind*/)>;
 
     explicit ApplicationsCanvas(wxWindow* parent)
         : wxScrolledWindow(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize,
@@ -334,6 +333,25 @@ private:
         row->Add(msg, 1, wxRIGHT, 10);
         outer->Add(row, 0, wxEXPAND);
 
+        // Trace KIND — the dimension the supervisor's per-node filter keys on
+        // (#403), the same one `rtdb trace <node> CAST_OUT` sets. Index maps to
+        // the TraceKind ordinal: 0=all(OTHER), 1=CAST_OUT … 5=STATEM.
+        auto* krow = new wxBoxSizer(wxHORIZONTAL);
+        krow->Add(new wxStaticText(&dlg, wxID_ANY, "Trace kind:"),
+                  0, wxALIGN_CENTER_VERTICAL | wxLEFT | wxRIGHT, 10);
+        wxArrayString kinds;
+        kinds.Add("ALL (every kind)");   // ordinal 0 (OTHER = catch-all)
+        kinds.Add("CAST_OUT");           // 1
+        kinds.Add("CAST_IN");            // 2
+        kinds.Add("CALL_OUT");           // 3
+        kinds.Add("CALL_IN");            // 4
+        kinds.Add("STATEM");             // 5
+        auto* kind_choice = new wxChoice(&dlg, wxID_ANY, wxDefaultPosition,
+                                          wxDefaultSize, kinds);
+        kind_choice->SetSelection(0);
+        krow->Add(kind_choice, 1, wxRIGHT, 10);
+        outer->Add(krow, 0, wxEXPAND);
+
         auto* enable_box = new wxCheckBox(&dlg, wxID_ANY,
             "Enabled (uncheck to remove the filter)");
         enable_box->SetValue(true);
@@ -347,8 +365,10 @@ private:
         if (dlg.ShowModal() != wxID_OK) return;
         std::string msg_type = std::string(msg->GetValue().mb_str());
         bool enabled = enable_box->IsChecked();
+        const uint32_t kind =
+            static_cast<uint32_t>(std::max(0, kind_choice->GetSelection()));
         if (configure_cb_) {
-            configure_cb_(machine, node_name, msg_type, enabled);
+            configure_cb_(machine, node_name, msg_type, enabled, kind);
         }
     }
 

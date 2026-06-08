@@ -61,7 +61,13 @@ public:
     // user-perception terms.
     int configure_trace(const std::string& target_node,
                          const std::string& msg_type,
-                         bool enabled);
+                         bool enabled, uint32_t kind = 0);
+
+    // Child lifecycle (Processes panel context menu). Both return per's
+    // ControlReply status (0 = OK), negative on RPC failure; msg gets the
+    // reply message. Kill restarts; Remove stop-and-holds (no policy restart).
+    int restart_child(const std::string& name, std::string* msg = nullptr);
+    int terminate_child(const std::string& name, std::string* msg = nullptr);
 
     // ---- Persistency (services/per) proxy — PerView on the SAME :7700 -----
     // One (config_type, digest) schema-registry row.
@@ -81,6 +87,10 @@ private:
     // Derive the trace endpoint from host_port_: same host, port 7710 (com's
     // TraceForwarder). Overridable via $THEIA_COM_TRACE_LISTEN host:port.
     std::string trace_endpoint() const;
+
+    // Shared impl for restart_child / terminate_child (ChildSelector RPC).
+    int child_op(const std::string& name, bool no_restart,
+                 const char* which, std::string* msg);
 
     std::string             machine_name_;
     std::string             host_port_;

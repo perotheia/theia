@@ -28,6 +28,8 @@
 // correctly without pulling those headers in here.
 class wxListCtrl;
 class wxListEvent;
+class wxTreeListEvent;
+class wxDataViewEvent;
 class wxMouseEvent;
 class wxTreeListCtrl;
 class wxStaticText;
@@ -181,6 +183,7 @@ public:
 private:
     void on_sampler_update(wxThreadEvent& evt);   // legacy, no-op now
     void refresh_list();
+    void on_col_click(wxDataViewEvent& evt);      // header click → set sort
 
     // Latest rows, indexed by machine_name. Each snapshot replaces
     // that machine's vector; rows from other machines stay intact.
@@ -188,6 +191,12 @@ private:
 
     ::wxTreeListCtrl*               list_{nullptr};
     std::unique_ptr<ProcessSampler> sampler_;
+
+    // Sort state — which column to sort by + direction. Set by clicking a
+    // column header (toggles asc/desc on the same column). -1 = default
+    // (machine, name). Applied in refresh_list so it survives the 1Hz refresh.
+    int  sort_col_{-1};
+    bool sort_desc_{false};
 };
 
 // Connection state of a machine (the supervisor-gui's view of it).

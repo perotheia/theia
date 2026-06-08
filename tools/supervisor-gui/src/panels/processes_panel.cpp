@@ -31,6 +31,7 @@
 
 #include <wx/wx.h>
 #include <wx/treelist.h>
+#include <wx/dataview.h>   // GetDataView() + wxEVT_DATAVIEW_COLUMN_HEADER_CLICK
 
 #include <algorithm>
 #include <cstdio>
@@ -98,6 +99,24 @@ ProcessesPanel::ProcessesPanel(wxWindow* parent) : PanelBase(parent) {
 
     sizer->Add(list_, 1, wxEXPAND | wxALL, 4);
     SetSizer(sizer);
+
+    // Click a column header to sort by it (toggle asc/desc). wxTreeListCtrl's
+    // own COLUMN_SORTED event only fires for its built-in LEXICAL sort (wrong
+    // for numeric cols: "100" < "9", "17.2 MB" vs "4.0 MB"). Instead we bind
+    // the inner wxDataViewCtrl's header-click directly (fires on every header
+    // click) and run our OWN typed sort in refresh_list.
+    if (auto* dv = list_->GetDataView()) {
+        dv->Bind(wxEVT_DATAVIEW_COLUMN_HEADER_CLICK,
+                 &ProcessesPanel::on_col_click, this);
+    }
+}
+
+void ProcessesPanel::on_col_click(wxDataViewEvent& evt) {
+    const int col = evt.GetColumn();
+    if (col < 0) return;
+    if (col == sort_col_) sort_desc_ = !sort_desc_;   // same col → flip dir
+    else { sort_col_ = col; sort_desc_ = false; }     // new col → ascending
+    refresh_list();
 }
 
 ProcessesPanel::~ProcessesPanel() = default;
@@ -154,16 +173,55 @@ void ProcessesPanel::on_sampler_update(wxThreadEvent&) {
 }
 
 void ProcessesPanel::refresh_list() {
-    // Collect into a flat vector + stable sort by (machine, name).
+    // Collect into a flat vector, then sort. Default (sort_col_ < 0): by
+    // (machine, name). Otherwise by the clicked column — TYPED (numeric cols
+    // compare as numbers, not lexically), direction per sort_desc_.
     std::vector<ProcessRow> rows;
     for (auto& kv : rows_by_machine_) {
         for (auto& r : kv.second) rows.push_back(r);
     }
-    std::sort(rows.begin(), rows.end(),
-              [](const ProcessRow& a, const ProcessRow& b) {
-                  if (a.machine != b.machine) return a.machine < b.machine;
-                  return a.name < b.name;
-              });
+    const int sc = sort_col_;
+    const bool desc = sort_desc_;
+    // Column → a typed key. Numeric cols return a double in `num`; string cols
+    // set `str`. -1/unknown falls through to (machine, name).
+    auto num_key = [](const ProcessRow& r, int col) -> double {
+        switch (col) {
+            case 1:  return r.pid;                       // pid
+            case 5:  return static_cast<double>(r.uptime_ms);
+            case 6:  return r.restart_count;
+            case 7:  return r.last_exit_code;
+            case 8:  return r.cpu_pct;                   // cpu%
+            case 9:  return static_cast<double>(r.rss_kb);
+            case 10: return static_cast<double>(r.shared_kb);
+            case 11: return static_cast<double>(r.data_kb);
+            case 12: return static_cast<double>(r.vsz_kb);
+            case 13: return r.threads;
+            default: return 0.0;
+        }
+    };
+    auto is_numeric_col = [](int col) {
+        return col == 1 || (col >= 5 && col <= 13);
+    };
+    std::stable_sort(rows.begin(), rows.end(),
+        [&](const ProcessRow& a, const ProcessRow& b) {
+            int cmp = 0;
+            if (sc < 0) {
+                if (a.machine != b.machine) cmp = a.machine < b.machine ? -1 : 1;
+                else cmp = a.name.compare(b.name);
+            } else if (is_numeric_col(sc)) {
+                const double x = num_key(a, sc), y = num_key(b, sc);
+                cmp = (x < y) ? -1 : (x > y) ? 1 : 0;
+            } else {
+                // string columns: 0=name, 2=parent, 3=machine.
+                const std::string& x = (sc == 2) ? a.parent_name
+                                     : (sc == 3) ? a.machine : a.name;
+                const std::string& y = (sc == 2) ? b.parent_name
+                                     : (sc == 3) ? b.machine : b.name;
+                cmp = x.compare(y);
+            }
+            if (cmp == 0) cmp = a.name.compare(b.name);   // stable tiebreak
+            return desc ? cmp > 0 : cmp < 0;
+        });
 
     // Remember which process rows were expanded, by (machine, name), so
     // a 1Hz refresh doesn't collapse the user's open subtrees.

@@ -32,6 +32,7 @@
 #include <cstring>
 #include <ctime>
 #include <deque>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -236,67 +237,158 @@ struct TracePanelImpl {
     bool                  follow{true};   // auto-scroll to newest (Wireshark)
     TraceDecoderLib       decoder;        // libtrace_decoder.so (payload → JSON)
 
-    // Parsed filter terms, recomputed only when the filter STRING changes —
-    // not per record. Each is (key, substring), lower-cased.
-    std::vector<std::pair<std::string, std::string>> terms_;
+    // Boolean filter expression. Tokens are `[key:]substring` LEAVES combined
+    // with `and` / `or` / `not` and parens — e.g.
+    //   msg:GetReply or (src:incrementer and msg:Inc)
+    // Precedence: not > and > or. Adjacent leaves with no operator imply AND
+    // (back-compat: `src:a msg:b` == `src:a and msg:b`). Empty filter = match
+    // all. Parsed once per filter-string change into an AST; matches() walks it
+    // per row (cheap — the tree is tiny).
+    struct FNode {
+        enum Op { Leaf, And, Or, Not } op{Leaf};
+        std::string key, sub;                 // Leaf: lower-cased key/substring
+        std::unique_ptr<FNode> a, b;          // And/Or: a,b; Not: a
+    };
+    std::unique_ptr<FNode> filter_ast_;       // null = match all
 
     static void to_lower(std::string& s) {
         for (auto& c : s) c = static_cast<char>(std::tolower(c));
     }
 
-    // (Re)parse current_filter into terms_. Call on filter change only.
-    void parse_filter() {
-        terms_.clear();
+    // ---- filter tokenizer + recursive-descent parser ----------------------
+    // Tokens: "(", ")", "and", "or", "not", or a LEAF string (a run of
+    // non-space, non-paren chars). `and/or/not` are reserved words (case-
+    // insensitive); anything else is a leaf, even with a `:` in it.
+    static std::vector<std::string> tokenize_filter(const std::string& s) {
+        std::vector<std::string> toks;
         std::string cur;
-        auto flush = [&] {
-            if (cur.empty()) return;
-            std::string key, sub = cur;
-            size_t colon = sub.find(':');
-            if (colon != std::string::npos) {
-                key = sub.substr(0, colon);
-                sub = sub.substr(colon + 1);
-            }
-            to_lower(key);
-            to_lower(sub);
-            terms_.emplace_back(std::move(key), std::move(sub));
-            cur.clear();
-        };
-        for (char c : current_filter) {
-            if (c == ' ' || c == '\t') flush();
+        auto flush = [&] { if (!cur.empty()) { toks.push_back(cur); cur.clear(); } };
+        for (char c : s) {
+            if (c == '(' || c == ')') { flush(); toks.emplace_back(1, c); }
+            else if (c == ' ' || c == '\t') flush();
             else cur.push_back(c);
         }
         flush();
+        return toks;
     }
 
-    // Does one row pass the current (already-parsed) filter? O(terms), not
-    // O(ring) — so it's cheap to call per incoming record.
-    bool matches(const EventRow& r) const {
+    static bool is_kw(const std::string& t, const char* kw) {
+        if (t.size() != std::strlen(kw)) return false;
+        for (size_t i = 0; i < t.size(); ++i)
+            if (std::tolower(t[i]) != kw[i]) return false;
+        return true;
+    }
+
+    static std::unique_ptr<FNode> make_leaf(const std::string& tok) {
+        auto n = std::make_unique<FNode>();
+        n->op = FNode::Leaf;
+        std::string key, sub = tok;
+        size_t colon = tok.find(':');
+        if (colon != std::string::npos) { key = tok.substr(0, colon); sub = tok.substr(colon + 1); }
+        to_lower(key); to_lower(sub);
+        n->key = std::move(key); n->sub = std::move(sub);
+        return n;
+    }
+
+    // Recursive descent: parse_or → parse_and → parse_not → primary.
+    // `i` is the cursor into toks.
+    static std::unique_ptr<FNode> parse_primary(
+            const std::vector<std::string>& toks, size_t& i) {
+        if (i >= toks.size()) return nullptr;
+        if (toks[i] == "(") {
+            ++i;
+            auto inner = parse_or(toks, i);
+            if (i < toks.size() && toks[i] == ")") ++i;   // tolerate missing ')'
+            return inner;
+        }
+        if (toks[i] == ")") return nullptr;
+        return make_leaf(toks[i++]);
+    }
+    static std::unique_ptr<FNode> parse_not(
+            const std::vector<std::string>& toks, size_t& i) {
+        if (i < toks.size() && is_kw(toks[i], "not")) {
+            ++i;
+            auto n = std::make_unique<FNode>();
+            n->op = FNode::Not; n->a = parse_not(toks, i);
+            return n;
+        }
+        return parse_primary(toks, i);
+    }
+    static std::unique_ptr<FNode> parse_and(
+            const std::vector<std::string>& toks, size_t& i) {
+        auto lhs = parse_not(toks, i);
+        while (i < toks.size() && toks[i] != ")") {
+            // explicit `and`, or an IMPLICIT and before the next leaf/`(`/`not`.
+            const bool explicit_and = is_kw(toks[i], "and");
+            if (explicit_and) ++i;
+            else if (is_kw(toks[i], "or")) break;          // `or` binds looser
+            auto rhs = parse_not(toks, i);
+            if (!rhs) break;
+            auto n = std::make_unique<FNode>();
+            n->op = FNode::And; n->a = std::move(lhs); n->b = std::move(rhs);
+            lhs = std::move(n);
+        }
+        return lhs;
+    }
+    static std::unique_ptr<FNode> parse_or(
+            const std::vector<std::string>& toks, size_t& i) {
+        auto lhs = parse_and(toks, i);
+        while (i < toks.size() && is_kw(toks[i], "or")) {
+            ++i;
+            auto rhs = parse_and(toks, i);
+            if (!rhs) break;
+            auto n = std::make_unique<FNode>();
+            n->op = FNode::Or; n->a = std::move(lhs); n->b = std::move(rhs);
+            lhs = std::move(n);
+        }
+        return lhs;
+    }
+
+    // (Re)parse current_filter into filter_ast_. Call on filter change only.
+    void parse_filter() {
+        const auto toks = tokenize_filter(current_filter);
+        size_t i = 0;
+        filter_ast_ = toks.empty() ? nullptr : parse_or(toks, i);
+    }
+
+    // Evaluate one LEAF against a row (the original key dispatch).
+    static bool leaf_matches(const FNode& t, const EventRow& r) {
         auto ci_find = [](const std::string& hay, const std::string& needle) {
             if (needle.empty()) return true;
             std::string h; h.reserve(hay.size());
             for (char c : hay) h.push_back(static_cast<char>(std::tolower(c)));
             return h.find(needle) != std::string::npos;
         };
-        for (const auto& t : terms_) {
-            bool m = false;
-            if (t.first.empty())
-                m = ci_find(r.src, t.second) || ci_find(r.dst, t.second) ||
-                    ci_find(r.msg_type, t.second);
-            else if (t.first == "kind") {
-                std::string k = kind_name(r.kind);
-                to_lower(k);
-                m = k.find(t.second) != std::string::npos;
-            }
-            else if (t.first == "src" || t.first == "node")
-                                           m = ci_find(r.src,      t.second);
-            else if (t.first == "dst")     m = ci_find(r.dst,      t.second);
-            else if (t.first == "msg" || t.first == "type")
-                                           m = ci_find(r.msg_type, t.second);
-            else if (t.first == "machine") m = ci_find(r.machine, t.second);
-            if (!m) return false;
+        if (t.key.empty())
+            return ci_find(r.src, t.sub) || ci_find(r.dst, t.sub) ||
+                   ci_find(r.msg_type, t.sub);
+        if (t.key == "kind") {
+            std::string k = kind_name(r.kind); to_lower(k);
+            return k.find(t.sub) != std::string::npos;
+        }
+        if (t.key == "src" || t.key == "node") return ci_find(r.src, t.sub);
+        if (t.key == "dst")                    return ci_find(r.dst, t.sub);
+        if (t.key == "msg" || t.key == "type") return ci_find(r.msg_type, t.sub);
+        if (t.key == "machine")                return ci_find(r.machine, t.sub);
+        // Unknown key — treat the whole token as a bare substring so a stray
+        // `foo:bar` still does something sensible instead of matching nothing.
+        return ci_find(r.src, t.sub) || ci_find(r.dst, t.sub) ||
+               ci_find(r.msg_type, t.sub);
+    }
+
+    static bool eval(const FNode* n, const EventRow& r) {
+        if (!n) return true;
+        switch (n->op) {
+            case FNode::Leaf: return leaf_matches(*n, r);
+            case FNode::Not:  return !eval(n->a.get(), r);
+            case FNode::And:  return eval(n->a.get(), r) && eval(n->b.get(), r);
+            case FNode::Or:   return eval(n->a.get(), r) || eval(n->b.get(), r);
         }
         return true;
     }
+
+    // Does one row pass the current (already-parsed) filter?
+    bool matches(const EventRow& r) const { return eval(filter_ast_.get(), r); }
 
     // Full rebuild of `visible` from `ring`. Only on filter change / Clear /
     // ring eviction — NOT per record (that was O(N²) and froze under bursts).
@@ -304,7 +396,7 @@ struct TracePanelImpl {
         parse_filter();
         visible.clear();
         for (size_t i = 0; i < ring.size(); ++i)
-            if (terms_.empty() || matches(ring[i])) visible.push_back(i);
+            if (matches(ring[i])) visible.push_back(i);   // null AST = match all
     }
 
     void rebuild_tree(const EventRow& r) {
@@ -390,6 +482,13 @@ TracePanel::TracePanel(wxWindow* parent) : PanelBase(parent) {
     impl_->filter_input = new wxTextCtrl(this, wxID_ANY, "",
                                           wxDefaultPosition, wxDefaultSize,
                                           wxTE_PROCESS_ENTER);
+    impl_->filter_input->SetHint(
+        "msg:GetReply or (src:incrementer and msg:Inc)");
+    impl_->filter_input->SetToolTip(
+        "Filter expression (Enter to apply). Keys: src:/node: dst: msg:/type: "
+        "kind: machine:; a bare word matches src|dst|msg. Combine with "
+        "and / or / not and ( ). Adjacent terms imply AND. "
+        "Case-insensitive substring match.");
     top->Add(impl_->filter_input, 1, wxRIGHT, 4);
     auto* clear_btn = new wxButton(this, wxID_ANY, "Clear");
     top->Add(clear_btn, 0, wxRIGHT, 8);
@@ -487,7 +586,7 @@ void TracePanel::on_frame(const std::string& machine_name,
         // (The old code re-scanned the whole ring per record → O(N²) freeze.)
         impl_->ring.push_back(std::move(r));
         const size_t new_idx = impl_->ring.size() - 1;
-        show = impl_->terms_.empty() || impl_->matches(impl_->ring.back());
+        show = impl_->matches(impl_->ring.back());   // null AST = match all
         if (show) impl_->visible.push_back(new_idx);
         newest = impl_->ring.back();   // copy for the decode pane (lock-free use)
 

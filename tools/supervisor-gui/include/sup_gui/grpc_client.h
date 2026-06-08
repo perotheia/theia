@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -90,6 +91,17 @@ private:
     std::thread             trace_thread_;
     std::shared_ptr<grpc::Channel> channel_;
     std::shared_ptr<grpc::Channel> trace_channel_;
+
+    // The live stream ClientContexts, so stop() can TryCancel() a blocked
+    // reader->Read() (resetting the channel shared_ptr does NOT cancel an
+    // in-flight RPC — the reader holds its own ref, so Read() would hang
+    // until the next record, which never comes when no trace is enabled).
+    // Stored as void* to keep the grpc ClientContext type (a version-dependent
+    // typedef, awkward to forward-declare) out of this header; the .cpp casts.
+    // Guarded: the worker threads set/clear them, stop() reads them.
+    std::mutex              ctx_mu_;
+    void*                   sub_ctx_   {nullptr};
+    void*                   trace_ctx_ {nullptr};
 };
 
 }  // namespace sup_gui

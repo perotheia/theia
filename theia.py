@@ -112,6 +112,7 @@ def cmd_orchestrate(args: list[str]) -> int:
 # leaf, bin/<name>) -> bazel target the binary is built from. The supervisor is
 # handled separately (lands at <dest>/supervisor, not bin/).
 _LOCAL_BINARIES = {
+    "com":  "//services/com/main:com",
     "log":  "//services/log/main:log",
     "sm":   "//services/sm/main:sm",
     "per":  "//services/per/main:per",

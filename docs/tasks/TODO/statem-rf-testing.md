@@ -48,19 +48,25 @@ in-process (the statem node itself takes no wire messages — sm split
 pattern). The probe casts events at the gate's TIPC address. **No FC change
 needed** — the gate already IS the standalone test surface.
 
-### 3. Test node with a `sender` to drive the probe — NEW (small .art)
+### 3. Test node with a `sender` to drive the probe — DONE
 The probe needs a node *definition* carrying a `sender` port on `DemoFsmIn`
 to bind a tester identity and cast events. This node is NOT in the demo
 cluster (not deployed) — it exists only so `artheia.probe` can construct a
 client from the `.art`. Pattern: a `tdb.art`-style client node.
 
-  - New file `demo/test/demo_fsm_tester.art` (or fold into a `test`
-    package): `node DemoFsmTester { sender events provides DemoFsmIn }`,
-    importing the demo package for the messages/interface.
-  - rf-theia builds `ArtheiaContext(demo_fsm_tester.art, proto_root)`,
-    `ctx.ref("DemoFsmGate")` → cast DemoStart/DemoFinish/DemoReset.
+  - `demo/test/system/demo_test/demo_fsm_tester.art` (package
+    `system.demo_test`, canonical symlink `system/demo_test`): imports
+    `system.demo.*`, `extern node DemoFsmGate {}` (materialized from the
+    import), `node DemoFsmTester { sender events provides DemoFsmIn }`
+    (tipc 0xd0010101, not deployed).
+  - `demo/test/fsm_drive.py`: `ctx.probe("DemoFsmTester").start()` then
+    `probe.cast("DemoFsmGate", "DemoStart"|"DemoFinish"|"DemoReset")` over
+    ONE persistent connection → ORDERED delivery (fixes the raw-socket
+    race where DemoFinish dropped). Proven live: IDLE→PROCESSING→DONE→IDLE,
+    each STATEM record carrying from→to + data={visits, reason}.
   - This is the `probe_external()` / tester-identity case from
-    `rf-theia-v3-probe-augment` §Pair 4.
+    `rf-theia-v3-probe-augment` §Pair 4. rf-theia (Step C) imports the same
+    context + casts, quarantined to one probe-adapter module.
 
 ### 4. Observe FSM **data** (OTP Data term) in the trace — NEW (runtime + gen)
 Carry the FSM's `Data` message in the STATEM trace `payload`, OTP-style.

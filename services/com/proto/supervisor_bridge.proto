@@ -201,11 +201,14 @@ service SupervisorView {
 message TraceRecord {
     string node_name = 1;   // emitting node = src (e.g. "SmDaemon")
     string dst       = 2;   // destination/peer node, "" if none
-    string msg_type  = 3;   // proto message type name (e.g. "SmStateMsg")
+    string msg_type  = 3;   // proto message type name (e.g. "SmStateMsg"); for
+                            // a STATEM record this is the EVENT that fired it
     uint32 corr_id   = 4;   // = msg_id; pairs Send/Recv/Dispatch in a cast/call
     uint64 ts_ns     = 5;   // emitting node's steady_clock ns
     uint32 kind      = 6;   // TraceKind value (call/cast × in/out, statem)
     bytes  payload   = 7;   // proto-wire-v3 bytes — fed to libtrace_decoder
+    string from_state = 8;  // STATEM only: the state left ("OFF"); "" otherwise
+    string to_state   = 9;  // STATEM only: the state entered ("STARTING")
 }
 
 // (target_node, msg_type, kind) filter toggle. Routed via the

@@ -38,6 +38,16 @@ composition Demo3WayP3 {
     prototype IncrementerNode incrementer  on process P3
 }
 
+// The gen_statem test FSM in its own process. The gate receives events
+// from outside (rf / a probe casts DemoStart/DemoFinish/DemoReset to its
+// TIPC address) and post_event()s them into the in-process FSM; the FSM
+// emits STATEM traces on each transition. No internal connect — the gate
+// is driven externally, like sm's gate.
+composition Demo3WayP4 {
+    prototype DemoFsm     demo_fsm   on process P4
+    prototype DemoFsmGate demo_gate  on process P4
+}
+
 // `cluster Applications` is the distribution unit (AUTOSAR Application
 // Manifest section). The instance ident on each member is the .ipk
 // basename (p1.ipk / p2.ipk / p3.ipk); the cluster name prefixes the
@@ -46,6 +56,7 @@ cluster Applications {
     composition Demo3WayP1 p1
     composition Demo3WayP2 p2
     composition Demo3WayP3 p3
+    composition Demo3WayP4 p4
 
     connect observer.counter_call    to counter.srv  // FIXME: duplication
     connect incrementer.inc_out      to counter.inc_in

@@ -229,8 +229,11 @@ public:
             h.initialized = true;
             auto& tr = ::theia::runtime::tracer_for(Derived::kNodeName);
             if (tr.enabled()) {
+                // Init: there is no prior state — from == to == the initial.
+                const char* sn = Derived::state_name(h.state);
                 tr.emit(::theia::runtime::TraceEvent::StateTransition,
-                        "<init>", /*corr=*/0, nullptr, 0);
+                        "<init>", /*corr=*/0, nullptr, 0, /*dst=*/nullptr,
+                        sn, sn);
             }
             self->on_enter(h.state, h.state, h.data);
         });
@@ -309,7 +312,9 @@ void post_event(GenStateM<Derived, StateT, DataT>& server, Msg msg) {
             h.state = r.new_state;
             if (tr2.enabled()) {
                 tr2.emit(::theia::runtime::TraceEvent::StateTransition,
-                         mname, corr, nullptr, 0);
+                         mname, corr, nullptr, 0, /*dst=*/nullptr,
+                         Derived::state_name(before),
+                         Derived::state_name(r.new_state));
             }
             while (!h.postponed.empty()) {
                 auto fn = std::move(h.postponed.front());
@@ -349,7 +354,9 @@ void post_event(GenStateM<Derived, StateT, DataT>& server, Msg msg) {
                     if (tr3.enabled()) {
                         tr3.emit(::theia::runtime::TraceEvent::
                                      StateTransition,
-                                 mn, corr_replay, nullptr, 0);
+                                 mn, corr_replay, nullptr, 0, /*dst=*/nullptr,
+                                 Derived::state_name(before2),
+                                 Derived::state_name(rr.new_state));
                     }
                     self2->on_enter(h2.state, before2, h2.data);
                     if (rr.state_timeout_ms.has_value()) {
@@ -440,7 +447,10 @@ void post_state_timeout_msg(GenStateM<Derived, StateT, DataT>& server,
             h.state = r.new_state;
             if (tr2.enabled()) {
                 tr2.emit(::theia::runtime::TraceEvent::StateTransition,
-                         "<state_timeout>", /*corr=*/0, nullptr, 0);
+                         "<state_timeout>", /*corr=*/0, nullptr, 0,
+                         /*dst=*/nullptr,
+                         Derived::state_name(before),
+                         Derived::state_name(r.new_state));
             }
             while (!h.postponed.empty()) {
                 auto fn = std::move(h.postponed.front());

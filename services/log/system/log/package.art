@@ -92,12 +92,16 @@ enum TraceKind {
 message TraceRecord {
     string   node_name      // source FC node ("SmDaemon", ...) = src
     string   dst            // destination/peer node, "" if none (e.g. broadcast)
-    string   msg_type       // wire-type name ("SmStateMsg", ...)
+    string   msg_type       // wire-type name ("SmStateMsg", ...); for a STATEM
+                            // record this is the EVENT that fired the transition
+                            // ("SystemBoot", "<state_timeout>", "<init>")
     uint32   corr_id        // correlation id from the dispatch header = msg_id,
                             // 0 if not part of a request/reply pair
     uint64   ts_ns          // wall time at the dispatcher
     TraceKind kind          // call/cast × in/out, statem
     bytes    payload        // [header][proto-wire] verbatim
+    string   from_state     // STATEM only: the state left (e.g. "OFF"); "" else
+    string   to_state       // STATEM only: the state entered (e.g. "STARTING")
 }
 
 // Configuration request from a consumer (supdbg or com-on-behalf-of-

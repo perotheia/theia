@@ -57,6 +57,8 @@ struct EventRow {
     std::string  raw_payload;    // proto-wire-v3 bytes
     std::string  from_state;     // STATEM only: the state left
     std::string  to_state;       // STATEM only: the state entered
+    std::string  data_type;      // STATEM only: type of the `data` msg in payload
+                                 // (decode payload by THIS, not msg_type)
 };
 
 // TraceKind ordinal → name (platform_runtime.TraceKind, same as tdb).
@@ -454,9 +456,16 @@ struct TracePanelImpl {
         // available or the type isn't registered.
         wxTreeItemId decoded_id;
         std::string json;
+        // STATEM rows carry the FSM `data` message in payload (decode it by
+        // data_type — the OTP `{State, Data}` Data term); every other row's
+        // payload is the traced message itself (decode by msg_type). Label the
+        // group "Data" for STATEM so it reads as the FSM data snapshot.
+        const std::string& decode_type =
+            r.data_type.empty() ? r.msg_type : r.data_type;
+        const char* decoded_label = r.data_type.empty() ? "Decoded" : "Data";
         if (!r.raw_payload.empty() &&
-            decoder.decode(r.msg_type, r.raw_payload, json)) {
-            decoded_id = tree->AppendItem(root, "Decoded");
+            decoder.decode(decode_type, r.raw_payload, json)) {
+            decoded_id = tree->AppendItem(root, decoded_label);
             // The JSON is compact ({"n":2}); show it whole + split top-level
             // "key": value pairs into leaves for grep-ability.
             tree->AppendItem(decoded_id,
@@ -590,6 +599,7 @@ void TracePanel::on_frame(const std::string& machine_name,
     r.raw_payload = tr.payload();
     r.from_state  = tr.from_state();
     r.to_state    = tr.to_state();
+    r.data_type   = tr.data_type();
 
     long new_count = 0;
     bool follow = false;

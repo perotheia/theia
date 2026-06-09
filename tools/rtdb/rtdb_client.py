@@ -153,7 +153,7 @@ class _RecordView:
     artheia.observer records expose. content is the decoded inner message dict
     when a decoder is available, else None (cmd_logcat prints raw header only)."""
 
-    def __init__(self, rec, content=None) -> None:
+    def __init__(self, rec, content=None, data=None) -> None:
         self.ts_ns    = rec.ts_ns
         self.src      = rec.node_name        # tdb names this `src`
         self.dst      = rec.dst
@@ -166,6 +166,9 @@ class _RecordView:
         # and on an older collector that predates the proto extension.
         self.from_state = getattr(rec, "from_state", "") or ""
         self.to_state   = getattr(rec, "to_state", "") or ""
+        # STATEM FSM data (OTP Data term): field 10 type name + decoded dict.
+        self.data_type  = getattr(rec, "data_type", "") or ""
+        self.data       = data
 
     def to_dict(self, ts: str = "") -> dict:
         d = {
@@ -180,6 +183,8 @@ class _RecordView:
         if self.to_state:
             d["from_state"] = self.from_state
             d["to_state"] = self.to_state
+        if self.data is not None:
+            d["data"] = self.data
         if self.content is not None:
             d["content"] = self.content
         else:
@@ -217,12 +222,20 @@ class TraceClient:
         req = _br.TraceSubscribeRequest(kind=self._kind, target_node=self._node)
         for rec in self._stub.Subscribe(req, timeout=timeout):
             content = None
+            data = None
             if self._decoder is not None and rec.payload:
+                # STATEM rows carry the FSM `data` message (decode by data_type
+                # → `data`); every other row's payload is the traced message
+                # itself (decode by msg_type → `content`).
+                dtype = getattr(rec, "data_type", "") or ""
                 try:
-                    content = self._decoder.decode(rec.msg_type, rec.payload)
+                    if dtype:
+                        data = self._decoder.decode(dtype, rec.payload)
+                    else:
+                        content = self._decoder.decode(rec.msg_type, rec.payload)
                 except Exception:
-                    content = None
-            yield _RecordView(rec, content)
+                    content = data = None
+            yield _RecordView(rec, content, data)
 
     def stop(self) -> None:
         self._channel.close()

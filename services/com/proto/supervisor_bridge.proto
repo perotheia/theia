@@ -209,6 +209,9 @@ message TraceRecord {
     bytes  payload   = 7;   // proto-wire-v3 bytes — fed to libtrace_decoder
     string from_state = 8;  // STATEM only: the state left ("OFF"); "" otherwise
     string to_state   = 9;  // STATEM only: the state entered ("STARTING")
+    string data_type  = 10; // STATEM only: flat type name of the `data` message
+                            // in payload (e.g. "system_demo_DemoFsmData"), so a
+                            // consumer decodes payload → a labelled data dict
 }
 
 // (target_node, msg_type, kind) filter toggle. Routed via the

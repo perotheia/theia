@@ -182,6 +182,34 @@ public:
     using State  = StateT;
     using Data   = DataT;
 
+    // Emit one STATEM trace record for a committed transition, carrying the
+    // FSM's data (OTP `{State, Data}` — the Data half) in the record payload.
+    // encode_for_trace<DataT> is SFINAE-guarded: a DataT with a RemoteCodec
+    // (the .art declared `data <Msg>`, so Codecs.hh registered it) encodes to
+    // proto-wire bytes; an empty-POD placeholder DataT yields 0 bytes → the
+    // payload field is simply omitted. The data is decoded back by the trace
+    // observer keyed on the FSM's data message type. Static so the state-
+    // timeout free function and replay lambdas can all reach it. Caller has
+    // already checked tr.enabled().
+    static void emit_transition_(::theia::runtime::Tracer& tr,
+                                 const char* trigger,
+                                 uint32_t corr,
+                                 const char* from_state,
+                                 const char* to_state,
+                                 const DataT& data) noexcept {
+        uint8_t scratch[256];
+        uint16_t n = ::theia::runtime::encode_for_trace(
+            data, scratch, static_cast<uint16_t>(sizeof(scratch)));
+        // When DataT has a codec, also stamp its type name (field 10) so the
+        // observer decodes the payload. An empty-POD placeholder DataT yields
+        // n==0 and msg_type_name "?" → neither payload nor data_type encoded.
+        const char* data_type =
+            n ? ::theia::runtime::msg_type_name<DataT>() : nullptr;
+        tr.emit(::theia::runtime::TraceEvent::StateTransition,
+                trigger, corr, n ? scratch : nullptr, n, /*dst=*/nullptr,
+                from_state, to_state, data_type);
+    }
+
     // User-supplied: returns the initial state. Default returns a
     // value-initialized StateT — fine for enum classes whose first
     // enumerator is the "start" state. Derived may shadow with its
@@ -228,14 +256,14 @@ public:
             h.state = self->init(h.data);
             h.initialized = true;
             auto& tr = ::theia::runtime::tracer_for(Derived::kNodeName);
+            self->on_enter(h.state, h.state, h.data);
             if (tr.enabled()) {
                 // Init: there is no prior state — from == to == the initial.
+                // Emit after on_enter so the data snapshot is the initialized
+                // value the user set in init()/the first on_enter.
                 const char* sn = Derived::state_name(h.state);
-                tr.emit(::theia::runtime::TraceEvent::StateTransition,
-                        "<init>", /*corr=*/0, nullptr, 0, /*dst=*/nullptr,
-                        sn, sn);
+                emit_transition_(tr, "<init>", /*corr=*/0, sn, sn, h.data);
             }
-            self->on_enter(h.state, h.state, h.data);
         });
     }
 
@@ -310,18 +338,21 @@ void post_event(GenStateM<Derived, StateT, DataT>& server, Msg msg) {
             }
             h.expected_cookie++;
             h.state = r.new_state;
-            if (tr2.enabled()) {
-                tr2.emit(::theia::runtime::TraceEvent::StateTransition,
-                         mname, corr, nullptr, 0, /*dst=*/nullptr,
-                         Derived::state_name(before),
-                         Derived::state_name(r.new_state));
-            }
             while (!h.postponed.empty()) {
                 auto fn = std::move(h.postponed.front());
                 h.postponed.pop_front();
                 base->enqueue(std::move(fn));
             }
             self->on_enter(h.state, before, h.data);
+            // STATEM trace AFTER on_enter so the data snapshot (OTP `{State,
+            // Data}`) reflects any mutation the user made in on_enter/
+            // handle_event — the trace carries the POST-transition data.
+            if (tr2.enabled()) {
+                GenStateM<Derived, StateT, DataT>::emit_transition_(
+                    tr2, mname, corr,
+                    Derived::state_name(before),
+                    Derived::state_name(r.new_state), h.data);
+            }
             if (r.state_timeout_ms.has_value()) {
                 arm_state_timeout_(*self, h.state, *r.state_timeout_ms);
             }
@@ -351,14 +382,14 @@ void post_event(GenStateM<Derived, StateT, DataT>& server, Msg msg) {
                     }
                     h2.expected_cookie++;
                     h2.state = rr.new_state;
-                    if (tr3.enabled()) {
-                        tr3.emit(::theia::runtime::TraceEvent::
-                                     StateTransition,
-                                 mn, corr_replay, nullptr, 0, /*dst=*/nullptr,
-                                 Derived::state_name(before2),
-                                 Derived::state_name(rr.new_state));
-                    }
                     self2->on_enter(h2.state, before2, h2.data);
+                    if (tr3.enabled()) {
+                        GenStateM<Derived, StateT, DataT>::emit_transition_(
+                            tr3, mn, corr_replay,
+                            Derived::state_name(before2),
+                            Derived::state_name(rr.new_state),
+                            h2.data);
+                    }
                     if (rr.state_timeout_ms.has_value()) {
                         arm_state_timeout_(*self2, h2.state,
                                             *rr.state_timeout_ms);
@@ -445,19 +476,19 @@ void post_state_timeout_msg(GenStateM<Derived, StateT, DataT>& server,
             }
             h.expected_cookie++;
             h.state = r.new_state;
-            if (tr2.enabled()) {
-                tr2.emit(::theia::runtime::TraceEvent::StateTransition,
-                         "<state_timeout>", /*corr=*/0, nullptr, 0,
-                         /*dst=*/nullptr,
-                         Derived::state_name(before),
-                         Derived::state_name(r.new_state));
-            }
             while (!h.postponed.empty()) {
                 auto fn = std::move(h.postponed.front());
                 h.postponed.pop_front();
                 base->enqueue(std::move(fn));
             }
             self->on_enter(h.state, before, h.data);
+            // Trace AFTER on_enter — data snapshot reflects on_enter mutations.
+            if (tr2.enabled()) {
+                GenStateM<Derived, StateT, DataT>::emit_transition_(
+                    tr2, "<state_timeout>", /*corr=*/0,
+                    Derived::state_name(before),
+                    Derived::state_name(r.new_state), h.data);
+            }
             if (r.state_timeout_ms.has_value()) {
                 arm_state_timeout_(*self, h.state, *r.state_timeout_ms);
             }

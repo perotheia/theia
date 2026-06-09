@@ -23,6 +23,7 @@ message TraceRecord {
     bytes payload = 7;
     string from_state = 8;
     string to_state = 9;
+    string data_type = 10;
 }
 
 message TraceEmpty {

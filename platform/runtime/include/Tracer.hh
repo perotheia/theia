@@ -323,7 +323,11 @@ public:
               // (TraceRecord.from_state / to_state). nullptr/empty for every
               // other event class → the fields are simply not encoded.
               const char* from_state = nullptr,
-              const char* to_state   = nullptr) noexcept {
+              const char* to_state   = nullptr,
+              // STATEM only: flat type name of the `data` message carried in
+              // payload (proto field 10). Lets the observer decode the FSM
+              // data snapshot to a labelled dict. nullptr/empty → not encoded.
+              const char* data_type  = nullptr) noexcept {
         if (!trace_filter_passes(msg_type_name)) return;
         // Kind filter (#403): supervisor's TraceControlPush selects which
         // dispatch classes to trace. Empty mask = all kinds (back-compat).
@@ -366,6 +370,10 @@ public:
             pb_string(rec, 8, from_state, std::strlen(from_state));
         if (to_state && to_state[0])
             pb_string(rec, 9, to_state, std::strlen(to_state));
+        // STATEM only: the data message's type (field 10), so the observer
+        // can decode `payload` into a labelled dict.
+        if (data_type && data_type[0])
+            pb_string(rec, 10, data_type, std::strlen(data_type));
 
         TraceSubmitter::instance().submit(rec);
     }

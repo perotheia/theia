@@ -129,9 +129,14 @@ message DemoStart  { }   // IDLE → PROCESSING (after 5s timeout)
 message DemoFinish { }   // PROCESSING → DONE
 message DemoReset  { }   // DONE → IDLE  (or PROCESSING → IDLE)
 
-// The FSM's persistent data — just carries the current state name for the
-// broadcast/persist symmetry sm has; minimal here.
-message DemoFsmData { }
+// The FSM's persistent data — the OTP `{State, Data}` Data term. Carried in
+// the STATEM trace payload on every transition (GenStateM encodes it), so a
+// test can assert on it via the trace observer (`Assert Data`). The user
+// mutates it in on_enter/handle_event; the framework snapshots it.
+message DemoFsmData {
+    uint32 visits   // how many transitions this FSM has entered (cumulative)
+    string reason   // last transition's trigger/reason, for human-readable trace
+}
 
 // Lifecycle event ingress for the gate. senderReceiver `in` data so the
 // gate's generated handle_cast fires; the gate forwards into the statem.

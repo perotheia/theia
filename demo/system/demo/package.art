@@ -181,6 +181,25 @@ node atomic DemoFsmGate {
     }
 }
 
+// ---- test-only client node (for artheia.probe) --------------------------
+//
+// DemoFsmTester carries a `sender` on DemoFsmIn so artheia.probe can bind a
+// tester identity and cast DemoStart/DemoFinish/DemoReset at DemoFsmGate —
+// ordered, over one persistent connection — to drive the FSM standalone
+// (demo/test/fsm_drive.py + the rf statem scenario). It lives in THIS package
+// (no import/extern: DemoFsmGate + DemoFsmIn are siblings here) so it resolves
+// through the canonical `system/demo` symlink like every other demo node.
+//
+// NOT deployed: it appears in no composition/cluster, so the manifest +
+// supervisor tree never instantiate it. It exists purely as a probe-resolvable
+// client handle (same idiom as tools/tdb/system/tdb.art's client nodes).
+node atomic DemoFsmTester {
+    tipc type=0xd0010101 instance=0
+    ports {
+        sender events provides DemoFsmIn
+    }
+}
+
 // Compositions and the Demo3Way cluster live in the sibling
 // component.art file. The model loader merges package.art (schema)
 // and component.art (wiring/deploy) when parsing either path.

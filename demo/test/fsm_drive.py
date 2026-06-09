@@ -22,9 +22,10 @@ sys.path.insert(0, str(REPO / "artheia"))
 
 from artheia.gen_server.probe import ArtheiaContext   # noqa: E402
 
-# Canonical system/ path so `import system.demo.*` resolves (the dir-climb
-# mirrors the package FQN). Parsing the physical path would fail the import.
-ART = REPO / "system/demo_test/demo_fsm_tester.art"
+# DemoFsmTester lives in the demo package itself (system.demo). Load it through
+# the canonical `system/demo` symlink so any cross-package imports resolve (the
+# dir-climb mirrors the package FQN).
+ART = REPO / "system/demo/package.art"
 PROTO = REPO / "platform/proto"
 
 # The DemoFsmIn events, in the order that walks IDLE→PROCESSING→DONE→IDLE.

@@ -129,3 +129,20 @@ node atomic SmGate {
         receiver lifecycle requires LifecycleIn
     }
 }
+
+// ---- test-only client node (for artheia.probe) --------------------------
+//
+// SmTester carries a `sender` on LifecycleIn so artheia.probe can bind a
+// tester identity and cast SystemBoot/StartupComplete/... at SmGate — ordered,
+// over one persistent connection — to drive the FSM standalone (the generic
+// hybrid-automata rf keywords; services/sm/test/sm_fsm.robot). Mirrors demo's
+// DemoFsmTester. NOT deployed: it appears in no composition, so the manifest +
+// supervisor tree never instantiate it; it exists purely as a probe-resolvable
+// client handle. Same idiom as tools/tdb/system/tdb.art's client nodes.
+node atomic SmTester {
+    tipc type=0x8001002D instance=0
+    tag = "SMT"
+    ports {
+        sender lifecycle provides LifecycleIn
+    }
+}

@@ -65,6 +65,7 @@ from .runtime.supervisor_watcher import SupervisorWatcher
 from .runtime.topology import Topology, load_topology
 from .runtime.topology_check import Issue, validate_against_rig
 from .runtime.trace_watcher import TraceWatcher
+from .adapters.hybrid_automata import HybridAutomata
 
 logger = logging.getLogger("rf_theia")
 
@@ -131,6 +132,11 @@ class TheiaTestLibrary:
         # last `Assert Netgraph Matches Rig` call (for inspection).
         self._topology: Optional[Topology] = None
         self._last_issues: list[Issue] = []
+        # Hybrid-automata (gen_statem) testing — drive+observe one statem FC
+        # standalone (probe injects events, observer reads the STATEM trace).
+        # Created by `Start Statem Stack`; parameterized by the FC's nodes/.art
+        # so the SAME keywords drive demo_fsm, sm, and any statem FC.
+        self._statem: Optional[HybridAutomata] = None
 
     # ──────────────────────────────────────────────────────────────────
     # Pair-1 lifecycle: Load Rig / Tear Down Rig.
@@ -338,6 +344,70 @@ class TheiaTestLibrary:
         if order[new] > order.get(self._verdict, 0):
             self._verdict = new
         logger.info("Verdict: %s (suite verdict now %s)", new, self._verdict)
+
+    # ──────────────────────────────────────────────────────────────────
+    # Hybrid-automata (gen_statem) keywords. Drive + observe ANY statem FC
+    # standalone: the probe injects events at the FC's gate, the observer
+    # reads the STATEM trace. Parameterized by the FC's node names + .art so
+    # the SAME keywords drive demo_fsm, sm, and any future statem FC. Backed
+    # by adapters/hybrid_automata.HybridAutomata.
+    # ──────────────────────────────────────────────────────────────────
+
+    @keyword("Start Statem Stack")
+    def start_statem_stack(self, node: str, gate: str, tester: str,
+                           art: str, ready: str = "",
+                           within: str = "12s") -> None:
+        """Stage + run the central supervisor (THEIA_TRACE=1), enable STATEM
+        trace on ``node``, and attach the event-injecting probe + the trace
+        observer for one gen_statem FC.
+
+        Example::
+
+            Start Statem Stack    node=demo_fsm    gate=DemoFsmGate
+            ...    tester=DemoFsmTester    art=system/demo/package.art
+
+        ``art`` is the FC's .art (canonical system/ path); ``tester`` a sender
+        node in it the probe binds as the cast source. Readiness is checked by
+        polling the gate's TIPC binding (uniform across FCs); ``ready`` is an
+        optional supervisor-log substring for extra diagnostics."""
+        self._statem = HybridAutomata(
+            node=node, gate=gate, tester=tester, art=art, ready=ready)
+        self._statem.start(timeout=_seconds(within))
+
+    @keyword("Stop Statem Stack")
+    def stop_statem_stack(self) -> None:
+        if self._statem is not None:
+            self._statem.stop()
+            self._statem = None
+
+    @keyword("Emit Statem Event")
+    def emit_statem_event(self, event: str, **fields: Any) -> None:
+        """Cast a gate-interface event (e.g. DemoStart / StartupComplete) at
+        the FC's gate, in order, over the probe's one connection."""
+        self._require_statem()
+        assert self._statem is not None
+        self._statem.emit(event, **fields)
+
+    @keyword("Wait For Statem State")
+    def wait_for_statem_state(self, state: str, within: str = "2s") -> dict:
+        """Block until the FSM enters ``state`` (reactive, via the STATEM
+        trace). Returns the transition payload (incl. decoded ``data``)."""
+        self._require_statem()
+        assert self._statem is not None
+        return self._statem.wait_for_state(state, within=within)
+
+    @keyword("Assert Statem Data")
+    def assert_statem_data(self, **expected: Any) -> None:
+        """Assert fields of the LAST observed transition's FSM data (OTP Data
+        term). e.g. ``Assert Statem Data    reason=PROCESSING``."""
+        self._require_statem()
+        assert self._statem is not None
+        self._statem.assert_data(**expected)
+
+    def _require_statem(self) -> None:
+        if self._statem is None:
+            raise AssertionError(
+                "no statem stack — call `Start Statem Stack` first")
 
     # ──────────────────────────────────────────────────────────────────
     # Pair-2 keywords: temporal logic + trace lifecycle.

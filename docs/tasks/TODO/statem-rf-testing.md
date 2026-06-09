@@ -171,9 +171,35 @@ decoded `data` dict (OTP Data term).
     namespace root. (Surfaced because the lib uses BOTH the supervisor client
     AND the log observer in one process.)
 
-**D. Generalize (backlog, not this session)** — re-run B/C against `sm`
-(StartupComplete events, OFF→…→RUNNING), then fold the v1 `T Sup`/`T Sig`
-keywords behind the role-named surface per v3.
+**D. Generalize to sm + rf reorg** — DONE.
+  - The statem keywords are now GENERIC + live in the shared
+    `TheiaTestLibrary`: `Start/Stop Statem Stack`, `Emit Statem Event`,
+    `Wait For Statem State`, `Assert Statem Data`. Backed by
+    `adapters/hybrid_automata.py` (`HybridAutomata`, parameterized by
+    node/gate/tester/art) — the SAME keywords drive demo_fsm AND sm.
+  - `SmTester` (sender on LifecycleIn, tipc 0x8001002D) added to sm's
+    package.art (mirrors DemoFsmTester; not in any composition → gen-app
+    excludes it). sm's FSM data is `SmStateMsg{state,ts_ns}` and on_enter
+    already sets it, so the STATEM trace carries `data={state, ts_ns}`
+    (state=1 STARTING, 2 RUNNING). On psp-retirement the supervisor no
+    longer auto-drives sm (it sits at OFF) so the test drives the boot
+    handshake itself.
+  - Tests: `demo/test/demo_fsm.robot` (app test) + `services/sm/test/
+    sm_fsm.robot` (service test) — both GREEN (also green run together as
+    sequential suites, each owning the central stack).
+  - **Ready-check is transport-based** (poll the gate's TIPC binding), NOT a
+    log grep: sm logs via the structured Logger to its own file sink
+    (/tmp/theia/sm.log), so a supervisor-stdout grep wouldn't see it; only
+    raw-fprintf(stderr) nodes (demo_fsm) appear there. The gate-binding poll
+    is uniform across FCs.
+  - **rf reorg** (roman's convention): `scenarios/` holds selftest `.robot`
+    only — the demo lib left it (robot → `demo/test/`, impl → adapter +
+    keywords). Service/app tests live in `<fc>/test/`. The 10 `_selftest/
+    *_lib.py` + 2 `services/log/*_lib.py` are kept as-is (deferred sweep).
+
+  Future (still backlog): fold the v1 `T Sup`/`T Sig` keywords behind the
+  role-named surface; sweep the remaining selftest libs into
+  SelftestLibrary.py + adapters/selftest/.
 
 ## Boundary / constraints (carried)
 - rf-theia may import `artheia.gen_server.probe` (a stable contract, per

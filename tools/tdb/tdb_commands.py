@@ -487,7 +487,12 @@ def cmd_logcat(args, _sup, trace_factory) -> int:
             frm = getattr(rec, "from_state", "") or ""
             to = getattr(rec, "to_state", "") or ""
             if frm or to:
-                body = (f"{frm}→{to}" + (f" {body}" if body else "")).strip()
+                # FSM data (OTP Data term) rides on STATEM rows too — append it
+                # after the transition: `IDLE→PROCESSING data={visits: 1, ...}`.
+                data = getattr(rec, "data", None)
+                data_str = f" data={_fmt_content(data)}" if data else ""
+                body = (f"{frm}→{to}{data_str}"
+                        + (f" {body}" if body else "")).strip()
             print(f"{rec.ts_ns:>16} {rec.src:>16} {kind:<9} {rec.msg_type:<22} "
                   f"corr={rec.corr_id}{(' ' + body) if body else ''}")
     except KeyboardInterrupt:

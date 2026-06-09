@@ -46,6 +46,18 @@ class TrafficLight
 public:
     static constexpr const char* kNodeName = "TrafficLight";
 
+    // state_name — the GenStateM base labels each STATEM trace with from/to
+    // state names; gen-statem emits this automatically, hand-written test
+    // FSMs supply it here.
+    static const char* state_name(Light s) {
+        switch (s) {
+        case Light::Red:    return "Red";
+        case Light::Green:  return "Green";
+        case Light::Yellow: return "Yellow";
+        }
+        return "?";
+    }
+
     Light init(TrafficData& /*d*/) { return Light::Red; }
 
     // External wake — caller sends one TLBoot to start the cycle.
@@ -98,6 +110,14 @@ public:
     static constexpr const char* kNodeName = "RetryEscalator";
     static constexpr int kMaxRetries = 3;
 
+    static const char* state_name(Retry s) {
+        switch (s) {
+        case Retry::Trying: return "Trying";
+        case Retry::Failed: return "Failed";
+        }
+        return "?";
+    }
+
     // Make the base-class handle_event(StateTimeoutMsg) visible — our
     // derived overloads otherwise hide it (C++ name hiding).
     using rt::GenStateM<RetryEscalator, Retry, RetryData>::handle_event;
@@ -148,6 +168,15 @@ class DoorLock
     : public rt::GenStateM<DoorLock, Door, DoorData> {
 public:
     static constexpr const char* kNodeName = "DoorLock";
+
+    static const char* state_name(Door s) {
+        switch (s) {
+        case Door::Locked:    return "Locked";
+        case Door::Unlocking: return "Unlocking";
+        case Door::Unlocked:  return "Unlocked";
+        }
+        return "?";
+    }
 
     Door init(DoorData&) { return Door::Locked; }
 

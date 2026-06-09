@@ -19,6 +19,7 @@
 #include "NodeRef.hh"   // theia::runtime::LocalRef — published for the gate
 
 #include <cstdio>
+#include <cstring>
 
 namespace system_demo {
 
@@ -34,14 +35,21 @@ theia::runtime::LocalRef<DemoFsm>& demo_fsm_ref();
 // cast/post_event/broadcast from here; UNSAFE to transition.
 void DemoFsm::on_enter(DemoFsmState new_s,
                               DemoFsmState /*old_s*/,
-                              DemoFsmData& /*d*/) {
+                              DemoFsmData& d) {
     // Publish the FSM ref once so the gate can forward events in.
     if (!demo_fsm_ref().valid()) {
         demo_fsm_ref() = theia::runtime::LocalRef<DemoFsm>(*this);
     }
-    std::fprintf(stderr, "[%s] → %s\n", kNodeName, state_name(new_s));
-    // The STATEM trace (kind=5, from→to state) is emitted by the GenStateM
-    // base on each transition — see GenStateM.hh. rf asserts on those.
+    // Mutate the FSM data (OTP `{State, Data}` Data term). The GenStateM base
+    // snapshots `d` into the STATEM trace payload AFTER this returns, so rf
+    // can `Assert Data visits=N reason=...` alongside the state name.
+    d.visits++;
+    const char* sn = state_name(new_s);
+    std::strncpy(d.reason, sn, sizeof(d.reason) - 1);
+    d.reason[sizeof(d.reason) - 1] = '\0';
+    std::fprintf(stderr, "[%s] → %s (visits=%u)\n", kNodeName, sn, d.visits);
+    // The STATEM trace (kind=5, from→to state + data) is emitted by the
+    // GenStateM base on each transition — see GenStateM.hh. rf asserts on those.
 }
 
 

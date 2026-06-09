@@ -6,3 +6,8 @@
 # member the transform can strncpy. (Same fix as system_supervisor.*.options.)
 
 system_demo.CounterConfig.label   max_size:64
+
+# DemoFsm's data (OTP `{State, Data}` Data term). The FSM sets `reason` in
+# on_enter; a fixed char[] makes it a plain member to strncpy (and the trace
+# encoder/decoder reads it directly). Without this it's a pb_callback_t.
+system_demo.DemoFsmData.reason    max_size:48

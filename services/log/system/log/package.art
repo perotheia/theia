@@ -99,9 +99,14 @@ message TraceRecord {
                             // 0 if not part of a request/reply pair
     uint64   ts_ns          // wall time at the dispatcher
     TraceKind kind          // call/cast × in/out, statem
-    bytes    payload        // [header][proto-wire] verbatim
+    bytes    payload        // [header][proto-wire] verbatim. For a STATEM
+                            // record: the FSM's `data` message (OTP `{State,
+                            // Data}` Data term) proto-wire, decoded via data_type
     string   from_state     // STATEM only: the state left (e.g. "OFF"); "" else
     string   to_state       // STATEM only: the state entered (e.g. "STARTING")
+    string   data_type      // STATEM only: the flat type name of the `data`
+                            // message in payload (e.g. "system_demo_DemoFsmData"),
+                            // so the observer decodes payload → a labelled dict
 }
 
 // Configuration request from a consumer (supdbg or com-on-behalf-of-

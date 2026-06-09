@@ -20,7 +20,10 @@ Documentation    SM gen_statem (the platform State Manager) — drive the
 ...
 ...              sm's FSM `data` is SmStateMsg{state, ts_ns} — on_enter sets
 ...              `state` to the new state's enum ordinal (STARTING=1, RUNNING=2)
-...              and a monotonic ts_ns, both asserted below.
+...              and ts_ns to a monotonic timestamp (the LAST-CHANGE TIME). Both
+...              are asserted below: `state` against the expected ordinal, and
+...              `ts_ns` proven to be set + strictly advancing across
+...              transitions.
 ...
 ...              Prereq: binaries built + staged (Start Statem Stack runs
 ...              demo/stage_local.sh, which stages sm too). The suite stages +
@@ -40,14 +43,41 @@ SM Boots OFF To RUNNING Via Lifecycle Events
     [Documentation]    Drive the boot handshake the supervisor used to send:
     ...                SystemBoot (OFF→STARTING) then StartupComplete
     ...                (STARTING→RUNNING). Assert each transition + the FSM
-    ...                data (SmStateMsg.state = the new state's ordinal).
+    ...                data (SmStateMsg.state = the new state's ordinal) and the
+    ...                last-change time (ts_ns) set + advancing.
 
-    # SystemBoot: OFF → STARTING. on_enter sets data.state = STARTING (1).
+    # SystemBoot: OFF → STARTING. on_enter sets data.state = STARTING (1)
+    # and stamps ts_ns (the last-change time).
     Emit Statem Event         SystemBoot
-    Wait For Statem State     STARTING      within=2s
+    ${starting}=   Wait For Statem State     STARTING      within=2s
     Assert Statem Data        state=1
+    # ts_ns (last-change time) is populated, not the zero default.
+    Should Be True    ${starting}[data][ts_ns] > 0
+    ...    STARTING data carries no last-change time: ${starting}[data]
 
-    # StartupComplete: STARTING → RUNNING. data.state = RUNNING (2).
+    # StartupComplete: STARTING → RUNNING. data.state = RUNNING (2), and the
+    # last-change time advances past the STARTING stamp.
     Emit Statem Event         StartupComplete
-    Wait For Statem State     RUNNING       within=2s
+    ${running}=    Wait For Statem State     RUNNING       within=2s
     Assert Statem Data        state=2
+    Should Be True    ${running}[data][ts_ns] > ${starting}[data][ts_ns]
+    ...    last-change time did not advance: STARTING=${starting}[data][ts_ns] RUNNING=${running}[data][ts_ns]
+
+
+SM Last-Change Time Advances On Every Transition
+    [Documentation]    The last-change time (ts_ns) is re-stamped on EACH
+    ...                transition. From RUNNING (left by the first test), drive
+    ...                a round trip RUNNING→UPDATE→RUNNING and assert ts_ns
+    ...                strictly increases at each step — proving on_enter stamps
+    ...                the moment of change, not a one-shot boot time.
+
+    # RUNNING → UPDATE.
+    Emit Statem Event         UpdateRequest
+    ${update}=     Wait For Statem State     UPDATE        within=2s
+    Should Be True    ${update}[data][ts_ns] > 0    UPDATE has no ts_ns
+
+    # UPDATE → RUNNING. ts_ns must be re-stamped (a new, later change time).
+    Emit Statem Event         UpdateComplete
+    ${back}=       Wait For Statem State     RUNNING       within=2s
+    Should Be True    ${back}[data][ts_ns] > ${update}[data][ts_ns]
+    ...    last-change time not re-stamped: UPDATE=${update}[data][ts_ns] RUNNING=${back}[data][ts_ns]

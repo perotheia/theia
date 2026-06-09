@@ -482,6 +482,12 @@ def cmd_logcat(args, _sup, trace_factory) -> int:
             # record has no payload (e.g. Dispatch) or the type didn't resolve.
             body = _fmt_content(rec.content) if rec.content else ""
             kind = getattr(rec, "kind", "") or "?"
+            # STATEM rows carry the transition in from_state/to_state — show it
+            # as `from→to` (the event is in msg_type). e.g. OFF→STARTING.
+            frm = getattr(rec, "from_state", "") or ""
+            to = getattr(rec, "to_state", "") or ""
+            if frm or to:
+                body = (f"{frm}→{to}" + (f" {body}" if body else "")).strip()
             print(f"{rec.ts_ns:>16} {rec.src:>16} {kind:<9} {rec.msg_type:<22} "
                   f"corr={rec.corr_id}{(' ' + body) if body else ''}")
     except KeyboardInterrupt:

@@ -54,12 +54,15 @@ to bind a tester identity and cast events. This node is NOT in the demo
 cluster (not deployed) — it exists only so `artheia.probe` can construct a
 client from the `.art`. Pattern: a `tdb.art`-style client node.
 
-  - `demo/test/system/demo_test/demo_fsm_tester.art` (package
-    `system.demo_test`, canonical symlink `system/demo_test`): imports
-    `system.demo.*`, `extern node DemoFsmGate {}` (materialized from the
-    import), `node DemoFsmTester { sender events provides DemoFsmIn }`
-    (tipc 0xd0010101, not deployed).
-  - `demo/test/fsm_drive.py`: `ctx.probe("DemoFsmTester").start()` then
+  - `DemoFsmTester` lives IN the demo package (`demo/system/demo/
+    package.art`, package `system.demo`) — NOT a separate `demo_test` tree.
+    It's a sibling of DemoFsmGate/DemoFsmIn, so it needs no import/extern and
+    resolves through the existing canonical `system/demo` symlink like every
+    other demo node: `node DemoFsmTester { sender events provides DemoFsmIn }`
+    (tipc 0xd0010101). Not in any composition → gen-app excludes it from the
+    deployed FCs (verified: regenerating p4 leaves no DemoFsmTester ref).
+  - `demo/test/fsm_drive.py`: loads `system/demo/package.art`,
+    `ctx.probe("DemoFsmTester").start()` then
     `probe.cast("DemoFsmGate", "DemoStart"|"DemoFinish"|"DemoReset")` over
     ONE persistent connection → ORDERED delivery (fixes the raw-socket
     race where DemoFinish dropped). Proven live: IDLE→PROCESSING→DONE→IDLE,

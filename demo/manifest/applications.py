@@ -43,7 +43,8 @@ from artheia.manifest.utils import (
 APPLICATIONS_MEMBERS: list[tuple[str, str, list[str]]] = [
     ('p1', 'Demo3WayP1', ['counter', 'driver', 'ticker']),
     ('p2', 'Demo3WayP2', ['observer']),
-    ('p3', 'Demo3WayP3', ['incrementer'])
+    ('p3', 'Demo3WayP3', ['incrementer']),
+    ('p4', 'Demo3WayP4', ['demo_fsm', 'demo_gate']),   # gen_statem test FSM
 ]
 APPLICATIONS_SHORTS = [m[0] for m in APPLICATIONS_MEMBERS]
 APPLICATIONS_COMPONENTS = [

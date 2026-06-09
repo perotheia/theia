@@ -120,6 +120,7 @@ _LOCAL_BINARIES = {
     "p1":   "//demo/Demo3WayP1/main:demo",
     "p2":   "//demo/Demo3WayP2/main:demo",
     "p3":   "//demo/Demo3WayP3/main:demo",
+    "p4":   "//demo/Demo3WayP4/main:demo",   # gen_statem test FSM
 }
 _LOCAL_SUPERVISOR = "//platform/supervisor/main:supervisor"
 

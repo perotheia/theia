@@ -112,6 +112,70 @@ node atomic IncrementerNode {
     }
 }
 
+// ---- gen_statem test FSM (for STATEM trace + rf testing) ----------------
+//
+// A minimal three-state FSM that exercises BOTH transition paths the
+// GenStateM tracer emits (kind=STATEM, with from→to state names):
+//   - EVENT-driven:  DemoStart (IDLE→PROCESSING), DemoFinish (PROCESSING→DONE,
+//                    DONE→IDLE via DemoReset).
+//   - TIMEOUT-driven: PROCESSING auto-falls back to IDLE after 5s if no
+//                    DemoFinish arrives.
+// Mirrors the sm split: the statem node (DemoFsm) takes NO external
+// messages; a gate (DemoFsmGate) receives the events over TIPC and
+// post_event()s them into the FSM in-process. rf injects events at the
+// gate + asserts the STATEM trace records.
+
+message DemoStart  { }   // IDLE → PROCESSING (after 5s timeout)
+message DemoFinish { }   // PROCESSING → DONE
+message DemoReset  { }   // DONE → IDLE  (or PROCESSING → IDLE)
+
+// The FSM's persistent data — just carries the current state name for the
+// broadcast/persist symmetry sm has; minimal here.
+message DemoFsmData { }
+
+// Lifecycle event ingress for the gate. senderReceiver `in` data so the
+// gate's generated handle_cast fires; the gate forwards into the statem.
+interface senderReceiver DemoFsmIn {
+    data DemoStart  start
+    data DemoFinish finish
+    data DemoReset  reset
+}
+
+// The statem node. Three states, initial IDLE. PROCESSING arms a 5s state
+// timeout that falls back to IDLE if DemoFinish doesn't arrive first.
+node atomic DemoFsm {
+    tipc type=0xd0010006 instance=0
+    requires_timers
+    tag = "DFSM"
+    statem {
+        states  [IDLE, PROCESSING, DONE]
+        initial IDLE
+        data    DemoFsmData
+
+        on IDLE:
+            event DemoStart   → PROCESSING after 5s
+
+        on PROCESSING:
+            event DemoFinish  → DONE
+            event DemoReset   → IDLE
+            timeout           → IDLE
+
+        on DONE:
+            event DemoReset   → IDLE
+    }
+}
+
+// The gate — the FSM's only TIPC-reachable surface. Receives DemoFsmIn
+// events and post_event()s each into DemoFsm in-process (impl/hand-owned,
+// modeled on SmGate).
+node atomic DemoFsmGate {
+    tipc type=0xd0010007 instance=0
+    tag = "DFSG"
+    ports {
+        receiver events requires DemoFsmIn
+    }
+}
+
 // Compositions and the Demo3Way cluster live in the sibling
 // component.art file. The model loader merges package.art (schema)
 // and component.art (wiring/deploy) when parsing either path.

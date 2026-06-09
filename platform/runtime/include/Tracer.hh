@@ -318,7 +318,12 @@ public:
               const char* msg_type_name,
               uint32_t       corr_id,
               const uint8_t* payload, uint16_t payload_len,
-              const char* dst = nullptr) noexcept {
+              const char* dst = nullptr,
+              // STATEM only: the state names on a transition. proto fields 8/9
+              // (TraceRecord.from_state / to_state). nullptr/empty for every
+              // other event class → the fields are simply not encoded.
+              const char* from_state = nullptr,
+              const char* to_state   = nullptr) noexcept {
         if (!trace_filter_passes(msg_type_name)) return;
         // Kind filter (#403): supervisor's TraceControlPush selects which
         // dispatch classes to trace. Empty mask = all kinds (back-compat).
@@ -355,6 +360,12 @@ public:
         if (k)       pb_varint_field(rec, 6, k);
         if (payload && payload_len)
             pb_bytes(rec, 7, payload, payload_len);
+        // STATEM transition state names (fields 8/9) — only present on a
+        // gen_statem StateTransition/StateTimeout, where dst+payload are empty.
+        if (from_state && from_state[0])
+            pb_string(rec, 8, from_state, std::strlen(from_state));
+        if (to_state && to_state[0])
+            pb_string(rec, 9, to_state, std::strlen(to_state));
 
         TraceSubmitter::instance().submit(rec);
     }

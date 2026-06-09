@@ -147,13 +147,29 @@ decoded `data` dict (OTP Data term).
   6. rf `runtime/probe_adapter.py` (per probe-augment §1) OR a focused
      `demo_fsm_lib.py` first: build the context, cast events at the gate.
 
-**C. rf observer + keywords + scenario** — points 5, 6.
-  7. `runtime/state_observer.py` — gRPC TraceStream → `state_transition`
-     events on the bus.
-  8. Keywords `Start State Machine` / `Emit Event` / `Wait For State` /
-     `Assert Data` (extend `flow_engine.py` + `TheiaTestLibrary`).
-  9. Scenario `scenarios/.../demo_fsm.robot` — the slice above, green
-     against the live p4 + com.
+**C. rf observer + keywords + scenario** — points 5, 6. DONE.
+  7. `runtime/statem_observer.py` — wraps `artheia.observer.TraceObserver`
+     (TIPC, the probe-native path — NOT gRPC/com; clients via .art + probe),
+     filters STATEM records for one node, publishes `statem_transition`
+     events (`node, event, from_state, to_state, data`) on the EventBus.
+  8. `runtime/probe_adapter.py` — wraps the probe to cast events at the
+     gate (ordered, one connection). Both quarantine the artheia import.
+  9. `scenarios/demo/fsm/demo_fsm_lib.py` — a self-contained scenario lib
+     (sm_gate idiom) with role-named keywords: `Start/Stop Demo Fsm Stack`
+     (stage + run supervisor, enable STATEM trace via the tdb
+     SupervisorClient, attach observer + probe), `Emit Fsm Event`,
+     `Wait For Fsm State`, `Assert Fsm Data`.
+  10. `scenarios/demo/fsm/demo_fsm.robot` — two tests, GREEN twice:
+      the full IDLE→PROCESSING→DONE→IDLE walk asserting each transition +
+      `reason`, and a monotonic-`visits` check across a second walk.
+  - **Pre-existing codec bug fixed** (artheia `probe/codec.py`): two `Codec`
+    instances each `mkdtemp`'d their OWN `_pb2` out dir, so once one compiled
+    `system.supervisor` (caching `sys.modules['system']` at its dir), a second
+    compiling `system.services.log` failed with `No module named
+    'system.services'`. Made `_out` a process-shared singleton across all
+    Codec instances → every sub-package lives under one `system`/`platform`
+    namespace root. (Surfaced because the lib uses BOTH the supervisor client
+    AND the log observer in one process.)
 
 **D. Generalize (backlog, not this session)** — re-run B/C against `sm`
 (StartupComplete events, OFF→…→RUNNING), then fold the v1 `T Sup`/`T Sig`
@@ -168,8 +184,13 @@ keywords behind the role-named surface per v3.
   (payload was already there, always empty for STATEM).
 - gen-app via the canonical `system/<pkg>` symlink path.
 
-## Done when
+## Done — A, B, C all landed
 The `demo_fsm.robot` scenario drives DemoStart/Finish/Reset through the
-probe and asserts each transition AND the decoded data via `Wait For
-State` + `Assert Data`, green against live p4 + com. The data-in-trace
-+ sender + observer pieces are reusable for `sm` and every statem FC.
+probe and asserts each transition AND the decoded data via `Wait For Fsm
+State` + `Assert Fsm Data`, GREEN (twice) against a live supervisor (no com
+needed — observer + probe are TIPC-direct). The data-in-trace + sender +
+observer + adapter pieces are reusable for `sm` and every statem FC.
+
+Remaining (Step D, backlog): re-run B/C against `sm` (StartupComplete,
+OFF→…→RUNNING) and graduate the role-named keywords into the shared
+TheiaTestLibrary, folding the v1 `T Sup`/`T Sig` keywords behind them.

@@ -102,10 +102,12 @@ _PLATFORM_OPKG_ARTIFACTS = [
         target_dir="/opt/theia/supervisor/",
         systemd_unit="/etc/systemd/system/theia-supervisor.service",
     ),
-    # (gateway dropped from the deploy bundle — the gateway FC is broadly stale
-    # and needs its own gen-app modernization, like the supervisor port. Add it
-    # back to _PLATFORM_FABRIC_COMPONENTS + here once it builds. See the
-    # gateway-fc-modernization follow-up.)
+    OpkgArtifact(
+        name="gateway",
+        bazel_target="//platform/gateway/main:gateway",
+        target_dir="/opt/theia/gateway/",
+        systemd_unit="/etc/systemd/system/theia-gateway.service",
+    ),
 ]
 
 CentralHost = MachineManifest(
@@ -182,10 +184,25 @@ _PLATFORM_FABRIC_COMPONENTS: list[SwComponent] = [
         art_node="system.supervisor/Supervisor",
         bazel_buildable=True,
     ),
-    # (gateway dropped — the gateway FC is broadly stale and needs its own
-    # gen-app modernization. Re-add once //platform/gateway/main:gateway
-    # builds. See the gateway-fc-modernization follow-up.)
+    SwComponent(
+        name="gateway",
+        bazel_target="//platform/gateway/main:gateway",
+        owner="platform",
+        art_node="system.gateway/GatewayBridge",
+        bazel_buildable=True,
+    ),
 ]
+
+# Execution Manifest Process for the gateway — the supervisor tree's `gateway`
+# leaf (under drv_sup) resolves to THIS, giving it start_cmd=["bin/gateway"].
+# nodes = the GatewayBridge composition's hosted prototypes, so executor.json
+# lists them statically (the bus mega-nodes + the two gateway own nodes).
+from artheia.manifest.utils import app_process_for as _app_process_for  # noqa: E402
+
+GATEWAY_PROCESS = _app_process_for(
+    "platform", "gateway",
+    ["flexray_bus", "kcan_bus", "gw_svc", "cmp_gw"],
+)
 
 # DEMO_BINARIES = the demo per-process binaries (compute-bound AAs),
 # straight from the generated applications.py. Kept separate from
@@ -220,7 +237,7 @@ DemoLayer = Layer(
     set_vehicle=VehicleIdentity(name="demo", make="theia", model="gen_server-demo"),
     add_machines=[DemoHost],
     add_components=DEMO_COMPONENTS,
-    add_executions=DEMO_PROCESSES,
+    add_executions=DEMO_PROCESSES + [GATEWAY_PROCESS],
     # Override (not Append) so we REPLACE app_sup's empty children list
     # with the demo apps — Override does replace(base, **patch).
     override_supervisors=[
@@ -383,7 +400,7 @@ DemoSpecLayer = SoftwareSpecification(
         Append(_CentralDemoApp),
     }),
     execution_manifests=cast(set[SetTransformTypes], {
-        Append(p) for p in DEMO_PROCESSES
+        Append(p) for p in DEMO_PROCESSES + [GATEWAY_PROCESS]
     }),
     # Carry the pinned service_manifests from the legacy DemoRig
     # (built via merge_layers above) into the structured-DSL output.
@@ -493,7 +510,8 @@ CentralSoftware: SoftwareSpecification = SoftwareSpecification(
                        _central_app_components)),
     }),
     execution_manifests=cast(set[SetTransformTypes], {
-        Append(p) for p in (_central_fc_processes + _central_app_processes)
+        Append(p) for p in (_central_fc_processes + _central_app_processes
+                            + [GATEWAY_PROCESS])
     }),
     service_manifests=cast(set[SetTransformTypes], {
         Append(_sm) for _sm in DemoRig.service_manifests

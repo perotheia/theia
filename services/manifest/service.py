@@ -41,6 +41,7 @@ from artheia.manifest.utils import (
 # directory convention (artheia.manifest.utils).
 # ---------------------------------------------------------------------------
 SERVICES_MEMBERS: list[tuple[str, str, list[str]]] = [
+    ('com', 'Com', []),
     ('log', 'Log', []),
     ('per', 'Per', []),
     ('sm', 'Sm', []),

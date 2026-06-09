@@ -80,7 +80,14 @@ SUPERVISORS: list[SupervisorNode] = [
         # records and Subscribe has no listener. (The earlier "no daemon —
         # spec-completeness only" note predated the trace hub; the hub now
         # exists and is exactly this child.)
-        children=["log", "per", "rds"],
+        #
+        # "com" = the services/com FC (ComDaemon + the ComGrpcProxy gRPC
+        # bridge). It's a real packaged FC in `cluster Services` and the GUI /
+        # rtdb / rf trace surface — it MUST be forked by the supervisor so the
+        # stack comes up complete without launching com by hand. (Replaces
+        # "rds", a daemon-less conceptual FC with no composition — it had no
+        # binary to start, so the supervisor child was a phantom.)
+        children=["log", "per", "com"],
     ),
     SupervisorNode(
         name="pltf_sup",

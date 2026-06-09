@@ -52,9 +52,11 @@ struct EventRow {
     uint32_t     kind{};         // TraceKind
     std::string  src;            // node_name (emitter)
     std::string  dst;            // peer node, "" if none
-    std::string  msg_type;       // proto message type name
+    std::string  msg_type;       // proto message type name (event for STATEM)
     uint32_t     corr_id{};      // pairs Send/Recv/Dispatch
     std::string  raw_payload;    // proto-wire-v3 bytes
+    std::string  from_state;     // STATEM only: the state left
+    std::string  to_state;       // STATEM only: the state entered
 };
 
 // TraceKind ordinal → name (platform_runtime.TraceKind, same as tdb).
@@ -197,7 +199,13 @@ protected:
             case 1: return wxString::FromUTF8(r.machine.c_str(), r.machine.size());
             case 2: return wxString::FromAscii(kind_name(r.kind));
             case 3: return wxString::FromUTF8(r.src.c_str(), r.src.size());
-            case 4: return wxString::FromUTF8(r.dst.c_str(), r.dst.size());
+            case 4:
+                // STATEM rows have no peer (dst empty) — show the transition
+                // (from→to) in the Dst column instead, where it reads well.
+                if (!r.to_state.empty())
+                    return wxString::FromUTF8(r.from_state.c_str()) + " → " +
+                           wxString::FromUTF8(r.to_state.c_str());
+                return wxString::FromUTF8(r.dst.c_str(), r.dst.size());
             case 5: return wxString::FromUTF8(r.msg_type.c_str(), r.msg_type.size());
         }
         return wxString();
@@ -430,6 +438,14 @@ struct TracePanelImpl {
             r.dst.empty() ? "—" : r.dst.c_str()));
         tree->AppendItem(subj, wxString::Format("msg_type:    %s",
             r.msg_type.c_str()));
+        // STATEM rows: surface the transition explicitly. msg_type is the
+        // EVENT that fired it; from_state→to_state is the move.
+        if (!r.to_state.empty()) {
+            tree->AppendItem(subj, wxString::Format(
+                "transition: %s → %s",
+                r.from_state.empty() ? "?" : r.from_state.c_str(),
+                r.to_state.c_str()));
+        }
 
         // Decoded fields — the spec's centerpiece. libtrace_decoder.so renders
         // the payload to JSON via libprotobuf reflection (same .so tdb/rtdb
@@ -572,6 +588,8 @@ void TracePanel::on_frame(const std::string& machine_name,
     r.msg_type    = tr.msg_type();
     r.corr_id     = tr.corr_id();
     r.raw_payload = tr.payload();
+    r.from_state  = tr.from_state();
+    r.to_state    = tr.to_state();
 
     long new_count = 0;
     bool follow = false;

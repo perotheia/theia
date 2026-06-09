@@ -162,6 +162,10 @@ class _RecordView:
         self.kind     = _KIND_NAMES.get(rec.kind, str(rec.kind))
         self.payload  = rec.payload
         self.content  = content
+        # STATEM-only transition states (gRPC fields 8/9); "" on other kinds
+        # and on an older collector that predates the proto extension.
+        self.from_state = getattr(rec, "from_state", "") or ""
+        self.to_state   = getattr(rec, "to_state", "") or ""
 
     def to_dict(self, ts: str = "") -> dict:
         d = {
@@ -173,6 +177,9 @@ class _RecordView:
             "msg_type": self.msg_type,
             "corr_id": self.corr_id,
         }
+        if self.to_state:
+            d["from_state"] = self.from_state
+            d["to_state"] = self.to_state
         if self.content is not None:
             d["content"] = self.content
         else:

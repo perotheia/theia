@@ -118,6 +118,7 @@ _LOCAL_BINARIES = {
     "per":  "//services/per/main:per",
     "ucm":  "//services/ucm/main:ucm",
     "shwa": "//services/shwa/main:shwa",
+    "gateway": "//platform/gateway/main:gateway",  # GatewayBridge (drv_sup)
     "p1":   "//demo/Demo3WayP1/main:demo",
     "p2":   "//demo/Demo3WayP2/main:demo",
     "p3":   "//demo/Demo3WayP3/main:demo",

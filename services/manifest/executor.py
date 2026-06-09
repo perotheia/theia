@@ -60,8 +60,18 @@ SUPERVISORS: list[SupervisorNode] = [
             # follow because the rest_for_one cascade order is meaningful.
             "exec", "core", "crypto", "sm",
             # Per-domain sub-supervisors after the leaves.
-            "network_sup", "host_svc_sup", "pltf_sup",
+            "network_sup", "host_svc_sup", "pltf_sup", "drv_sup",
         ],
+    ),
+    SupervisorNode(
+        name="drv_sup",
+        strategy=RestartStrategy.ONE_FOR_ONE,
+        # Driver / data-path layer. "gateway" = the GatewayBridge composition
+        # (platform/gateway): GatewayService + CmpGwService (the ASAM-CMP UDP
+        # bridge from Hercules) + the PSP Kcan_Bus / Flexray_Bus mega-nodes.
+        # It bridges the vehicle buses into the Theia fabric, so it's its own
+        # driver sub-supervisor rather than a host service.
+        children=["gateway"],
     ),
     SupervisorNode(
         name="network_sup",

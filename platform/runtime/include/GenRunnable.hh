@@ -54,7 +54,10 @@
 
 #pragma once
 
-#include "Logger.hh"     // NodeLogger mixin (per-node tagged logger)
+#include "Logger.hh"      // NodeLogger mixin (per-node tagged logger)
+#include "Tracer.hh"      // tracer_for — trace-control push target
+#include "ControlPush.hh" // shared apply_{log_level,trace_control}_push
+#include "platform_runtime/runtime.pb.h"  // LogLevelPush / TraceControlPush
 
 #include <atomic>
 #include <string>
@@ -110,6 +113,26 @@ public:
     // runnable with no body is a programming error — Derived must define it).
     void do_start() {}
     void do_stop() {}
+
+    // ---- Config service: live control pushes (#386 / #403) --------------
+    //
+    // A GenRunnable has NO mailbox, so it can't receive the supervisor's
+    // LogLevelPush / TraceControlPush via the GenServer handle_cast path
+    // (those enqueue onto a mailbox loop that a runnable doesn't have).
+    // Instead a reporting runnable's main.cc binds its config port on the
+    // process TipcMux and register_cast_inline's these two methods, so the
+    // mux's dispatch thread calls them DIRECTLY on receipt. Both apply only
+    // atomics (Logger::set_level, Tracer kind-mask) — safe off the mux thread,
+    // no node thread needed. Shared apply-logic with GenServer (ControlPush.hh)
+    // so the behaviour is identical to a gen_server node's.
+    void on_log_level_push(const platform_runtime_LogLevelPush& push) noexcept {
+        ::theia::runtime::apply_log_level_push(this->log(), push);
+    }
+    void on_trace_control_push(
+            const platform_runtime_TraceControlPush& push) noexcept {
+        ::theia::runtime::apply_trace_control_push(
+            ::theia::runtime::tracer_for(Derived::kNodeName), this->log(), push);
+    }
 
 protected:
     const std::string& terminate_reason() const { return terminate_reason_; }

@@ -253,8 +253,7 @@ private:
         dc.SetTextForeground(wxColour(0x80, 0x80, 0x80));
         dc.DrawText(wxString::Format("%g", ymax), LX + 2, y + 1);
 
-        // One polyline per child + a legend chip at the strip's right edge.
-        int legend_y = y + 2;
+        // One polyline per child.
         size_t idx = 0;
         for (const auto& kv : by_child) {
             const wxColour col = series_colour(idx++);
@@ -268,16 +267,29 @@ private:
                 else        path.AddLineToPoint(x, yp);
             }
             if (!first) gc.StrokePath(path);
+        }
 
-            // Legend: a coloured square + the child name, stacked top-right.
-            const int lx = LX + pw - 110;
+        // Legend, packed into as many columns as the strip height allows so a
+        // wide FC count doesn't overrun the box. Swatch + name per row; columns
+        // fill top-to-bottom then wrap right. Same colour order as the lines.
+        constexpr int kRowH = 13, kColW = 80;
+        const int rows = std::max(1, (ph - 4) / kRowH);
+        const int cols = (static_cast<int>(by_child.size()) + rows - 1) / rows;
+        const int lx0  = LX + pw - cols * kColW - 4;
+        idx = 0;
+        dc.SetPen(*wxTRANSPARENT_PEN);
+        for (const auto& kv : by_child) {
+            const wxColour col = series_colour(idx);
+            const int r  = static_cast<int>(idx) % rows;
+            const int c  = static_cast<int>(idx) / rows;
+            const int lx = lx0 + c * kColW;
+            const int ly = y + 2 + r * kRowH;
             dc.SetBrush(wxBrush(col));
-            dc.SetPen(*wxTRANSPARENT_PEN);
-            dc.DrawRectangle(lx, legend_y + 2, 8, 8);
+            dc.DrawRectangle(lx, ly + 2, 8, 8);
             dc.SetTextForeground(col);
             dc.DrawText(wxString::FromUTF8(kv.first.c_str(), kv.first.size()),
-                        lx + 12, legend_y);
-            legend_y += 14;
+                        lx + 11, ly);
+            ++idx;
         }
     }
 

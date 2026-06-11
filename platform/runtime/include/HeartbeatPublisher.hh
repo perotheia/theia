@@ -69,6 +69,10 @@ public:
         "system_supervisor_HeartbeatReport";
     static constexpr uint16_t kServiceId = hash_msg_type_(kMsgTypeName);
 
+    // Re-roll the socket every N beats so connect-by-name re-lands on the live
+    // supervisor binding even when SIGKILL'd predecessors left stale bindings.
+    static constexpr uint64_t kReRollEvery = 4;
+
     explicit HeartbeatPublisher(std::string node_name)
         : node_name_(std::move(node_name)), self_pid_(::getpid()) {}
 
@@ -77,13 +81,16 @@ public:
     HeartbeatPublisher(const HeartbeatPublisher&)            = delete;
     HeartbeatPublisher& operator=(const HeartbeatPublisher&) = delete;
 
-    // Open a SEQPACKET socket connected to the supervisor's control name.
-    // Returns false if AF_TIPC is unavailable or the supervisor isn't bound;
-    // a later (re)connect happens lazily inside send_once on first failure.
+    // Open a SEQPACKET socket. Succeeds as long as AF_TIPC is available — the
+    // CONNECT to the supervisor is LAZY (done in send_once, retried every tick)
+    // so a node that starts before / racing the supervisor's bind still beats
+    // once the supervisor is up. Returns false only when AF_TIPC itself is
+    // unavailable (no kernel module / no permission), leaving the node inert.
     bool open() {
-        fd_ = ::socket(AF_TIPC, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
+        if (fd_ < 0)
+            fd_ = ::socket(AF_TIPC, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
         if (fd_ < 0) return false;
-        if (!connect_locked_()) { ::close(fd_); fd_ = -1; return false; }
+        connected_ = connect_locked_();   // best-effort; send_once retries
         return true;
     }
 
@@ -95,9 +102,31 @@ public:
     bool is_open() const { return fd_ >= 0; }
 
     // Cast one HeartbeatReport now. Best-effort: a send failure (supervisor
-    // restarting) is silently dropped; the next tick retries.
+    // restarting / not yet bound) is silently dropped; the next tick retries.
     void send_once() {
         if (fd_ < 0) return;
+        // Periodic RE-ROLL onto a fresh socket. TIPC connect-by-name load-
+        // balances across EVERY port bound at the supervisor's name — and a
+        // SIGKILL'd supervisor can leave a stale binding the kernel reaps
+        // slowly, so a one-shot connect may latch onto a DEAD port and a
+        // fire-and-forget SEQPACKET send to it never errors (so we'd never
+        // notice). The probe hits the same hazard and cures it the same way:
+        // re-roll the socket periodically so we eventually land on the LIVE
+        // binding. In production (one binding) this just reconnects to the same
+        // port — harmless. (project-probe-connect-stale-bindings.)
+        if (connected_ && (seq_.load() % kReRollEvery) == 0) {
+            ::close(fd_);
+            fd_ = ::socket(AF_TIPC, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
+            connected_ = false;
+        }
+        // Lazy connect: if we couldn't reach the supervisor at open() (it bound
+        // after us), the peer went away, or we just re-rolled — try now. Skip
+        // the send until connected so we don't fault on an unconnected socket.
+        if (fd_ < 0) return;
+        if (!connected_) {
+            connected_ = connect_locked_();
+            if (!connected_) return;
+        }
         std::string rec;
         rec.reserve(48);
         pb_string(rec, 1, node_name_.c_str(), node_name_.size());   // node_name
@@ -118,11 +147,12 @@ public:
         std::memcpy(&frame[sizeof(hdr)], rec.data(), rec.size());
         if (::send(fd_, frame.data(), frame.size(),
                    MSG_NOSIGNAL | MSG_DONTWAIT) < 0) {
-            // Peer gone (supervisor restart): drop the socket so the next tick
-            // reconnects to the fresh supervisor binding.
+            // Peer gone (supervisor restart): drop + re-create the socket and
+            // mark unconnected, so the next tick's lazy connect re-binds to the
+            // fresh supervisor name.
             ::close(fd_);
             fd_ = ::socket(AF_TIPC, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
-            if (fd_ >= 0 && !connect_locked_()) { ::close(fd_); fd_ = -1; }
+            connected_ = false;
         }
     }
 
@@ -189,6 +219,7 @@ private:
 
     std::string           node_name_;
     int                   fd_       = -1;
+    bool                  connected_ = false;  // lazy-connect state (one thread)
     std::atomic<uint64_t> seq_      {0};
     pid_t                 self_pid_ = -1;
     std::atomic<bool>     running_  {false};

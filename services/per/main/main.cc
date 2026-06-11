@@ -14,7 +14,15 @@
 #include "NodeAffinity.hh"  // apply_node_affinity($THEIA_NODE_CFG) per node
 #include "ParamsConfig.hh"  // init_config(fc) / get_config() — static params JSON
 
-#include "TipcMux.hh"    // config-service receiver for reporting nodes (#386)
+#include "TipcMux.hh"    // config-service receiver for reporting nodes (#386).
+                         // GenServer nodes use bind_node + register_cast;
+                         // reporting runnables use bind_listener +
+                         // register_cast_inline (no mailbox).
+#include "HeartbeatPublisher.hh"  // periodic liveness beat to the supervisor
+                         // watchdog — every reporting node (GenServer AND
+                         // runnable). Hand-framed cast, no supervisor-proto dep.
+#include <memory>
+#include <vector>
 
 
 #include <atomic>
@@ -57,17 +65,23 @@ int main() {
     ::theia::runtime::TimerService timers;
     (void)timers;  // no node requires_timers
 
-    // Config-service receiver (#386). A reporting node binds its TIPC
-    // name and register_cast's the supervisor's control push; the cast
-    // lands in GenServer's base handle_cast(LogLevelPush) on the node
-    // thread. Same standard GwMessageHeader path as any app message —
-    // no bespoke control frame.
+    // Config-service receiver (#386). A reporting node binds its TIPC name
+    // and registers the supervisor's control pushes. A GenServer node's cast
+    // lands in its base handle_cast on the node thread; a reporting runnable
+    // (no mailbox) takes them INLINE on the mux thread (register_cast_inline).
+    // Same standard GwMessageHeader path as any app message — no bespoke frame.
     ::theia::runtime::TipcMux config_mux;
     // Publish the one per-app mux (the single epoll/select loop) so a
     // handler's ad-hoc RemoteRef registers its call-reply fd here via
     // process_mux() — without it a synchronous call(ref,...) from inside
     // a handler would never get its reply pumped.
     ::theia::runtime::set_process_mux(&config_mux);
+
+    // Heartbeat publishers — one per reporting node, kept alive for the
+    // process lifetime (each owns a timer thread). Started after the node's
+    // own start() below. The supervisor watchdog only watches nodes that
+    // beat, so non-reporting nodes simply never appear here.
+    std::vector<std::unique_ptr<::theia::runtime::HeartbeatPublisher>> heartbeats;
 
 
     PerClient per_client;
@@ -122,6 +136,24 @@ int main() {
     } else {
         per_client.log().warn("config service bind failed; live log-level "
                                  "push + signal inject disabled");
+    }
+
+
+
+    // Liveness beat to the supervisor watchdog (#PHM). A reporting node — of
+    // EITHER base — must beat or the watchdog SIGTERMs it after K missed
+    // deadlines. One publisher per node, own timer thread; period TODO from the
+    // manifest (1s default matches the supervisor's check cadence).
+    {
+        auto per_client_hb = std::make_unique<
+            ::theia::runtime::HeartbeatPublisher>(PerClient::kNodeName);
+        if (per_client_hb->open()) {
+            per_client_hb->start(/*period_ms=*/1000);
+            heartbeats.push_back(std::move(per_client_hb));
+        } else {
+            per_client.log().warn("heartbeat publisher open failed; "
+                                     "supervisor watchdog will not see beats");
+        }
     }
 
 
@@ -180,6 +212,24 @@ int main() {
     } else {
         per_manager.log().warn("config service bind failed; live log-level "
                                  "push + signal inject disabled");
+    }
+
+
+
+    // Liveness beat to the supervisor watchdog (#PHM). A reporting node — of
+    // EITHER base — must beat or the watchdog SIGTERMs it after K missed
+    // deadlines. One publisher per node, own timer thread; period TODO from the
+    // manifest (1s default matches the supervisor's check cadence).
+    {
+        auto per_manager_hb = std::make_unique<
+            ::theia::runtime::HeartbeatPublisher>(PerManager::kNodeName);
+        if (per_manager_hb->open()) {
+            per_manager_hb->start(/*period_ms=*/1000);
+            heartbeats.push_back(std::move(per_manager_hb));
+        } else {
+            per_manager.log().warn("heartbeat publisher open failed; "
+                                     "supervisor watchdog will not see beats");
+        }
     }
 
 

@@ -500,6 +500,29 @@ TraceConfigList SupervisorCtl::handle_call(
     return list;
 }
 
+GetTombstoneReply SupervisorCtl::handle_call(
+        const GetTombstoneRequest& req,
+        SupervisorCtlState& /*s_*/) {
+    using Op = ::supervisor::ExecCommand::Op;
+    GetTombstoneReply rep{};
+    rep.found = false;
+    auto* eng = engine();
+    if (!eng) return rep;
+    auto c = exec_cmd(Op::GetTombstone);
+    c.name = s(req.child_name);
+    auto r = eng->call(std::move(c));
+    rep.found     = r.tomb_found;
+    rep.truncated = r.tomb_truncated;
+    rep.total_bytes = static_cast<uint32_t>(
+        std::min<uint64_t>(r.tomb_total, 0xFFFFFFFFull));
+    std::snprintf(rep.path, sizeof(rep.path), "%s", r.tomb_path.c_str());
+    // content is a fixed nanopb bytes char[] (size + max_size from .options).
+    const size_t n = std::min(r.tomb_content.size(), sizeof(rep.content.bytes));
+    std::memcpy(rep.content.bytes, r.tomb_content.data(), n);
+    rep.content.size = static_cast<pb_size_t>(n);
+    return rep;
+}
+
 ControlReply SupervisorCtl::handle_call(
         const ConfigureLogLevelRequest& req,
         SupervisorCtlState& st) {

@@ -56,6 +56,8 @@ using TraceConfigList = system_supervisor_TraceConfigList;
 using ConfigureLogLevelRequest = system_supervisor_ConfigureLogLevelRequest;
 using GetLogLevelConfigRequest = system_supervisor_GetLogLevelConfigRequest;
 using LogLevelConfigList = system_supervisor_LogLevelConfigList;
+using GetTombstoneRequest = system_supervisor_GetTombstoneRequest;
+using GetTombstoneReply = system_supervisor_GetTombstoneReply;
 using SupervisionEvent = system_supervisor_SupervisionEvent;
 using HealthBeacon = system_supervisor_HealthBeacon;
 using SnapshotBegin = system_supervisor_SnapshotBegin;
@@ -66,6 +68,7 @@ using HeartbeatReport = system_supervisor_HeartbeatReport;
 using SendTimeoutReport = system_supervisor_SendTimeoutReport;
 using TraceControlPush = platform_runtime_TraceControlPush;
 using LogLevelPush = platform_runtime_LogLevelPush;
+using ConfigUpdated = platform_runtime_ConfigUpdated;
 
 
 
@@ -88,6 +91,8 @@ using Child_ctrlTrace_ctrlSubscriber =
     std::function<void(const TraceControlPush&)>;
 using Child_ctrlLog_levelSubscriber =
     std::function<void(const LogLevelPush&)>;
+using Child_ctrlConfig_pushSubscriber =
+    std::function<void(const ConfigUpdated&)>;
 
 
 class SupervisorCtl : public ::theia::runtime::GenServer<SupervisorCtl, SupervisorCtlState> {
@@ -177,6 +182,11 @@ public:
         Child_ctrlLog_levelSubscriber s);
     void     unsubscribe_child_ctrl_log_level(uint32_t id);
 
+    // child_ctrl.config_push broadcast subscribers.
+    uint32_t subscribe_child_ctrl_config_push(
+        Child_ctrlConfig_pushSubscriber s);
+    void     unsubscribe_child_ctrl_config_push(uint32_t id);
+
 
     // ---- GenServer plumbing: terminate default
     //
@@ -236,6 +246,9 @@ public:
     LogLevelConfigList handle_call(const GetLogLevelConfigRequest& req,
                                             SupervisorCtlState& s);
 
+    GetTombstoneReply handle_call(const GetTombstoneRequest& req,
+                                            SupervisorCtlState& s);
+
 
     // ---- OTP init/1 — body in impl (SupervisorCtl_handlers.cc) ----------
     //
@@ -270,6 +283,8 @@ public:
     void broadcast_child_ctrl_trace_ctrl(const TraceControlPush& msg);
 
     void broadcast_child_ctrl_log_level(const LogLevelPush& msg);
+
+    void broadcast_child_ctrl_config_push(const ConfigUpdated& msg);
 
 
 private:
@@ -345,6 +360,15 @@ private:
     uint32_t child_ctrl_log_level_next_id_{1};
     std::vector<Child_ctrlLog_levelEntry>
         child_ctrl_log_level_subs_;
+
+    struct Child_ctrlConfig_pushEntry {
+        uint32_t id;
+        Child_ctrlConfig_pushSubscriber fn;
+    };
+    std::mutex child_ctrl_config_push_mu_;
+    uint32_t child_ctrl_config_push_next_id_{1};
+    std::vector<Child_ctrlConfig_pushEntry>
+        child_ctrl_config_push_subs_;
 
 };
 
@@ -594,6 +618,37 @@ inline void SupervisorCtl::broadcast_child_ctrl_log_level(const LogLevelPush& ms
         catch (...) {
             std::fprintf(stderr,
                 "[%s] subscriber %u threw on child_ctrl.log_level — dropping\n",
+                kNodeName, e.id);
+        }
+    }
+}
+
+inline uint32_t SupervisorCtl::subscribe_child_ctrl_config_push(
+        Child_ctrlConfig_pushSubscriber s) {
+    std::lock_guard<std::mutex> lk(child_ctrl_config_push_mu_);
+    uint32_t id = child_ctrl_config_push_next_id_++;
+    child_ctrl_config_push_subs_.push_back({id, std::move(s)});
+    return id;
+}
+
+inline void SupervisorCtl::unsubscribe_child_ctrl_config_push(uint32_t id) {
+    std::lock_guard<std::mutex> lk(child_ctrl_config_push_mu_);
+    auto& v = child_ctrl_config_push_subs_;
+    v.erase(std::remove_if(v.begin(), v.end(),
+              [id](const auto& e) { return e.id == id; }), v.end());
+}
+
+inline void SupervisorCtl::broadcast_child_ctrl_config_push(const ConfigUpdated& msg) {
+    std::vector<Child_ctrlConfig_pushEntry> snap;
+    {
+        std::lock_guard<std::mutex> lk(child_ctrl_config_push_mu_);
+        snap = child_ctrl_config_push_subs_;
+    }
+    for (const auto& e : snap) {
+        try { e.fn(msg); }
+        catch (...) {
+            std::fprintf(stderr,
+                "[%s] subscriber %u threw on child_ctrl.config_push — dropping\n",
                 kNodeName, e.id);
         }
     }

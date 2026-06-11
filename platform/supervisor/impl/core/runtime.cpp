@@ -25,6 +25,7 @@
 #include <cstring>
 #include <sys/utsname.h>
 #include <dirent.h>
+#include <fstream>
 #include <functional>
 #include <sstream>
 #include <string>
@@ -91,15 +92,16 @@ uint64_t epoch_ms() {
         system_clock::now().time_since_epoch()).count();
 }
 
-// Locate the most recent tombstone matching <dir>/tombstone-<name>-<pid>-*.
-// Returns "" if no match. We pick the newest mtime to handle multi-run
-// noise.
-std::string locate_tombstone(const std::string& dir,
-                             const std::string& name,
-                             pid_t pid) {
+// Locate the most recent tombstone matching <dir>/tombstone-<name>-<prefix>*.
+// `prefix` is "<name>-<pid>-" for an exact-pid match (the crash-time surfacing)
+// or "<name>-" to find the newest tombstone for a child across ANY pid (the
+// GUI fetch, where the child has since restarted with a new pid). Newest mtime
+// wins. Returns "" if no match.
+std::string locate_tombstone_prefixed(const std::string& dir,
+                                      const std::string& prefix_body) {
     DIR* d = opendir(dir.c_str());
     if (!d) return {};
-    std::string prefix = "tombstone-" + name + "-" + std::to_string(pid) + "-";
+    std::string prefix = "tombstone-" + prefix_body;
     std::string best;
     time_t best_mt = 0;
     struct dirent* e;
@@ -115,6 +117,13 @@ std::string locate_tombstone(const std::string& dir,
     }
     closedir(d);
     return best;
+}
+
+// Crash-time surfacing: exact <name>-<pid> match.
+std::string locate_tombstone(const std::string& dir,
+                             const std::string& name,
+                             pid_t pid) {
+    return locate_tombstone_prefixed(dir, name + "-" + std::to_string(pid) + "-");
 }
 
 }  // namespace
@@ -313,6 +322,38 @@ std::vector<LogLevelRow> Supervisor::ctl_get_log_level() {
         }
     }
     return out;
+}
+
+void Supervisor::ctl_get_tombstone(const std::string& child_name,
+                                   ExecReply& rep) {
+    rep.tomb_found = false;
+    WorkerNode* w = find_worker_by_name(child_name);
+    if (!w) return;
+    SupervisorNode* sup = supervisor_of(*w);
+    const std::string dir = find_tombstone_dir(sup);
+    if (dir.empty()) return;
+    // The child may have restarted since it cored, so its current pid won't
+    // match the tombstone's. Find the newest tombstone for this NAME (any pid).
+    const std::string path = locate_tombstone_prefixed(dir, child_name + "-");
+    if (path.empty()) return;
+
+    std::ifstream in(path, std::ios::binary | std::ios::ate);
+    if (!in) return;
+    const auto total = static_cast<uint64_t>(in.tellg());
+    in.seekg(0);
+    // Cap UNDER the ~48KB TIPC gen_server reply limit; the .art reply's
+    // `content` is a 40KB nanopb char[]. A longer tombstone is truncated; the
+    // path + truncated flag let the operator read the rest at the source.
+    constexpr size_t kCap = 40 * 1024;
+    const size_t take = std::min<size_t>(total, kCap);
+    std::string buf(take, '\0');
+    in.read(&buf[0], static_cast<std::streamsize>(take));
+
+    rep.tomb_found     = true;
+    rep.tomb_path      = path;
+    rep.tomb_total     = total;
+    rep.tomb_content   = std::move(buf);
+    rep.tomb_truncated = (total > take);
 }
 
 std::vector<TreeRow> Supervisor::ctl_get_tree() {
@@ -1026,6 +1067,9 @@ void Supervisor::dispatch(ExecCommand& cmd) {
             break;
         case Op::GetLogLevelConfig:
             rep.log_cfg = ctl_get_log_level();
+            break;
+        case Op::GetTombstone:
+            ctl_get_tombstone(cmd.name, rep);
             break;
         case Op::Shutdown:
             request_shutdown();

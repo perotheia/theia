@@ -393,6 +393,29 @@ message ConfigureLogLevelRequest {
 message GetLogLevelConfigRequest {
 }
 
+// Fetch a crashed child's tombstone (the libtombstone TEXT file: signal info +
+// backtrace + memory map). The supervisor already locates it
+// (locate_tombstone / find_tombstone_dir) when a child dies from a fatal
+// signal; this serves the bytes back so the GUI can offer "Download tombstone"
+// for a cored FC.
+//   child_name — the supervised child (e.g. "gateway").
+message GetTombstoneRequest {
+    string child_name
+}
+
+// Reply: the tombstone content, capped. content is a fixed char[] (the TIPC
+// reply path caps a gen_server reply at ~48KB), so a long memory map is
+// TRUNCATED — `truncated` flags it and `path` lets the operator read the full
+// file at the source. `found` is false when the child has no tombstone (never
+// cored, or the file aged out).
+message GetTombstoneReply {
+    bool   found
+    string path          // on-host path of the full file
+    bool   truncated     // content is shorter than the file
+    uint32 total_bytes   // full file size (so the GUI shows what it's missing)
+    bytes  content       // the (capped) tombstone text
+}
+
 // One node's effective log level for the read-back (tdb loglevel). `level` is
 // the effective value (override if a ConfigureLogLevel push is in effect, else
 // the boot level); is_override flags that; boot_level is the manifest
@@ -503,6 +526,8 @@ interface clientServer SupervisorControlIf {
     // Read-back: every reporting node's effective log level (boot ⊕ override).
     // tdb loglevel (no args). Mirrors GetTraceConfig.
     operation GetLogLevelConfig(in req: GetLogLevelConfigRequest) returns LogLevelConfigList
+    // Fetch a crashed child's tombstone text (GUI "Download tombstone").
+    operation GetTombstone(in req: GetTombstoneRequest) returns GetTombstoneReply
 }
 
 interface senderReceiver SupervisorEventIf {

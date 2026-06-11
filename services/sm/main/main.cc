@@ -17,6 +17,11 @@
 #include "ParamsConfig.hh"  // init_config(fc) / get_config() — static params JSON
 
 #include "TipcMux.hh"    // config-service receiver for reporting nodes (#386)
+#include "HeartbeatPublisher.hh"  // periodic liveness beat to the supervisor
+                         // watchdog — every reporting node. Hand-framed cast,
+                         // no supervisor-proto dep.
+#include <memory>
+#include <vector>
 
 
 #include <atomic>
@@ -58,6 +63,10 @@ int main() {
     // Config-service receiver (#386): reporting nodes register_cast the
     // supervisor's LogLevelPush, applied by GenServer's base handler.
     ::theia::runtime::TipcMux config_mux;
+    // Heartbeat publishers — one per reporting node, kept alive for the
+    // process lifetime (each owns a timer thread). Started after the node's
+    // own start() below.
+    std::vector<std::unique_ptr<::theia::runtime::HeartbeatPublisher>> heartbeats;
 
 
     SmDaemon sm_daemon;
@@ -106,6 +115,20 @@ int main() {
     } else {
         sm_daemon.log().warn("config service bind failed; live log-level "
                                  "push + signal inject disabled");
+    }
+    // Liveness beat to the supervisor watchdog (#PHM). A reporting node must
+    // beat or the watchdog SIGTERMs it after K missed deadlines. One publisher
+    // per node, own timer thread (1s default = the supervisor's check cadence).
+    {
+        auto sm_daemon_hb = std::make_unique<
+            ::theia::runtime::HeartbeatPublisher>(SmDaemon::kNodeName);
+        if (sm_daemon_hb->open()) {
+            sm_daemon_hb->start(/*period_ms=*/1000);
+            heartbeats.push_back(std::move(sm_daemon_hb));
+        } else {
+            sm_daemon.log().warn("heartbeat publisher open failed; "
+                                     "supervisor watchdog will not see beats");
+        }
     }
 
 
@@ -158,6 +181,20 @@ int main() {
     } else {
         sm_gate.log().warn("config service bind failed; live log-level "
                                  "push + signal inject disabled");
+    }
+    // Liveness beat to the supervisor watchdog (#PHM). A reporting node must
+    // beat or the watchdog SIGTERMs it after K missed deadlines. One publisher
+    // per node, own timer thread (1s default = the supervisor's check cadence).
+    {
+        auto sm_gate_hb = std::make_unique<
+            ::theia::runtime::HeartbeatPublisher>(SmGate::kNodeName);
+        if (sm_gate_hb->open()) {
+            sm_gate_hb->start(/*period_ms=*/1000);
+            heartbeats.push_back(std::move(sm_gate_hb));
+        } else {
+            sm_gate.log().warn("heartbeat publisher open failed; "
+                                     "supervisor watchdog will not see beats");
+        }
     }
 
 

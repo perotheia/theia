@@ -15,7 +15,15 @@
 #include "NodeAffinity.hh"  // apply_node_affinity($THEIA_NODE_CFG) per node
 #include "ParamsConfig.hh"  // init_config(fc) / get_config() — static params JSON
 
-#include "TipcMux.hh"    // config-service receiver for reporting nodes (#386)
+#include "TipcMux.hh"    // config-service receiver for reporting nodes (#386).
+                         // GenServer nodes use bind_node + register_cast;
+                         // reporting runnables use bind_listener +
+                         // register_cast_inline (no mailbox).
+#include "HeartbeatPublisher.hh"  // periodic liveness beat to the supervisor
+                         // watchdog — every reporting node (GenServer AND
+                         // runnable). Hand-framed cast, no supervisor-proto dep.
+#include <memory>
+#include <vector>
 
 
 #include <atomic>
@@ -58,17 +66,23 @@ int main() {
     ::theia::runtime::TimerService timers;
     (void)timers;  // no node requires_timers
 
-    // Config-service receiver (#386). A reporting node binds its TIPC
-    // name and register_cast's the supervisor's control push; the cast
-    // lands in GenServer's base handle_cast(LogLevelPush) on the node
-    // thread. Same standard GwMessageHeader path as any app message —
-    // no bespoke control frame.
+    // Config-service receiver (#386). A reporting node binds its TIPC name
+    // and registers the supervisor's control pushes. A GenServer node's cast
+    // lands in its base handle_cast on the node thread; a reporting runnable
+    // (no mailbox) takes them INLINE on the mux thread (register_cast_inline).
+    // Same standard GwMessageHeader path as any app message — no bespoke frame.
     ::theia::runtime::TipcMux config_mux;
     // Publish the one per-app mux (the single epoll/select loop) so a
     // handler's ad-hoc RemoteRef registers its call-reply fd here via
     // process_mux() — without it a synchronous call(ref,...) from inside
     // a handler would never get its reply pumped.
     ::theia::runtime::set_process_mux(&config_mux);
+
+    // Heartbeat publishers — one per reporting node, kept alive for the
+    // process lifetime (each owns a timer thread). Started after the node's
+    // own start() below. The supervisor watchdog only watches nodes that
+    // beat, so non-reporting nodes simply never appear here.
+    std::vector<std::unique_ptr<::theia::runtime::HeartbeatPublisher>> heartbeats;
 
 
     LogDaemon log_daemon;
@@ -120,6 +134,24 @@ int main() {
     }
 
 
+
+    // Liveness beat to the supervisor watchdog (#PHM). A reporting node — of
+    // EITHER base — must beat or the watchdog SIGTERMs it after K missed
+    // deadlines. One publisher per node, own timer thread; period TODO from the
+    // manifest (1s default matches the supervisor's check cadence).
+    {
+        auto log_daemon_hb = std::make_unique<
+            ::theia::runtime::HeartbeatPublisher>(LogDaemon::kNodeName);
+        if (log_daemon_hb->open()) {
+            log_daemon_hb->start(/*period_ms=*/1000);
+            heartbeats.push_back(std::move(log_daemon_hb));
+        } else {
+            log_daemon.log().warn("heartbeat publisher open failed; "
+                                     "supervisor watchdog will not see beats");
+        }
+    }
+
+
     TraceStreamPump trace_pump;
     // Per-node logger: tagged [#trace_pump] (kNodeName, matches `tdb ps`),
     // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so do_start/init
@@ -142,6 +174,41 @@ int main() {
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
                       TraceStreamPump::kTipcType, TraceStreamPump::kTipcInstance);
         trace_pump.log().info(_tipc);
+    }
+
+
+    // GenRunnable has no mailbox, so it can't take the supervisor's control
+    // pushes via the GenServer handle_cast/mailbox path. Bind a listener and
+    // register the LogLevelPush / TraceControlPush INLINE — the mux dispatch
+    // thread applies them directly (on_log_level_push / on_trace_control_push,
+    // touching only atomics). This is what makes a runnable's log level + trace
+    // live-controllable (`tdb loglevel`/`trace <node>`), same as a gen_server.
+    if (auto* trace_pump_cfg = config_mux.bind_listener(
+            TraceStreamPump::kTipcType, TraceStreamPump::kTipcInstance)) {
+        config_mux.register_cast_inline<platform_runtime_LogLevelPush>(
+            trace_pump_cfg, trace_pump, &TraceStreamPump::on_log_level_push);
+        config_mux.register_cast_inline<platform_runtime_TraceControlPush>(
+            trace_pump_cfg, trace_pump, &TraceStreamPump::on_trace_control_push);
+    } else {
+        trace_pump.log().warn("config service bind failed; live log-level "
+                                 "push disabled");
+    }
+
+
+    // Liveness beat to the supervisor watchdog (#PHM). A reporting node — of
+    // EITHER base — must beat or the watchdog SIGTERMs it after K missed
+    // deadlines. One publisher per node, own timer thread; period TODO from the
+    // manifest (1s default matches the supervisor's check cadence).
+    {
+        auto trace_pump_hb = std::make_unique<
+            ::theia::runtime::HeartbeatPublisher>(TraceStreamPump::kNodeName);
+        if (trace_pump_hb->open()) {
+            trace_pump_hb->start(/*period_ms=*/1000);
+            heartbeats.push_back(std::move(trace_pump_hb));
+        } else {
+            trace_pump.log().warn("heartbeat publisher open failed; "
+                                     "supervisor watchdog will not see beats");
+        }
     }
 
 
@@ -192,6 +259,24 @@ int main() {
     } else {
         trace_ctl.log().warn("config service bind failed; live log-level "
                                  "push + signal inject disabled");
+    }
+
+
+
+    // Liveness beat to the supervisor watchdog (#PHM). A reporting node — of
+    // EITHER base — must beat or the watchdog SIGTERMs it after K missed
+    // deadlines. One publisher per node, own timer thread; period TODO from the
+    // manifest (1s default matches the supervisor's check cadence).
+    {
+        auto trace_ctl_hb = std::make_unique<
+            ::theia::runtime::HeartbeatPublisher>(TraceCtl::kNodeName);
+        if (trace_ctl_hb->open()) {
+            trace_ctl_hb->start(/*period_ms=*/1000);
+            heartbeats.push_back(std::move(trace_ctl_hb));
+        } else {
+            trace_ctl.log().warn("heartbeat publisher open failed; "
+                                     "supervisor watchdog will not see beats");
+        }
     }
 
 

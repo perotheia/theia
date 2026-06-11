@@ -19,6 +19,11 @@
                          // GenServer nodes use bind_node + register_cast;
                          // reporting runnables use bind_listener +
                          // register_cast_inline (no mailbox).
+#include "HeartbeatPublisher.hh"  // periodic liveness beat to the supervisor
+                         // watchdog — every reporting node (GenServer AND
+                         // runnable). Hand-framed cast, no supervisor-proto dep.
+#include <memory>
+#include <vector>
 
 
 #include <atomic>
@@ -72,6 +77,12 @@ int main() {
     // process_mux() — without it a synchronous call(ref,...) from inside
     // a handler would never get its reply pumped.
     ::theia::runtime::set_process_mux(&config_mux);
+
+    // Heartbeat publishers — one per reporting node, kept alive for the
+    // process lifetime (each owns a timer thread). Started after the node's
+    // own start() below. The supervisor watchdog only watches nodes that
+    // beat, so non-reporting nodes simply never appear here.
+    std::vector<std::unique_ptr<::theia::runtime::HeartbeatPublisher>> heartbeats;
 
 
     ComDaemon com_daemon;
@@ -128,6 +139,23 @@ int main() {
 
 
 
+    // Liveness beat to the supervisor watchdog (#PHM). A reporting node — of
+    // EITHER base — must beat or the watchdog SIGTERMs it after K missed
+    // deadlines. One publisher per node, own timer thread; period TODO from the
+    // manifest (1s default matches the supervisor's check cadence).
+    {
+        auto com_daemon_hb = std::make_unique<
+            ::theia::runtime::HeartbeatPublisher>(ComDaemon::kNodeName);
+        if (com_daemon_hb->open()) {
+            com_daemon_hb->start(/*period_ms=*/1000);
+            heartbeats.push_back(std::move(com_daemon_hb));
+        } else {
+            com_daemon.log().warn("heartbeat publisher open failed; "
+                                     "supervisor watchdog will not see beats");
+        }
+    }
+
+
     ComGrpcProxy com_grpc_proxy;
     // Per-node logger: tagged [#com_grpc_proxy] (kNodeName, matches `tdb ps`),
     // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so do_start/init
@@ -154,6 +182,7 @@ int main() {
 
 
 
+
     TraceForwarder trace_forwarder;
     // Per-node logger: tagged [#trace_forwarder] (kNodeName, matches `tdb ps`),
     // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so do_start/init
@@ -177,6 +206,7 @@ int main() {
                       TraceForwarder::kTipcType, TraceForwarder::kTipcInstance);
         trace_forwarder.log().info(_tipc);
     }
+
 
 
 

@@ -1707,6 +1707,16 @@ uint32_t Supervisor::do_restart_child(const std::string& name) {
         stop_worker(*w);
     }
     start_worker(*w);
+    // A deliberate restart (tdb restart / GUI "Kill (restart)" → RestartChild)
+    // is still a restart: count it so the stat tracks it. stop_worker() sets
+    // terminating, so the SIGCHLD reap path skips on_child_exit (which bumps
+    // the count for a CRASH) — without this the manual-restart count never
+    // moves and the GUI/tdb show a stale 0. Emit the NodeState so consumers
+    // (firehose) see the new count + pid live, same as the crash path does.
+    if (w->pid > 0) {
+        w->restart_count++;
+        cast_node_state(*w);
+    }
     return (w->pid > 0) ? 0 : 4;
 }
 

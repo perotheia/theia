@@ -306,4 +306,27 @@ bool SupLink::get_log_level_config(SupReply& out, int timeout_ms) {
     return true;
 }
 
+bool SupLink::get_tombstone(const std::string& child_name, SupReply& out,
+                            int timeout_ms) {
+    if (!impl_->started) return false;
+    std::lock_guard<std::mutex> lk(impl_->call_mu);
+    system_supervisor_GetTombstoneRequest req =
+        system_supervisor_GetTombstoneRequest_init_zero;
+    set_str(req.child_name, sizeof(req.child_name), child_name);
+    auto result = theia::runtime::call<system_supervisor_GetTombstoneReply>(
+        impl_->ref, req, /*act=*/0, timeout_ms);
+    if (result.tag != theia::runtime::CallTag::Reply) return false;
+    // Reply IS the tombstone (not a ControlReply): copy the fields straight
+    // into SupReply — com re-exposes them as native gRPC fields, no re-encode.
+    const auto& r = result.reply;
+    out.tomb_found     = r.found;
+    out.tomb_truncated = r.truncated;
+    out.tomb_total     = r.total_bytes;
+    out.tomb_path.assign(r.path);
+    out.tomb_content.assign(reinterpret_cast<const char*>(r.content.bytes),
+                            r.content.size);
+    out.status = 0;
+    return true;
+}
+
 }  // namespace services_com

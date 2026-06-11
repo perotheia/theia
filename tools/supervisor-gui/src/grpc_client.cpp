@@ -178,6 +178,38 @@ int GrpcClient::snapshot(const std::string& label, std::string* msg) {
     return static_cast<int>(rep.status());
 }
 
+// ---- crash forensics: GetTombstone (Applications panel right-click) ------
+// GetTombstone on SupervisorView (:7700). com forwards to the supervisor's
+// TIPC op and returns the (capped) tombstone bytes. Synchronous unary, fresh
+// channel. A valid found=false reply is NOT an error (sets *ok=true).
+GrpcClient::TombstoneResult
+GrpcClient::get_tombstone(const std::string& child_name, bool* ok) {
+    TombstoneResult out;
+    auto chan = grpc::CreateChannel(host_port_,
+                                    grpc::InsecureChannelCredentials());
+    auto ci = std::static_pointer_cast< ::grpc::ChannelInterface>(chan);
+    auto stub = ::services::com::SupervisorView::NewStub(ci);
+    ::services::com::GetTombstoneCall req;
+    req.set_child_name(child_name);
+    ::services::com::GetTombstoneReply rep;
+    grpc::ClientContext ctx;
+    ctx.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(5));
+    auto status = stub->GetTombstone(&ctx, req, &rep);
+    if (!status.ok()) {
+        std::fprintf(stderr, "grpc_client[%s]: GetTombstone failed: %s\n",
+                     machine_name_.c_str(), status.error_message().c_str());
+        if (ok) *ok = false;
+        return out;
+    }
+    out.found       = rep.found();
+    out.truncated   = rep.truncated();
+    out.total_bytes = rep.total_bytes();
+    out.path        = rep.path();
+    out.content     = rep.content();
+    if (ok) *ok = true;
+    return out;
+}
+
 // ---- child lifecycle (Processes panel right-click) ----------------------
 // Kill = RestartChild (no_restart=false): kill + supervisor restarts it.
 // Remove = TerminateChild (no_restart=true): stop-and-hold, no policy restart.

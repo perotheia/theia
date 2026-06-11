@@ -80,6 +80,22 @@ public:
     // (0 = OK) + fills msg with per's reply message; negative on RPC failure.
     int snapshot(const std::string& label, std::string* msg = nullptr);
 
+    // ---- Crash forensics (Applications panel "Download tombstone") --------
+    // A crashed child's tombstone bytes (capped at the supervisor under the
+    // TIPC reply limit). When `truncated`, `path` is the full file's on-host
+    // location so the operator can read the rest at the source.
+    struct TombstoneResult {
+        bool        found       = false;  // false: no tombstone (never crashed)
+        bool        truncated   = false;  // content shorter than total_bytes
+        uint32_t    total_bytes = 0;      // full file size at the source
+        std::string path;                 // on-host path of the full file
+        std::string content;              // the (capped) tombstone text
+    };
+    // GetTombstone(child_name). ok=false on RPC failure (left untouched on a
+    // valid found=false reply). Synchronous, from the wx main thread.
+    TombstoneResult get_tombstone(const std::string& child_name,
+                                  bool* ok = nullptr);
+
 private:
     void run();          // SupervisorView Subscribe (:7700) + GetSystemInfo
     void run_trace();    // TraceStream Subscribe (:7710) — live trace records

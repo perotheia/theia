@@ -251,6 +251,25 @@ public:
         return grpc::Status::OK;
     }
 
+    // Crash forensics — fetch a crashed child's tombstone bytes (capped at the
+    // supervisor). The reply is com's OWN native message, so we copy SupReply
+    // fields straight in (no proto-bytes round-trip). `found=false` is a valid,
+    // non-error result (the child never crashed / no tombstone on disk).
+    grpc::Status GetTombstone(
+            grpc::ServerContext*,
+            const services::com::GetTombstoneCall* req,
+            services::com::GetTombstoneReply* out) override {
+        services_com::SupReply r;
+        if (!services_com::SupLink::instance().get_tombstone(req->child_name(), r))
+            return unavailable();
+        out->set_found(r.tomb_found);
+        out->set_path(r.tomb_path);
+        out->set_truncated(r.tomb_truncated);
+        out->set_total_bytes(r.tomb_total);
+        out->set_content(r.tomb_content);
+        return grpc::Status::OK;
+    }
+
 private:
     static grpc::Status unavailable() {
         return grpc::Status(grpc::StatusCode::UNAVAILABLE,

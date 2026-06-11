@@ -19,6 +19,8 @@ cc_binary(
     deps = [
         "//demo/Demo3WayP4/lib:demo_lib",
         "//demo/Demo3WayP4/impl:demo_impl",
+        # Crash forensics — main.cc installs the fatal-signal handler.
+        "//platform/supervisor/tombstone:tombstone",
     ],
     linkopts = [
         "-lpthread",

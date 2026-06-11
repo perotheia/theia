@@ -574,6 +574,12 @@ void Supervisor::start_worker(WorkerNode& w) {
     msg << "starting child " << w.name << ": " << join(argv);
     log_info(msg.str());
 
+    // Resolve the tombstone dir BEFORE fork (no allocation in the child). The
+    // child's main.cc installs the libtombstone fatal-signal handler pointed at
+    // THEIA_TOMBSTONE_DIR, so a crash writes tombstone-<name>-<pid>-* there —
+    // which GetTombstone later serves. Empty when no ancestor sets one.
+    const std::string tombstone_dir = find_tombstone_dir(supervisor_of(w));
+
     pid_t pid = fork();
     if (pid < 0) {
         log_err("fork failed: " + std::string(std::strerror(errno)));
@@ -597,6 +603,9 @@ void Supervisor::start_worker(WorkerNode& w) {
         for (const auto& kv : w.env) {
             setenv(kv.first.c_str(), kv.second.c_str(), 1);
         }
+        // Tombstone output dir for the child's libtombstone handler.
+        if (!tombstone_dir.empty())
+            setenv("THEIA_TOMBSTONE_DIR", tombstone_dir.c_str(), 1);
 
         // THEIA_NODE_CFG — per-node CPU affinity + scheduler for the hosting
         // process's main.cc to apply to each node thread (apply_node_affinity).

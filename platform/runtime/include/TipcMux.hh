@@ -82,6 +82,14 @@ public:
     NodeBinding* bind_node(GenServerBase& node,
                             uint32_t tipc_type, uint32_t tipc_instance);
 
+    // Bind a listening socket WITHOUT a GenServerBase — for a GenRunnable
+    // (no mailbox). The returned binding's `node` is nullptr; only the
+    // inline dispatch path (register_cast_inline) may be registered on it,
+    // never the mailbox-enqueuing register_cast/register_call. Used so a
+    // reporting runnable can receive the supervisor's LogLevelPush /
+    // TraceControlPush and apply them on the mux thread.
+    NodeBinding* bind_listener(uint32_t tipc_type, uint32_t tipc_instance);
+
     // Look up an already-bound node's binding by its TIPC address. Lets a
     // runnable's do_start() install extra dispatch entries on ANOTHER node's
     // binding (e.g. com's ComGrpcProxy registering the firehose casts on
@@ -125,6 +133,39 @@ public:
                              corr, nullptr, 0);
                 }
             });
+        };
+        b->entries[RemoteCodec<Msg>::service_id] = std::move(e);
+    }
+
+    // Register an INLINE cast handler for typed Msg — for a GenRunnable, which
+    // has no mailbox to enqueue onto. The mux's dispatch thread decodes Msg and
+    // calls (node.*method)(msg) DIRECTLY (no node thread, no enqueue). Use only
+    // for handlers whose body is thread-safe off the node thread — the control
+    // pushes (on_log_level_push / on_trace_control_push) qualify, as they touch
+    // only atomics. service_id keys on the same djb2(Msg) hash as register_cast,
+    // so the supervisor's push matches by construction.
+    // MethodHost is separate from NodeT because the framework control
+    // handlers (on_log_level_push / on_trace_control_push) live on the
+    // GenRunnable<Derived> BASE, so &Derived::on_log_level_push has type
+    // `void (GenRunnable<Derived>::*)(...)`, not `void (Derived::*)(...)`.
+    // Deducing the host independently lets the call bind either.
+    template <typename Msg, typename NodeT, typename MethodHost>
+    void register_cast_inline(NodeBinding* b, NodeT& node,
+                              void (MethodHost::*method)(const Msg&) noexcept) {
+        InboundEntry e;
+        e.kind = InboundEntry::Kind::Cast;
+        e.dispatch = [&node, method](const uint8_t* payload, uint16_t len,
+                                     int /*reply_fd*/, uint32_t corr) {
+            auto& tr = ::theia::runtime::tracer_for(NodeT::kNodeName);
+            if (tr.enabled()) {
+                tr.emit(::theia::runtime::TraceEvent::Recv,
+                        ::theia::runtime::msg_type_name<Msg>(),
+                        corr, payload, len);
+            }
+            Msg msg{};
+            pb_istream_t is = pb_istream_from_buffer(payload, len);
+            if (!pb_decode(&is, RemoteCodec<Msg>::fields(), &msg)) return;
+            (node.*method)(msg);   // inline on the mux thread — no mailbox
         };
         b->entries[RemoteCodec<Msg>::service_id] = std::move(e);
     }

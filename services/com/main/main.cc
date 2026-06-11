@@ -15,7 +15,10 @@
 #include "NodeAffinity.hh"  // apply_node_affinity($THEIA_NODE_CFG) per node
 #include "ParamsConfig.hh"  // init_config(fc) / get_config() — static params JSON
 
-#include "TipcMux.hh"    // config-service receiver for reporting nodes (#386)
+#include "TipcMux.hh"    // config-service receiver for reporting nodes (#386).
+                         // GenServer nodes use bind_node + register_cast;
+                         // reporting runnables use bind_listener +
+                         // register_cast_inline (no mailbox).
 
 
 #include <atomic>
@@ -58,11 +61,11 @@ int main() {
     ::theia::runtime::TimerService timers;
     (void)timers;  // no node requires_timers
 
-    // Config-service receiver (#386). A reporting node binds its TIPC
-    // name and register_cast's the supervisor's control push; the cast
-    // lands in GenServer's base handle_cast(LogLevelPush) on the node
-    // thread. Same standard GwMessageHeader path as any app message —
-    // no bespoke control frame.
+    // Config-service receiver (#386). A reporting node binds its TIPC name
+    // and registers the supervisor's control pushes. A GenServer node's cast
+    // lands in its base handle_cast on the node thread; a reporting runnable
+    // (no mailbox) takes them INLINE on the mux thread (register_cast_inline).
+    // Same standard GwMessageHeader path as any app message — no bespoke frame.
     ::theia::runtime::TipcMux config_mux;
     // Publish the one per-app mux (the single epoll/select loop) so a
     // handler's ad-hoc RemoteRef registers its call-reply fd here via
@@ -124,6 +127,7 @@ int main() {
     }
 
 
+
     ComGrpcProxy com_grpc_proxy;
     // Per-node logger: tagged [#com_grpc_proxy] (kNodeName, matches `tdb ps`),
     // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so do_start/init
@@ -149,6 +153,7 @@ int main() {
     }
 
 
+
     TraceForwarder trace_forwarder;
     // Per-node logger: tagged [#trace_forwarder] (kNodeName, matches `tdb ps`),
     // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so do_start/init
@@ -172,6 +177,7 @@ int main() {
                       TraceForwarder::kTipcType, TraceForwarder::kTipcInstance);
         trace_forwarder.log().info(_tipc);
     }
+
 
 
 

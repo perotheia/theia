@@ -81,6 +81,23 @@ NodeBinding* TipcMux::bind_node(GenServerBase& node,
     return raw;
 }
 
+NodeBinding* TipcMux::bind_listener(uint32_t tipc_type,
+                                    uint32_t tipc_instance) {
+    // Same as bind_node but with node==nullptr — the epoll loop routes by fd
+    // and dispatches via entries[service_id], which the inline path fills; it
+    // never dereferences binding->node. Only register_cast_inline is valid here.
+    int fd = bind_listen_(tipc_type, tipc_instance);
+    if (fd < 0) return nullptr;
+    auto b = std::unique_ptr<NodeBinding>(new NodeBinding{
+        nullptr, fd, tipc_type, tipc_instance, {}});
+    auto* raw = b.get();
+    std::lock_guard<std::mutex> lk(mu_);
+    add_to_epoll_(fd, EPOLLIN);
+    listen_fd_to_binding_[fd] = raw;
+    bindings_.push_back(std::move(b));
+    return raw;
+}
+
 NodeBinding* TipcMux::binding_for(uint32_t tipc_type, uint32_t tipc_instance) {
     std::lock_guard<std::mutex> lk(mu_);
     for (auto& b : bindings_) {

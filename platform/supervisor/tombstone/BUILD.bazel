@@ -1,0 +1,16 @@
+# libtombstone — in-process crash forensics (async-signal-safe fatal-signal
+# handler that writes a tombstone text file before re-raising). Header-light;
+# the FC main links it and calls tombstone::install_handlers(name, dir) once at
+# startup so a crash leaves a record the supervisor's GetTombstone can serve.
+
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "tombstone",
+    srcs = ["src/tombstone.cpp"],
+    hdrs = ["include/tombstone/tombstone.h"],
+    includes = ["include"],
+    copts = ["-std=c++17", "-Wall", "-fPIC"],
+)

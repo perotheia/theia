@@ -19,6 +19,8 @@ cc_binary(
     deps = [
         "//services/log/lib:log_lib",
         "//services/log/impl:log_impl",
+        # Crash forensics — main.cc installs the fatal-signal handler.
+        "//platform/supervisor/tombstone:tombstone",
     ],
     linkopts = [
         "-lpthread",

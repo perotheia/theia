@@ -64,6 +64,12 @@ struct SupReply {
     std::string tree_snapshot;       // raw TreeSnapshot bytes (GetTree)
     std::string system_info;         // raw SystemInfo bytes (GetSystemInfo)
     std::string log_level_list;      // raw LogLevelConfigList bytes
+    // GetTombstone — a crashed child's tombstone (capped at the source).
+    bool        tomb_found     = false;
+    bool        tomb_truncated = false;
+    uint32_t    tomb_total     = 0;     // full file size at the source
+    std::string tomb_path;             // on-host path of the full file
+    std::string tomb_content;          // the (capped) tombstone text bytes
 };
 
 // Singleton link to the supervisor control node. Opened once by
@@ -113,6 +119,9 @@ public:
     // to the libprotobuf the gRPC client decodes).
     bool get_system_info(SupReply& out, int timeout_ms = 3000);
     bool get_log_level_config(SupReply& out, int timeout_ms = 3000);
+    // Fetch a crashed child's tombstone (GUI "Download tombstone").
+    bool get_tombstone(const std::string& child_name, SupReply& out,
+                       int timeout_ms = 5000);
 
 private:
     SupLink();

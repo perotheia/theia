@@ -64,6 +64,27 @@ message GetTraceConfigCall {}
 message GetSystemInfoCall {}
 message GetLogLevelConfigCall {}
 
+// Fetch a crashed child's tombstone (the libtombstone TEXT forensics file:
+// signal/fault + backtrace + maps). Backs the GUI "Download tombstone" menu
+// item, gated on the child's CORE_DUMPED flag. com forwards `child_name` to
+// the supervisor's GetTombstone TIPC op and re-exposes the reply here as a
+// native gRPC bytes payload (the GUI never sees the supervisor proto).
+message GetTombstoneCall {
+    string child_name = 1;
+}
+
+// The tombstone content, capped at the source (under the TIPC reply limit).
+// When `truncated`, `path` is the on-host path of the FULL file so an operator
+// can read the rest at the source. `found` is false when the child has no
+// tombstone (never crashed, or it was reaped).
+message GetTombstoneReply {
+    bool   found       = 1;
+    string path        = 2;   // on-host path of the full tombstone file
+    bool   truncated   = 3;   // content is shorter than total_bytes
+    uint32 total_bytes = 4;   // full file size at the source
+    bytes  content     = 5;   // the (capped) tombstone text
+}
+
 // ---- Robot node: signal inject + service call (#387) -------------------
 //
 // com IS the robot node: a test impersonates a real node and drives
@@ -158,6 +179,10 @@ service SupervisorView {
         returns (system_supervisor.SystemInfo);
     rpc GetLogLevelConfig (GetLogLevelConfigCall)
         returns (system_supervisor.LogLevelConfigList);
+
+    // Crash forensics: fetch a crashed child's tombstone bytes (capped).
+    // Backs the GUI "Download tombstone" menu item on a CORE_DUMPED FC.
+    rpc GetTombstone (GetTombstoneCall) returns (GetTombstoneReply);
 
     // ---- Robot node (#387) -------------------------------------------
     // Test-only: inject a signal / call a service ON a component,

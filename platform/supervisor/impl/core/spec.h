@@ -141,8 +141,18 @@ struct SupervisorNode {
     int                                  max_seconds{5};
     std::vector<std::unique_ptr<Node>>   children;
 
-    // Sliding-window of restart timestamps (steady_clock).
+    // Sliding-window of restart timestamps (steady_clock) — the OTP restart-
+    // INTENSITY check (max_restarts in max_seconds). Decays as entries age out;
+    // an INTERNAL supervision signal, NOT the user-facing stat.
     std::vector<std::chrono::steady_clock::time_point> restart_history;
+
+    // Cumulative, monotonic count of child restarts under this supervisor —
+    // the user-facing "restarts" stat (matches WorkerNode::restart_count's
+    // lifetime semantics, so the GUI/tdb column means the same thing on a
+    // supervisor row as on a process row). Bumped alongside a child's
+    // restart_count; never decays. (Distinct from restart_history, which is
+    // the windowed intensity check.)
+    uint32_t                             restart_count{0};
 
     // Back-pointer; not owning. nullptr at root.
     SupervisorNode* parent{nullptr};

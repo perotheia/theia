@@ -374,6 +374,10 @@ private:
     // Restart strategy dispatch.
     void on_child_exit(WorkerNode& w, int return_code, pid_t old_pid);
     bool record_and_check_restart(SupervisorNode& sup);
+    // Cumulative restart stat: bump the worker's lifetime counter AND its
+    // supervisor's, in lockstep, so the snapshot's "restarts" column means the
+    // same thing (total restarts) on a process row and a supervisor row.
+    void bump_restart_count_(WorkerNode& w, SupervisorNode& sup);
     void restart_all(SupervisorNode& sup);
     void restart_rest(SupervisorNode& sup, WorkerNode& failed);
 

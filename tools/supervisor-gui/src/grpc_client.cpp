@@ -210,6 +210,31 @@ GrpcClient::get_tombstone(const std::string& child_name, bool* ok) {
     return out;
 }
 
+// ---- live log-level (Applications panel right-click → Log level) --------
+// ConfigureLogLevel on SupervisorView (:7700). The supervisor stores the
+// override AND pushes it live to the node (same RPC `rtdb loglevel <n> <lvl>`
+// drives). Synchronous unary, fresh channel.
+int GrpcClient::configure_log_level(const std::string& target_node,
+                                    const std::string& level) {
+    auto chan = grpc::CreateChannel(host_port_,
+                                    grpc::InsecureChannelCredentials());
+    auto ci = std::static_pointer_cast< ::grpc::ChannelInterface>(chan);
+    auto stub = ::services::com::SupervisorView::NewStub(ci);
+    ::services::com::LogLevelCall req;
+    req.set_target_node(target_node);
+    req.set_level(level);
+    ::system_supervisor::ControlReply rep;
+    grpc::ClientContext ctx;
+    ctx.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(3));
+    auto status = stub->ConfigureLogLevel(&ctx, req, &rep);
+    if (!status.ok()) {
+        std::fprintf(stderr, "grpc_client[%s]: ConfigureLogLevel failed: %s\n",
+                     machine_name_.c_str(), status.error_message().c_str());
+        return -1;
+    }
+    return static_cast<int>(rep.status());
+}
+
 // ---- child lifecycle (Processes panel right-click) ----------------------
 // Kill = RestartChild (no_restart=false): kill + supervisor restarts it.
 // Remove = TerminateChild (no_restart=true): stop-and-hold, no policy restart.

@@ -260,6 +260,14 @@ public:
     using ConfigureCallback = std::function<void(
         const std::string& /*machine*/, const std::string& /*node*/,
         const std::string& /*msg_type*/, bool /*enabled*/, uint32_t /*kind*/)>;
+    // GUI-3 menu callbacks (see panels.h for semantics). Each returns a status
+    // line the canvas pushes to the frame's status bar (or "" for none).
+    using LogLevelCallback = std::function<std::string(
+        const std::string&, const std::string&, const std::string&)>;
+    using RestartCallback = std::function<std::string(
+        const std::string&, const std::string&)>;
+    using TombstoneCallback = std::function<std::string(
+        const std::string&, const std::string&)>;
 
     explicit ApplicationsCanvas(wxWindow* parent)
         : wxScrolledWindow(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize,
@@ -281,6 +289,15 @@ public:
 
     void set_configure_callback(ConfigureCallback cb) {
         configure_cb_ = std::move(cb);
+    }
+    void set_log_level_callback(LogLevelCallback cb) {
+        log_level_cb_ = std::move(cb);
+    }
+    void set_restart_callback(RestartCallback cb) {
+        restart_cb_ = std::move(cb);
+    }
+    void set_tombstone_callback(TombstoneCallback cb) {
+        tombstone_cb_ = std::move(cb);
     }
 
 private:
@@ -366,20 +383,79 @@ private:
         evt.Skip();
     }
 
-    // Right-click on a node → select it + open its menu. For GUI-2 the menu is
-    // still the ConfigureTrace dialog (workers only); GUI-3 fleshes out the
-    // per-kind FC/node/sup menu on this same selectable hit cache.
+    // Menu item IDs (local to this canvas).
+    enum {
+        kMenuTrace = wxID_HIGHEST + 1,
+        kMenuLogBase,          // 5 contiguous: TRACE/DEBUG/INFO/WARN/ERROR
+        kMenuRestart = kMenuLogBase + 8,
+        kMenuTombstone,
+    };
+    static const char* log_level_name(int idx) {
+        static const char* kL[] = {"TRACE", "DEBUG", "INFO", "WARN", "ERROR"};
+        return (idx >= 0 && idx < 5) ? kL[idx] : "INFO";
+    }
+
+    // Right-click on a node → select it + pop a per-kind context menu on the
+    // selectable hit cache (GUI-3):
+    //   supervisor : Restart subtree.
+    //   FC/node    : Log level ▸ (TRACE…ERROR), Configure trace…, and — when
+    //                CORE_DUMPED — Download tombstone.
     void on_right_down(wxMouseEvent& evt) {
         wxPoint p = CalcUnscrolledPosition(evt.GetPosition());
         const HitBox* b = box_at(p);
         if (!b) { evt.Skip(); return; }
+        // Copy out the fields we need before unlocking — the cache is rebuilt
+        // on the next paint, so `b` must not outlive this scope.
+        std::string machine, name;
+        int kind; uint32_t flags;
         {
             std::lock_guard<std::mutex> lk(mtx_);
             selected_[b->machine] = b->name;
+            machine = b->machine; name = b->name;
+            kind = b->kind; flags = b->flags;
         }
         Refresh(false);
-        if (b->kind != 0) { evt.Skip(); return; }  // sup: no Configure (yet)
-        show_configure_dialog(b->machine, b->name);
+
+        wxMenu menu;
+        if (kind == 1) {
+            // Supervisor: restart the whole subtree (RestartChild on the sup).
+            menu.Append(kMenuRestart,
+                        wxString::Format("Restart subtree \"%s\"", name.c_str()));
+        } else {
+            // FC / node: log level submenu + trace + (gated) tombstone.
+            auto* log_menu = new wxMenu;
+            for (int i = 0; i < 5; ++i)
+                log_menu->Append(kMenuLogBase + i, log_level_name(i));
+            menu.AppendSubMenu(log_menu, "Log level");
+            menu.Append(kMenuTrace, "Configure trace…");
+            if (flags & kFlagCoreDumped) {
+                menu.AppendSeparator();
+                menu.Append(kMenuTombstone, "Download tombstone…");
+            }
+        }
+
+        const int sel = GetPopupMenuSelectionFromUser(menu, evt.GetPosition());
+        if (sel == wxID_NONE) return;
+
+        if (sel == kMenuTrace) {
+            show_configure_dialog(machine, name);
+        } else if (sel >= kMenuLogBase && sel < kMenuLogBase + 5) {
+            if (log_level_cb_) {
+                std::string s = log_level_cb_(machine, name,
+                                              log_level_name(sel - kMenuLogBase));
+                if (!s.empty()) wxLogStatus("%s", s.c_str());
+            }
+        } else if (sel == kMenuRestart) {
+            if (restart_cb_) {
+                std::string s = restart_cb_(machine, name);
+                if (!s.empty()) wxLogStatus("%s", s.c_str());
+            }
+        } else if (sel == kMenuTombstone) {
+            if (tombstone_cb_) {
+                std::string s = tombstone_cb_(machine, name);
+                if (!s.empty()) wxLogStatus("%s", s.c_str());
+            }
+        }
     }
 
     void show_configure_dialog(const std::string& machine,
@@ -448,6 +524,9 @@ private:
     mutable std::mutex mtx_;   // mutable: box_at()/selected_for() lock it const
     std::map<std::string, system_supervisor::TreeSnapshot> snapshots_;
     ConfigureCallback configure_cb_;
+    LogLevelCallback  log_level_cb_;
+    RestartCallback   restart_cb_;
+    TombstoneCallback tombstone_cb_;
     // Per-paint hit cache (rect → node), rebuilt every on_paint, used by
     // left/right click to map a point to a node without re-laying-out.
     std::vector<HitBox> hit_boxes_;
@@ -474,6 +553,18 @@ void ApplicationsPanel::on_frame(const std::string& machine_name,
 void ApplicationsPanel::set_configure_trace_callback(
     ConfigureTraceCallback cb) {
     canvas_->set_configure_callback(std::move(cb));
+}
+
+void ApplicationsPanel::set_log_level_callback(LogLevelCallback cb) {
+    canvas_->set_log_level_callback(std::move(cb));
+}
+
+void ApplicationsPanel::set_restart_callback(RestartCallback cb) {
+    canvas_->set_restart_callback(std::move(cb));
+}
+
+void ApplicationsPanel::set_tombstone_callback(TombstoneCallback cb) {
+    canvas_->set_tombstone_callback(std::move(cb));
 }
 
 }  // namespace sup_gui

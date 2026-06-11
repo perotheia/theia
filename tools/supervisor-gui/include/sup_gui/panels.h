@@ -127,6 +127,33 @@ public:
         const std::string& /*msg_type*/, bool /*enabled*/, uint32_t /*kind*/)>;
     void set_configure_trace_callback(ConfigureTraceCallback cb);
 
+    // GUI-3 context menu. Each is invoked from the right-click menu on the
+    // selectable tree; main_frame routes to the matching machine's GrpcClient.
+    //
+    // Log level — menu item on EITHER an FC (worker) or a node. The supervisor
+    // ConfigureLogLevel keys on the target name (worker name for an FC; the
+    // node's kNodeName for a granular per-node level). `level` is a name
+    // (TRACE/DEBUG/INFO/WARN/ERROR). Returns a short status string for the bar.
+    using LogLevelCallback = std::function<std::string(
+        const std::string& /*machine*/, const std::string& /*target*/,
+        const std::string& /*level*/)>;
+    void set_log_level_callback(LogLevelCallback cb);
+
+    // Restart a subtree (right-click on a supervisor) OR kill an FC (worker):
+    // both map to RestartChild on the named child — the supervisor restarts the
+    // worker, or every worker under the named supervisor. Returns a status line.
+    using RestartCallback = std::function<std::string(
+        const std::string& /*machine*/, const std::string& /*name*/)>;
+    void set_restart_callback(RestartCallback cb);
+
+    // Download a crashed FC's tombstone — gated on the CORE_DUMPED flag. The
+    // callback fetches the (capped) bytes via GrpcClient::get_tombstone and is
+    // responsible for surfacing them (save dialog / viewer). Returns a status
+    // line for the bar.
+    using TombstoneCallback = std::function<std::string(
+        const std::string& /*machine*/, const std::string& /*fc_name*/)>;
+    void set_tombstone_callback(TombstoneCallback cb);
+
 private:
     ApplicationsCanvas* canvas_{nullptr};
 };

@@ -12,8 +12,17 @@
 #include "TimerService.hh"
 #include "Logger.hh"     // parse_log_level / process_logger / set_process_logger
 #include "NodeAffinity.hh"  // apply_node_affinity($THEIA_NODE_CFG) per node
+#include "ParamsConfig.hh"  // init_config(fc) / get_config() — static params JSON
 
-#include "TipcMux.hh"    // config-service receiver for reporting nodes (#386)
+#include "TipcMux.hh"    // config-service receiver for reporting nodes (#386).
+                         // GenServer nodes use bind_node + register_cast;
+                         // reporting runnables use bind_listener +
+                         // register_cast_inline (no mailbox).
+#include "HeartbeatPublisher.hh"  // periodic liveness beat to the supervisor
+                         // watchdog — every reporting node (GenServer AND
+                         // runnable). Hand-framed cast, no supervisor-proto dep.
+#include <memory>
+#include <vector>
 
 
 #include <atomic>
@@ -46,30 +55,33 @@ int main() {
         boot_level = ::theia::runtime::parse_log_level(lvl);
     }
 
-    // TIPC instance for THIS supervisor. central + compute run the SAME binary
-    // on the SAME host TIPC namespace (network_mode: host), so they'd collide at
-    // the lib's baked kTipcInstance (0). THEIA_SUPERVISOR_INSTANCE (set per
-    // machine from the .art ComputeSupervisor prototype's instance, via
-    // executor.json's env) shifts compute to instance 1. tdb -i <n> targets it.
-    uint32_t sup_instance = SupervisorCtl::kTipcInstance;
-    if (const char* inst = std::getenv("THEIA_SUPERVISOR_INSTANCE")) {
-        sup_instance = static_cast<uint32_t>(std::strtoul(inst, nullptr, 10));
-    }
+    // Static params (#params): load this FC's deployment-config JSON ONCE,
+    // before any node is constructed, so a node's ctor / init() can read its
+    // knobs via ::theia::runtime::get_config().node(kNodeName).u32(...). A
+    // missing file is fine — every lookup falls back to the caller's default.
+    // Path from $THEIA_CONFIG / $THEIA_CONFIG_DIR / ./config/supervisor.json.
+    ::theia::runtime::init_config("supervisor");
 
     ::theia::runtime::TimerService timers;
     (void)timers;  // no node requires_timers
 
-    // Config-service receiver (#386). A reporting node binds its TIPC
-    // name and register_cast's the supervisor's control push; the cast
-    // lands in GenServer's base handle_cast(LogLevelPush) on the node
-    // thread. Same standard GwMessageHeader path as any app message —
-    // no bespoke control frame.
+    // Config-service receiver (#386). A reporting node binds its TIPC name
+    // and registers the supervisor's control pushes. A GenServer node's cast
+    // lands in its base handle_cast on the node thread; a reporting runnable
+    // (no mailbox) takes them INLINE on the mux thread (register_cast_inline).
+    // Same standard GwMessageHeader path as any app message — no bespoke frame.
     ::theia::runtime::TipcMux config_mux;
     // Publish the one per-app mux (the single epoll/select loop) so a
     // handler's ad-hoc RemoteRef registers its call-reply fd here via
     // process_mux() — without it a synchronous call(ref,...) from inside
     // a handler would never get its reply pumped.
     ::theia::runtime::set_process_mux(&config_mux);
+
+    // Heartbeat publishers — one per reporting node, kept alive for the
+    // process lifetime (each owns a timer thread). Started after the node's
+    // own start() below. The supervisor watchdog only watches nodes that
+    // beat, so non-reporting nodes simply never appear here.
+    std::vector<std::unique_ptr<::theia::runtime::HeartbeatPublisher>> heartbeats;
 
 
     SupervisorCtl supervisor_ctl;
@@ -93,18 +105,23 @@ int main() {
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
-                      SupervisorCtl::kTipcType, sup_instance);
+                      SupervisorCtl::kTipcType, SupervisorCtl::kTipcInstance);
         supervisor_ctl.log().info(_tipc);
     }
 
     if (auto* supervisor_ctl_cfg = config_mux.bind_node(
             supervisor_ctl, SupervisorCtl::kTipcType,
-            sup_instance)) {
+            SupervisorCtl::kTipcInstance)) {
         config_mux.register_cast<platform_runtime_LogLevelPush>(
             supervisor_ctl_cfg, supervisor_ctl);
         // Trace control (#403): supervisor pushes TraceControlPush to flip
         // this node's Tracer kind filter — same path as LogLevelPush.
         config_mux.register_cast<platform_runtime_TraceControlPush>(
+            supervisor_ctl_cfg, supervisor_ctl);
+        // Config update: services/per casts ConfigUpdated when a watched
+        // config changes — same framework path; GenServer base handle_cast
+        // applies it (decode + on_config_update hook).
+        config_mux.register_cast<platform_runtime_ConfigUpdated>(
             supervisor_ctl_cfg, supervisor_ctl);
         // Receiver ports (#387): register the node's declared inbound
         // types so a real peer — or a robot-test inject via services/com
@@ -132,11 +149,31 @@ int main() {
             supervisor_ctl_cfg, supervisor_ctl);
         config_mux.register_call<GetLogLevelConfigRequest, LogLevelConfigList>(
             supervisor_ctl_cfg, supervisor_ctl);
+        config_mux.register_call<GetTombstoneRequest, GetTombstoneReply>(
+            supervisor_ctl_cfg, supervisor_ctl);
         config_mux.register_cast<HeartbeatReport>(supervisor_ctl_cfg, supervisor_ctl);
         config_mux.register_cast<SendTimeoutReport>(supervisor_ctl_cfg, supervisor_ctl);
     } else {
         supervisor_ctl.log().warn("config service bind failed; live log-level "
                                  "push + signal inject disabled");
+    }
+
+
+
+    // Liveness beat to the supervisor watchdog (#PHM). A reporting node — of
+    // EITHER base — must beat or the watchdog SIGTERMs it after K missed
+    // deadlines. One publisher per node, own timer thread; period TODO from the
+    // manifest (1s default matches the supervisor's check cadence).
+    {
+        auto supervisor_ctl_hb = std::make_unique<
+            ::theia::runtime::HeartbeatPublisher>(SupervisorCtl::kNodeName);
+        if (supervisor_ctl_hb->open()) {
+            supervisor_ctl_hb->start(/*period_ms=*/1000);
+            heartbeats.push_back(std::move(supervisor_ctl_hb));
+        } else {
+            supervisor_ctl.log().warn("heartbeat publisher open failed; "
+                                     "supervisor watchdog will not see beats");
+        }
     }
 
 
@@ -160,8 +197,43 @@ int main() {
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
-                      SupervisorWorker::kTipcType, sup_instance);
+                      SupervisorWorker::kTipcType, SupervisorWorker::kTipcInstance);
         supervisor_worker.log().info(_tipc);
+    }
+
+
+    // GenRunnable has no mailbox, so it can't take the supervisor's control
+    // pushes via the GenServer handle_cast/mailbox path. Bind a listener and
+    // register the LogLevelPush / TraceControlPush INLINE — the mux dispatch
+    // thread applies them directly (on_log_level_push / on_trace_control_push,
+    // touching only atomics). This is what makes a runnable's log level + trace
+    // live-controllable (`tdb loglevel`/`trace <node>`), same as a gen_server.
+    if (auto* supervisor_worker_cfg = config_mux.bind_listener(
+            SupervisorWorker::kTipcType, SupervisorWorker::kTipcInstance)) {
+        config_mux.register_cast_inline<platform_runtime_LogLevelPush>(
+            supervisor_worker_cfg, supervisor_worker, &SupervisorWorker::on_log_level_push);
+        config_mux.register_cast_inline<platform_runtime_TraceControlPush>(
+            supervisor_worker_cfg, supervisor_worker, &SupervisorWorker::on_trace_control_push);
+    } else {
+        supervisor_worker.log().warn("config service bind failed; live log-level "
+                                 "push disabled");
+    }
+
+
+    // Liveness beat to the supervisor watchdog (#PHM). A reporting node — of
+    // EITHER base — must beat or the watchdog SIGTERMs it after K missed
+    // deadlines. One publisher per node, own timer thread; period TODO from the
+    // manifest (1s default matches the supervisor's check cadence).
+    {
+        auto supervisor_worker_hb = std::make_unique<
+            ::theia::runtime::HeartbeatPublisher>(SupervisorWorker::kNodeName);
+        if (supervisor_worker_hb->open()) {
+            supervisor_worker_hb->start(/*period_ms=*/1000);
+            heartbeats.push_back(std::move(supervisor_worker_hb));
+        } else {
+            supervisor_worker.log().warn("heartbeat publisher open failed; "
+                                     "supervisor watchdog will not see beats");
+        }
     }
 
 

@@ -183,6 +183,12 @@ struct ExecReply {
     std::vector<TraceConfigRow> trace_cfg;   // GetTraceConfig
     std::vector<LogLevelRow>    log_cfg;     // GetLogLevelConfig
     SystemInfoData              sysinfo;     // GetSystemInfo
+    // GetTombstone — the crashed child's tombstone text (capped) + metadata.
+    bool                        tomb_found{false};
+    std::string                 tomb_path;       // on-host path of the file
+    std::string                 tomb_content;    // file bytes (already capped)
+    uint64_t                    tomb_total{0};   // full file size
+    bool                        tomb_truncated{false};
 };
 
 struct ExecCommand {
@@ -190,7 +196,7 @@ struct ExecCommand {
         StartChild, DeleteChild, RestartChild, SuspendChild, ResumeChild,
         TerminateChild, OnHeartbeat, OnSendTimeout, ConfigureTrace,
         ConfigureLogLevel, GetTree, GetSystemInfo, GetTraceConfig,
-        GetLogLevelConfig, Shutdown,
+        GetLogLevelConfig, GetTombstone, Shutdown,
     };
     Op op;
 
@@ -336,6 +342,11 @@ public:
     // level — boot (the worker's THEIA_LOG_LEVEL spawn env) ⊕ override (the
     // log_levels_ map). For tdb loglevel (no args).
     std::vector<LogLevelRow> ctl_get_log_level();
+
+    // GetTombstone: read a crashed child's tombstone text (capped) into rep.
+    // Matches by NAME (newest tombstone, any pid — the child may have restarted
+    // since it cored). rep.tomb_found is false when there's no tombstone.
+    void ctl_get_tombstone(const std::string& child_name, ExecReply& rep);
 
     // GetTree: a flat, parent-keyed snapshot of the whole tree (root +
     // supervisors + workers, synthetic <worker>_sup rows for reporting

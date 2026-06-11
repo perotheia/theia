@@ -190,6 +190,18 @@ message GetLogLevelConfigRequest {
     // empty body
 }
 
+message GetTombstoneRequest {
+    string child_name = 1;
+}
+
+message GetTombstoneReply {
+    bool found = 1;
+    string path = 2;
+    bool truncated = 3;
+    uint32 total_bytes = 4;
+    bytes content = 5;
+}
+
 message LogLevelStatus {
     string target_node = 1;
     platform_runtime.LogLevelValue level = 2;

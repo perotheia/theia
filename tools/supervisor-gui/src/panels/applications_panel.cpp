@@ -36,12 +36,22 @@ namespace sup_gui {
 
 namespace {
 
+// OTP observer_app_wx-style layout: depth → X column (tree grows RIGHT, so it
+// never overflows horizontally — depth is shallow), siblings stack DOWN (Y, the
+// scrollable axis). A parent is vertically CENTERED against its children's span
+// — it does NOT span their combined width (the old top-down look). Rounded
+// selectable boxes; state drives colour.
 constexpr int kBoxPadX     = 12;
 constexpr int kBoxPadY     = 6;
-constexpr int kHGap        = 16;
-constexpr int kVGap        = 32;
-constexpr int kMachineGap  = 48;
+constexpr int kColGap      = 36;   // horizontal gap between depth columns
+constexpr int kRowGap      = 10;   // vertical gap between sibling boxes
+constexpr int kMachineGap  = 40;
 constexpr int kMargin      = 16;
+constexpr double kRadius   = 7.0;  // rounded-box corner radius
+
+// NodeFlag bits (mirror platform/supervisor: w.flags).
+constexpr uint32_t kFlagCoreDumped = 1u;   // bit0 — crashed (fatal signal + core)
+constexpr uint32_t kFlagDegraded   = 2u;   // bit1 — restart-thrashing
 
 struct Node {
     std::string name;
@@ -49,6 +59,9 @@ struct Node {
     int         kind = 0;       // 0 = worker, 1 = supervisor
     int         pid  = -1;
     int         state = 0;
+    uint32_t    restart_count = 0;
+    int         last_exit_code = 0;
+    uint32_t    flags = 0;
     std::string parent_name;
 
     std::vector<Node*> children;  // populated after building lookup
@@ -56,6 +69,17 @@ struct Node {
     // Layout outputs.
     int x = 0, y = 0;
     int w = 0, h = 0;
+};
+
+// A laid-out box, cached each paint for click → node mapping. Carries just the
+// fields a click handler needs (no Node* — the tree store is rebuilt per paint).
+struct HitBox {
+    std::string machine;
+    std::string name;
+    int         kind = 0;     // 0 worker, 1 supervisor
+    int         pid  = -1;
+    uint32_t    flags = 0;    // CORE_DUMPED / DEGRADED (for menu gating)
+    wxRect      rect;
 };
 
 // Build hierarchy from flat list. Returns root nodes (parent_name="").
@@ -72,6 +96,9 @@ build_tree(const system_supervisor::TreeSnapshot& snap,
         n->kind        = static_cast<int>(c.kind());
         n->pid         = c.pid();
         n->state       = static_cast<int>(c.state());
+        n->restart_count  = c.restart_count();
+        n->last_exit_code = c.last_exit_code();
+        n->flags          = c.flags();
         n->parent_name = c.parent_name();
         n->strategy    = c.strategy();
         by_name[n->name] = n.get();
@@ -92,74 +119,131 @@ build_tree(const system_supervisor::TreeSnapshot& snap,
     return nodes;
 }
 
-// Width/height pass: bottom-up. Returns the box width for this node.
-void layout_sizes(Node* n, wxDC& dc) {
-    wxSize text = dc.GetTextExtent(n->name);
-    int box_w = text.GetWidth()  + 2 * kBoxPadX;
-    int box_h = text.GetHeight() + 2 * kBoxPadY;
-    n->h = box_h;
+// The label drawn in a box: name + compact badges. ↻N for restarts, ✗ for a
+// crashed (CORE_DUMPED) node — so the breadth of a tree reads at a glance.
+std::string box_label(const Node* n) {
+    std::string s = n->name;
+    if (n->kind == 0) {  // workers carry the per-process stats
+        if (n->flags & kFlagCoreDumped) s += "  ✗";        // ✗ crashed
+        if (n->restart_count > 0)
+            s += "  ↻" + std::to_string(n->restart_count); // ↻N restarts
+    }
+    return s;
+}
 
+// ---- OTP observer_app_wx layout: column-per-depth, vertical sibling flow ----
+//
+// PASS 1 (size): set each box's w/h from its label.
+void measure(Node* n, wxDC& dc) {
+    wxSize t = dc.GetTextExtent(box_label(n));
+    n->w = t.GetWidth()  + 2 * kBoxPadX;
+    n->h = t.GetHeight() + 2 * kBoxPadY;
+    for (auto* c : n->children) measure(c, dc);
+}
+
+// `col_x[d]` = the LEFT x of depth-column d. Built from the widest box per
+// depth so every column is just wide enough — the tree grows rightward by
+// DEPTH (shallow), never by breadth.
+void measure_columns(const Node* n, int depth, std::vector<int>& col_w) {
+    if (static_cast<int>(col_w.size()) <= depth) col_w.resize(depth + 1, 0);
+    col_w[depth] = std::max(col_w[depth], n->w);
+    for (auto* c : n->children) measure_columns(c, depth + 1, col_w);
+}
+
+// PASS 2 (place): assign x by depth-column, y by a running cursor. A leaf
+// consumes one row (advances `y`); a parent is CENTERED vertically against the
+// span of its children (NOT stretched across their width). Returns the node's
+// vertical centre so the parent can centre on its children's mean.
+int place(Node* n, int depth, const std::vector<int>& col_x, int& y) {
+    n->x = col_x[depth];
     if (n->children.empty()) {
-        n->w = box_w;
-        return;
+        n->y = y;
+        int centre = y + n->h / 2;
+        y += n->h + kRowGap;
+        return centre;
     }
-    int child_total = 0;
-    for (auto* c : n->children) {
-        layout_sizes(c, dc);
-        child_total += c->w;
+    int first_c = 0, last_c = 0;
+    for (size_t i = 0; i < n->children.size(); ++i) {
+        int cc = place(n->children[i], depth + 1, col_x, y);
+        if (i == 0) first_c = cc;
+        last_c = cc;
     }
-    child_total += static_cast<int>(n->children.size() - 1) * kHGap;
-    n->w = std::max(box_w, child_total);
+    int centre = (first_c + last_c) / 2;     // midway between first/last child
+    n->y = centre - n->h / 2;                // parent centred on that span
+    return centre;
 }
 
-// Place: top-down. Sets x/y on this node and recurses.
-void layout_place(Node* n, int x, int y) {
-    n->x = x;
-    n->y = y;
-    if (n->children.empty()) return;
-
-    int child_total = 0;
-    for (auto* c : n->children) child_total += c->w;
-    child_total += static_cast<int>(n->children.size() - 1) * kHGap;
-    int cx = x + (n->w - child_total) / 2;
-    int cy = y + n->h + kVGap;
-    for (auto* c : n->children) {
-        layout_place(c, cx, cy);
-        cx += c->w + kHGap;
+// State → box colours. Crash (red) and restart (amber) are the signals the
+// user asked to surface; degraded (orange border) and stopped (grey) too.
+void box_colours(const Node* n, wxColour& fill, wxColour& border,
+                 bool selected) {
+    if (n->kind == 1) {                       // supervisor
+        fill = wxColour(224, 234, 247);       // light blue
+        border = wxColour(120, 140, 170);
+    } else if (n->pid <= 0) {                  // worker, not running
+        fill = wxColour(228, 228, 228);       // grey
+        border = wxColour(150, 150, 150);
+    } else if (n->flags & kFlagCoreDumped) {   // crashed
+        fill = wxColour(250, 205, 205);       // red
+        border = wxColour(190, 70, 70);
+    } else if (n->restart_count > 0) {         // has restarted
+        fill = wxColour(252, 236, 200);       // amber
+        border = wxColour(200, 150, 60);
+    } else {                                   // running, clean
+        fill = wxColour(232, 245, 233);       // light green
+        border = wxColour(120, 170, 120);
     }
+    if (n->flags & kFlagDegraded)              // restart-thrashing: orange edge
+        border = wxColour(225, 120, 0);
+    if (selected) border = wxColour(0, 90, 200);  // selection: blue edge
 }
 
-void draw_node(wxDC& dc, const Node* n) {
-    wxColour box_fill =
-        n->kind == 1 ? wxColour(225, 235, 245)   // supervisor (light blue)
-                     : wxColour(245, 245, 235);  // worker (light yellow)
-    if (n->kind == 0 && n->pid <= 0) {
-        box_fill = wxColour(250, 220, 220);      // worker not running (red-ish)
+void draw_node(wxDC& dc, const Node* n, const std::string& selected) {
+    // Right-angle links to children, drawn first (under the boxes). From this
+    // box's RIGHT edge → a vertical bus in the column gap → each child's LEFT.
+    if (!n->children.empty()) {
+        dc.SetPen(wxPen(wxColour(140, 140, 140), 1));
+        int rx = n->x + n->w;                       // parent right edge
+        int rcy = n->y + n->h / 2;                  // parent centre-y
+        int busx = rx + kColGap / 2;                // vertical bus x
+        dc.DrawLine(rx, rcy, busx, rcy);
+        for (auto* c : n->children) {
+            int ccy = c->y + c->h / 2;
+            dc.DrawLine(busx, rcy, busx, ccy);      // bus segment
+            dc.DrawLine(busx, ccy, c->x, ccy);      // into the child
+        }
     }
-    dc.SetBrush(wxBrush(box_fill));
-    dc.SetPen(wxPen(*wxBLACK, 1));
-    dc.DrawRectangle(n->x, n->y, n->w, n->h);
-    dc.DrawText(n->name,
-                n->x + (n->w - dc.GetTextExtent(n->name).GetWidth()) / 2,
+
+    const bool is_sel = (!selected.empty() && n->name == selected);
+    wxColour fill, border;
+    box_colours(n, fill, border, is_sel);
+    dc.SetBrush(wxBrush(fill));
+    dc.SetPen(wxPen(border, is_sel ? 2 : 1));
+    dc.DrawRoundedRectangle(n->x, n->y, n->w, n->h, kRadius);
+    dc.SetTextForeground(*wxBLACK);
+    std::string label = box_label(n);
+    dc.DrawText(label,
+                n->x + (n->w - dc.GetTextExtent(label).GetWidth()) / 2,
                 n->y + kBoxPadY);
 
-    // Connector lines to children: vertical drop from this box centre,
-    // horizontal hop, vertical drop to each child top.
-    if (n->children.empty()) return;
-    int cx = n->x + n->w / 2;
-    int by = n->y + n->h;
-    int half = kVGap / 2;
-    int hy = by + half;
-    dc.SetPen(wxPen(*wxBLACK, 1));
-    dc.DrawLine(cx, by, cx, hy);
-    int lx = n->children.front()->x + n->children.front()->w / 2;
-    int rx = n->children.back()->x  + n->children.back()->w / 2;
-    dc.DrawLine(lx, hy, rx, hy);
-    for (auto* c : n->children) {
-        int ccx = c->x + c->w / 2;
-        dc.DrawLine(ccx, hy, ccx, c->y);
+    for (auto* c : n->children) draw_node(dc, c, selected);
+}
+
+// Lay a root tree out at (origin_x, origin_y); returns its bounding box.
+// `y` is advanced by place() to the bottom of the subtree.
+wxRect layout_tree(Node* root, wxDC& dc, int origin_x, int origin_y) {
+    measure(root, dc);
+    std::vector<int> col_w;
+    measure_columns(root, 0, col_w);
+    std::vector<int> col_x(col_w.size());
+    int x = origin_x;
+    for (size_t d = 0; d < col_w.size(); ++d) {
+        col_x[d] = x;
+        x += col_w[d] + kColGap;
     }
-    for (auto* c : n->children) draw_node(dc, c);
+    int y = origin_y;
+    place(root, 0, col_x, y);
+    return wxRect(origin_x, origin_y, x - origin_x, y - origin_y);
 }
 
 }  // namespace
@@ -184,6 +268,7 @@ public:
         SetBackgroundColour(*wxWHITE);
         SetScrollRate(16, 16);
         Bind(wxEVT_PAINT, &ApplicationsCanvas::on_paint, this);
+        Bind(wxEVT_LEFT_DOWN, &ApplicationsCanvas::on_left_down, this);
         Bind(wxEVT_RIGHT_DOWN, &ApplicationsCanvas::on_right_down, this);
     }
 
@@ -205,6 +290,7 @@ private:
         dc.Clear();
 
         std::lock_guard<std::mutex> lk(mtx_);
+        hit_boxes_.clear();   // rebuilt below for click → node mapping
 
         // Build trees per machine, in deterministic order.
         std::vector<std::string> machines;
@@ -233,86 +319,67 @@ private:
             caption.SetWeight(wxFONTWEIGHT_NORMAL);
             dc.SetFont(caption);
 
-            // Layout each root tree side-by-side.
-            int x_cursor = kMargin;
-            int row_h    = 0;
+            // Lay out + draw each root tree, stacking DOWN the page (each tree
+            // grows RIGHT by depth, so trees never collide horizontally; new
+            // trees go below the previous). Cache hit boxes for click mapping.
             for (auto* r : roots) {
-                layout_sizes(r, dc);
-                layout_place(r, x_cursor, y_cursor);
-                draw_node(dc, r);
-                x_cursor += r->w + kHGap * 2;
-                row_h     = std::max(row_h, r->h);
-                // Track furthest right edge from this tree.
+                wxRect bb = layout_tree(r, dc, kMargin, y_cursor);
+                draw_node(dc, r, selected_for(m));
+                // Flatten every box into the per-machine hit cache.
                 std::vector<Node*> stack{r};
                 while (!stack.empty()) {
                     Node* n = stack.back(); stack.pop_back();
-                    max_w  = std::max(max_w,    n->x + n->w);
-                    row_h  = std::max(row_h,    n->y + n->h - y_cursor);
+                    max_w = std::max(max_w, n->x + n->w);
+                    hit_boxes_.push_back(HitBox{
+                        m, n->name, n->kind, n->pid, n->flags,
+                        wxRect(n->x, n->y, n->w, n->h)});
                     for (auto* c : n->children) stack.push_back(c);
                 }
+                y_cursor = bb.GetBottom() + kRowGap;
             }
-            y_cursor += row_h + kMachineGap;
+            y_cursor += kMachineGap;
         }
 
         // Update virtual size for scrolling.
         SetVirtualSize(max_w + kMargin, y_cursor + kMargin);
     }
 
-    // #365 — Right-click on a node row opens a ConfigureTrace
-    // dialog. The hit-test reuses the layout cache (last on_paint
-    // pass) so the click→node mapping is exact. node_at_point()
-    // returns the box the click landed in, or nullptr.
-    void on_right_down(wxMouseEvent& evt) {
+    // Box the click landed in (from the cache the last paint built), or null.
+    const HitBox* box_at(const wxPoint& p) const {
+        std::lock_guard<std::mutex> lk(mtx_);
+        for (const auto& b : hit_boxes_)
+            if (b.rect.Contains(p)) return &b;
+        return nullptr;
+    }
+
+    // Left-click SELECTS the node under the cursor (highlight). The selection
+    // is what a following right-click / future detail panel acts on.
+    void on_left_down(wxMouseEvent& evt) {
         wxPoint p = CalcUnscrolledPosition(evt.GetPosition());
-        std::string machine, node_name, node_msg_default;
-        bool is_worker = false;
+        const HitBox* b = box_at(p);
         {
             std::lock_guard<std::mutex> lk(mtx_);
-            // Re-layout in a memory DC to compute hit boxes — cheaper
-            // than caching them across paints since the snapshot map
-            // changes rarely.
-            wxMemoryDC dc;
-            wxBitmap bmp(1, 1);
-            dc.SelectObject(bmp);
-            int y_cursor = kMargin;
-            for (const auto& kv : snapshots_) {
-                const auto& snap = kv.second;
-                std::vector<Node*> roots;
-                auto store = build_tree(snap, roots);
-                if (roots.empty()) continue;
-                wxString cap = wxString::Format("machine: %s",
-                                                 kv.first.c_str());
-                y_cursor += dc.GetTextExtent(cap).GetHeight() + 4;
-                int x_cursor = kMargin;
-                for (auto* r : roots) {
-                    layout_sizes(r, dc);
-                    layout_place(r, x_cursor, y_cursor);
-                    std::vector<Node*> stack{r};
-                    while (!stack.empty()) {
-                        Node* n = stack.back(); stack.pop_back();
-                        wxRect rect(n->x, n->y, n->w, n->h);
-                        if (rect.Contains(p)) {
-                            machine     = kv.first;
-                            node_name   = n->name;
-                            is_worker   = (n->kind == 0);
-                            // For workers we don't know a default
-                            // msg_type — user types it. For sup rows
-                            // a Configure makes no sense; skip.
-                        }
-                        for (auto* c : n->children) stack.push_back(c);
-                        x_cursor = std::max(x_cursor, n->x + n->w);
-                    }
-                    x_cursor += kHGap * 2;
-                    y_cursor = std::max(y_cursor, r->y + r->h);
-                }
-                y_cursor += kMachineGap;
-            }
+            if (b) selected_[b->machine] = b->name;
+            else   selected_.clear();   // click on empty space clears
         }
-        if (machine.empty() || node_name.empty() || !is_worker) {
-            evt.Skip();
-            return;
+        Refresh(false);
+        evt.Skip();
+    }
+
+    // Right-click on a node → select it + open its menu. For GUI-2 the menu is
+    // still the ConfigureTrace dialog (workers only); GUI-3 fleshes out the
+    // per-kind FC/node/sup menu on this same selectable hit cache.
+    void on_right_down(wxMouseEvent& evt) {
+        wxPoint p = CalcUnscrolledPosition(evt.GetPosition());
+        const HitBox* b = box_at(p);
+        if (!b) { evt.Skip(); return; }
+        {
+            std::lock_guard<std::mutex> lk(mtx_);
+            selected_[b->machine] = b->name;
         }
-        show_configure_dialog(machine, node_name);
+        Refresh(false);
+        if (b->kind != 0) { evt.Skip(); return; }  // sup: no Configure (yet)
+        show_configure_dialog(b->machine, b->name);
     }
 
     void show_configure_dialog(const std::string& machine,
@@ -372,9 +439,20 @@ private:
         }
     }
 
-    std::mutex mtx_;
+    // Selected node name in `machine` whose box should be highlighted, "" none.
+    std::string selected_for(const std::string& machine) const {
+        auto it = selected_.find(machine);
+        return it == selected_.end() ? std::string{} : it->second;
+    }
+
+    mutable std::mutex mtx_;   // mutable: box_at()/selected_for() lock it const
     std::map<std::string, system_supervisor::TreeSnapshot> snapshots_;
     ConfigureCallback configure_cb_;
+    // Per-paint hit cache (rect → node), rebuilt every on_paint, used by
+    // left/right click to map a point to a node without re-laying-out.
+    std::vector<HitBox> hit_boxes_;
+    // Per-machine selected node name (highlighted box).
+    std::map<std::string, std::string> selected_;
 };
 
 ApplicationsPanel::ApplicationsPanel(wxWindow* parent) : PanelBase(parent) {

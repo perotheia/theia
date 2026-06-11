@@ -63,6 +63,14 @@ public:
                          const std::string& msg_type,
                          bool enabled, uint32_t kind = 0);
 
+    // Live log-level change (Applications panel context menu → "Log level").
+    // ConfigureLogLevel on SupervisorView: the supervisor stores it (survives
+    // restart) AND pushes it live to the node. `level` is a name the supervisor
+    // parses (TRACE/DEBUG/INFO/WARN/ERROR). Returns the ControlReply status
+    // (0 = OK), negative on RPC failure. Synchronous, from the wx main thread.
+    int configure_log_level(const std::string& target_node,
+                            const std::string& level);
+
     // Child lifecycle (Processes panel context menu). Both return per's
     // ControlReply status (0 = OK), negative on RPC failure; msg gets the
     // reply message. Kill restarts; Remove stop-and-holds (no policy restart).

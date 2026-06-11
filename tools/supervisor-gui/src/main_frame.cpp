@@ -8,12 +8,43 @@
 #include <wx/timer.h>
 #include <wx/menu.h>
 #include <wx/aboutdlg.h>
+#include <wx/filedlg.h>
+#include <wx/file.h>
+#include <wx/textdlg.h>
 
 #include <utility>
 
 namespace sup_gui {
 
 wxDEFINE_EVENT(EVT_SUP_FRAME, wxThreadEvent);
+
+namespace {
+// Surface a fetched tombstone: offer a Save dialog (default name
+// tombstone-<fc>.txt), write the bytes. A truncated body gets a header noting
+// the full file's on-host path. Cancel just drops it (status line already
+// reported the size).
+void save_tombstone_to_file(wxWindow* parent, const std::string& fc,
+                            const GrpcClient::TombstoneResult& t) {
+    wxFileDialog dlg(parent, "Save tombstone",
+                     "", wxString::Format("tombstone-%s.txt", fc.c_str()),
+                     "Text files (*.txt)|*.txt|All files (*.*)|*.*",
+                     wxFD_SAVE | wxFD_OVERWRITE_PROMPT);
+    if (dlg.ShowModal() != wxID_OK) return;
+    wxFile out(dlg.GetPath(), wxFile::write);
+    if (!out.IsOpened()) {
+        wxLogError("could not open %s for writing", dlg.GetPath());
+        return;
+    }
+    if (t.truncated) {
+        wxString hdr = wxString::Format(
+            "# TRUNCATED: %u of %u bytes — full file at %s\n\n",
+            static_cast<unsigned>(t.content.size()),
+            static_cast<unsigned>(t.total_bytes), t.path.c_str());
+        out.Write(hdr.mb_str(), hdr.length());
+    }
+    out.Write(t.content.data(), t.content.size());
+}
+}  // namespace
 
 enum : int {
     ID_STATUS_TIMER = wxID_HIGHEST + 1,
@@ -147,6 +178,57 @@ MainFrame::MainFrame(std::vector<MachineEndpoint> machines)
                     return;
                 }
             }
+        });
+
+    // Applications panel context menu → Log level (FC/node), Restart subtree
+    // (supervisor), Download tombstone (crashed FC). Each routes to the
+    // matching machine's GrpcClient and returns a status line for the bar.
+    applications_->set_log_level_callback(
+        [this](const std::string& machine, const std::string& target,
+               const std::string& level) -> std::string {
+            for (auto& c : clients_) {
+                if (c && c->machine_name() == machine) {
+                    int rc = c->configure_log_level(target, level);
+                    return "log level " + level + " on " + target +
+                           ": rc=" + std::to_string(rc);
+                }
+            }
+            return "no client for machine " + machine;
+        });
+
+    applications_->set_restart_callback(
+        [this](const std::string& machine,
+               const std::string& name) -> std::string {
+            for (auto& c : clients_) {
+                if (c && c->machine_name() == machine) {
+                    std::string msg;
+                    int rc = c->restart_child(name, &msg);
+                    return "restart " + name + " on " + machine +
+                           ": rc=" + std::to_string(rc) +
+                           (msg.empty() ? "" : "  " + msg);
+                }
+            }
+            return "no client for machine " + machine;
+        });
+
+    applications_->set_tombstone_callback(
+        [this](const std::string& machine,
+               const std::string& fc) -> std::string {
+            for (auto& c : clients_) {
+                if (c && c->machine_name() == machine) {
+                    bool ok = false;
+                    auto t = c->get_tombstone(fc, &ok);
+                    if (!ok) return "tombstone fetch failed for " + fc;
+                    if (!t.found)
+                        return "no tombstone for " + fc + " (never crashed)";
+                    save_tombstone_to_file(this, fc, t);
+                    return "tombstone " + fc + ": " +
+                           std::to_string(t.content.size()) + " bytes" +
+                           (t.truncated ? " (truncated; full at " + t.path + ")"
+                                        : "");
+                }
+            }
+            return "no client for machine " + machine;
         });
 
     // Processes panel right-click → Kill / Remove on the matching machine's

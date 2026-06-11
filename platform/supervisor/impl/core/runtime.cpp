@@ -328,7 +328,7 @@ std::vector<TreeRow> Supervisor::ctl_get_tree() {
             s.kind          = 1;   // supervisor
             s.pid           = -1;
             s.state         = 2;   // running
-            s.restart_count = static_cast<uint32_t>(sup.restart_history.size());
+            s.restart_count = sup.restart_count;  // cumulative, not the window
             s.strategy      = to_string(sup.strategy);
             out.push_back(std::move(s));
 
@@ -347,6 +347,10 @@ std::vector<TreeRow> Supervisor::ctl_get_tree() {
                         synth.pid         = -1;
                         synth.state       = 2;
                         synth.strategy    = "one_for_all";
+                        // The synthetic bracket wraps ONE worker — its
+                        // "restarts" is that worker's cumulative count, so the
+                        // wrapper row doesn't show a misleading 0.
+                        synth.restart_count = c->worker.restart_count;
                         out.push_back(std::move(synth));
                         worker_parent = c->worker.name + "_sup";
                     }
@@ -796,10 +800,10 @@ void Supervisor::on_child_exit(WorkerNode& w, int return_code, pid_t old_pid) {
     if (w.restart == RestartType::Temporary)             return;
     if (w.restart == RestartType::Transient && !abnormal) return;
 
-    // #429 — count this restart; flag DEGRADED if the sliding-window restart
-    // count is at/over the supervisor's budget (the node is restart-thrashing,
-    // one more failure escalates). Surfaced on the NodeState the restart emits.
-    w.restart_count++;
+    // #429 — record this restart in the sliding intensity window and check the
+    // budget FIRST. If exceeded, the node is torn down (escalation), NOT
+    // restarted — so we must NOT count it as a restart (the lifetime counter
+    // tracks successful respawns, not the fatal final exit).
     if (!record_and_check_restart(*sup)) {
         std::ostringstream msg;
         msg << "supervisor " << sup->name << " exceeded restart intensity ("
@@ -812,6 +816,9 @@ void Supervisor::on_child_exit(WorkerNode& w, int return_code, pid_t old_pid) {
         shutdown_requested_.store(true);
         return;
     }
+    // A respawn WILL happen: count it (worker + the supervisor's cumulative
+    // stat stay in lockstep — see bump_restart_count_).
+    bump_restart_count_(w, *sup);
     // Nearing exhaustion: history is at the budget ceiling.
     if (static_cast<int>(sup->restart_history.size()) >= sup->max_restarts) {
         w.flags |= 2u;          // DEGRADED
@@ -844,6 +851,16 @@ bool Supervisor::record_and_check_restart(SupervisorNode& sup) {
         hist.end());
     hist.push_back(now);
     return static_cast<int>(hist.size()) <= sup.max_restarts;
+}
+
+void Supervisor::bump_restart_count_(WorkerNode& w, SupervisorNode& sup) {
+    // Both cumulative, monotonic — kept in lockstep so the snapshot's
+    // "restarts" column reads consistently across row kinds (process =
+    // w.restart_count, supervisor = sup.restart_count). The immediate
+    // supervisor owns the restart (its strategy fired), matching how
+    // restart_history is per-supervisor.
+    w.restart_count++;
+    sup.restart_count++;
 }
 
 void Supervisor::restart_all(SupervisorNode& sup) {
@@ -1711,10 +1728,15 @@ uint32_t Supervisor::do_restart_child(const std::string& name) {
     // is still a restart: count it so the stat tracks it. stop_worker() sets
     // terminating, so the SIGCHLD reap path skips on_child_exit (which bumps
     // the count for a CRASH) — without this the manual-restart count never
-    // moves and the GUI/tdb show a stale 0. Emit the NodeState so consumers
-    // (firehose) see the new count + pid live, same as the crash path does.
+    // moves and the GUI/tdb show a stale 0. Bump worker + supervisor in
+    // lockstep, then emit the NodeState so consumers (firehose) see the new
+    // count + pid live, same as the crash path does.
     if (w->pid > 0) {
-        w->restart_count++;
+        if (SupervisorNode* sup = supervisor_of(*w)) {
+            bump_restart_count_(*w, *sup);
+        } else {
+            w->restart_count++;   // orphan (shouldn't happen): count the worker
+        }
         cast_node_state(*w);
     }
     return (w->pid > 0) ? 0 : 4;
@@ -2008,8 +2030,7 @@ void Supervisor::emit_tree_stream() {
     std::function<void(const SupervisorNode&, const std::string&)> walk =
         [&](const SupervisorNode& sup, const std::string& parent) {
             edge(/*ADD*/0, parent, sup.name, /*kind sup*/1);
-            sup_state(sup.name,
-                      static_cast<uint32_t>(sup.restart_history.size()));
+            sup_state(sup.name, sup.restart_count);  // cumulative, not window
 
             for (const auto& c : sup.children) {
                 if (c->is_worker()) {
@@ -2021,7 +2042,8 @@ void Supervisor::emit_tree_stream() {
                     if (has_reporting) {
                         const std::string synth = c->worker.name + "_sup";
                         edge(0, sup.name, synth, 1);
-                        sup_state(synth, 0);
+                        // Bracket wraps one worker — mirror its cumulative count.
+                        sup_state(synth, c->worker.restart_count);
                         worker_parent = synth;
                     }
                     // worker edge (kind=0) + its NodeState.

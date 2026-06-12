@@ -22,10 +22,12 @@ cc_library(
     strip_include_prefix = "/platform/proto",
 )
 
-# One plugin per migrating node (the RF migration suite's CASES).
+# One plugin per migrating node. The block below is the MANAGED region:
+# `artheia gen-migration` merges its schema-diff's nodes into it (idempotent).
+# Hand-add an entry here too if you author a transform .json directly.
+# >>> gen-migration plugins (managed) >>>
 migration_plugin(name = "counter", src = "counter_v1_to_v2.cc")
-migration_plugin(name = "observer", src = "observer_v1_to_v2.cc")
 migration_plugin(name = "demo_fsm", src = "demo_fsm_v1_to_v2.cc")
-
-# Back-compat alias for the original P4 verification (README references it).
+migration_plugin(name = "observer", src = "observer_v1_to_v2.cc")
 migration_plugin(name = "p4config", src = "p4config_v1_to_v2.cc")
+# <<< gen-migration plugins (managed) <<<

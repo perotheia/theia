@@ -30,22 +30,37 @@ To extend the rule vocabulary, edit `migrate.apply_rule` **and**
 `transform_codegen._emit_rules` **together**. A regression test should assert
 they produce identical output on a real config (the lockstep invariant).
 
-## The 4-tool chain
+## The tool chain
 
 ```
 .art (config <Msg>)                                  ← evolve the shape
-  │  artheia gen-schema <system.art> --out schema.json   (config_type → digest + fields)
+  │  artheia gen-schema <component.art> --out schema_vN.json   (config_type → digest + fields)
+  ▼   (keep the PREVIOUS schema_v{N-1}.json — the diff baseline)
+artheia gen-migration --from schema_v{N-1}.json --to schema_vN.json --out migration/
+  │   → one <node>_v1_to_v2.json per CHANGED config (auto from/to digest +
+  │     add/remove + same-tag RENAME heuristic + custom stub for type changes;
+  │     each guess flagged in a `_review` note) + the BUILD plugin entries.
+  ▼   ← REVIEW the scaffold: confirm renames, set add-defaults, fill custom hooks.
+tdb get-snapshot <label> --schema schema_vN.json     → snapshot.json (decoded, JSON)
+  │  migrate.py --snapshot snap.json --transform <node>_v1_to_v2.json --out next.json
+  ▼   ← DESIGN: eyeball the v_{n+1} snapshot, iterate on the transform .json
+artheia gen-transform <node>_v1_to_v2.json --schema schema_vN.json --out <node>_v1_to_v2.cc
+  │   → plugin.cc (+ <node>_v1_to_v2_custom.cc if a {custom} rule)
+  │  bazel build //migration:libper_migrate_<node>.so   (the managed BUILD entry)
   ▼
-tdb get-snapshot <label> --schema schema.json        → snapshot.json (decoded, JSON)
-  │  migrate.py --snapshot snap.json --transform t.json --out next.json
-  ▼   ← DESIGN: eyeball the v_{n+1} snapshot, iterate on t.json
-artheia gen-transform t.json --schema schema.json --out plugin.cc
-  │   → plugin.cc (+ plugin_custom.cc if a {custom} rule)
-  │  build a cc_binary .so (linkshared) — copy services/per/migrations/BUILD.bazel
-  ▼
-PerManager.MigrateBulk(from_digest, to_digest, plugin_so)   ← RUNTIME: rewrite the store
+PerManager.MigrateBulk(config_type, from_digest, to_digest, plugin_so)  ← rewrite the store
   + the same plugin serves lazy migration on GetConfig read
 ```
+
+`gen-migration` is the diff-to-scaffold step that removes the per-node toil:
+positional proto tags mean the diff is by INDEX — same-tag/different-name →
+`rename`, appended → `add`, truncated tail → `remove`, same-tag/different-type →
+a `custom` hook stub. Renames + type changes are HEURISTICS, so every emitted
+transform carries a `_review` list of what it guessed; confirm before codegen. A
+config with an unchanged digest emits nothing; a config only in the NEW schema is
+a fresh binding (skipped — no stored old value). The BUILD region between the
+`# >>> gen-migration plugins (managed) >>>` markers is MERGED (a later diff
+doesn't drop an earlier diff's nodes).
 
 ## transform.json
 
@@ -231,7 +246,7 @@ forces in-memory (tests).
 ## See also
 
 - Design + decisions: [docs/artheia/transform.md](../../../artheia/transform.md)
-- Generators: `artheia/artheia/generators/{config_schema,transform_codegen}.py`
+- Generators: `artheia/artheia/generators/{config_schema,migration_diff,transform_codegen}.py`
 - Reference applier: `tools/migrate/migrate.py`
 - per internals: `services/per/impl/` (etcd_store, migration_registry,
   migration_plugin, schema_registry, snapshot_ops)

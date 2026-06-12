@@ -34,6 +34,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <deque>
 #include <map>
 #include <mutex>
@@ -70,6 +71,27 @@ wxColour series_colour(size_t i) {
         wxColour(0x34, 0x4A, 0x9E),  // indigo
     };
     return kPalette[i % (sizeof(kPalette) / sizeof(kPalette[0]))];
+}
+
+// Grid: 6 columns (time, 10s each over the 60s window) × 4 rows (value).
+constexpr int kGridCols = 6;
+constexpr int kGridRows = 4;
+
+// Round a raw max up to a "nice" ceiling so the Y axis lands on round numbers
+// and divides cleanly by kGridRows: 0.89 → 1.0 (mid 0.5), 17.21 → 20 (mid 10).
+// Picks the smallest of {1,2,2.5,5}×10^k that is ≥ v. Returns ≥ 1.
+double nice_ceiling(double v) {
+    if (v <= 0.0) return 1.0;
+    const double exp10 = std::floor(std::log10(v));
+    const double base  = std::pow(10.0, exp10);
+    const double frac  = v / base;                 // in [1, 10)
+    double nice;
+    if      (frac <= 1.0) nice = 1.0;
+    else if (frac <= 2.0) nice = 2.0;
+    else if (frac <= 2.5) nice = 2.5;
+    else if (frac <= 5.0) nice = 5.0;
+    else                  nice = 10.0;
+    return nice * base;
 }
 
 }  // namespace
@@ -161,14 +183,14 @@ private:
             // TOP — CPU / Scheduler Utilization % (full width), with legend.
             draw_proc_graph(*gc, dc, by_child,
                             wxRect(gap, top, w - 2 * gap, top_h),
-                            "CPU / Scheduler Utilization (%)",
+                            "CPU / Scheduler Utilization (%)", "",
                             [](const ProcSample& p) { return p.cpu_pct; },
                             /*legend=*/true);
 
             // BOTTOM-LEFT — Memory Usage (MB).
             draw_proc_graph(*gc, dc, by_child,
                             wxRect(gap, bot_y, half_w, bot_h),
-                            "Memory Usage (MB)",
+                            "Memory Usage (MB)", "",
                             [](const ProcSample& p) { return p.rss_mb; },
                             /*legend=*/false);
 
@@ -180,14 +202,47 @@ private:
         }
     }
 
+    // Draw the grid + axis labels inside a plot box: kGridCols vertical lines
+    // (time, 10s each over the 60s window) and kGridRows horizontal lines
+    // (value, ymax/kGridRows apart). Y labels sit just left-inside each
+    // horizontal line (top = ymax, mid = ymax/2, etc.); the bottom row is 0.
+    // `unit` is appended to each Y label ("", " MB", " %").
+    void draw_grid(wxGraphicsContext& gc, wxDC& dc, const wxRect& box,
+                   double ymax, const char* unit) {
+        gc.SetPen(wxPen(wxColour(0xE4, 0xE4, 0xE4), 1));   // light grey lines
+        for (int c = 1; c < kGridCols; ++c) {
+            const double x = box.x + (double)box.width * c / kGridCols;
+            wxGraphicsPath p = gc.CreatePath();
+            p.MoveToPoint(x, box.y);
+            p.AddLineToPoint(x, box.y + box.height);
+            gc.StrokePath(p);
+        }
+        dc.SetTextForeground(wxColour(0x90, 0x90, 0x90));
+        for (int rr = 1; rr < kGridRows; ++rr) {
+            const double y = box.y + (double)box.height * rr / kGridRows;
+            wxGraphicsPath p = gc.CreatePath();
+            p.MoveToPoint(box.x, y);
+            p.AddLineToPoint(box.x + box.width, y);
+            gc.StrokePath(p);
+        }
+        // Y labels at each horizontal level (incl. top=ymax, bottom=0).
+        for (int rr = 0; rr <= kGridRows; ++rr) {
+            const double v = ymax * (kGridRows - rr) / kGridRows;
+            const int    ly = box.y + box.height * rr / kGridRows;
+            const int    off = (rr == 0) ? 1 : (rr == kGridRows ? -11 : -6);
+            dc.DrawText(wxString::Format("%g%s", v, unit), box.x + 2, ly + off);
+        }
+    }
+
     // Multi-series graph into an arbitrary rect: one coloured polyline per
-    // child, Y=0-based autoscale over the shared 60s window. Draws a title
-    // above the plot box and, when `legend`, a packed colour key bottom-right.
+    // child, Y=0-based autoscale (rounded up to a nice ceiling) over the shared
+    // 60s window, on a 6×4 grid. Draws a title above the plot box and, when
+    // `legend`, a packed colour key bottom-right.
     template <typename Fn>
     void draw_proc_graph(wxGraphicsContext& gc, wxDC& dc,
                          const std::map<std::string, std::deque<ProcSample>>& by_child,
-                         const wxRect& r, const char* title, Fn value_fn,
-                         bool legend) {
+                         const wxRect& r, const char* title, const char* unit,
+                         Fn value_fn, bool legend) {
         // Title above the box.
         dc.SetTextForeground(wxColour(0x20, 0x20, 0x20));
         dc.DrawText(title, r.x, r.y);
@@ -201,19 +256,24 @@ private:
 
         // Shared window + Y autoscale across every series.
         int64_t t_max = 0;
-        double  ymax  = 0.0;
+        double  raw_ymax = 0.0;
         for (const auto& kv : by_child) {
             for (const auto& p : kv.second) {
                 t_max = std::max(t_max, p.t_ms);
-                ymax  = std::max(ymax, value_fn(p));
+                raw_ymax = std::max(raw_ymax, value_fn(p));
             }
         }
+        // Nice ceiling so the axis lands on round numbers and the grid rows are
+        // even (0.89 → 1.0 / mid 0.5; 17.21 → 20 / mid 10).
+        const double ymax = nice_ceiling(raw_ymax);
+
+        draw_grid(gc, dc, box, ymax, unit);
+
         if (t_max == 0) {
             dc.SetTextForeground(wxColour(0x80, 0x80, 0x80));
             dc.DrawText("(no data)", box.x + 8, box.y + box.height / 2 - 6);
             return;
         }
-        if (ymax <= 0.0) ymax = 1.0;
 
         const int64_t t_min = t_max -
             std::chrono::milliseconds(
@@ -225,10 +285,6 @@ private:
         auto px_y = [&](double v) {
             return box.y + box.height - (v / ymax) * box.height;
         };
-
-        // Y-axis max label (top-left, inside).
-        dc.SetTextForeground(wxColour(0x80, 0x80, 0x80));
-        dc.DrawText(wxString::Format("%g", ymax), box.x + 2, box.y + 1);
 
         // One polyline per child.
         size_t idx = 0;
@@ -284,6 +340,10 @@ private:
         gc.SetPen(wxPen(wxColour(0xC0, 0xC0, 0xC0), 1));
         gc.SetBrush(*wxTRANSPARENT_BRUSH);
         gc.DrawRectangle(r.x, box_y, r.width, box_h);
+
+        // Same 6×4 grid as the live graphs (0..100% scale) so the panels match
+        // even before the shwa feed lands.
+        draw_grid(gc, dc, wxRect(r.x, box_y, r.width, box_h), 100.0, "");
 
         dc.SetTextForeground(wxColour(0x80, 0x80, 0x80));
         dc.DrawText("awaiting shwa feed (nvidia-smi / jtop)",

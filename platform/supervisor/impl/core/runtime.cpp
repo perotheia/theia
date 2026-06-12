@@ -1764,8 +1764,9 @@ void Supervisor::sample_procs() {
                 // EWMA smoothing: the raw % is jiffy-quantized (1 jiffy ≈ 1% per
                 // 1s tick), so a near-idle process oscillates 0↔1%. Blend it so
                 // the GUI shows a steady low value instead of a sawtooth. alpha
-                // 0.4 ≈ a few-tick time constant — responsive but not jittery.
-                constexpr double kAlpha = 0.4;
+                // 0.2 ≈ a ~5-tick time constant (window ≈ 1/alpha) — twice the
+                // 0.4 default, which still let near-idle procs jump 0↔1%.
+                constexpr double kAlpha = 0.2;
                 if (!s.cpu_ewma_init) { s.cpu_ewma = raw_pct; s.cpu_ewma_init = true; }
                 else s.cpu_ewma = kAlpha * raw_pct + (1.0 - kAlpha) * s.cpu_ewma;
                 s.cpu_pct = static_cast<uint32_t>(s.cpu_ewma * 100.0 + 0.5);

@@ -1242,7 +1242,34 @@ int Supervisor::run() {
             // HeartbeatReport in too long; SIGTERM them and let the
             // strategy restart. Nodes with no recorded heartbeat are
             // exempt (not all daemons participate in alive supervision).
-            check_heartbeats();
+            //
+            // BUT skip the watchdog if the engine loop was STALLED since the
+            // last tick — stop_worker() blocks the loop for up to a child's
+            // SIGTERM grace (com/per take ~5s on gRPC/etcd teardown), during
+            // which NO heartbeats are processed. Counting that gap against every
+            // child false-positives the whole tree → mass-kill → escalation
+            // cascade (a single `restart com` took the tree down). If the tick
+            // ran late (we expect ~1s; >2.5s means the loop was busy), forgive
+            // this round so children get a clean window to beat again.
+            const auto tick_gap = now - last_heartbeat_;
+            if (tick_gap <= milliseconds(2500)) {
+                check_heartbeats();
+            } else {
+                // Push every recorded last_seen FORWARD by the stall (gap minus
+                // the expected ~1s tick), so the blocked time isn't charged
+                // against children retroactively — each gets a full kMaxAge
+                // window from now to send its next beat. A genuinely dead child
+                // still won't beat and is caught next round.
+                const auto shift = tick_gap - milliseconds(1000);
+                for (auto& kv : heartbeats_) kv.second.last_seen += shift;
+                std::ostringstream m;
+                m << "watchdog: engine loop stalled "
+                  << duration_cast<milliseconds>(tick_gap).count()
+                  << "ms (e.g. a slow stop_worker) — forgiving the gap so live "
+                     "children aren't false-positive killed";
+                log_warn(m.str());
+                check_heartbeats();
+            }
             last_heartbeat_ = now;
         }
         // 1 Hz snapshot — gives htop-like refresh rate on the GUI side.

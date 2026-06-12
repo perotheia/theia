@@ -530,7 +530,7 @@ private:
     };
 
     struct ProcSample {
-        uint32_t cpu_pct{0};           // hundredths of a percent
+        uint32_t cpu_pct{0};           // SMOOTHED cpu, hundredths of a percent
         uint64_t rss_kb{0};
         uint64_t vsz_kb{0};
         uint64_t shared_kb{0};         // Shared_Clean+Shared_Dirty (smaps_rollup)
@@ -539,6 +539,13 @@ private:
         // Previous (utime + stime) in jiffies — used to compute the
         // delta CPU% each tick.
         uint64_t prev_jiffies{0};
+        // Smoothed CPU as a double (% — NOT hundredths), EWMA of the raw
+        // per-tick %. The raw value is jiffy-quantized: at clk_tck=100, one
+        // jiffy ≈ 1% of a 1s window, so a near-idle process reads a 0↔1%
+        // sawtooth. The EWMA turns that into a steady low value (e.g. ~0.2%).
+        // `cpu_ewma_init` guards the first sample (seed, don't blend from 0).
+        double   cpu_ewma{0.0};
+        bool     cpu_ewma_init{false};
 
         // Per-thread breakdown, keyed by tid so delta computation
         // survives across ticks.
@@ -550,6 +557,9 @@ private:
 
     std::map<pid_t, ProcSample>      sample_;
     std::chrono::steady_clock::time_point last_proc_sample_{};
+    // THEIA_TRACE_CPU=1 → log the raw /proc cpu inputs per tick so a 0%% cpu_pct
+    // reading is explainable (idle / fresh pid / no interval / read fail).
+    const bool cpu_trace_ = (std::getenv("THEIA_TRACE_CPU") != nullptr);
 
     // Watchdog state (phase 4): last heartbeat timestamp per pid + the
     // last seq we saw. ``check_heartbeats()`` runs every tick of the

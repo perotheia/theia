@@ -139,6 +139,7 @@ class PerMigrationLib:
 
     def __init__(self) -> None:
         self._offline: dict[str, dict] = {}   # node -> migrated config dict
+        self._so_seq = 0                       # unique-plugin-path counter
 
     # -- the offline (hermetic) path --------------------------------------
     @keyword("Migrate Offline")
@@ -309,6 +310,17 @@ class PerMigrationLib:
                             "PATH": f"{REPO}/.venv/bin:" +
                                     __import__("os").environ.get("PATH", "")})
         built = REPO / "bazel-bin/migration" / f"libper_migrate_{node}.so"
-        dst = Path("/tmp") / f"rf_mig_{node}.so"
-        dst.write_bytes(built.read_bytes())
+        # Stage to a UNIQUE path, written ATOMICALLY (temp + os.replace). per
+        # dlopens this with RTLD_NOW; overwriting an .so in place while a (prior)
+        # per still maps it — or dlopening a half-written file — corrupts the
+        # loaded code and crashes per (worker-thread SIGSEGV, empty backtrace).
+        # A fresh name per build + atomic rename guarantees per only ever
+        # dlopens a complete, immutable file.
+        import os as _os
+        uniq = f"rf_mig_{node}_{_os.getpid()}_{self._so_seq}.so"
+        self._so_seq += 1
+        dst = Path("/tmp") / uniq
+        tmp = Path("/tmp") / (uniq + ".tmp")
+        tmp.write_bytes(built.read_bytes())
+        _os.replace(tmp, dst)   # atomic on the same filesystem
         return str(dst)

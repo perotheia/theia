@@ -90,8 +90,12 @@ def seed_defaults(per, cfgdef, schema):
                     demo.IncrementerConfig, demo.P4Config)}
     for node, info in cfgdef["configs"].items():
         values = info.get("values") or {}
-        if not values:
-            continue
+        # NOTE: we seed EVERY config-bearing node, even one whose .art declares
+        # no field defaults (values == {}). Such a node still gets a
+        # /theia/config/<node> key — an empty proto + its digest — so the key is
+        # visible in the Table Viewer and the node has a stored baseline to edit
+        # from. (Previously empty-default nodes were skipped, so only nodes with
+        # declared defaults like CounterConfig ever got a key.)
         # Skip if already present (don't clobber a real stored value).
         cur = per.probe.call("PerClient", "GetConfig", timeout=3.0,
                              target_node=node, want_digest="")

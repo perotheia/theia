@@ -220,7 +220,62 @@ def cmd_start(args: list[str]) -> int:
               f"tail of {log}:", file=sys.stderr)
         _run(["tail", "-n", "15", str(log)])
         return 1
+
+    # First-boot config seed: populate /theia/config/* from the demo's DECLARED
+    # config defaults, for any node that has no stored value yet. Idempotent —
+    # safe to run on every start (already-stored keys are left untouched), and
+    # best-effort: a seed failure (no etcd, per still coming up) is a warning,
+    # not a start failure. Skip with --no-seed.
+    if "--no-seed" not in args:
+        _seed_defaults()
+
     return 0
+
+
+def _seed_defaults() -> None:
+    """Seed declared config defaults into etcd via services/per (first-boot).
+
+    Generates the schema + config-defaults from system/demo/package.art and runs
+    migration/seed.py's idempotent `defaults` action. per must be up and reachable
+    (give it a moment after the supervisor forks it). Best-effort: any failure is
+    logged, never fatal."""
+    import tempfile
+    import time
+
+    art = WORKSPACE / "system" / "demo" / "package.art"
+    if not art.exists():
+        return
+    tmp = Path(tempfile.gettempdir())
+    schema = tmp / "theia_seed_schema.json"
+    defs   = tmp / "theia_seed_defaults.json"
+    try:
+        if _run(["artheia", "gen-schema", str(art), "--out", str(schema)]) != 0:
+            print("theia: seed skipped — gen-schema failed.", file=sys.stderr)
+            return
+        if _run(["artheia", "gen-config-defaults",
+                 str(art), "--out", str(defs)]) != 0:
+            print("theia: seed skipped — gen-config-defaults failed.",
+                  file=sys.stderr)
+            return
+        # per is forked by the supervisor and binds its TIPC port a few seconds
+        # in (after the etcd connect). Retry the (idempotent) seed until it lands
+        # or a ~20s budget runs out — the ConnectionError on a not-yet-bound per
+        # is the expected early miss, not a real failure.
+        seed = [sys.executable, str(WORKSPACE / "migration" / "seed.py"),
+                "defaults", "--defaults", str(defs), "--schema", str(schema)]
+        for attempt in range(7):
+            time.sleep(3.0)
+            if subprocess.call(seed, stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL) == 0:
+                print("theia: config defaults seeded (idempotent).",
+                      file=sys.stderr)
+                return
+        print("theia: config-defaults seed did not land within ~20s "
+              "(per slow to start?) — non-fatal; run `migration/seed.py "
+              "defaults` manually.", file=sys.stderr)
+    except Exception as e:  # noqa: BLE001 — best-effort, never fail the start
+        print(f"theia: config-defaults seed errored ({e}) — non-fatal.",
+              file=sys.stderr)
 
 
 def cmd_stop(args: list[str]) -> int:

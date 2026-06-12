@@ -42,6 +42,7 @@
 #include <sys/signalfd.h>
 #include <sys/eventfd.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>    // statvfs — disk free for SystemInfo (System tab)
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <signal.h>
@@ -2112,6 +2113,17 @@ uint64_t parse_uptime_sec(const std::string& body) {
     return v > 0 ? static_cast<uint64_t>(v) : 0;
 }
 
+// statvfs a path; fill total/avail kB (0/0 if the path can't be stat'd —
+// e.g. an install dir that doesn't exist yet). Uses f_frsize (fragment size)
+// for the byte conversion, f_blocks for total, f_bavail for free-to-unpriv.
+void statvfs_kb(const char* path, uint64_t& total_kb, uint64_t& avail_kb) {
+    struct statvfs vfs{};
+    if (::statvfs(path, &vfs) != 0) { total_kb = avail_kb = 0; return; }
+    const uint64_t unit = vfs.f_frsize ? vfs.f_frsize : vfs.f_bsize;
+    total_kb = (static_cast<uint64_t>(vfs.f_blocks) * unit) / 1024;
+    avail_kb = (static_cast<uint64_t>(vfs.f_bavail) * unit) / 1024;
+}
+
 }  // namespace
 
 
@@ -2135,6 +2147,13 @@ void Supervisor::do_get_system_info(SystemInfoData& info) {
 
     info.total_ram_kb = parse_mem_total_kb(slurp_text("/proc/meminfo"));
     info.uptime_sec   = parse_uptime_sec  (slurp_text("/proc/uptime"));
+
+    // Disk free (System tab "Resources" box): root and the install/run dir
+    // (where binaries + tombstones live). root_dir_ is the supervisor's stage
+    // dir; if it's empty (unstaged), fall back to the current dir.
+    statvfs_kb("/", info.disk_root_total_kb, info.disk_root_avail_kb);
+    statvfs_kb(root_dir_.empty() ? "." : root_dir_.c_str(),
+               info.disk_install_total_kb, info.disk_install_avail_kb);
 
     // Build-time facts injected via -D... when the build wires them.
     // Defaults to empty when undefined, matching proto3 default.

@@ -141,6 +141,10 @@ message SystemInfo {
     string theia_git_sha = 7;
     string build_timestamp = 8;
     uint64 start_timestamp_ms = 9;
+    uint64 disk_root_total_kb = 10;
+    uint64 disk_root_avail_kb = 11;
+    uint64 disk_install_total_kb = 12;
+    uint64 disk_install_avail_kb = 13;
 }
 
 message ChildSelector {

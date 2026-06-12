@@ -1,9 +1,13 @@
-// System panel — observer_sys_wx.erl analogue.
+// System panel — Erlang observer "System" tab analogue, Theia-native.
 //
-// One wxStaticBox per machine, two-column key/value. Shows the SAME host +
-// build facts `tdb info` / `rtdb info` print (GetSystemInfo, tag 0x0004) plus
-// the supervisor HealthBeacon counters (tag 0x0002, when emitted). Values are
-// updated in place; a box is created on the first frame for a machine.
+// Per connected machine, four sub-boxes laid out 2×2:
+//   System & Architecture | Resources
+//   Supervisor Statistics | GPU / Accelerators
+//
+// Fed by GetSystemInfo (tag 0x0004) and HealthBeacon (tag 0x0002) — the same
+// surface `tdb info` prints. Values are updated in place; the boxes are created
+// on the first frame seen for a machine. The GPU box is a placeholder until the
+// shwa FC's nvidia-smi/jtop telemetry path is wired (a follow-up).
 
 #include "sup_gui/panels.h"
 
@@ -11,6 +15,7 @@
 
 #include <wx/wx.h>
 #include <wx/sizer.h>
+#include <wx/statbox.h>
 #include <wx/stattext.h>
 
 #include <ctime>
@@ -26,12 +31,43 @@ wxFlexGridSizer* kv_sizer() {
     return g;
 }
 
+// Build a titled sub-box with a 2-col key/value grid; fill `vals[]` with the
+// value cells (labels come from `keys`). Returns the box's sizer so the caller
+// can drop it into the 2×2 layout.
+wxSizer* make_subbox(wxWindow* parent,
+                     const wxString& title,
+                     const char* const* keys,
+                     wxStaticText** vals,
+                     int n) {
+    auto* box = new wxStaticBox(parent, wxID_ANY, title);
+    auto* bsz = new wxStaticBoxSizer(box, wxVERTICAL);
+    auto* g   = kv_sizer();
+    for (int i = 0; i < n; ++i) {
+        auto* k = new wxStaticText(box, wxID_ANY, keys[i]);
+        vals[i] = new wxStaticText(box, wxID_ANY, "—");
+        g->Add(k, 0, wxALIGN_LEFT);
+        g->Add(vals[i], 1, wxALIGN_LEFT);
+    }
+    bsz->Add(g, 0, wxEXPAND | wxALL, 4);
+    return bsz;
+}
+
 // ---- formatters, matching tdb_commands.py (_fmt_ram_mb/_uptime/_epoch_ms) ----
 
 wxString fmt_ram_mb(uint64_t ram_kb) {
     if (!ram_kb) return "";
     const double mb = ram_kb / 1024.0;
     return wxString::Format("%.0f MB (%.1f GB)", mb, mb / 1024.0);
+}
+
+// "used / total GB (NN%)" from a (total_kb, avail_kb) statvfs pair.
+wxString fmt_disk(uint64_t total_kb, uint64_t avail_kb) {
+    if (!total_kb) return "(n/a)";
+    const uint64_t used_kb = total_kb >= avail_kb ? total_kb - avail_kb : 0;
+    const double   used_gb = used_kb  / 1024.0 / 1024.0;
+    const double   tot_gb  = total_kb / 1024.0 / 1024.0;
+    const int      pct     = static_cast<int>((used_kb * 100) / total_kb);
+    return wxString::Format("%.1f / %.0f GB (%d%%)", used_gb, tot_gb, pct);
 }
 
 wxString fmt_uptime(uint64_t sec) {
@@ -56,13 +92,24 @@ wxString fmt_epoch_ms(uint64_t ts_ms) {
     return wxString::FromUTF8(buf);
 }
 
+const char* const kArchKeys[]   = {
+    "hostname", "kernel", "os", "logical CPUs", "theia git sha", "build ts",
+};
+const char* const kResKeys[]    = {
+    "RAM total", "disk /", "disk install", "host uptime", "supervisor started",
+};
+const char* const kHealthKeys[] = {
+    "generation", "workers (active / total)", "total restarts",
+    "total tombstones", "last heartbeat",
+};
+
 }  // namespace
 
 SystemPanel::SystemPanel(wxWindow* parent) : PanelBase(parent) {
     auto* sizer = new wxBoxSizer(wxVERTICAL);
     auto* hint  = new wxStaticText(this, wxID_ANY,
-        "System overview — host + build + supervisor facts, one section per "
-        "connected machine (the `tdb info` surface).");
+        "System overview — host, resources, supervisor stats and accelerators, "
+        "one section per connected machine (the `tdb info` surface).");
     sizer->Add(hint, 0, wxALL, 8);
 
     container_ = new wxBoxSizer(wxVERTICAL);
@@ -77,36 +124,38 @@ SystemPanel::MachineRows& SystemPanel::ensure_box(const std::string& machine_nam
 
     auto* box = new wxStaticBox(this, wxID_ANY, machine_name);
     auto* bsz = new wxStaticBoxSizer(box, wxVERTICAL);
-    auto* kvs = kv_sizer();
-    bsz->Add(kvs, 0, wxEXPAND | wxALL, 4);
-    container_->Add(bsz, 0, wxEXPAND | wxALL, 4);
 
     MachineRows mr;
-    mr.box = box; mr.sizer = bsz; mr.grid = kvs;
+    mr.box = box; mr.sizer = bsz;
 
-    // SystemInfo group first (the static host/build facts), then a thin gap,
-    // then the HealthBeacon counters. Pre-create key/value cells (labels set
-    // here, values filled on frames).
-    static const char* kInfoKeys[kInfoRows] = {
-        "hostname", "kernel", "os", "cpus", "ram",
-        "uptime", "theia git sha", "build ts", "started",
-    };
-    for (int i = 0; i < kInfoRows; ++i) {
-        mr.info_keys[i] = new wxStaticText(box, wxID_ANY, kInfoKeys[i]);
-        mr.info_vals[i] = new wxStaticText(box, wxID_ANY, "—");
-        kvs->Add(mr.info_keys[i], 0, wxALIGN_LEFT);
-        kvs->Add(mr.info_vals[i], 1, wxALIGN_LEFT);
+    // 2×2 grid of sub-boxes (observer System-tab layout). Both columns grow so
+    // the boxes share width evenly.
+    auto* grid = new wxFlexGridSizer(/*rows*/ 2, /*cols*/ 2, /*vgap*/ 6, /*hgap*/ 8);
+    grid->AddGrowableCol(0, 1);
+    grid->AddGrowableCol(1, 1);
+
+    grid->Add(make_subbox(box, "System & Architecture",
+                          kArchKeys, mr.arch_vals, kArchRows),
+              1, wxEXPAND);
+    grid->Add(make_subbox(box, "Resources",
+                          kResKeys, mr.res_vals, kResRows),
+              1, wxEXPAND);
+    grid->Add(make_subbox(box, "Supervisor Statistics",
+                          kHealthKeys, mr.health_vals, kHealthRows),
+              1, wxEXPAND);
+
+    // GPU / Accelerators — placeholder until the shwa FC telemetry lands.
+    {
+        auto* gbox = new wxStaticBox(box, wxID_ANY, "GPU / Accelerators");
+        auto* gsz  = new wxStaticBoxSizer(gbox, wxVERTICAL);
+        gsz->Add(new wxStaticText(gbox, wxID_ANY,
+                     "awaiting shwa feed (nvidia-smi / jtop)"),
+                 0, wxALL, 6);
+        grid->Add(gsz, 1, wxEXPAND);
     }
-    static const char* kHealthKeys[kHealthRows] = {
-        "generation", "workers (active / total)", "total restarts",
-        "total tombstones", "last heartbeat",
-    };
-    for (int i = 0; i < kHealthRows; ++i) {
-        mr.health_keys[i] = new wxStaticText(box, wxID_ANY, kHealthKeys[i]);
-        mr.health_vals[i] = new wxStaticText(box, wxID_ANY, "—");
-        kvs->Add(mr.health_keys[i], 0, wxALIGN_LEFT);
-        kvs->Add(mr.health_vals[i], 1, wxALIGN_LEFT);
-    }
+
+    bsz->Add(grid, 1, wxEXPAND | wxALL, 4);
+    container_->Add(bsz, 0, wxEXPAND | wxALL, 4);
 
     auto inserted = machine_boxes_.emplace(machine_name, mr);
     Layout();
@@ -120,17 +169,26 @@ void SystemPanel::on_frame(const std::string& machine_name,
         system_supervisor::SystemInfo si;
         if (!si.ParseFromString(payload)) return;
         auto& mr = ensure_box(machine_name);
-        mr.info_vals[0]->SetLabel(wxString::FromUTF8(si.hostname().c_str()));
-        mr.info_vals[1]->SetLabel(wxString::FromUTF8(si.kernel().c_str()));
-        mr.info_vals[2]->SetLabel(wxString::FromUTF8(si.os_pretty_name().c_str()));
-        mr.info_vals[3]->SetLabel(wxString::Format("%u", si.cpu_count()));
-        mr.info_vals[4]->SetLabel(fmt_ram_mb(si.total_ram_kb()));
-        mr.info_vals[5]->SetLabel(fmt_uptime(si.uptime_sec()));
-        mr.info_vals[6]->SetLabel(si.theia_git_sha().empty()
+
+        // System & Architecture
+        mr.arch_vals[0]->SetLabel(wxString::FromUTF8(si.hostname().c_str()));
+        mr.arch_vals[1]->SetLabel(wxString::FromUTF8(si.kernel().c_str()));
+        mr.arch_vals[2]->SetLabel(wxString::FromUTF8(si.os_pretty_name().c_str()));
+        mr.arch_vals[3]->SetLabel(wxString::Format("%u", si.cpu_count()));
+        mr.arch_vals[4]->SetLabel(si.theia_git_sha().empty()
             ? "(unstamped)" : wxString::FromUTF8(si.theia_git_sha().c_str()));
-        mr.info_vals[7]->SetLabel(si.build_timestamp().empty()
+        mr.arch_vals[5]->SetLabel(si.build_timestamp().empty()
             ? "(unstamped)" : wxString::FromUTF8(si.build_timestamp().c_str()));
-        mr.info_vals[8]->SetLabel(fmt_epoch_ms(si.start_timestamp_ms()));
+
+        // Resources
+        mr.res_vals[0]->SetLabel(fmt_ram_mb(si.total_ram_kb()));
+        mr.res_vals[1]->SetLabel(fmt_disk(si.disk_root_total_kb(),
+                                          si.disk_root_avail_kb()));
+        mr.res_vals[2]->SetLabel(fmt_disk(si.disk_install_total_kb(),
+                                          si.disk_install_avail_kb()));
+        mr.res_vals[3]->SetLabel(fmt_uptime(si.uptime_sec()));
+        mr.res_vals[4]->SetLabel(fmt_epoch_ms(si.start_timestamp_ms()));
+
         mr.sizer->Layout();
         return;
     }

@@ -57,13 +57,18 @@ public:
 };
 
 // "System" — host + build + supervisor facts, one wxStaticBox per machine.
-// Two groups, the same surface `tdb info` / `rtdb info` show:
-//   - SystemInfo (tag 0x0004, GetSystemInfo): hostname, kernel, os, cpus,
-//     ram (MB/GB), uptime (Dd Hh Mm), git sha, build ts, started (local).
-//   - HealthBeacon (tag 0x0002): generation, workers, restarts, tombstones,
-//     last heartbeat. (Empty until the supervisor emits health frames — com's
-//     Subscribe is snapshot-only under the pull model; SystemInfo is the live
-//     content today.)
+// Observer-style "System" tab: per machine, four sub-boxes in a 2×2 grid
+// (the Erlang observer System tab, Theia-native — no Erlang-VM Memory/limits
+// boxes). Data comes from the same surface `tdb info` / `rtdb info` show:
+//   - "System & Architecture" — SystemInfo (tag 0x0004): hostname, kernel, os,
+//     cpus, theia git sha, build ts.
+//   - "Resources" — SystemInfo: ram (MB/GB), disk / (used/total), disk install,
+//     host uptime, supervisor started (local).
+//   - "Supervisor Statistics" — HealthBeacon (tag 0x0002): generation, workers,
+//     restarts, tombstones, last heartbeat. (Empty until the supervisor emits
+//     health frames; SystemInfo is the live content today.)
+//   - "GPU / Accelerators" — placeholder ("awaiting shwa feed") until the shwa
+//     FC's nvidia-smi/jtop telemetry path is wired (a follow-up).
 class SystemPanel : public PanelBase {
 public:
     explicit SystemPanel(wxWindow* parent);
@@ -71,17 +76,16 @@ public:
                   const std::string& payload) override;
 
 private:
-    // SystemInfo = 9 rows; HealthBeacon = 5 rows. Pre-allocated key/value
-    // wxStaticTexts updated in place to avoid relayout churn.
-    static constexpr int kInfoRows   = 9;
-    static constexpr int kHealthRows = 5;
+    // Per-box row counts. Pre-allocated key/value wxStaticTexts updated in
+    // place to avoid relayout churn.
+    static constexpr int kArchRows   = 6;  // hostname,kernel,os,cpus,sha,build
+    static constexpr int kResRows    = 5;  // ram,disk /,disk install,uptime,started
+    static constexpr int kHealthRows = 5;  // gen,workers,restarts,tombstones,beat
     struct MachineRows {
-        wxStaticBox*       box{nullptr};
+        wxStaticBox*       box{nullptr};   // outer per-machine box
         wxStaticBoxSizer*  sizer{nullptr};
-        wxFlexGridSizer*   grid{nullptr};
-        wxStaticText*      info_keys[kInfoRows]{};
-        wxStaticText*      info_vals[kInfoRows]{};
-        wxStaticText*      health_keys[kHealthRows]{};
+        wxStaticText*      arch_vals  [kArchRows]{};
+        wxStaticText*      res_vals   [kResRows]{};
         wxStaticText*      health_vals[kHealthRows]{};
     };
 

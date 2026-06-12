@@ -1,28 +1,27 @@
-// Load Charts panel — observer_perf_wx.erl analogue.
+// Load Charts panel — observer_perf_wx.erl analogue (observer dashboard layout).
 //
-// Per machine, 60s rolling window. Two kinds of strips:
+// Per machine, 60s rolling window, laid out as three zones like the Erlang
+// observer "Load Charts" tab:
 //
-//   PER-PROCESS load (from TreeSnapshot, tag 0x0003) — observer's
-//   Scheduler-Utilization graph style: ONE coloured polyline per FC,
-//   with a legend:
-//     1. CPU %   (ChildState.cpu_pct, hundredths → %)
-//     2. RSS MB  (ChildState.rss_kb)
+//   TOP (full width)  — CPU / "Scheduler" Utilization %: ONE coloured polyline
+//                       per FC (ChildState.cpu_pct, hundredths → %), with a
+//                       per-series colour legend along the bottom.
+//   BOTTOM-LEFT       — Memory Usage (MB): one coloured line per FC
+//                       (ChildState.rss_kb → MB), same colour order as the top.
+//   BOTTOM-RIGHT      — GPU load + mem: placeholder ("awaiting shwa feed") on
+//                       one graph (two lines once the shwa nvidia-smi/jtop feed
+//                       is wired). Replaces observer's IO-usage graph.
 //
-//   SUPERVISOR health (from HealthBeacon, tag 0x0002) — one line each:
-//     3. Active workers
-//     4. Restarts (cumulative)
-//     5. Tombstones (cumulative)
-//     6. Uptime (s)
+// Fed by TreeSnapshot (tag 0x0003): the same per-process CPU%/RSS the
+// Processes/Applications panels consume, time-series'd. The supervisor-health
+// strips (workers/restarts/tombstones/uptime) moved to the System tab's
+// "Supervisor Statistics" box and are no longer plotted here.
 //
-// Both feeds share the same 60s window + per-paint lock-snapshot. The
-// per-process series is keyed machine → child → deque<ProcSample>; a
-// child gone from a snapshot stops getting points and ages out.
+// The per-process series is keyed machine → child → deque<ProcSample>; a child
+// gone from a snapshot stops getting points and ages out of the 60s window.
 //
-// TIPC traffic per node is NOT here yet — the supervisor doesn't sample
-// it (SocketInfo.sockets is an unfilled placeholder). Follow-up.
-//
-// wxGraphicsContext for the lines, wxDC for the axes — same pattern
-// observer's perf panel uses.
+// wxGraphicsContext for the lines, wxDC for the axes — same pattern observer's
+// perf panel uses.
 
 #include "sup_gui/panels.h"
 
@@ -45,21 +44,11 @@ namespace sup_gui {
 
 namespace {
 
-constexpr uint16_t kTagHealth      = 0x0002;
 constexpr uint16_t kTagTree        = 0x0003;
-constexpr int      kStripHeight    = 80;
 constexpr int      kStripPadding   = 4;
 constexpr int      kWindowSeconds  = 60;
 constexpr int      kRefreshMs      = 1000;
-
-struct Sample {
-    int64_t  t_ms{};
-    uint32_t total_workers{};
-    uint32_t active_workers{};
-    uint64_t total_restarts{};
-    uint64_t total_tombstones{};
-    uint64_t uptime_ms{};
-};
+constexpr int      kMinDashHeight  = 260;   // min height of one machine's 3-zone dashboard
 
 // One per-process sample (from a ChildState in a TreeSnapshot).
 struct ProcSample {
@@ -96,13 +85,6 @@ public:
         Bind(wxEVT_PAINT, &LoadChartsCanvas::on_paint, this);
     }
 
-    void ingest(const std::string& machine, const Sample& s) {
-        std::lock_guard<std::mutex> lk(mtx_);
-        auto& q = data_[machine];
-        q.push_back(s);
-        prune(q, s.t_ms);
-    }
-
     // Per-process CPU/RSS points for one machine, parsed from a TreeSnapshot:
     // {child_name → ProcSample}. Each child's series gets ONE point per
     // snapshot; a child absent from this snapshot simply gets none and ages
@@ -128,16 +110,14 @@ private:
         dc.SetBackground(*wxWHITE_BRUSH);
         dc.Clear();
 
-        std::map<std::string, std::deque<Sample>> snap;
         std::map<std::string,
                  std::map<std::string, std::deque<ProcSample>>> psnap;
         {
             std::lock_guard<std::mutex> lk(mtx_);
-            snap  = data_;
             psnap = procs_;
         }
 
-        if (snap.empty() && psnap.empty()) {
+        if (psnap.empty()) {
             dc.SetTextForeground(*wxBLACK);
             dc.DrawText("Waiting for supervisor data…", 20, 20);
             return;
@@ -148,14 +128,16 @@ private:
 
         const wxSize sz = GetClientSize();
         const int    w  = sz.GetWidth();
+        const int    h  = sz.GetHeight();
 
-        // Union of machine names across both feeds, sorted.
         std::vector<std::string> machines;
-        for (const auto& kv : snap)  machines.push_back(kv.first);
-        for (const auto& kv : psnap)
-            if (snap.find(kv.first) == snap.end())
-                machines.push_back(kv.first);
+        for (const auto& kv : psnap) machines.push_back(kv.first);
         std::sort(machines.begin(), machines.end());
+
+        // Each machine gets its own three-zone dashboard, stacked vertically.
+        const int dash_h = std::max(kMinDashHeight,
+            (h - kStripPadding) / std::max<int>(1, machines.size())
+                - kStripPadding);
 
         int y = kStripPadding;
         for (const auto& m : machines) {
@@ -164,67 +146,58 @@ private:
             dc.SetFont(hdr);
             dc.SetTextForeground(*wxBLACK);
             dc.DrawText(wxString::FromUTF8(m.c_str(), m.size()), 8, y);
-            y += 20;
             dc.SetFont(GetFont());
+            const int top = y + 18;
 
-            // Per-process CPU% + RSS (one coloured line per FC, with legend).
-            auto pit = psnap.find(m);
-            if (pit != psnap.end() && !pit->second.empty()) {
-                draw_proc_strip(*gc, dc, pit->second, w, y, "CPU %",
-                                [](const ProcSample& p) { return p.cpu_pct; });
-                y += kStripHeight + kStripPadding;
-                draw_proc_strip(*gc, dc, pit->second, w, y, "RSS MB",
-                                [](const ProcSample& p) { return p.rss_mb; });
-                y += kStripHeight + kStripPadding + 6;
-            }
+            const auto& by_child = psnap[m];
 
-            // Supervisor health (HealthBeacon).
-            auto hit = snap.find(m);
-            if (hit != snap.end()) {
-                const auto& q = hit->second;
-                draw_strip(*gc, dc, q, w, y, "active workers",
-                           [](const Sample& s) {
-                               return static_cast<double>(s.active_workers);
-                           });
-                y += kStripHeight + kStripPadding;
-                draw_strip(*gc, dc, q, w, y, "restarts",
-                           [](const Sample& s) {
-                               return static_cast<double>(s.total_restarts);
-                           });
-                y += kStripHeight + kStripPadding;
-                draw_strip(*gc, dc, q, w, y, "tombstones",
-                           [](const Sample& s) {
-                               return static_cast<double>(s.total_tombstones);
-                           });
-                y += kStripHeight + kStripPadding;
-                draw_strip(*gc, dc, q, w, y, "uptime (s)",
-                           [](const Sample& s) {
-                               return static_cast<double>(s.uptime_ms / 1000);
-                           });
-                y += kStripHeight + kStripPadding + 6;
-            }
-            y += 6;
+            // Zone geometry: top = full-width CPU; bottom split left/right.
+            const int gap     = 8;
+            const int top_h   = (dash_h - 18 - gap) * 55 / 100;   // ~55% tall
+            const int bot_h   = (dash_h - 18 - gap) - top_h;
+            const int bot_y   = top + top_h + gap;
+            const int half_w  = (w - 3 * gap) / 2;
+
+            // TOP — CPU / Scheduler Utilization % (full width), with legend.
+            draw_proc_graph(*gc, dc, by_child,
+                            wxRect(gap, top, w - 2 * gap, top_h),
+                            "CPU / Scheduler Utilization (%)",
+                            [](const ProcSample& p) { return p.cpu_pct; },
+                            /*legend=*/true);
+
+            // BOTTOM-LEFT — Memory Usage (MB).
+            draw_proc_graph(*gc, dc, by_child,
+                            wxRect(gap, bot_y, half_w, bot_h),
+                            "Memory Usage (MB)",
+                            [](const ProcSample& p) { return p.rss_mb; },
+                            /*legend=*/false);
+
+            // BOTTOM-RIGHT — GPU load + mem (placeholder until shwa feed).
+            draw_gpu_placeholder(*gc, dc,
+                            wxRect(gap + half_w + gap, bot_y, half_w, bot_h));
+
+            y += dash_h + kStripPadding;
         }
     }
 
-    // Multi-series strip: one coloured polyline per child + a legend. Shares
-    // the 60s window + Y=0-based autoscale with draw_strip, but iterates a
-    // map<child → series> and colours each line by index.
+    // Multi-series graph into an arbitrary rect: one coloured polyline per
+    // child, Y=0-based autoscale over the shared 60s window. Draws a title
+    // above the plot box and, when `legend`, a packed colour key bottom-right.
     template <typename Fn>
-    void draw_proc_strip(wxGraphicsContext& gc, wxDC& dc,
+    void draw_proc_graph(wxGraphicsContext& gc, wxDC& dc,
                          const std::map<std::string, std::deque<ProcSample>>& by_child,
-                         int w, int y, const char* label, Fn value_fn) {
-        constexpr int LX = 100;
-        constexpr int RX = 8;
-        const int     pw = std::max(w - LX - RX, 50);
-        const int     ph = kStripHeight;
-
-        dc.SetTextForeground(wxColour(0x40, 0x40, 0x40));
-        dc.DrawText(label, 8, y + ph / 2 - 6);
+                         const wxRect& r, const char* title, Fn value_fn,
+                         bool legend) {
+        // Title above the box.
+        dc.SetTextForeground(wxColour(0x20, 0x20, 0x20));
+        dc.DrawText(title, r.x, r.y);
+        const int box_y = r.y + 16;
+        const int box_h = std::max(r.height - 16, 24);
+        const wxRect box(r.x, box_y, r.width, box_h);
 
         gc.SetPen(wxPen(wxColour(0xC0, 0xC0, 0xC0), 1));
         gc.SetBrush(*wxTRANSPARENT_BRUSH);
-        gc.DrawRectangle(LX, y, pw, ph);
+        gc.DrawRectangle(box.x, box.y, box.width, box.height);
 
         // Shared window + Y autoscale across every series.
         int64_t t_max = 0;
@@ -237,7 +210,7 @@ private:
         }
         if (t_max == 0) {
             dc.SetTextForeground(wxColour(0x80, 0x80, 0x80));
-            dc.DrawText("(no data)", LX + 8, y + ph / 2 - 6);
+            dc.DrawText("(no data)", box.x + 8, box.y + box.height / 2 - 6);
             return;
         }
         if (ymax <= 0.0) ymax = 1.0;
@@ -246,12 +219,16 @@ private:
             std::chrono::milliseconds(
                 std::chrono::seconds(kWindowSeconds)).count();
         const double  t_span = static_cast<double>(t_max - t_min);
-        auto px_x = [&](int64_t t) { return LX + ((t - t_min) / t_span) * pw; };
-        auto px_y = [&](double v) { return y + ph - (v / ymax) * ph; };
+        auto px_x = [&](int64_t t) {
+            return box.x + ((t - t_min) / t_span) * box.width;
+        };
+        auto px_y = [&](double v) {
+            return box.y + box.height - (v / ymax) * box.height;
+        };
 
         // Y-axis max label (top-left, inside).
         dc.SetTextForeground(wxColour(0x80, 0x80, 0x80));
-        dc.DrawText(wxString::Format("%g", ymax), LX + 2, y + 1);
+        dc.DrawText(wxString::Format("%g", ymax), box.x + 2, box.y + 1);
 
         // One polyline per child.
         size_t idx = 0;
@@ -269,21 +246,23 @@ private:
             if (!first) gc.StrokePath(path);
         }
 
-        // Legend, packed into as many columns as the strip height allows so a
-        // wide FC count doesn't overrun the box. Swatch + name per row; columns
-        // fill top-to-bottom then wrap right. Same colour order as the lines.
+        if (!legend) return;
+
+        // Legend, packed into as many columns as the box height allows so a
+        // wide FC count doesn't overrun. Swatch + name per row; columns fill
+        // top-to-bottom then wrap right. Same colour order as the lines.
         constexpr int kRowH = 13, kColW = 80;
-        const int rows = std::max(1, (ph - 4) / kRowH);
+        const int rows = std::max(1, (box.height - 4) / kRowH);
         const int cols = (static_cast<int>(by_child.size()) + rows - 1) / rows;
-        const int lx0  = LX + pw - cols * kColW - 4;
+        const int lx0  = box.x + box.width - cols * kColW - 4;
         idx = 0;
         dc.SetPen(*wxTRANSPARENT_PEN);
         for (const auto& kv : by_child) {
             const wxColour col = series_colour(idx);
-            const int r  = static_cast<int>(idx) % rows;
-            const int c  = static_cast<int>(idx) / rows;
-            const int lx = lx0 + c * kColW;
-            const int ly = y + 2 + r * kRowH;
+            const int rr = static_cast<int>(idx) % rows;
+            const int cc = static_cast<int>(idx) / rows;
+            const int lx = lx0 + cc * kColW;
+            const int ly = box.y + 2 + rr * kRowH;
             dc.SetBrush(wxBrush(col));
             dc.DrawRectangle(lx, ly + 2, 8, 8);
             dc.SetTextForeground(col);
@@ -293,62 +272,37 @@ private:
         }
     }
 
-    template <typename Fn>
-    void draw_strip(wxGraphicsContext& gc, wxDC& dc,
-                     const std::deque<Sample>& q, int w, int y,
-                     const char* label, Fn value_fn) {
-        constexpr int LX = 100;
-        constexpr int RX = 8;
-        const int     pw = std::max(w - LX - RX, 50);
-        const int     ph = kStripHeight;
-
-        dc.SetTextForeground(wxColour(0x40, 0x40, 0x40));
-        dc.DrawText(label, 8, y + ph / 2 - 6);
+    // GPU load + mem placeholder (bottom-right). Mirrors draw_proc_graph's
+    // title + empty plot box, with a centred "awaiting shwa feed" note and a
+    // two-line legend (GPU load / GPU mem) so the eventual shwa wiring drops in.
+    void draw_gpu_placeholder(wxGraphicsContext& gc, wxDC& dc, const wxRect& r) {
+        dc.SetTextForeground(wxColour(0x20, 0x20, 0x20));
+        dc.DrawText("GPU load + mem (%)", r.x, r.y);
+        const int box_y = r.y + 16;
+        const int box_h = std::max(r.height - 16, 24);
 
         gc.SetPen(wxPen(wxColour(0xC0, 0xC0, 0xC0), 1));
         gc.SetBrush(*wxTRANSPARENT_BRUSH);
-        gc.DrawRectangle(LX, y, pw, ph);
+        gc.DrawRectangle(r.x, box_y, r.width, box_h);
 
-        if (q.size() < 2) {
-            dc.SetTextForeground(wxColour(0x80, 0x80, 0x80));
-            dc.DrawText("(no data)", LX + 8, y + ph / 2 - 6);
-            return;
-        }
+        dc.SetTextForeground(wxColour(0x80, 0x80, 0x80));
+        dc.DrawText("awaiting shwa feed (nvidia-smi / jtop)",
+                    r.x + 10, box_y + box_h / 2 - 6);
 
-        // Y-range: 0..max in the visible window. min stays 0 since
-        // every plotted quantity is non-negative.
-        double ymax = 0.0;
-        for (const auto& s : q) ymax = std::max(ymax, value_fn(s));
-        if (ymax <= 0.0) ymax = 1.0;
-
-        const int64_t t_max = q.back().t_ms;
-        const int64_t t_min = t_max -
-            std::chrono::milliseconds(
-                std::chrono::seconds(kWindowSeconds)).count();
-        const double  t_span = static_cast<double>(t_max - t_min);
-
-        auto px_x = [&](int64_t t) {
-            return LX + ((t - t_min) / t_span) * pw;
+        // Two-line colour key so the layout already reads as a dual-series
+        // graph. Distinct from the FC palette: GPU load = magenta, mem = teal.
+        struct { const char* name; wxColour col; } keys[] = {
+            {"GPU load", wxColour(0xB0, 0x30, 0xB0)},
+            {"GPU mem",  wxColour(0x16, 0xA0, 0x85)},
         };
-        auto px_y = [&](double v) {
-            return y + ph - (v / ymax) * ph;
-        };
-
-        gc.SetPen(wxPen(wxColour(0x1E, 0x90, 0xFF), 2));
-        wxGraphicsPath path = gc.CreatePath();
-        bool first = true;
-        for (const auto& s : q) {
-            const double x = px_x(s.t_ms);
-            const double yp = px_y(value_fn(s));
-            if (first) { path.MoveToPoint(x, yp); first = false; }
-            else        path.AddLineToPoint(x, yp);
+        dc.SetPen(*wxTRANSPARENT_PEN);
+        for (int i = 0; i < 2; ++i) {
+            const int ly = box_y + 2 + i * 13;
+            dc.SetBrush(wxBrush(keys[i].col));
+            dc.DrawRectangle(r.x + r.width - 78, ly + 2, 8, 8);
+            dc.SetTextForeground(keys[i].col);
+            dc.DrawText(keys[i].name, r.x + r.width - 65, ly);
         }
-        gc.StrokePath(path);
-
-        // Current value at the upper-right.
-        dc.SetTextForeground(*wxBLACK);
-        dc.DrawText(wxString::Format("%g", value_fn(q.back())),
-                     LX + pw - 60, y + 2);
     }
 
     // Drop window-expired points off the front of any time-ordered deque.
@@ -361,7 +315,6 @@ private:
     }
 
     mutable std::mutex                          mtx_;
-    std::map<std::string, std::deque<Sample>>    data_;
     // machine → child → per-process CPU/RSS series.
     std::map<std::string,
              std::map<std::string, std::deque<ProcSample>>> procs_;
@@ -391,20 +344,9 @@ void LoadChartsPanel::on_frame(const std::string& machine_name,
     const int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now().time_since_epoch()).count();
 
-    if (tag == kTagHealth) {
-        ::system_supervisor::HealthBeacon hb;
-        if (!hb.ParseFromString(payload)) return;
-        Sample s;
-        s.t_ms             = now_ms;
-        s.total_workers    = hb.total_workers();
-        s.active_workers   = hb.active_workers();
-        s.total_restarts   = hb.total_restarts();
-        s.total_tombstones = hb.total_tombstones();
-        s.uptime_ms        = hb.uptime_ms();
-        c->ingest(machine_name, s);
-        c->repaint();
-        return;
-    }
+    // HealthBeacon (tag 0x0002) is no longer plotted here — supervisor health
+    // moved to the System tab's "Supervisor Statistics" box. Load Charts is now
+    // purely the per-process CPU/Mem dashboard, fed by TreeSnapshot.
 
     if (tag == kTagTree) {
         // Per-process CPU%/RSS from each running worker (kind 0). The same

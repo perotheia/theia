@@ -74,8 +74,9 @@ wxColour series_colour(size_t i) {
 }
 
 // Grid: 6 columns (time, 10s each over the 60s window) × 4 rows (value).
-constexpr int kGridCols = 6;
-constexpr int kGridRows = 4;
+constexpr int kGridCols  = 6;
+constexpr int kGridRows  = 4;
+constexpr int kTimeAxisH = 14;   // px reserved below each plot box for X labels
 
 // Round a raw max up to a "nice" ceiling so the Y axis lands on round numbers
 // and divides cleanly by kGridRows: 0.89 → 1.0 (mid 0.5), 17.21 → 20 (mid 10).
@@ -206,7 +207,9 @@ private:
     // (time, 10s each over the 60s window) and kGridRows horizontal lines
     // (value, ymax/kGridRows apart). Y labels sit just left-inside each
     // horizontal line (top = ymax, mid = ymax/2, etc.); the bottom row is 0.
-    // `unit` is appended to each Y label ("", " MB", " %").
+    // X labels sit just below the box at every vertical division: left edge =
+    // kWindowSeconds ago, right edge = 0s (now). `unit` is appended to each Y
+    // label ("", " MB", " %").
     void draw_grid(wxGraphicsContext& gc, wxDC& dc, const wxRect& box,
                    double ymax, const char* unit) {
         gc.SetPen(wxPen(wxColour(0xE4, 0xE4, 0xE4), 1));   // light grey lines
@@ -232,6 +235,20 @@ private:
             const int    off = (rr == 0) ? 1 : (rr == kGridRows ? -11 : -6);
             dc.DrawText(wxString::Format("%g%s", v, unit), box.x + 2, ly + off);
         }
+        // X (time) labels at every vertical division, just below the box: left
+        // edge = kWindowSeconds ago (oldest), right edge = 0s (now).
+        const int tly = box.y + box.height + 1;
+        for (int c = 0; c <= kGridCols; ++c) {
+            const int secs = kWindowSeconds * (kGridCols - c) / kGridCols;
+            const int x    = box.x + box.width * c / kGridCols;
+            const wxString lbl = wxString::Format("%ds", secs);
+            wxSize ext = dc.GetTextExtent(lbl);
+            int tx = x - ext.GetWidth() / 2;            // centre on the line
+            if (c == 0)          tx = box.x;            // first: flush left
+            else if (c == kGridCols)
+                                 tx = box.x + box.width - ext.GetWidth();  // last: flush right
+            dc.DrawText(lbl, tx, tly);
+        }
     }
 
     // Multi-series graph into an arbitrary rect: one coloured polyline per
@@ -247,7 +264,7 @@ private:
         dc.SetTextForeground(wxColour(0x20, 0x20, 0x20));
         dc.DrawText(title, r.x, r.y);
         const int box_y = r.y + 16;
-        const int box_h = std::max(r.height - 16, 24);
+        const int box_h = std::max(r.height - 16 - kTimeAxisH, 24);  // bottom room for X labels
         const wxRect box(r.x, box_y, r.width, box_h);
 
         gc.SetPen(wxPen(wxColour(0xC0, 0xC0, 0xC0), 1));
@@ -335,7 +352,7 @@ private:
         dc.SetTextForeground(wxColour(0x20, 0x20, 0x20));
         dc.DrawText("GPU load + mem (%)", r.x, r.y);
         const int box_y = r.y + 16;
-        const int box_h = std::max(r.height - 16, 24);
+        const int box_h = std::max(r.height - 16 - kTimeAxisH, 24);  // bottom room for X labels
 
         gc.SetPen(wxPen(wxColour(0xC0, 0xC0, 0xC0), 1));
         gc.SetBrush(*wxTRANSPARENT_BRUSH);

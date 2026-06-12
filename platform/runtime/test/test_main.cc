@@ -574,6 +574,62 @@ static std::string case_tipc_concurrent_calls() {
     return {};
 }
 
+// Per-call RemoteRef create/destroy CHURN — the regression for the TipcMux
+// reply-fd use-after-free. Each iteration builds a FRESH RemoteRef, connects
+// (which watch_reply_fd's its socket on the mux), does one call, and lets the
+// ref DESTRUCT (which unwatch_reply_fd's + closes the socket) — all while the
+// mux's epoll loop is dispatching replies. The bug: the loop copied the sink
+// (capturing the ref) out under the lock, RELEASED the lock, then invoked it —
+// so ~RemoteRef on this thread could free the ref between the copy and the call
+// → SIGSEGV in the loop thread under churn. Many threads × many iterations
+// makes the window hittable (and TSan flags the race directly). The fix holds
+// the mux lock across the whole reply find→recv→dispatch.
+static std::string case_tipc_remoteref_churn() {
+    if (::access("/proc/sys/net/tipc", F_OK) != 0) return {};
+    namespace rt = theia::runtime;
+
+    TipcCounter server;
+    server.start();
+    rt::TipcMux mux;
+    auto* binding = mux.bind_node(server, 0xe0010003u, 0u);
+    EXPECT(binding != nullptr, "churn: bind_node");
+    mux.register_call<platform_runtime_test_Get,
+                      platform_runtime_test_GetReply>(binding, server);
+    rt::set_process_mux(&mux);   // so each ad-hoc ref's reply fd is pumped
+    mux.start();
+
+    constexpr int THREADS = 6;
+    constexpr int ITERS = 40;
+    std::atomic<int> ok{0}, fail{0};
+    std::vector<std::thread> ths;
+    for (int t = 0; t < THREADS; ++t) {
+        ths.emplace_back([&] {
+            for (int i = 0; i < ITERS; ++i) {
+                rt::RemoteRef<TipcCounter, 0xe0010003u, 0u> ref;
+                if (!ref.connect(1000)) { ++fail; continue; }
+                auto rid = rt::send_request<platform_runtime_test_GetReply>(
+                    ref, platform_runtime_test_Get{},
+                    test::CallAct{(uint32_t)i});
+                auto r = rt::wait_response(rid, /*timeout_ms=*/1500);
+                if (r.tag == rt::CallTag::Reply) ++ok; else ++fail;
+                // ref destructs HERE — unwatch_reply_fd + close, racing the loop.
+            }
+        });
+    }
+    for (auto& th : ths) th.join();
+
+    mux.stop();
+    rt::set_process_mux(nullptr);
+    server.stop();
+    // The contract is "no crash / no UAF under churn"; we also assert the bulk
+    // of calls completed (a few connect failures under heavy churn are ok).
+    EXPECT(ok.load() > (THREADS * ITERS) / 2,
+           "churn: majority of calls must complete (got " +
+           std::to_string(ok.load()) + "/" +
+           std::to_string(THREADS * ITERS) + ")");
+    return {};
+}
+
 // Cross-process trace correlation. Same fixture as the concurrent-
 // calls stress test, but with TipcCounter's tracer enabled. We capture
 // stderr and assert that:
@@ -1148,6 +1204,7 @@ int main() {
     CASE(stat, tipc_3process)           { return case_tipc_3process(); });
     CASE(stat, tipc_3process_generated) { return case_tipc_3process_generated(); });
     CASE(stat, tipc_concurrent_calls)   { return case_tipc_concurrent_calls(); });
+    CASE(stat, tipc_remoteref_churn)    { return case_tipc_remoteref_churn(); });
     CASE(stat, tipc_trace_correlation)  { return case_tipc_trace_correlation(); });
     CASE(stat, tracer_runtime_toggle)   { return case_tracer_runtime_toggle(); });
     CASE(stat, tracer_msg_type_filter)  { return case_tracer_msg_type_filter(); });

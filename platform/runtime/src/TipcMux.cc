@@ -172,40 +172,58 @@ void TipcMux::loop_() {
             }
 
             // Reply path: outbound RemoteRef expecting CALL_REPLY frames.
-            std::function<void(uint32_t, const uint8_t*, uint16_t)> reply_sink;
+            //
+            // The sink lambda captures the RemoteRef (`this`). ~RemoteRef runs
+            // unwatch_reply_fd() (which takes mu_, erases the sink, EPOLL_DELs
+            // the fd) and THEN frees the RemoteRef + closes the fd — on a
+            // DIFFERENT thread (the caller's). If we copied the sink out, then
+            // released mu_, then invoked it, ~RemoteRef could free `this`
+            // between the copy and the call → use-after-free (the per-restart
+            // probe-churn crash: SIGSEGV in this loop thread). So we hold mu_
+            // ACROSS the whole find→recv→dispatch: unwatch_reply_fd() then
+            // can't race the dispatch — it blocks until we're done, and only
+            // frees the RemoteRef after. on_reply_ takes only the RemoteRef's
+            // OWN pending_mu_ and fulfils a promise (no re-entry into this mux),
+            // so holding mu_ here is deadlock-free.
             {
                 std::lock_guard<std::mutex> lk(mu_);
-                auto it = reply_sinks_.find(fd);
-                if (it != reply_sinks_.end()) reply_sink = it->second;
-            }
-            if (reply_sink) {
-                ssize_t n = ::recv(fd, buf, sizeof(buf), 0);
-                if (n <= 0) {
-                    // Peer closed the reply socket (EOF n==0, or a hard error
-                    // like ECONNRESET n<0). MUST remove the fd from epoll +
-                    // close it — otherwise epoll keeps reporting the dead fd
-                    // readable, recv keeps returning <=0, and this loop
-                    // hot-spins at 100% CPU. Only a transient EAGAIN retries.
-                    bool transient = (n < 0) &&
-                        (errno == EAGAIN || errno == EWOULDBLOCK ||
-                         errno == EINTR);
-                    if (!transient) {
-                        std::lock_guard<std::mutex> lk(mu_);
-                        reply_sinks_.erase(fd);
-                        ::epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, fd, nullptr);
-                        ::close(fd);
+                auto sit = reply_sinks_.find(fd);
+                if (sit != reply_sinks_.end()) {
+                    ssize_t n = ::recv(fd, buf, sizeof(buf), 0);
+                    if (n <= 0) {
+                        // Peer closed (EOF n==0) or hard error (ECONNRESET n<0).
+                        // Drop the sink + EPOLL_DEL so the dead fd stops firing
+                        // (else this loop hot-spins). Do NOT ::close(fd): the
+                        // reply fd is the RemoteRef's OWN TipcClient socket —
+                        // ~RemoteRef/~TipcClient closes it. Closing it here would
+                        // race that close and the fd-number could be reused by a
+                        // fresh RemoteRef before ~TipcClient closes it → a
+                        // double-close on a live fd. Transient EAGAIN/EINTR retry.
+                        bool transient = (n < 0) &&
+                            (errno == EAGAIN || errno == EWOULDBLOCK ||
+                             errno == EINTR);
+                        if (!transient) {
+                            reply_sinks_.erase(sit);
+                            ::epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, fd, nullptr);
+                        }
+                        continue;
+                    }
+                    if (n >= (ssize_t)sizeof(TheiaMsgHeader)) {
+                        TheiaMsgHeader hdr{};
+                        std::memcpy(&hdr, buf, sizeof(TheiaMsgHeader));
+                        if (hdr.msg_type ==
+                                ::theia::runtime::kMsgGenCallReply) {
+                            // Clamp proto_len to what we actually recv'd so a
+                            // truncated/oversized frame can't read past buf.
+                            uint16_t avail = (uint16_t)(n - sizeof(TheiaMsgHeader));
+                            uint16_t plen = hdr.proto_len < avail ? hdr.proto_len
+                                                                  : avail;
+                            sit->second(hdr.rpc.correlation_id,
+                                        buf + sizeof(TheiaMsgHeader), plen);
+                        }
                     }
                     continue;
                 }
-                if (n < (ssize_t)sizeof(TheiaMsgHeader)) continue;
-                TheiaMsgHeader hdr{};
-                std::memcpy(&hdr, buf, sizeof(TheiaMsgHeader));
-                if (hdr.msg_type == ::theia::runtime::kMsgGenCallReply) {
-                    reply_sink(hdr.rpc.correlation_id,
-                                buf + sizeof(TheiaMsgHeader),
-                                hdr.proto_len);
-                }
-                continue;
             }
 
             // Inbound: data on an accepted client fd.
@@ -264,8 +282,13 @@ void TipcMux::loop_() {
                     binding->tipc_type);
                 continue;
             }
-            eit->second.dispatch(payload, hdr.proto_len, fd,
-                                  hdr.rpc.correlation_id);
+            // Clamp the wire proto_len to what we actually recv'd into buf so a
+            // truncated or lying frame can't make dispatch read past the buffer
+            // (kRecvBuf=4096; a SEQPACKET datagram larger than that arrives
+            // truncated, but hdr.proto_len still claims the original length).
+            uint16_t avail = (uint16_t)(n - sizeof(TheiaMsgHeader));
+            uint16_t plen = hdr.proto_len < avail ? hdr.proto_len : avail;
+            eit->second.dispatch(payload, plen, fd, hdr.rpc.correlation_id);
         }
     }
 }

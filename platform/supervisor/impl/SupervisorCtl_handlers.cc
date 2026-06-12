@@ -431,7 +431,11 @@ SystemInfo SupervisorCtl::handle_call(
                   info.theia_git_sha.c_str());
     std::snprintf(m.build_timestamp, sizeof(m.build_timestamp), "%s",
                   info.build_timestamp.c_str());
-    m.start_timestamp_ms = info.start_timestamp_ms;
+    m.start_timestamp_ms       = info.start_timestamp_ms;
+    m.disk_root_total_kb       = info.disk_root_total_kb;
+    m.disk_root_avail_kb       = info.disk_root_avail_kb;
+    m.disk_install_total_kb    = info.disk_install_total_kb;
+    m.disk_install_avail_kb    = info.disk_install_avail_kb;
     return m;
 }
 

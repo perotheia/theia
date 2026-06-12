@@ -105,6 +105,10 @@ struct SystemInfoData {
     std::string theia_git_sha;
     std::string build_timestamp;
     uint64_t    start_timestamp_ms{0};
+    uint64_t    disk_root_total_kb{0};     // statvfs("/")          f_blocks
+    uint64_t    disk_root_avail_kb{0};     // statvfs("/")          f_bavail
+    uint64_t    disk_install_total_kb{0};  // statvfs(install dir)  f_blocks
+    uint64_t    disk_install_avail_kb{0};  // statvfs(install dir)  f_bavail
 };
 
 // One read-back trace-config row for GetTraceConfig.

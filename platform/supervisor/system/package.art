@@ -282,6 +282,10 @@ message SystemInfo {
     string  theia_git_sha       // -DTHEIA_GIT_SHA at build time
     string  build_timestamp     // -DTHEIA_BUILD_TIMESTAMP
     uint64  start_timestamp_ms  // wall-clock millis when supervisor started
+    uint64  disk_root_total_kb     // statvfs("/")          f_blocks
+    uint64  disk_root_avail_kb     // statvfs("/")          f_bavail
+    uint64  disk_install_total_kb  // statvfs(install dir)  f_blocks
+    uint64  disk_install_avail_kb  // statvfs(install dir)  f_bavail
 }
 
 message ChildSelector {

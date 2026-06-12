@@ -1718,19 +1718,54 @@ void Supervisor::sample_procs() {
         ProcSample s = sample_[w->pid];   // carry forward prev_jiffies
         uint64_t ut = 0, st = 0;
         uint32_t th = 0;
-        if (read_proc_stat(w->pid, &ut, &st, &th)) {
+        bool stat_ok = read_proc_stat(w->pid, &ut, &st, &th);
+        if (stat_ok) {
             uint64_t cur = ut + st;
             uint64_t delta = (s.prev_jiffies <= cur) ? (cur - s.prev_jiffies) : 0;
+            const uint64_t prev = s.prev_jiffies;
+            const bool fresh = (prev == 0);   // new pid / first sample (no basis)
             s.prev_jiffies = cur;
             s.threads      = th;
+            double raw_pct = 0.0;
             if (interval_s > 0.0) {
                 // jiffies per second = clk_tck. CPU% = delta / (clk_tck * interval) * 100
-                double pct = static_cast<double>(delta) /
-                             (static_cast<double>(clk_tck) * interval_s) * 100.0;
-                if (pct < 0.0)   pct = 0.0;
-                if (pct > 6553.0) pct = 6553.0;  // fits in u32 ×100
-                s.cpu_pct = static_cast<uint32_t>(pct * 100.0 + 0.5);
+                raw_pct = static_cast<double>(delta) /
+                          (static_cast<double>(clk_tck) * interval_s) * 100.0;
+                if (raw_pct < 0.0)   raw_pct = 0.0;
+                if (raw_pct > 6553.0) raw_pct = 6553.0;  // fits in u32 ×100
+                // EWMA smoothing: the raw % is jiffy-quantized (1 jiffy ≈ 1% per
+                // 1s tick), so a near-idle process oscillates 0↔1%. Blend it so
+                // the GUI shows a steady low value instead of a sawtooth. alpha
+                // 0.4 ≈ a few-tick time constant — responsive but not jittery.
+                constexpr double kAlpha = 0.4;
+                if (!s.cpu_ewma_init) { s.cpu_ewma = raw_pct; s.cpu_ewma_init = true; }
+                else s.cpu_ewma = kAlpha * raw_pct + (1.0 - kAlpha) * s.cpu_ewma;
+                s.cpu_pct = static_cast<uint32_t>(s.cpu_ewma * 100.0 + 0.5);
             }
+            // Why-is-cpu-zero tracing (env THEIA_TRACE_CPU=1). For each running
+            // worker, log the raw inputs so a 0%% reading is explainable:
+            //   delta=0          → genuinely idle this window (<1 jiffy used) —
+            //                      the common cause of the val-0-0-0-val pattern;
+            //                      sub-(1000/clk_tck)ms of CPU quantizes to 0.
+            //   prev=0 (fresh)   → first sample for this pid (no prior basis);
+            //                      a restarted process restarts its counter.
+            //   interval<=0      → first tick overall (no wall-clock delta yet).
+            if (cpu_trace_) {
+                std::ostringstream os;
+                os << "cpu " << w->name << " pid=" << w->pid
+                   << " smoothed=" << (s.cpu_pct / 100.0) << "% raw="
+                   << raw_pct << "%"
+                   << " (delta=" << delta << "j cur=" << cur << "j prev=" << prev
+                   << "j interval=" << interval_s << "s clk_tck=" << clk_tck
+                   << (fresh ? " FRESH(no-basis)" : "")
+                   << (delta == 0 ? " IDLE(delta=0)" : "")
+                   << (interval_s <= 0.0 ? " NO-INTERVAL" : "") << ")";
+                log_info(os.str());
+            }
+        } else if (cpu_trace_) {
+            log_info("cpu " + w->name + " pid=" + std::to_string(w->pid) +
+                     " cpu_pct=0 (read_proc_stat FAILED — /proc/<pid>/stat "
+                     "unreadable; transient on a just-exited pid)");
         }
         uint64_t rss = 0, vsz = 0, data = 0;
         if (read_proc_status(w->pid, &rss, &vsz, &data)) {

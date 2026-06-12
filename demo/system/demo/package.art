@@ -41,12 +41,18 @@ message GetReply {
 // (add-field rule), proving each node carries its OWN v1->v2 evolution + rules,
 // independent of P4Config's. v1: {step,max_value,wrap,label};
 // v2: {step,max_value,wrap,label,hysteresis}.
+//
+// Fields carry DECLARED DEFAULTS (`= value`, same syntax as a node `params`
+// entry). The default is metadata, NOT part of the wire shape / digest — it
+// feeds (a) the migration `add` rule when a field is introduced, and (b) the
+// first-boot config seed (so a node with no stored config starts here, not at
+// proto3 zeros).
 message CounterConfig {
-    uint32 step          // how much each Inc adds
-    uint32 max_value     // saturate at this
-    bool   wrap          // wrap to 0 instead of saturating
-    string label         // human tag
-    uint32 hysteresis    // v2: deadband before re-acting (add-field migration)
+    uint32 step       = 1            // how much each Inc adds
+    uint32 max_value  = 100          // saturate at this
+    bool   wrap       = false        // wrap to 0 instead of saturating
+    string label      = "counter"    // human tag
+    uint32 hysteresis = 3            // v2: deadband; the add-rule's default
 }
 
 // Config for ObserverNode (P2) — how often it polls + a name. v2 renames

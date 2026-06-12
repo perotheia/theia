@@ -80,15 +80,53 @@ def get(per, node, schema):
     return fields
 
 
+def seed_defaults(per, cfgdef, schema):
+    """First-boot seed: PutConfig the DECLARED config defaults (gen-config-
+    defaults output) for every node that has NO stored value yet. A node with an
+    existing value is left untouched (idempotent — defaults seed once). Nodes
+    whose config declares no defaults (empty `values`) are skipped."""
+    name_to_cls = {c.DESCRIPTOR.name: c for c in
+                   (demo.CounterConfig, demo.ObserverConfig,
+                    demo.IncrementerConfig, demo.P4Config)}
+    for node, info in cfgdef["configs"].items():
+        values = info.get("values") or {}
+        if not values:
+            continue
+        # Skip if already present (don't clobber a real stored value).
+        cur = per.probe.call("PerClient", "GetConfig", timeout=3.0,
+                             target_node=node, want_digest="")
+        if cur.get("mod_rev", 0):
+            print(f"  {node}: already has a stored value — not seeding defaults")
+            continue
+        cls = name_to_cls.get(info["config_type"])
+        if cls is None:
+            print(f"  {node}: no proto class for {info['config_type']} — skip")
+            continue
+        msg = cls(**values)
+        rep = per.probe.call("PerClient", "PutConfig", timeout=3.0,
+                             target_node=node, config=msg.SerializeToString(),
+                             digest=info["digest"], expect_rev=0)
+        print(f"  seeded {node} ({info['config_type']}@{info['digest']}) "
+              f"{values} -> {rep.get('status')}")
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("action", choices=["seed", "change", "get"])
-    ap.add_argument("--schema", required=True, type=Path)
+    ap.add_argument("action", choices=["seed", "change", "get", "defaults"])
+    ap.add_argument("--schema", type=Path,
+                    help="gen-schema output (for seed/change/get)")
+    ap.add_argument("--defaults", type=Path,
+                    help="gen-config-defaults output (for the `defaults` action)")
     a = ap.parse_args()
-    schema = json.loads(a.schema.read_text())
 
     per = PerClient.from_workspace(str(REPO))
     try:
+        if a.action == "defaults":
+            cfgdef = json.loads(a.defaults.read_text())
+            schema = json.loads(a.schema.read_text()) if a.schema else None
+            seed_defaults(per, cfgdef, schema)
+            return 0
+        schema = json.loads(a.schema.read_text())
         if a.action == "seed":
             for node, (cls, vals) in SEED.items():
                 put(per, node, cls, vals, schema)

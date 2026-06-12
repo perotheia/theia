@@ -20,7 +20,7 @@
 
 #include <cstdio>
 
-namespace system_demo {
+namespace demo {
 
 // The statem peer the gate forwards into — a process-shared singleton both
 // nodes' impls reach. DemoFsm_handlers.cc publishes *this into it on its
@@ -61,4 +61,4 @@ void DemoFsmGate::handle_cast(const DemoReset& msg, DemoFsmGateState& /*s*/) {
     forward_to_fsm(kNodeName, "DemoReset", msg);
 }
 
-}  // namespace system_demo
+}  // namespace demo

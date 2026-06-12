@@ -74,8 +74,13 @@ bool load_migration_plugin(const std::string& so_path, std::string* err) {
     // registered transforms call back into the plugin's code for the process
     // lifetime).
     void* h = ::dlopen(so_path.c_str(), RTLD_NOW | RTLD_LOCAL);
-    if (!h) return fail(std::string("dlopen failed: ") +
-                        (::dlerror() ? ::dlerror() : "unknown"));
+    if (!h) {
+        // dlerror() CLEARS the error on read, so call it exactly ONCE — a second
+        // call (e.g. in a `?:` that reads it twice) returns nullptr and
+        // `std::string + nullptr` segfaults. Capture, then build the message.
+        const char* de = ::dlerror();
+        return fail(std::string("dlopen failed: ") + (de ? de : "unknown"));
+    }
 
     auto entry = reinterpret_cast<per_register_migrations_fn>(
         ::dlsym(h, PER_MIGRATION_ENTRY_SYMBOL));

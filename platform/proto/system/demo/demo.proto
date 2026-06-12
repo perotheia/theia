@@ -21,11 +21,12 @@ message CounterConfig {
     uint32 max_value = 2;
     bool wrap = 3;
     string label = 4;
+    uint32 hysteresis = 5;
 }
 
 message ObserverConfig {
     uint32 poll_ms = 1;
-    string name = 2;
+    string tag = 2;
 }
 
 message IncrementerConfig {

@@ -1,0 +1,120 @@
+{
+  "package": "system.demo",
+  "configs": {
+    "CounterConfig": {
+      "digest": "cfg_68334f330fa1ceae",
+      "proto_type": "system_demo_CounterConfig",
+      "art_package": "system.demo",
+      "nodes": [
+        "counter"
+      ],
+      "fields": [
+        {
+          "name": "step",
+          "type": "uint32",
+          "repeated": false
+        },
+        {
+          "name": "max_value",
+          "type": "uint32",
+          "repeated": false
+        },
+        {
+          "name": "wrap",
+          "type": "bool",
+          "repeated": false
+        },
+        {
+          "name": "label",
+          "type": "string",
+          "repeated": false
+        },
+        {
+          "name": "hysteresis",
+          "type": "uint32",
+          "repeated": false
+        }
+      ]
+    },
+    "ObserverConfig": {
+      "digest": "cfg_9072169f29427dc1",
+      "proto_type": "system_demo_ObserverConfig",
+      "art_package": "system.demo",
+      "nodes": [
+        "observer"
+      ],
+      "fields": [
+        {
+          "name": "poll_ms",
+          "type": "uint32",
+          "repeated": false
+        },
+        {
+          "name": "tag",
+          "type": "string",
+          "repeated": false
+        }
+      ]
+    },
+    "IncrementerConfig": {
+      "digest": "cfg_2c5e5cfc07477b4c",
+      "proto_type": "system_demo_IncrementerConfig",
+      "art_package": "system.demo",
+      "nodes": [
+        "incrementer"
+      ],
+      "fields": [
+        {
+          "name": "amount",
+          "type": "uint32",
+          "repeated": false
+        },
+        {
+          "name": "period_ms",
+          "type": "uint32",
+          "repeated": false
+        },
+        {
+          "name": "enabled",
+          "type": "bool",
+          "repeated": false
+        }
+      ]
+    },
+    "P4Config": {
+      "digest": "cfg_37bde78e5ba60b3d",
+      "proto_type": "system_demo_P4Config",
+      "art_package": "system.demo",
+      "nodes": [
+        "demo_fsm"
+      ],
+      "fields": [
+        {
+          "name": "timeout_s",
+          "type": "uint32",
+          "repeated": false
+        },
+        {
+          "name": "label",
+          "type": "string",
+          "repeated": false
+        },
+        {
+          "name": "step",
+          "type": "uint32",
+          "repeated": false
+        },
+        {
+          "name": "poll_ms",
+          "type": "uint32",
+          "repeated": false
+        },
+        {
+          "name": "amount",
+          "type": "uint32",
+          "repeated": false
+        }
+      ]
+    }
+  }
+}

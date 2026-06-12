@@ -145,6 +145,140 @@ def _fc_art_path(fc: str, target: str):
     return cand if cand.exists() else None
 
 
+def _install_dir(args: list[str]) -> Path:
+    machine = next((a for a in args if not a.startswith("-")), "central")
+    return WORKSPACE / "install" / machine
+
+
+def _sup_pidfile(dest: Path) -> Path:
+    return dest / "supervisor.pid"
+
+
+def cmd_start(args: list[str]) -> int:
+    """Run the staged supervisor from install/<machine>/ (default central).
+
+    The supervisor forks every child from executor.json; bring the whole stack
+    up with one verb instead of the hand-typed
+    `THEIA_SUPERVISOR_MANIFEST=… ./supervisor`. Detached (setsid) with a pidfile
+    so `theia stop` can bring it down gracefully — and so it survives the
+    calling shell (the supervisor must outlive `theia start`). Logs stream to
+    install/<machine>/supervisor.log. Idempotent: refuses if one is already up.
+
+    Pass an INSTANCE via `--instance N` (THEIA_SUPERVISOR_INSTANCE, default 0)."""
+    if "-h" in args or "--help" in args:
+        print(cmd_start.__doc__, file=sys.stderr)
+        return 0
+    dest = _install_dir(args)
+    sup = dest / "supervisor"
+    if not sup.is_file():
+        print(f"theia: {sup} not found — run `theia install` first.",
+              file=sys.stderr)
+        return 1
+
+    pidfile = _sup_pidfile(dest)
+    if pidfile.is_file():
+        try:
+            old = int(pidfile.read_text().strip())
+            os.kill(old, 0)  # still alive?
+            print(f"theia: supervisor already running (pid {old}); "
+                  f"`theia stop` first.", file=sys.stderr)
+            return 1
+        except (ValueError, ProcessLookupError, PermissionError):
+            pidfile.unlink(missing_ok=True)  # stale
+
+    instance = "0"
+    for i, a in enumerate(args):
+        if a == "--instance" and i + 1 < len(args):
+            instance = args[i + 1]
+
+    log = dest / "supervisor.log"
+    env = {
+        **os.environ,
+        "THEIA_SUPERVISOR_MANIFEST": "executor.json",
+        "THEIA_ROOT_DIR": ".",
+        "THEIA_SUPERVISOR_INSTANCE": instance,
+    }
+    # Detach into its own session so it outlives this process; redirect output
+    # to the log. start_new_session=True == setsid → the supervisor leads its
+    # own session (its children already setsid per-worker).
+    logf = open(log, "ab")
+    proc = subprocess.Popen(
+        ["./supervisor"], cwd=str(dest), env=env,
+        stdout=logf, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    pidfile.write_text(str(proc.pid) + "\n")
+    print(f"theia: supervisor up (pid {proc.pid}, instance {instance}) — "
+          f"log: {log}", file=sys.stderr)
+    # Brief liveness check: if it died immediately (bad manifest / port in use),
+    # surface the tail rather than leave a stale pidfile.
+    import time
+    time.sleep(1.0)
+    if proc.poll() is not None:
+        pidfile.unlink(missing_ok=True)
+        print(f"theia: supervisor exited immediately (rc={proc.returncode}); "
+              f"tail of {log}:", file=sys.stderr)
+        _run(["tail", "-n", "15", str(log)])
+        return 1
+    return 0
+
+
+def cmd_stop(args: list[str]) -> int:
+    """Stop the supervisor started by `theia start` (graceful SIGTERM).
+
+    SIGTERM triggers the supervisor's shutdown_subtree() — it SIGTERMs→reaps→
+    SIGKILLs each child's process group, then exits. Children also carry
+    PR_SET_PDEATHSIG, so even a hard kill wouldn't orphan them. Reads the
+    pidfile; waits up to ~10s for a clean exit before escalating to SIGKILL."""
+    import signal
+    import time
+
+    if "-h" in args or "--help" in args:
+        print(cmd_stop.__doc__, file=sys.stderr)
+        return 0
+    dest = _install_dir(args)
+    pidfile = _sup_pidfile(dest)
+    if not pidfile.is_file():
+        print(f"theia: no pidfile at {pidfile} — supervisor not started by "
+              f"`theia start` (or already stopped).", file=sys.stderr)
+        return 0
+    try:
+        pid = int(pidfile.read_text().strip())
+    except ValueError:
+        pidfile.unlink(missing_ok=True)
+        return 0
+
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pidfile.unlink(missing_ok=True)
+        print("theia: supervisor already gone.", file=sys.stderr)
+        return 0
+    print(f"theia: SIGTERM → supervisor {pid}; waiting for clean shutdown…",
+          file=sys.stderr)
+    # The supervisor shuts children down SEQUENTIALLY, each up to its own
+    # SIGTERM→SIGKILL grace window. Most FCs now exit promptly (interruptible
+    # heartbeat); com/per still consume their ~5s grace on external-resource
+    # teardown (gRPC server / etcd client), so a full tree is ~12s. 20s budget
+    # covers it with margin before escalating.
+    for _ in range(200):  # 200 × 0.1s = 20s
+        time.sleep(0.1)
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            pidfile.unlink(missing_ok=True)
+            print("theia: supervisor stopped.", file=sys.stderr)
+            return 0
+    # Didn't exit in time — escalate.
+    print("theia: supervisor didn't exit in 20s; SIGKILL.", file=sys.stderr)
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    pidfile.unlink(missing_ok=True)
+    return 0
+
+
 def cmd_install(args: list[str]) -> int:
     """LOCAL install: build + populate $WORKSPACE/install/<machine>/ via puppet.
 
@@ -447,6 +581,8 @@ COMMANDS = {
     "orchestrate": (cmd_orchestrate, "puppet apply — Phase 2 remote (app rollout)"),
     "install":     (cmd_install,     "build + puppet-populate install/<machine>/ (local host)"),
     "stage-local": (cmd_install,     "alias for `install` (back-compat)"),
+    "start":       (cmd_start,       "run the staged supervisor from install/<machine>/ (detached + pidfile)"),
+    "stop":        (cmd_stop,        "stop the supervisor started by `theia start` (graceful)"),
     "manifest":    (cmd_manifest,    "rig.py → dist/manifest/*.json (sole rig entry for deploy)"),
     "dist":        (cmd_dist,        "per-host .ipk from dist/manifest/ JSON (no rig.py)"),
     "compdb":      (cmd_compdb,      "regen compile_commands.json from bazel (clangd)"),

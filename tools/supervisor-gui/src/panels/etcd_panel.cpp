@@ -29,6 +29,7 @@
 // pane is only updated on explicit row selection.
 
 #include "sup_gui/panels.h"
+#include "sup_gui/trace_decoder_lib.h"   // proto→JSON for /theia/config/* values
 
 #include <wx/wx.h>
 #include <wx/listctrl.h>
@@ -74,6 +75,34 @@ enum : int {
 // individual events into the visible list (kvs come and go too fast
 // and our refresh round-trips localhost etcd in <2ms anyway).
 wxDEFINE_EVENT(EVT_ETCD_CHANGED, wxThreadEvent);
+
+// Config values under /theia/config/<node> are framed by services/per as
+// "<digest>\0<protobuf-bytes>" (see services/per/impl/etcd_store.cc). To decode
+// proto→JSON we need the message TYPE for the node. Map the node leaf of the key
+// to its registered libtrace_decoder type name (the names registered in
+// platform/runtime/trace/trace_decoder_protos.cc). Unknown node → "" (skip,
+// fall back to text/hex). Extend this map as more FCs' configs want decoding.
+std::string config_type_for_key(const std::string& key) {
+    const std::string prefix = "/theia/config/";
+    if (key.rfind(prefix, 0) != 0) return "";
+    const std::string node = key.substr(prefix.size());
+    if (node == "counter")     return "system_demo_CounterConfig";
+    if (node == "observer")    return "system_demo_ObserverConfig";
+    if (node == "incrementer") return "system_demo_IncrementerConfig";
+    if (node == "demo_fsm")    return "system_demo_P4Config";
+    return "";
+}
+
+// Split a per-framed config value "<digest>\0<proto>" into (digest, proto).
+// Returns false if there's no NUL separator (not a framed config value).
+bool split_config_value(const std::string& body,
+                        std::string& digest, std::string& proto) {
+    const auto nul = body.find('\0');
+    if (nul == std::string::npos) return false;
+    digest = body.substr(0, nul);
+    proto  = body.substr(nul + 1);
+    return true;
+}
 
 // "looks like JSON" heuristic — accept if first non-ws byte is {} or [].
 bool looks_like_json(const std::string& s) {
@@ -184,6 +213,7 @@ private:
     std::unique_ptr<etcd::Watcher>    watcher_;
     std::string                       last_endpoint_;
     std::vector<std::string>          last_keys_;
+    TraceDecoderLib                   decoder_;   // /theia/config/* proto→JSON
 
     wxTextCtrl*  endpoint_{nullptr};
     wxTextCtrl*  prefix_{nullptr};
@@ -453,6 +483,28 @@ private:
                                             // that might re-enter handlers.
 
         const std::string& body = v.as_string();
+
+        // /theia/config/<node>: a per-framed "<digest>\0<proto>" value. Decode
+        // the proto→JSON (libtrace_decoder) and show that as the (read-only)
+        // value, with the digest noted in the meta. Falls through to the normal
+        // text/hex path if the type is unknown or the decode fails.
+        if (std::string ct = config_type_for_key(key_str); !ct.empty()) {
+            std::string digest, proto, json;
+            if (split_config_value(body, digest, proto) &&
+                decoder_.available() &&
+                decoder_.decode(ct, proto, json)) {
+                meta << wxString::Format("\nconfig-type: %s\ndigest:      %s",
+                    wxString::FromUTF8(ct.c_str()),
+                    wxString::FromUTF8(digest.c_str()));
+                detail_meta_->ChangeValue(meta);
+                value_text_->ChangeValue(wxString::FromUTF8(json.data(),
+                                                            json.size()));
+                value_text_->SetEditable(false);  // decoded view is read-only
+                set_buttons_enabled(true);
+                return;
+            }
+        }
+
         const bool is_textual = looks_like_json(body) || looks_like_text(body);
         wxString rendered;
         if (is_textual) {

@@ -154,6 +154,19 @@ public:
         const std::string& /*machine*/, const std::string& /*fc_name*/)>;
     void set_tombstone_callback(TombstoneCallback cb);
 
+    // Kill a PROCESS (right-click on a proc row). Maps to RestartChild on the
+    // process name (kill + supervisor restarts it). Returns a status line.
+    using KillCallback = std::function<std::string(
+        const std::string& /*machine*/, const std::string& /*proc*/)>;
+    void set_kill_callback(KillCallback cb);
+
+    // Fetch a node's CURRENT effective log level (for the Log level submenu's
+    // checkmark). Returns the level name (TRACE/DEBUG/INFO/WARN/ERROR) or ""
+    // if unknown. main_frame wires it to GrpcClient::get_log_level for `node`.
+    using GetLogLevelCallback = std::function<std::string(
+        const std::string& /*machine*/, const std::string& /*node*/)>;
+    void set_get_log_level_callback(GetLogLevelCallback cb);
+
 private:
     ApplicationsCanvas* canvas_{nullptr};
 };

@@ -50,6 +50,8 @@ using ChildSelector = system_supervisor_ChildSelector;
 using Stop = system_supervisor_Stop;
 using GetSystemInfoRequest = system_supervisor_GetSystemInfoRequest;
 using SystemInfo = system_supervisor_SystemInfo;
+using GetHealthRequest = system_supervisor_GetHealthRequest;
+using HealthBeacon = system_supervisor_HealthBeacon;
 using ConfigureTraceRequest = system_supervisor_ConfigureTraceRequest;
 using GetTraceConfigRequest = system_supervisor_GetTraceConfigRequest;
 using TraceConfigList = system_supervisor_TraceConfigList;
@@ -59,7 +61,6 @@ using LogLevelConfigList = system_supervisor_LogLevelConfigList;
 using GetTombstoneRequest = system_supervisor_GetTombstoneRequest;
 using GetTombstoneReply = system_supervisor_GetTombstoneReply;
 using SupervisionEvent = system_supervisor_SupervisionEvent;
-using HealthBeacon = system_supervisor_HealthBeacon;
 using SnapshotBegin = system_supervisor_SnapshotBegin;
 using NodeEdge = system_supervisor_NodeEdge;
 using NodeState = system_supervisor_NodeState;
@@ -232,6 +233,9 @@ public:
                                             SupervisorCtlState& s);
 
     SystemInfo handle_call(const GetSystemInfoRequest& req,
+                                            SupervisorCtlState& s);
+
+    HealthBeacon handle_call(const GetHealthRequest& req,
                                             SupervisorCtlState& s);
 
     ControlReply handle_call(const ConfigureTraceRequest& req,

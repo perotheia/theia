@@ -285,6 +285,25 @@ bool SupLink::get_system_info(SupReply& out, int timeout_ms) {
     return true;
 }
 
+bool SupLink::get_health(SupReply& out, int timeout_ms) {
+    if (!impl_->started) return false;
+    std::lock_guard<std::mutex> lk(impl_->call_mu);
+    system_supervisor_GetHealthRequest req =
+        system_supervisor_GetHealthRequest_init_zero;
+    auto result = theia::runtime::call<system_supervisor_HealthBeacon>(
+        impl_->ref, req, /*act=*/0, timeout_ms);
+    if (result.tag != theia::runtime::CallTag::Reply) return false;
+    uint8_t buf[256];   // HealthBeacon: 7 scalars, fits easily.
+    pb_ostream_t os = pb_ostream_from_buffer(buf, sizeof(buf));
+    if (pb_encode(&os,
+            theia::runtime::RemoteCodec<system_supervisor_HealthBeacon>::fields(),
+            &result.reply)) {
+        out.health.assign(reinterpret_cast<const char*>(buf), os.bytes_written);
+    }
+    out.status = 0;
+    return true;
+}
+
 bool SupLink::get_log_level_config(SupReply& out, int timeout_ms) {
     if (!impl_->started) return false;
     std::lock_guard<std::mutex> lk(impl_->call_mu);

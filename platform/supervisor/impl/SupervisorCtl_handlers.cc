@@ -310,6 +310,11 @@ TreeSnapshot SupervisorCtl::handle_call(
         c.shared_kb = r.shared_kb;
         c.data_kb   = r.data_kb;
         c.threads   = r.threads;
+        // TIPC traffic summary (summed queue bytes over the node's sockets).
+        // The full per-socket list stays off the wire (max_count:0) to keep the
+        // TreeSnapshot under the TIPC reply cap.
+        c.tipc_rx   = r.tipc_rx;
+        c.tipc_tx   = r.tipc_tx;
     }
     return snap;
 }
@@ -427,6 +432,25 @@ SystemInfo SupervisorCtl::handle_call(
     std::snprintf(m.build_timestamp, sizeof(m.build_timestamp), "%s",
                   info.build_timestamp.c_str());
     m.start_timestamp_ms = info.start_timestamp_ms;
+    return m;
+}
+
+HealthBeacon SupervisorCtl::handle_call(
+        const GetHealthRequest& /*req*/,
+        SupervisorCtlState& /*s*/) {
+    using Op = ::supervisor::ExecCommand::Op;
+    auto* eng = engine();
+    ::supervisor::HealthData h =
+        eng ? eng->call(exec_cmd(Op::GetHealth)).health
+            : ::supervisor::HealthData{};
+    HealthBeacon m{};
+    m.timestamp_ms     = h.timestamp_ms;
+    m.uptime_ms        = h.uptime_ms;
+    m.generation       = h.generation;
+    m.total_workers    = h.total_workers;
+    m.active_workers   = h.active_workers;
+    m.total_restarts   = h.total_restarts;
+    m.total_tombstones = h.total_tombstones;
     return m;
 }
 

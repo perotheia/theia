@@ -98,6 +98,15 @@ ProcessesPanel::ProcessesPanel(wxWindow* parent) : PanelBase(parent) {
     list_->AppendColumn("threads/mask",120, wxALIGN_RIGHT);
     list_->AppendColumn("tipc rx/tx",  120, wxALIGN_RIGHT);
 
+    // Zebra striping — odd rows white, even rows light salmon — so a row's
+    // values are easy to read across without selecting it. Matches the Erlang
+    // observer processes panel's even-row tint (RGB 255,224,224, "misty rose").
+    // wxTreeListCtrl has no per-row background setter; its backing
+    // wxDataViewCtrl does the striping for us (and keeps it correct across
+    // sorts, expansions and rebuilds).
+    if (wxDataViewCtrl* dv = list_->GetDataView())
+        dv->SetAlternateRowColour(wxColour(255, 224, 224));
+
     sizer->Add(list_, 1, wxEXPAND | wxALL, 4);
     SetSizer(sizer);
 

@@ -71,6 +71,11 @@ public:
     int configure_log_level(const std::string& target_node,
                             const std::string& level);
 
+    // Read ONE node's current effective log level (for the menu checkmark).
+    // Returns the level NAME (TRACE/DEBUG/INFO/WARN/ERROR), or "" if the node
+    // isn't found / the RPC fails. Synchronous, from the wx main thread.
+    std::string get_log_level(const std::string& node);
+
     // Child lifecycle (Processes panel context menu). Both return per's
     // ControlReply status (0 = OK), negative on RPC failure; msg gets the
     // reply message. Kill restarts; Remove stop-and-holds (no policy restart).

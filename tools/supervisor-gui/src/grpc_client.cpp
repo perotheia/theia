@@ -235,6 +235,30 @@ int GrpcClient::configure_log_level(const std::string& target_node,
     return static_cast<int>(rep.status());
 }
 
+// Read ONE node's current effective log level (the Applications-panel Log-level
+// submenu checkmark). GetLogLevelConfig returns every reporting node's status;
+// we find the row for `node` and map its level ordinal to a name. "" when the
+// node isn't found (not reporting yet) or the RPC fails.
+std::string GrpcClient::get_log_level(const std::string& node) {
+    static const char* kLvl[] = {"TRACE", "DEBUG", "INFO", "WARN", "ERROR"};
+    auto chan = grpc::CreateChannel(host_port_,
+                                    grpc::InsecureChannelCredentials());
+    auto ci = std::static_pointer_cast< ::grpc::ChannelInterface>(chan);
+    auto stub = ::services::com::SupervisorView::NewStub(ci);
+    ::services::com::GetLogLevelConfigCall req;
+    ::system_supervisor::LogLevelConfigList rep;
+    grpc::ClientContext ctx;
+    ctx.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(3));
+    if (!stub->GetLogLevelConfig(&ctx, req, &rep).ok()) return {};
+    for (const auto& s : rep.configs()) {
+        if (s.target_node() == node) {
+            int lv = static_cast<int>(s.level());
+            return (lv >= 0 && lv < 5) ? kLvl[lv] : "";
+        }
+    }
+    return {};
+}
+
 // ---- child lifecycle (Processes panel right-click) ----------------------
 // Kill = RestartChild (no_restart=false): kill + supervisor restarts it.
 // Remove = TerminateChild (no_restart=true): stop-and-hold, no policy restart.

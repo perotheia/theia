@@ -123,7 +123,9 @@ build_tree(const system_supervisor::TreeSnapshot& snap,
 // crashed (CORE_DUMPED) node — so the breadth of a tree reads at a glance.
 std::string box_label(const Node* n) {
     std::string s = n->name;
-    if (n->kind == 0) {  // workers carry the per-process stats
+    // Crash / restart badges ride on the PROCESS row (kind 0) — that's where the
+    // pid + per-process flags live. (kind 1 = supervisor, kind 2 = node/thread.)
+    if (n->kind == 0) {
         if (n->flags & kFlagCoreDumped) s += "  ✗";        // ✗ crashed
         if (n->restart_count > 0)
             s += "  ↻" + std::to_string(n->restart_count); // ↻N restarts
@@ -135,7 +137,7 @@ std::string box_label(const Node* n) {
 //
 // PASS 1 (size): set each box's w/h from its label.
 void measure(Node* n, wxDC& dc) {
-    wxSize t = dc.GetTextExtent(box_label(n));
+    wxSize t = dc.GetTextExtent(wxString::FromUTF8(box_label(n).c_str()));
     n->w = t.GetWidth()  + 2 * kBoxPadX;
     n->h = t.GetHeight() + 2 * kBoxPadY;
     for (auto* c : n->children) measure(c, dc);
@@ -189,7 +191,10 @@ void box_colours(const Node* n, wxColour& fill, wxColour& border,
     } else if (n->restart_count > 0) {         // has restarted
         fill = wxColour(252, 236, 200);       // amber
         border = wxColour(200, 150, 60);
-    } else {                                   // running, clean
+    } else if (n->kind == 0) {                 // PROCESS (running, clean) —
+        fill = wxColour(214, 234, 240);       // teal-ish: distinct from the
+        border = wxColour(90, 150, 165);      // green leaf NODES it contains
+    } else {                                   // node (kind 2), running clean
         fill = wxColour(232, 245, 233);       // light green
         border = wxColour(120, 170, 120);
     }
@@ -221,7 +226,11 @@ void draw_node(wxDC& dc, const Node* n, const std::string& selected) {
     dc.SetPen(wxPen(border, is_sel ? 2 : 1));
     dc.DrawRoundedRectangle(n->x, n->y, n->w, n->h, kRadius);
     dc.SetTextForeground(*wxBLACK);
-    std::string label = box_label(n);
+    // FromUTF8: box_label may carry multibyte badge glyphs (↻ ✗). A bare
+    // std::string→wxString goes through the C locale and yields an EMPTY string
+    // on a non-ASCII byte — which is why a restarted process (label "p1  ↻2")
+    // drew as a blank pill while a clean one ("sm") rendered fine.
+    wxString label = wxString::FromUTF8(box_label(n).c_str());
     dc.DrawText(label,
                 n->x + (n->w - dc.GetTextExtent(label).GetWidth()) / 2,
                 n->y + kBoxPadY);
@@ -268,6 +277,10 @@ public:
         const std::string&, const std::string&)>;
     using TombstoneCallback = std::function<std::string(
         const std::string&, const std::string&)>;
+    using KillCallback = std::function<std::string(
+        const std::string&, const std::string&)>;
+    using GetLogLevelCallback = std::function<std::string(
+        const std::string&, const std::string&)>;
 
     explicit ApplicationsCanvas(wxWindow* parent)
         : wxScrolledWindow(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize,
@@ -298,6 +311,12 @@ public:
     }
     void set_tombstone_callback(TombstoneCallback cb) {
         tombstone_cb_ = std::move(cb);
+    }
+    void set_kill_callback(KillCallback cb) {
+        kill_cb_ = std::move(cb);
+    }
+    void set_get_log_level_callback(GetLogLevelCallback cb) {
+        get_log_level_cb_ = std::move(cb);
     }
 
 private:
@@ -389,17 +408,20 @@ private:
         kMenuLogBase,          // 5 contiguous: TRACE/DEBUG/INFO/WARN/ERROR
         kMenuRestart = kMenuLogBase + 8,
         kMenuTombstone,
+        kMenuKill,
     };
     static const char* log_level_name(int idx) {
         static const char* kL[] = {"TRACE", "DEBUG", "INFO", "WARN", "ERROR"};
         return (idx >= 0 && idx < 5) ? kL[idx] : "INFO";
     }
+    // Tree row kind: 1 = supervisor, 0 = process (proc), 2 = node (thread).
 
-    // Right-click on a node → select it + pop a per-kind context menu on the
-    // selectable hit cache (GUI-3):
-    //   supervisor : Restart subtree.
-    //   FC/node    : Log level ▸ (TRACE…ERROR), Configure trace…, and — when
-    //                CORE_DUMPED — Download tombstone.
+    // Right-click on a box → select it + pop a KIND-SPECIFIC context menu on the
+    // selectable hit cache:
+    //   supervisor (1) : Restart subtree.
+    //   process    (0) : Kill (restart); Download tombstone if it cored.
+    //   node       (2) : Log level ▸ (with the CURRENT level checked) +
+    //                    Configure trace… (kinds as checkboxes).
     void on_right_down(wxMouseEvent& evt) {
         wxPoint p = CalcUnscrolledPosition(evt.GetPosition());
         const HitBox* b = box_at(p);
@@ -417,28 +439,35 @@ private:
         Refresh(false);
 
         wxMenu menu;
-        if (kind == 1) {
-            // Supervisor: restart the whole subtree (RestartChild on the sup).
+        if (kind == 1) {                              // supervisor
             menu.Append(kMenuRestart,
                         wxString::Format("Restart subtree \"%s\"", name.c_str()));
-        } else {
-            // FC / node: log level submenu + trace + (gated) tombstone.
-            auto* log_menu = new wxMenu;
-            for (int i = 0; i < 5; ++i)
-                log_menu->Append(kMenuLogBase + i, log_level_name(i));
-            menu.AppendSubMenu(log_menu, "Log level");
-            menu.Append(kMenuTrace, "Configure trace…");
+        } else if (kind == 0) {                       // process
+            menu.Append(kMenuKill,
+                        wxString::Format("Kill \"%s\" (restart)", name.c_str()));
             if (flags & kFlagCoreDumped) {
                 menu.AppendSeparator();
-                menu.Append(kMenuTombstone, "Download tombstone…");
+                menu.Append(kMenuTombstone, "Download tombstone...");
             }
+        } else {                                      // node (kind 2)
+            // Log level ▸ with a RADIO check on the node's CURRENT level.
+            std::string cur;
+            if (get_log_level_cb_) cur = get_log_level_cb_(machine, name);
+            auto* log_menu = new wxMenu;
+            for (int i = 0; i < 5; ++i) {
+                wxMenuItem* it = log_menu->AppendCheckItem(
+                    kMenuLogBase + i, log_level_name(i));
+                if (cur == log_level_name(i)) it->Check(true);
+            }
+            menu.AppendSubMenu(log_menu, "Log level");
+            menu.Append(kMenuTrace, "Configure trace...");
         }
 
         const int sel = GetPopupMenuSelectionFromUser(menu, evt.GetPosition());
         if (sel == wxID_NONE) return;
 
         if (sel == kMenuTrace) {
-            show_configure_dialog(machine, name);
+            show_trace_dialog(machine, name);
         } else if (sel >= kMenuLogBase && sel < kMenuLogBase + 5) {
             if (log_level_cb_) {
                 std::string s = log_level_cb_(machine, name,
@@ -450,6 +479,11 @@ private:
                 std::string s = restart_cb_(machine, name);
                 if (!s.empty()) wxLogStatus("%s", s.c_str());
             }
+        } else if (sel == kMenuKill) {
+            if (kill_cb_) {
+                std::string s = kill_cb_(machine, name);
+                if (!s.empty()) wxLogStatus("%s", s.c_str());
+            }
         } else if (sel == kMenuTombstone) {
             if (tombstone_cb_) {
                 std::string s = tombstone_cb_(machine, name);
@@ -458,47 +492,35 @@ private:
         }
     }
 
-    void show_configure_dialog(const std::string& machine,
-                                const std::string& node_name) {
-        wxDialog dlg(this, wxID_ANY, "Configure Trace",
-                     wxDefaultPosition, wxSize(420, 220));
+    // Trace dialog — a CHECKBOX per trace kind, like the log-level submenu but
+    // multi-select. The trace filter is a per-node BITMASK of kinds; checking a
+    // box enables that kind, unchecking removes it. No message-type field (the
+    // TraceControlPush carries only kind+enabled — msg_type was a vestige) and
+    // no global Enabled box (unchecking every kind = trace off).
+    void show_trace_dialog(const std::string& machine,
+                           const std::string& node_name) {
+        // (ordinal, label) — STATEM only matters for statem nodes but is
+        // harmless elsewhere. OTHER(0) = the "all kinds" catch-all.
+        struct K { uint32_t ord; const char* label; };
+        static const K kKinds[] = {
+            {1, "CAST_OUT"}, {2, "CAST_IN"}, {3, "CALL_OUT"},
+            {4, "CALL_IN"},  {5, "STATEM"},
+        };
+
+        wxDialog dlg(this, wxID_ANY,
+                     wxString::Format("Trace: %s", node_name.c_str()),
+                     wxDefaultPosition, wxSize(300, 280));
         auto* outer = new wxBoxSizer(wxVERTICAL);
         outer->Add(new wxStaticText(&dlg, wxID_ANY,
-            wxString::Format("Node:    %s    (machine: %s)",
-                              node_name.c_str(), machine.c_str())),
+            wxString::Format("Enable trace kinds for \"%s\":", node_name.c_str())),
             0, wxALL, 10);
 
-        auto* row = new wxBoxSizer(wxHORIZONTAL);
-        row->Add(new wxStaticText(&dlg, wxID_ANY, "Message type:"),
-                 0, wxALIGN_CENTER_VERTICAL | wxLEFT | wxRIGHT, 10);
-        auto* msg = new wxTextCtrl(&dlg, wxID_ANY, "SmStateMsg",
-                                    wxDefaultPosition, wxSize(220, -1));
-        row->Add(msg, 1, wxRIGHT, 10);
-        outer->Add(row, 0, wxEXPAND);
-
-        // Trace KIND — the dimension the supervisor's per-node filter keys on
-        // (#403), the same one `rtdb trace <node> CAST_OUT` sets. Index maps to
-        // the TraceKind ordinal: 0=all(OTHER), 1=CAST_OUT … 5=STATEM.
-        auto* krow = new wxBoxSizer(wxHORIZONTAL);
-        krow->Add(new wxStaticText(&dlg, wxID_ANY, "Trace kind:"),
-                  0, wxALIGN_CENTER_VERTICAL | wxLEFT | wxRIGHT, 10);
-        wxArrayString kinds;
-        kinds.Add("ALL (every kind)");   // ordinal 0 (OTHER = catch-all)
-        kinds.Add("CAST_OUT");           // 1
-        kinds.Add("CAST_IN");            // 2
-        kinds.Add("CALL_OUT");           // 3
-        kinds.Add("CALL_IN");            // 4
-        kinds.Add("STATEM");             // 5
-        auto* kind_choice = new wxChoice(&dlg, wxID_ANY, wxDefaultPosition,
-                                          wxDefaultSize, kinds);
-        kind_choice->SetSelection(0);
-        krow->Add(kind_choice, 1, wxRIGHT, 10);
-        outer->Add(krow, 0, wxEXPAND);
-
-        auto* enable_box = new wxCheckBox(&dlg, wxID_ANY,
-            "Enabled (uncheck to remove the filter)");
-        enable_box->SetValue(true);
-        outer->Add(enable_box, 0, wxALL, 10);
+        std::vector<wxCheckBox*> boxes;
+        for (const auto& k : kKinds) {
+            auto* cb = new wxCheckBox(&dlg, wxID_ANY, k.label);
+            outer->Add(cb, 0, wxLEFT | wxRIGHT | wxTOP, 12);
+            boxes.push_back(cb);
+        }
 
         auto* buttons = dlg.CreateButtonSizer(wxOK | wxCANCEL);
         outer->Add(buttons, 0, wxEXPAND | wxALL, 10);
@@ -506,12 +528,12 @@ private:
         outer->Layout();
 
         if (dlg.ShowModal() != wxID_OK) return;
-        std::string msg_type = std::string(msg->GetValue().mb_str());
-        bool enabled = enable_box->IsChecked();
-        const uint32_t kind =
-            static_cast<uint32_t>(std::max(0, kind_choice->GetSelection()));
-        if (configure_cb_) {
-            configure_cb_(machine, node_name, msg_type, enabled, kind);
+        if (!configure_cb_) return;
+        // One ConfigureTrace per kind: enabled = the box's state (checked adds
+        // the kind to the node's mask, unchecked removes it). msg_type unused.
+        for (size_t i = 0; i < boxes.size(); ++i) {
+            configure_cb_(machine, node_name, /*msg_type=*/"",
+                          boxes[i]->IsChecked(), kKinds[i].ord);
         }
     }
 
@@ -527,6 +549,8 @@ private:
     LogLevelCallback  log_level_cb_;
     RestartCallback   restart_cb_;
     TombstoneCallback tombstone_cb_;
+    KillCallback      kill_cb_;
+    GetLogLevelCallback get_log_level_cb_;
     // Per-paint hit cache (rect → node), rebuilt every on_paint, used by
     // left/right click to map a point to a node without re-laying-out.
     std::vector<HitBox> hit_boxes_;
@@ -565,6 +589,14 @@ void ApplicationsPanel::set_restart_callback(RestartCallback cb) {
 
 void ApplicationsPanel::set_tombstone_callback(TombstoneCallback cb) {
     canvas_->set_tombstone_callback(std::move(cb));
+}
+
+void ApplicationsPanel::set_kill_callback(KillCallback cb) {
+    canvas_->set_kill_callback(std::move(cb));
+}
+
+void ApplicationsPanel::set_get_log_level_callback(GetLogLevelCallback cb) {
+    canvas_->set_get_log_level_callback(std::move(cb));
 }
 
 }  // namespace sup_gui

@@ -231,6 +231,33 @@ MainFrame::MainFrame(std::vector<MachineEndpoint> machines)
             return "no client for machine " + machine;
         });
 
+    // Applications panel: Kill a PROCESS (RestartChild) + fetch a node's CURRENT
+    // log level (for the Log-level submenu checkmark).
+    applications_->set_kill_callback(
+        [this](const std::string& machine,
+               const std::string& proc) -> std::string {
+            for (auto& c : clients_) {
+                if (c && c->machine_name() == machine) {
+                    std::string msg;
+                    int rc = c->restart_child(proc, &msg);
+                    return "kill " + proc + " on " + machine +
+                           ": rc=" + std::to_string(rc) +
+                           (msg.empty() ? "" : "  " + msg);
+                }
+            }
+            return "no client for machine " + machine;
+        });
+
+    applications_->set_get_log_level_callback(
+        [this](const std::string& machine,
+               const std::string& node) -> std::string {
+            for (auto& c : clients_) {
+                if (c && c->machine_name() == machine)
+                    return c->get_log_level(node);
+            }
+            return "";
+        });
+
     // Processes panel right-click → Kill / Remove on the matching machine's
     // GrpcClient. kill = RestartChild (restarts); remove = TerminateChild
     // (no_restart=true, stop-and-hold).

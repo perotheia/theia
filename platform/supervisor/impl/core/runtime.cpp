@@ -1915,7 +1915,39 @@ uint32_t Supervisor::do_delete_child(const std::string& name) {
 
 uint32_t Supervisor::do_restart_child(const std::string& name) {
     WorkerNode* w = find_worker_by_name(name);
-    if (!w) return 1;     // not_found
+    if (!w) {
+        // The GUI/snapshot synthesizes a `<worker>_sup` BRACKET row for each
+        // reporting worker (#364) — it's NOT a real SupervisorNode. "Restart
+        // subtree" on that bracket means restart its one wrapped worker. Strip
+        // the suffix and retry as a worker before falling through to a real sup.
+        const std::string kSuf = "_sup";
+        if (name.size() > kSuf.size() &&
+            name.compare(name.size() - kSuf.size(), kSuf.size(), kSuf) == 0) {
+            const std::string base = name.substr(0, name.size() - kSuf.size());
+            if (find_worker_by_name(base))
+                return do_restart_child(base);  // restart the wrapped worker
+        }
+        // Not a worker — maybe it's a REAL SUPERVISOR. "Restart subtree" on a
+        // sup (GUI right-click) restarts every worker under it, OTP-style (stop
+        // reverse, start forward). Without this the GUI's Restart-subtree was a
+        // silent no-op (find_worker_by_name returned null → not_found).
+        if (SupervisorNode* sup = find_supervisor_by_name(name)) {
+            restart_all(*sup);
+            // Count the restart on the supervisor itself + each restarted
+            // worker, so the stat/firehose reflect it (mirrors do_restart_child
+            // for a worker). restart_all already re-forked them.
+            for (WorkerNode* cw : all_workers(*sup)) {
+                if (cw->pid > 0) {
+                    cw->restart_count++;
+                    cast_node_state(*cw);
+                }
+            }
+            sup->restart_count++;
+            total_restarts_++;
+            return 0;
+        }
+        return 1;     // not_found (neither worker nor supervisor)
+    }
     if (w->pid > 0) {
         stop_worker(*w);
     }

@@ -36,6 +36,9 @@
 #include <algorithm>
 #include <cstdio>
 #include <map>
+#ifdef __WXGTK__
+#include <dlfcn.h>   // dlsym(RTLD_DEFAULT, …) — resolve GTK CSS fns for zebra rows
+#endif
 #include <string>
 #include <vector>
 
@@ -64,6 +67,26 @@ const char* policy_name(uint32_t p) {
         case 6: return "DEADLINE";
         default: return "?";
     }
+}
+
+// Draw horizontal separator lines between rows so a row's values read across
+// easily without selecting it. On GTK the native GtkTreeView does this via
+// gtk_tree_view_set_grid_lines(HORIZONTAL) — theme-independent, and it stays
+// correct across sorts/expansions/rebuilds for free. libgtk-3 is already loaded
+// in-process (wxGTK pulls it in) but isn't on our link line and there are no gtk
+// dev headers in the build, so the function is resolved by dlsym(RTLD_DEFAULT)
+// rather than linked. No-op off GTK or if the symbol is missing.
+void apply_row_lines(wxDataViewCtrl* dv) {
+#ifdef __WXGTK__
+    using grid_fn = void (*)(void*, int);
+    auto set_grid =
+        reinterpret_cast<grid_fn>(dlsym(RTLD_DEFAULT, "gtk_tree_view_set_grid_lines"));
+    void* tv = dv->GtkGetTreeView();
+    if (tv && set_grid)
+        set_grid(tv, 1);   // 1 = GTK_TREE_VIEW_GRID_LINES_HORIZONTAL
+#else
+    (void)dv;
+#endif
 }
 
 }  // namespace
@@ -98,14 +121,13 @@ ProcessesPanel::ProcessesPanel(wxWindow* parent) : PanelBase(parent) {
     list_->AppendColumn("threads/mask",120, wxALIGN_RIGHT);
     list_->AppendColumn("tipc rx/tx",  120, wxALIGN_RIGHT);
 
-    // Zebra striping — odd rows white, even rows light salmon — so a row's
-    // values are easy to read across without selecting it. Matches the Erlang
-    // observer processes panel's even-row tint (RGB 255,224,224, "misty rose").
-    // wxTreeListCtrl has no per-row background setter; its backing
-    // wxDataViewCtrl does the striping for us (and keeps it correct across
-    // sorts, expansions and rebuilds).
+    // Horizontal separator lines between rows so a row's values read across
+    // easily without selecting it. (Tried zebra striping first, but on GTK3
+    // SetAlternateRowColour is a no-op and CSS :nth-child colours cells not
+    // rows — tinting every row. Native horizontal grid lines are the robust,
+    // theme-independent answer.) apply_row_lines() is a no-op off GTK.
     if (wxDataViewCtrl* dv = list_->GetDataView())
-        dv->SetAlternateRowColour(wxColour(255, 224, 224));
+        apply_row_lines(dv);
 
     sizer->Add(list_, 1, wxEXPAND | wxALL, 4);
     SetSizer(sizer);

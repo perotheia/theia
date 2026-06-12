@@ -28,6 +28,8 @@ message ChildState {
     uint32 flags = 19;
     repeated ThreadSample threads_detail = 20;
     repeated SocketInfo sockets = 21;
+    uint32 tipc_rx = 22;   // summed TIPC receive-queue bytes
+    uint32 tipc_tx = 23;   // summed TIPC transmit-queue bytes
 }
 
 message SocketInfo {
@@ -122,6 +124,10 @@ message GetChildRequest {
 }
 
 message GetSystemInfoRequest {
+    // empty body
+}
+
+message GetHealthRequest {
     // empty body
 }
 

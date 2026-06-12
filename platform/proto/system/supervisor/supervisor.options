@@ -74,15 +74,18 @@ system_supervisor.ChildState.name                  max_size:64
 system_supervisor.ChildState.parent_name           max_size:64
 system_supervisor.ChildState.strategy              max_size:24
 system_supervisor.ChildState.start_cmd             max_size:128
-# threads_detail/sockets kept small (the GetTree rows tdb consumes don't need
-# per-thread detail); children holds the whole flat tree (root + sups + workers
+# threads_detail kept off the GetTree wire (per-thread detail rides the
+# NodeState firehose); children holds the whole flat tree (root + sups + workers
 # + synthetic _sup rows) — 64 is comfortably above the demo's ~15.
 system_supervisor.ChildState.threads_detail        max_count:0
+# sockets: full per-socket detail kept OFF the GetTree wire (the scalar
+# tipc_rx/tipc_tx on ChildState carry the per-node summary). max_count:0 keeps
+# the TreeSnapshot small — same as threads_detail.
 system_supervisor.ChildState.sockets               max_count:0
 system_supervisor.TreeSnapshot.children            max_count:64
 system_supervisor.ThreadSample.comm                max_size:16
-system_supervisor.SocketInfo.local                 max_size:48
-system_supervisor.SocketInfo.remote                max_size:48
+system_supervisor.SocketInfo.local                 max_size:20
+system_supervisor.SocketInfo.remote                max_size:20
 
 # ---- SystemInfo (GetSystemInfo reply) ------------------------------------
 system_supervisor.SystemInfo.hostname              max_size:64

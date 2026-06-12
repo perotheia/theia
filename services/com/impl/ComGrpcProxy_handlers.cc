@@ -121,6 +121,18 @@ public:
                     if (!writer->Write(obs)) break;   // client gone
                 }
             }
+            // HealthBeacon: same poll cadence, separate observation (GUI Load
+            // panel + "heartbeat" status). The supervisor's GetHealth returns
+            // its latest beacon — no TIPC event-firehose subscription needed.
+            services_com::SupReply hr;
+            if (services_com::SupLink::instance().get_health(hr) &&
+                !hr.health.empty()) {
+                services::com::SupervisorObservation obs;
+                auto* h = obs.mutable_health();
+                if (h->ParseFromString(hr.health)) {
+                    if (!writer->Write(obs)) break;
+                }
+            }
             // Sleep in short slices so cancellation is responsive.
             for (int slept = 0; slept < poll_ms && !ctx->IsCancelled();
                  slept += 100) {

@@ -137,6 +137,20 @@ struct TreeThreadRow {
     uint32_t  last_cpu{0};
 };
 
+// One TIPC socket owned by a worker pid — projected into ChildState.sockets.
+// Sampled per tick: the TIPC sock_diag dump (inode → queue depths + addrs)
+// joined against the pid's /proc/<pid>/fd socket inodes. `rx_queue`/`tx_queue`
+// are the kernel's current receive/transmit backlog in bytes (per-socket, not
+// cumulative) — a non-zero rx_queue means a node is falling behind on intake.
+struct TreeSocketRow {
+    uint64_t  inode{0};
+    uint32_t  state{0};        // TIPC sk state (kernel enum)
+    uint32_t  rx_queue{0};     // bytes queued for receive
+    uint32_t  tx_queue{0};     // bytes queued for transmit
+    std::string local;         // "type:lower" or ref repr
+    std::string remote;        // peer, "" if none
+};
+
 // One row of the supervisor tree for GetTree (a flat, parent-keyed list — the
 // caller reassembles the hierarchy by name, same shape the firehose streams).
 // kind: 0=worker, 1=supervisor. state: 0=stopped, 2=running, 3=terminating.
@@ -162,7 +176,10 @@ struct TreeRow {
     uint64_t    shared_kb{0};
     uint64_t    data_kb{0};
     uint32_t    threads{0};
+    uint32_t    tipc_rx{0};   // summed TIPC receive-queue bytes (this pid)
+    uint32_t    tipc_tx{0};   // summed TIPC transmit-queue bytes
     std::vector<TreeThreadRow> threads_detail;
+    std::vector<TreeSocketRow> sockets;   // full per-socket detail (off the wire)
 };
 
 // ---- The executor command (actor ingress) --------------------------------
@@ -189,6 +206,7 @@ struct ExecReply {
     std::string                 tomb_content;    // file bytes (already capped)
     uint64_t                    tomb_total{0};   // full file size
     bool                        tomb_truncated{false};
+    HealthData                  health;          // GetHealth
 };
 
 struct ExecCommand {
@@ -196,7 +214,7 @@ struct ExecCommand {
         StartChild, DeleteChild, RestartChild, SuspendChild, ResumeChild,
         TerminateChild, OnHeartbeat, OnSendTimeout, ConfigureTrace,
         ConfigureLogLevel, GetTree, GetSystemInfo, GetTraceConfig,
-        GetLogLevelConfig, GetTombstone, Shutdown,
+        GetLogLevelConfig, GetTombstone, GetHealth, Shutdown,
     };
     Op op;
 
@@ -443,6 +461,8 @@ private:
                     const std::string& tombstone_path,
                     const std::string& detail);
     void emit_health();
+    HealthData compute_health();     // shared by emit_health + ctl_get_health
+    void ctl_get_health(ExecReply& rep);
     void emit_snapshot();
 
     // #429/#430 — the topo-pair firehose stream over the EmitSink.
@@ -523,6 +543,8 @@ private:
         // Per-thread breakdown, keyed by tid so delta computation
         // survives across ticks.
         std::map<uint32_t, ThreadEntry> threads_detail;
+        // TIPC sockets owned by this pid this tick (queue depths + addrs).
+        std::vector<TreeSocketRow> sockets;
     };
     void sample_procs();               // refresh sample_ for all live pids
 

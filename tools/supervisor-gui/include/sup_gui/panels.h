@@ -177,6 +177,17 @@ struct ThreadRow {
 // One worker as it appears in the htop-style list. Filled from a
 // remote ChildState — the GUI never touches /proc; the supervisor
 // samples and ships these via the wire.
+// One TIPC socket owned by a process (from ChildState.sockets). rx/tx are the
+// kernel's current receive/transmit queue depth in bytes (per-socket backlog).
+struct SocketRow {
+    uint64_t    inode    = 0;
+    uint32_t    state    = 0;
+    uint32_t    rx_queue = 0;
+    uint32_t    tx_queue = 0;
+    std::string local;
+    std::string remote;
+};
+
 struct ProcessRow {
     std::string machine;
     std::string name;
@@ -192,6 +203,9 @@ struct ProcessRow {
     uint64_t    data_kb         = 0;   // heap+bss+data — "memory used by app"
     uint64_t    vsz_kb          = 0;   // virtual size
     uint32_t    threads         = 0;
+    // TIPC: per-process totals (summed over the node's sockets) + the detail.
+    uint32_t    tipc_rx         = 0;   // summed receive-queue bytes
+    uint32_t    tipc_tx         = 0;   // summed transmit-queue bytes
     std::vector<ThreadRow> thread_rows;
 };
 

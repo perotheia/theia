@@ -83,19 +83,25 @@ message ChildState {
     // budget nearing exhaustion). 0 = healthy.
     uint32  flags
 
+    // TIPC traffic summary (worker only) — the node's per-socket receive /
+    // transmit queue depths SUMMED over its bound TIPC ports, in bytes. The
+    // headline "is this node backed up?" number for the GUI Processes panel.
+    // Sampled each tick from `ss --tipc -e` joined against /proc/<pid>/fd.
+    // Cheap (2 scalars) so it rides the GetTree snapshot without bloating it —
+    // unlike the full per-socket `sockets` list, which stays off the wire
+    // (max_count:0) the way per-thread detail does.
+    uint32  tipc_rx          // summed receive-queue bytes across TIPC sockets
+    uint32  tipc_tx          // summed transmit-queue bytes
+
     // Per-thread detail (one entry per TID, sampled from
     // /proc/<pid>/task/<tid>/{stat,status,sched,comm}). The `threads`
     // field above is the count; this is the breakdown the GUI shows
     // as expandable child rows.
     repeated ThreadSample threads_detail
 
-    // Open TCP/TIPC sockets owned by this pid. Populated from
-    // /proc/<pid>/net/tcp{,6} on the supervisor side. Empty when the
-    // sampler hasn't run yet (D2 schema-only commit; parser lands
-    // separately) or when the worker has no sockets.
-    //
-    // The GUI's "Sockets" tab (Phase 7) folds rows across all
-    // children into one table.
+    // Open TCP/TIPC sockets owned by this pid (full per-socket detail). Kept
+    // OFF the GetTree wire (max_count:0) — the scalar tipc_rx/tipc_tx above are
+    // what the snapshot carries; this stays for a future per-socket view.
     repeated SocketInfo sockets
 }
 
@@ -246,6 +252,13 @@ message HealthBeacon {
 // ---- control RPC types ---------------------------------------------------
 
 message GetTreeRequest {
+}
+
+// Empty — the supervisor returns the latest HealthBeacon (the same one it
+// emits to its `events` sender every 1s). com polls this in its Subscribe
+// loop, alongside GetTree, so the GUI Load panel gets live health without com
+// having to subscribe to the TIPC event firehose.
+message GetHealthRequest {
 }
 
 message GetChildRequest {
@@ -504,6 +517,10 @@ interface clientServer SupervisorControlIf {
     operation TerminateChild(in sel: ChildSelector) returns ControlReply
     operation Stop() returns ControlReply
     operation GetSystemInfo(in req: GetSystemInfoRequest) returns SystemInfo
+    // Latest HealthBeacon (workers/restarts/tombstones/uptime). com polls this
+    // alongside GetTree to feed the GUI Load panel; the supervisor returns its
+    // last-emitted beacon (same data as the `events` health broadcast).
+    operation GetHealth(in req: GetHealthRequest) returns HealthBeacon
 
     // Trace config — supervisor owns the per-child config/keepalive
     // channel to each supervised app. Extending it with a third

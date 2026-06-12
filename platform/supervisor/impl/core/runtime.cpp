@@ -34,6 +34,9 @@
 #include <sys/prctl.h>      // PR_CAP_AMBIENT_RAISE — pass CAP_SYS_NICE to children
 #include <sys/syscall.h>    // SYS_capget / SYS_capset (raw, no libcap dep)
 #include <linux/capability.h>  // CAP_SYS_NICE + cap header/data structs
+// TIPC per-socket queue depths come from `ss --tipc -e` (popen) — the kernel's
+// TIPC sock_diag returns TIPC-specific netlink attrs that ss already parses
+// (incl. the fs inode that matches /proc/<pid>/fd).
 #include <sys/resource.h>   // setrlimit(RLIMIT_AS) — per-process memory cap
 #include <sys/select.h>
 #include <sys/signalfd.h>
@@ -440,6 +443,12 @@ std::vector<TreeRow> Supervisor::ctl_get_tree() {
                                 tt.last_cpu          = te.second.last_cpu;
                                 r.threads_detail.push_back(std::move(tt));
                             }
+                            r.sockets = ps.sockets;   // full detail (off wire)
+                            // Per-node TIPC traffic summary (rides the wire).
+                            for (const auto& sk : ps.sockets) {
+                                r.tipc_rx += sk.rx_queue;
+                                r.tipc_tx += sk.tx_queue;
+                            }
                         }
                     }
                     out.push_back(std::move(r));
@@ -580,6 +589,11 @@ void Supervisor::start_worker(WorkerNode& w) {
     // which GetTombstone later serves. Empty when no ancestor sets one.
     const std::string tombstone_dir = find_tombstone_dir(supervisor_of(w));
 
+    // Captured BEFORE fork so the child can detect a parent that died in the
+    // fork→prctl window (see PR_SET_PDEATHSIG below). This is the supervisor's
+    // own pid at fork time.
+    const pid_t parent_pid = ::getpid();
+
     pid_t pid = fork();
     if (pid < 0) {
         log_err("fork failed: " + std::string(std::strerror(errno)));
@@ -591,6 +605,23 @@ void Supervisor::start_worker(WorkerNode& w) {
         sigemptyset(&empty);
         sigprocmask(SIG_SETMASK, &empty, nullptr);
         setsid();
+
+        // Parent-death signal: if the supervisor dies — including a hard
+        // SIGKILL where shutdown_subtree() never runs — the kernel SIGKILLs
+        // this child immediately, so it can't orphan to PPID 1 (still bound to
+        // its TIPC names). setsid() above gives us our own process group but
+        // does NOT tie our lifetime to the parent; PDEATHSIG does.
+        //
+        // Two caveats handled here:
+        //  - PDEATHSIG is cleared across execvp's credential change ONLY if the
+        //    exec changes the dumpable/uid state; a plain execvp of a same-user
+        //    binary keeps it, so setting it pre-exec is sufficient.
+        //  - Race: if the supervisor already died between fork() and this line,
+        //    the signal we just armed would never fire. Re-check getppid() — if
+        //    we've already been reparented (ppid != the supervisor's pid, i.e.
+        //    1 or a subreaper), exit now rather than run orphaned.
+        prctl(PR_SET_PDEATHSIG, SIGKILL, 0, 0, 0);
+        if (::getppid() != parent_pid) _exit(128);
 
         // Working dir.
         const std::string cwd = w.working_dir.empty() ? root_dir_ : w.working_dir;
@@ -843,6 +874,8 @@ void Supervisor::on_child_exit(WorkerNode& w, int return_code, pid_t old_pid) {
             if (!ts.empty()) {
                 log_err("tombstone for " + w.name + " (pid=" +
                         std::to_string(old_pid) + "): " + ts);
+                // Tree-wide cumulative for the HealthBeacon (GUI "tombstones").
+                total_tombstones_++;
             }
         }
     }
@@ -911,6 +944,8 @@ void Supervisor::bump_restart_count_(WorkerNode& w, SupervisorNode& sup) {
     // restart_history is per-supervisor.
     w.restart_count++;
     sup.restart_count++;
+    // Tree-wide cumulative for the HealthBeacon (GUI Load panel "restarts").
+    total_restarts_++;
 }
 
 void Supervisor::restart_all(SupervisorNode& sup) {
@@ -1079,6 +1114,9 @@ void Supervisor::dispatch(ExecCommand& cmd) {
             break;
         case Op::GetTombstone:
             ctl_get_tombstone(cmd.name, rep);
+            break;
+        case Op::GetHealth:
+            ctl_get_health(rep);
             break;
         case Op::Shutdown:
             request_shutdown();
@@ -1299,27 +1337,36 @@ void Supervisor::emit_event(uint32_t kind,
     emit_.on_event(ev);
 }
 
-void Supervisor::emit_health() {
-    if (!emit_.on_health) return;
+HealthData Supervisor::compute_health() {
     using namespace std::chrono;
-    const uint64_t uptime_ms =
-        duration_cast<milliseconds>(steady_clock::now() - start_time_).count();
-
     uint32_t total = 0, active = 0;
     for (auto* w : all_workers(*root_)) {
         ++total;
         if (w->pid > 0) ++active;
     }
-
     HealthData hb;
     hb.timestamp_ms     = epoch_ms();
-    hb.uptime_ms        = uptime_ms;
+    hb.uptime_ms        =
+        duration_cast<milliseconds>(steady_clock::now() - start_time_).count();
     hb.generation       = generation_;
     hb.total_workers    = total;
     hb.active_workers   = active;
     hb.total_restarts   = total_restarts_;
     hb.total_tombstones = total_tombstones_;
-    emit_.on_health(hb);
+    return hb;
+}
+
+void Supervisor::emit_health() {
+    if (!emit_.on_health) return;
+    emit_.on_health(compute_health());
+}
+
+// GetHealth control op — com polls this in its Subscribe loop (alongside
+// GetTree) to feed the GUI Load panel. Returns the same beacon emit_health()
+// would broadcast right now.
+void Supervisor::ctl_get_health(ExecReply& rep) {
+    rep.health = compute_health();
+    rep.ok = true;
 }
 
 // /proc reader helpers — see header for the design intent.
@@ -1564,6 +1611,87 @@ std::vector<uint32_t> list_tids(pid_t pid) {
 
 }  // namespace
 
+namespace {
+
+// The TIPC socket table, keyed by fs inode: per-socket receive/transmit queue
+// depth + local/peer TIPC port + state. We join this against each child's
+// /proc/<pid>/fd inodes (below) to attribute sockets to a worker.
+//
+// Source: `ss --tipc -e` (iproute2). The kernel's TIPC sock_diag dump returns
+// its data in TIPC-specific netlink attributes (NOT the inet_diag_msg layout),
+// and ss already parses them correctly — including the fs `ino:` that matches
+// /proc/<pid>/fd. Re-implementing that attribute parse in-process buys little;
+// ss is a ~5ms popen once per 1s tick. Best-effort: empty map (no sockets in
+// the snapshot, never an error) if ss is absent or TIPC isn't up.
+//
+// Line shape (header skipped):
+//   ESTAB 0 12 1833111100:3635388691 1833111100:2928584382 uid:1000 ino:63932542 sk:5010
+//   state rq sq  local                 peer                  ...      inode        ...
+std::map<uint64_t, supervisor::TreeSocketRow> read_tipc_sockets() {
+    std::map<uint64_t, supervisor::TreeSocketRow> out;
+    FILE* p = ::popen("ss --tipc -e 2>/dev/null", "r");
+    if (!p) return out;
+    char line[512];
+    bool first = true;
+    while (std::fgets(line, sizeof(line), p)) {
+        if (first) { first = false; continue; }   // header row
+        char state[32] = {0}, local[64] = {0}, peer[64] = {0};
+        unsigned long rq = 0, sq = 0;
+        if (std::sscanf(line, "%31s %lu %lu %63s %63s",
+                        state, &rq, &sq, local, peer) < 4) {
+            continue;
+        }
+        // ino:<n> appears later on the line.
+        uint64_t inode = 0;
+        if (const char* ip = std::strstr(line, "ino:")) {
+            inode = std::strtoull(ip + 4, nullptr, 10);
+        }
+        if (!inode) continue;
+        supervisor::TreeSocketRow row;
+        row.inode    = inode;
+        row.rx_queue = static_cast<uint32_t>(rq);
+        row.tx_queue = static_cast<uint32_t>(sq);
+        // Map ss's textual state to a small enum (0 unknown / 1 ESTAB / 2 LISTEN).
+        if (std::strncmp(state, "ESTAB", 5) == 0)       row.state = 1;
+        else if (std::strncmp(state, "LISTEN", 6) == 0) row.state = 2;
+        row.local  = local;
+        if (peer[0] && std::strcmp(peer, "*") != 0) row.remote = peer;
+        out[inode] = std::move(row);
+    }
+    ::pclose(p);
+    return out;
+}
+
+// The socket inodes a pid currently holds open: readlink each /proc/<pid>/fd/*
+// entry, parse the "socket:[<inode>]" form. The supervisor is these children's
+// parent and runs as the same uid, so it satisfies the PTRACE_MODE_READ check
+// that guards /proc/<pid>/fd.
+std::vector<uint64_t> list_pid_socket_inodes(pid_t pid) {
+    std::vector<uint64_t> inodes;
+    char dir[64];
+    std::snprintf(dir, sizeof(dir), "/proc/%d/fd", static_cast<int>(pid));
+    DIR* d = ::opendir(dir);
+    if (!d) return inodes;
+    struct dirent* ent;
+    while ((ent = ::readdir(d)) != nullptr) {
+        if (ent->d_name[0] == '.') continue;
+        char path[320], target[128];
+        std::snprintf(path, sizeof(path), "%s/%s", dir, ent->d_name);
+        ssize_t len = ::readlink(path, target, sizeof(target) - 1);
+        if (len <= 0) continue;
+        target[len] = '\0';
+        // "socket:[12345]"
+        if (std::strncmp(target, "socket:[", 8) == 0) {
+            uint64_t ino = std::strtoull(target + 8, nullptr, 10);
+            if (ino) inodes.push_back(ino);
+        }
+    }
+    ::closedir(d);
+    return inodes;
+}
+
+}  // namespace
+
 void Supervisor::sample_procs() {
     // Compute the wall-clock interval since the previous sample to
     // normalise cpu% (jiffies → percentage of one CPU).
@@ -1577,6 +1705,10 @@ void Supervisor::sample_procs() {
 
     long clk_tck = sysconf(_SC_CLK_TCK);
     if (clk_tck <= 0) clk_tck = 100;
+
+    // TIPC socket table once per tick (inode → queue depths), joined per-pid
+    // below. Empty when TIPC sock_diag is unavailable — sockets then stay empty.
+    const std::map<uint64_t, TreeSocketRow> tipc_by_inode = read_tipc_sockets();
 
     // Build the set of live pids; drop the rest from the map.
     auto workers = all_workers(*root_);
@@ -1648,6 +1780,17 @@ void Supervisor::sample_procs() {
             next_threads[tid] = te;
         }
         s.threads_detail = std::move(next_threads);
+
+        // TIPC sockets: join this pid's open socket inodes against the
+        // tick's TIPC diag table. Only TIPC sockets match (others aren't in
+        // the table), so this naturally filters to the node's TIPC ports.
+        s.sockets.clear();
+        if (!tipc_by_inode.empty()) {
+            for (uint64_t ino : list_pid_socket_inodes(w->pid)) {
+                auto it = tipc_by_inode.find(ino);
+                if (it != tipc_by_inode.end()) s.sockets.push_back(it->second);
+            }
+        }
 
         next[w->pid] = s;
     }

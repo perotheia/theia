@@ -96,6 +96,7 @@ ProcessesPanel::ProcessesPanel(wxWindow* parent) : PanelBase(parent) {
     list_->AppendColumn("data_kb",     100, wxALIGN_RIGHT);
     list_->AppendColumn("vsz_kb",      100, wxALIGN_RIGHT);
     list_->AppendColumn("threads/mask",120, wxALIGN_RIGHT);
+    list_->AppendColumn("tipc rx/tx",  120, wxALIGN_RIGHT);
 
     sizer->Add(list_, 1, wxEXPAND | wxALL, 4);
     SetSizer(sizer);
@@ -201,6 +202,8 @@ void ProcessesPanel::on_frame(const std::string& machine_name,
             tr.last_cpu          = t.last_cpu();
             r.thread_rows.push_back(std::move(tr));
         }
+        r.tipc_rx = c.tipc_rx();   // summed TIPC rx/tx queue bytes (per node)
+        r.tipc_tx = c.tipc_tx();
         v.push_back(std::move(r));
     }
     refresh_list();
@@ -314,6 +317,13 @@ void ProcessesPanel::refresh_list() {
         list_->SetItemText(item, 12, wxString::Format("%llu",
             static_cast<unsigned long long>(r.vsz_kb)));
         list_->SetItemText(item, 13, wxString::Format("%u", r.threads));
+        // TIPC rx/tx — summed queue bytes over the node's bound TIPC ports.
+        // "·" for supervisors / nodes with no TIPC traffic sampled.
+        if (r.state == 2 /*running*/ && (r.tipc_rx || r.tipc_tx))
+            list_->SetItemText(item, 14,
+                wxString::Format("%u/%u", r.tipc_rx, r.tipc_tx));
+        else
+            list_->SetItemText(item, 14, "·");
 
         for (const ThreadRow& t : r.thread_rows) {
             auto child = list_->AppendItem(item,

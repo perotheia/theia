@@ -12,11 +12,11 @@
 #include <cstdint>
 #include <string>
 
-namespace system_demo {
+namespace demo {
 
 struct DemoFsmGateState {
     // Add app fields here, e.g.:
     //   int32_t counter = 0;
 };
 
-}  // namespace system_demo
+}  // namespace demo

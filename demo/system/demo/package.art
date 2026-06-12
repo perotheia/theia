@@ -44,6 +44,33 @@ message CounterConfig {
     string label         // human tag
 }
 
+// Config for ObserverNode (P2) — how often it polls + a name.
+message ObserverConfig {
+    uint32 poll_ms       // poll period
+    string name          // human tag
+}
+
+// Config for IncrementerNode (P3) — increment amount + cadence.
+message IncrementerConfig {
+    uint32 amount        // how much each Inc adds
+    uint32 period_ms     // cast cadence
+    bool   enabled       // whether to drive at all
+}
+
+// Config for DemoFsm (P4) — the consolidation target. v2 shape: folds in the
+// p1/p2/p3 config fields (counter.step, observer.poll_ms, incrementer.amount)
+// alongside the FSM knobs, and renames tag→label. The v1→v2 migration (a within-
+// P4 schema bump) is what the migration-verification flow exercises:
+//   v1: { timeout_s, tag }
+//   v2: { timeout_s, label(<-tag), step, poll_ms, amount }
+message P4Config {
+    uint32 timeout_s     // PROCESSING-state timeout (mirrors the FSM's 5s)
+    string label         // human label (was `tag` in v1)
+    uint32 step          // consolidated from counter.step
+    uint32 poll_ms       // consolidated from observer.poll_ms
+    uint32 amount        // consolidated from incrementer.amount
+}
+
 // ---- interfaces ---------------------------------------------------------
 
 // senderReceiver: one-way typed messages. Drives handle_cast on the
@@ -98,6 +125,7 @@ node atomic TickerNode {
 node atomic ObserverNode {
     tipc type=0xd0010004 instance=0
     requires_timers
+    config ObserverConfig
     ports {
         client counter_call requires CounterSrv
     }
@@ -107,6 +135,7 @@ node atomic ObserverNode {
 node atomic IncrementerNode {
     tipc type=0xd0010005 instance=0
     requires_timers
+    config IncrementerConfig
     ports {
         sender inc_out provides IncIface
     }
@@ -152,6 +181,7 @@ node atomic DemoFsm {
     tipc type=0xd0010006 instance=0
     requires_timers
     tag = "DFSM"
+    config P4Config
     statem {
         states  [IDLE, PROCESSING, DONE]
         initial IDLE

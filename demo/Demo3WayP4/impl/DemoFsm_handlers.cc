@@ -21,7 +21,7 @@
 #include <cstdio>
 #include <cstring>
 
-namespace system_demo {
+namespace demo {
 
 // The gate (DemoFsmGate_handlers.cc) post_event()s into this FSM via a
 // shared LocalRef<DemoFsm>. We publish *this into it on the first on_enter
@@ -54,4 +54,4 @@ void DemoFsm::on_enter(DemoFsmState new_s,
 
 
 
-}  // namespace system_demo
+}  // namespace demo

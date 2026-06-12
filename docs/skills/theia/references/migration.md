@@ -62,6 +62,42 @@ a fresh binding (skipped — no stored old value). The BUILD region between the
 `# >>> gen-migration plugins (managed) >>>` markers is MERGED (a later diff
 doesn't drop an earlier diff's nodes).
 
+## Config-field defaults — declare once (same as `params`)
+
+proto3 has NO field defaults, so a config field's "default" used to live in two
+hand-typed places: the migration `add` rule and the node's C++ init. You can now
+declare it ONCE on the `.art` config message field — the SAME `= value` syntax a
+node `params` entry uses:
+
+```art
+message CounterConfig {
+    uint32 step       = 1
+    uint32 max_value  = 100
+    bool   wrap       = false
+    string label      = "counter"
+    uint32 hysteresis = 3
+}
+```
+
+The `= value` is a DEFAULT, not a proto tag (tags stay positional — body order).
+It is **not part of the wire shape / digest** (declaring or changing a default
+does NOT trigger a migration). Three consumers read the one declaration:
+
+- **gen-schema** records it per field (`"default": 3`) — the single source.
+- **gen-migration** fills an `add` rule's default from it (so a newly-introduced
+  field migrates to its declared value, not a neutral 0). Falls back to neutral
+  when undeclared.
+- **gen-config-defaults** emits a per-node first-boot seed:
+  `artheia gen-config-defaults <component.art> --out config_defaults.json` →
+  `{prototype: {config_type, digest, values}}`. A seeder (`migration/seed.py
+  defaults --defaults config_defaults.json`) PutConfigs the declared values for
+  any node with NO stored value — so a fresh node boots at its declared
+  defaults instead of proto3 zeros. Nodes with an existing value are untouched
+  (idempotent); fields without a declared default stay zero (opt-in).
+
+Declaring a default is opt-in per field; a config with none behaves exactly as
+before (neutral migration default + proto3 zeros).
+
 ## transform.json
 
 ```json

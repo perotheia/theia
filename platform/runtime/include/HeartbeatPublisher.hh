@@ -44,10 +44,12 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstring>
 #include <ctime>
 #include <linux/tipc.h>
+#include <mutex>
 #include <string>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -161,16 +163,22 @@ public:
         if (running_.exchange(true)) return;
         period_ms_ = period_ms;
         thread_ = std::thread([this] {
+            std::unique_lock<std::mutex> lk(wake_mu_);
             while (running_.load()) {
                 send_once();
-                std::this_thread::sleep_for(
-                    std::chrono::milliseconds(period_ms_));
+                // Interruptible sleep: wait the period OR until stop() notifies.
+                // A plain sleep_for(1s) makes shutdown take up to a full period
+                // per node (3 reporting nodes × 1s ≈ the 3s stop stall this
+                // fixes); wait_for wakes immediately on the stop predicate.
+                wake_cv_.wait_for(lk, std::chrono::milliseconds(period_ms_),
+                                  [this] { return !running_.load(); });
             }
         });
     }
 
     void stop() {
         if (!running_.exchange(false)) return;
+        wake_cv_.notify_all();        // break the period wait now, don't wait it out
         if (thread_.joinable()) thread_.join();
     }
 
@@ -225,6 +233,8 @@ private:
     std::atomic<bool>     running_  {false};
     std::thread           thread_;
     uint32_t              period_ms_ = 0;
+    std::mutex                wake_mu_;   // guards the interruptible period wait
+    std::condition_variable   wake_cv_;   // stop() notifies to break the wait
 };
 
 }}  // namespace theia::runtime

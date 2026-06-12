@@ -118,6 +118,108 @@ binary. Build it `cc_binary(linkshared=True, linkstatic=False)` against
 `api->add_edge(host, from_digest, to_digest, transform_fn)`. Strings the
 transform touches must be `.options`-pinned to `char[]` (else `pb_callback_t`).
 
+## Migrations are PER NODE
+
+A migration is keyed by **config_type**, and each node binds its own
+`config <Msg>` — so each node carries an **independent** v1→v2 evolution with its
+**own** `from_digest`/`to_digest` and its own rule set. A `transform.json` (and
+its generated plugin) covers exactly one config_type; `MigrateBulk` is invoked
+per config_type. There is no cross-node merge — per is strictly 1:1 per node, so
+"fold p1/p2/p3 fields into p4" is modeled as a *within-p4* schema bump (p4's own
+v1→v2 that ADDs those fields), not a 3→1 consolidation. The demo proves three
+distinct per-node migrations side by side:
+
+| node | config | rule kind |
+| --- | --- | --- |
+| `counter` | CounterConfig | **add** a field (`hysteresis`) |
+| `observer` | ObserverConfig | **rename** (`name`→`tag`, same tag number) |
+| `demo_fsm` | P4Config | **rename + add** (the consolidation target) |
+
+A rename that keeps the field NUMBER is just a carry — the v1 bytes already
+decode into the new member (gen-transform emits a no-op note, not `from.<old>`).
+
+## End-to-end: the verified dev workflow
+
+The whole loop, proven against a live etcd-backed per (artefacts under
+`migration/`, run dir `install/central/`):
+
+```sh
+# 1. clean etcd + schema of the v1 shapes
+ETCDCTL_API=3 etcdctl --endpoints=127.0.0.1:2379 del --prefix /theia/config/
+artheia gen-schema demo/system/demo/component.art --out migration/schema_v1.json
+theia install central && theia start central        # ← theia start/stop run install/
+
+# 2. seed v1 values (PutConfig), change some, snapshot
+python migration/seed.py seed --schema migration/schema_v1.json
+tdb get-snapshot snap_v1 --schema migration/schema_v1.json
+theia stop central
+
+# 3. evolve the .art (+ demo.options for new string fields), regen the FC,
+#    gen-schema of the v2 shapes, author migration/<node>_v1_to_v2.json
+artheia gen-schema demo/system/demo/component.art --out migration/schema_v2.json
+theia start central
+
+# 4. OFFLINE preview (design bench)
+tdb get-snapshot snap_v1b --schema migration/schema_v1.json
+python tools/migrate/migrate.py --snapshot snap_v1b.json \
+    --transform migration/<node>_v1_to_v2.json --out snap_v2_offline.json
+
+# 5. ONLINE: gen plugin, build the .so, MigrateBulk on the live per
+artheia gen-transform migration/<node>_v1_to_v2.json \
+    --out migration/<node>_v1_to_v2.cc --schema migration/schema_v2.json
+bazel build //migration:libper_migrate_<node>.so
+#   PerManager.MigrateBulk(config_type, from_digest, to_digest, plugin_so=...)
+
+# 6. COMPARE offline == online  (the lockstep invariant), then change a v2
+#    value, theia install + start, and confirm the migration survives a restart.
+```
+
+`theia start [machine]` / `theia stop [machine]` run the staged supervisor from
+`install/<machine>/` (detached + pidfile); they replace the hand-typed
+`THEIA_SUPERVISOR_MANIFEST=… ./supervisor`.
+
+## RF wrapper — parametrized migration tests
+
+`testing/rf_theia/scenarios/services/per_migration/` wraps the whole flow in a
+Robot Framework module, parametrized by node:
+
+- `per_migration_lib.py` — a `MigrationCase` per node (`node`, `config_type`,
+  `from`/`to` digest, `rules`, `seed`, `expect`) in the `CASES` list. Add a node
+  there and both its per-node test and the sweep pick it up.
+- Keywords: `Migrate Offline` (runs the real `migrate.py`), `Assert Migrated
+  Value`, `Assert Nanopb Roundtrip` (decodes v1 bytes with the v2 struct — the
+  plugin's `pb_decode` half, hermetic), `Assert Digest Bumped`, and
+  `Migrate Online And Compare` (live: seed → build+load plugin → `MigrateBulk` →
+  assert online == offline; retries the per-restart TIPC race).
+- `per_migration.robot` — one test per node, tagged `hermetic` (no stack) or
+  `live` (needs `theia start` + etcd).
+
+```sh
+cd testing
+PYTHONPATH=. ../.venv/bin/robot --include hermetic rf_theia/scenarios/services/per_migration/
+PYTHONPATH=. ../.venv/bin/robot --include live    rf_theia/scenarios/services/per_migration/
+```
+
+## Gotchas (battle-tested in the e2e run)
+
+- **The plugin `.so` MUST be self-contained.** per dlopens with `RTLD_NOW` and
+  exports neither nanopb nor the proto descriptors, so the plugin needs them IN
+  it: compile `demo.pb.c` straight in as a `src`, link nanopb statically
+  (`linkopts = ["-l:libprotobuf-nanopb.a"]`), and depend on the proto only via a
+  **header-only** target (a compiled proto cc_library adds a `DT_NEEDED` on a
+  shared lib that isn't on per's dlopen path → `dlopen failed`). See
+  `migration/plugin.bzl` for the macro.
+- **`dlerror()` clears on read** — read it ONCE. The loader used to read it
+  twice in `x ? x : "unknown"`; the second call returned null and
+  `std::string + null` segfaulted per. (Fixed in `migration_plugin.cc`.)
+- **String config fields must be `.options`-pinned** to `char[]` (else
+  `pb_callback_t`, which the struct-copy codegen can't assign and snapshots
+  can't decode). Add `<pkg>.<Msg>.<field> max_size:N` to the FC's `.options`.
+- **Repeated `MigrateBulk` across probe sessions can hit the TIPC stale-binding
+  race** (per crashes/restarts, a fresh probe load-balances onto a dead port).
+  It's a runtime hazard, not a migration bug — the RF live keyword retries on a
+  fresh probe ([[project-probe-connect-stale-bindings]]).
+
 ## Operations cheat sheet
 
 `Snapshot` / `RestoreSnapshot` are **config-prefix scoped** (just
@@ -133,4 +235,6 @@ forces in-memory (tests).
 - Reference applier: `tools/migrate/migrate.py`
 - per internals: `services/per/impl/` (etcd_store, migration_registry,
   migration_plugin, schema_registry, snapshot_ops)
-- E2E test (backlog): `docs/tasks/BACKLOG/config-migration-e2e-test.md`
+- Worked example + artefacts: `migration/` (schemas, per-node transforms +
+  plugins, `seed.py`, `plugin.bzl` macro, `README.md`)
+- RF suite: `testing/rf_theia/scenarios/services/per_migration/`

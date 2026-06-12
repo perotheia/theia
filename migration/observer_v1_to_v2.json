@@ -1,0 +1,6 @@
+{
+  "config_type": "ObserverConfig",
+  "from_digest": "cfg_641cf1694468714b",
+  "to_digest": "cfg_9072169f29427dc1",
+  "rules": [{"op": "rename", "from": "name", "to": "tag"}]
+}

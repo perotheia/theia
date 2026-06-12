@@ -53,5 +53,15 @@ on a real config, as a regression so the two engines can't drift.
 
 ## Status
 
-Not started. Tooling is committed (artheia + theia, branch psp-retirement);
-this is the integration test on top.
+DONE. Verified end-to-end against a live etcd-backed per: per-node config
+evolutions (counter add-field, observer rename, demo_fsm rename+add), offline
+migrate.py preview, gen-transform plugin, MigrateBulk online, and the lockstep
+invariant (offline == online). Wrapped as a parametrized Robot Framework suite
+at `testing/rf_theia/scenarios/services/per_migration/` (3 hermetic + 1 live,
+all green under the rf-theia MCP). Worked artefacts under `migration/`.
+
+Three seam bugs surfaced + fixed along the way: per's dlerror double-read
+segfault (migration_plugin.cc), the plugin .so not being self-contained
+(migration/plugin.bzl: compile demo.pb.c in + static nanopb + header-only proto
+dep), and gen-transform's `rename` codegen on a same-field-number rename
+(artheia). Full writeup: docs/skills/theia/references/migration.md.

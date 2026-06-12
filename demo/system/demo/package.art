@@ -37,17 +37,23 @@ message GetReply {
 // Runtime-observable config for CounterNode (services/per gatekeeper target).
 // A structured message bound to the node via `config` — the unit gen-schema
 // walks, snapshots decode against, and transforms reshape. v1 shape.
+// CounterConfig — also a per-node migration subject. v2 adds `hysteresis`
+// (add-field rule), proving each node carries its OWN v1->v2 evolution + rules,
+// independent of P4Config's. v1: {step,max_value,wrap,label};
+// v2: {step,max_value,wrap,label,hysteresis}.
 message CounterConfig {
     uint32 step          // how much each Inc adds
     uint32 max_value     // saturate at this
     bool   wrap          // wrap to 0 instead of saturating
     string label         // human tag
+    uint32 hysteresis    // v2: deadband before re-acting (add-field migration)
 }
 
-// Config for ObserverNode (P2) — how often it polls + a name.
+// Config for ObserverNode (P2) — how often it polls + a name. v2 renames
+// name->tag (rename migration), independent of the other nodes' rules.
 message ObserverConfig {
     uint32 poll_ms       // poll period
-    string name          // human tag
+    string tag           // human tag (was `name` in v1 — rename migration)
 }
 
 // Config for IncrementerNode (P3) — increment amount + cadence.

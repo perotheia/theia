@@ -41,6 +41,19 @@ struct Registrar {
                         &system_demo::Get::default_instance());
         register_global("system_demo_GetReply",
                         &system_demo::GetReply::default_instance());
+
+        // demo CONFIG messages — the structured config stored in etcd
+        // (/theia/config/<node>). Registering them lets the supervisor-gui
+        // Table Viewer decode a selected config value proto→JSON instead of
+        // showing a hex dump (the same TraceDecoderLib path traces use).
+        register_global("system_demo_CounterConfig",
+                        &system_demo::CounterConfig::default_instance());
+        register_global("system_demo_ObserverConfig",
+                        &system_demo::ObserverConfig::default_instance());
+        register_global("system_demo_IncrementerConfig",
+                        &system_demo::IncrementerConfig::default_instance());
+        register_global("system_demo_P4Config",
+                        &system_demo::P4Config::default_instance());
     }
 };
 

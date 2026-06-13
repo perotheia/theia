@@ -31,12 +31,26 @@ import tarfile
 import tempfile
 
 
-def _arch(machine_json: str) -> str:
-    """The .ipk Architecture tag, from machine.json's declared CPU arch.
-    (dpkg/opkg arch token: amd64 / arm64.)"""
+def _arch(machine_json: str, fmt: str = "deb") -> str:
+    """The per-host Architecture tag, from machine.json's declared CPU arch.
+    .deb → amd64 / arm64; .ipk → x86_64 / aarch64."""
     with open(machine_json) as f:
         cpu = json.load(f)["machine"]["hardware"]["cpu"]["architecture"]
+    if fmt == "ipk":
+        return {"amd64": "x86_64", "arm64": "aarch64"}.get(cpu, cpu)
     return {"x86_64": "amd64", "aarch64": "arm64"}.get(cpu, cpu)
+
+
+def _du_kb(path: str) -> int:
+    """KiB of the staged data tree (dpkg Installed-Size convention)."""
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for nm in files:
+            try:
+                total += os.path.getsize(os.path.join(root, nm))
+            except OSError:
+                pass
+    return (total + 1023) // 1024
 
 
 def _target_pkg_path(bazel_target: str) -> str:
@@ -76,10 +90,13 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--lib", action="append", default=[],
                     help="shared lib to bundle at /opt/theia/lib/<basename> "
                          "(e.g. libetcd-cpp-api.so for per)")
+    ap.add_argument("--format", choices=["deb", "ipk"], default="deb",
+                    help="archive format (same ar layout; deb adds Installed-Size "
+                         "+ amd64 arch, ipk is opkg-lean + x86_64 arch).")
     args = ap.parse_args(argv)
 
     wanted = _wanted(args.app)           # name → (dest, target_pkg_path)
-    arch = _arch(args.machine)
+    arch = _arch(args.machine, args.format)
 
     # Match each wanted component to a candidate binary by the target's package
     # path (a suffix of the binary's bazel-out path) — NOT basename, because the
@@ -123,7 +140,9 @@ def main(argv: list[str]) -> int:
                 w.write(r.read())
             os.chmod(dst, 0o755)
 
-        # control file
+        # control file. The archive is .deb-format either way (dpkg installs it);
+        # the .deb default adds Installed-Size (a dpkg/apt nicety), the --ipk
+        # hatch keeps the leaner opkg control.
         control = (
             f"Package: {args.package}\n"
             f"Version: {args.version}\n"
@@ -131,8 +150,11 @@ def main(argv: list[str]) -> int:
             "Section: apps\n"
             "Priority: optional\n"
             "Maintainer: Theia <info@robofortis.com>\n"
-            f"Description: Deploy bundle for {args.package}\n"
         )
+        if args.format == "deb":
+            installed_kb = _du_kb(data)
+            control += f"Installed-Size: {installed_kb}\n"
+        control += f"Description: Deploy bundle for {args.package}\n"
         with open(os.path.join(ctrl, "control"), "w") as f:
             f.write(control)
 

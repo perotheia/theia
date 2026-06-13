@@ -89,6 +89,20 @@ cc_library(
     ],
 )
 
+# Source-tree filegroups for the theia-runtime .deb (the runtime is shipped as
+# SOURCES — headers + .cc the user's generated apps compile against). The
+# packaging rule (//packaging/theia) stages these preserving their
+# workspace-relative path under /opt/theia. Kept here so they track the cc_library
+# globs above.
+filegroup(
+    name = "runtime_dist_srcs",
+    srcs = glob(["include/*.hh", "src/*.cc"]) + [
+        "system/runtime/package.art",
+        "proto/platform_runtime/runtime.proto",
+    ],
+    visibility = ["//visibility:public"],
+)
+
 # ---- Test suite (gen_server runtime; mirrors slices of OTP's
 #      gen_server_SUITE.erl). Self-contained nanopb proto under
 #      test/proto/ so the cc_test has no external app dependencies.

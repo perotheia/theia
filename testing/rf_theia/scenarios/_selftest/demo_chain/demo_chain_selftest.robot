@@ -17,7 +17,7 @@ Documentation    End-to-end selftest of the Demo3Way generation
 ...                               │
 ...                              dist/manifest/<machine>/*.yaml
 ...                               │
-...                               │  bazel build @rig_demo//<m>:image
+...                               │  bazel build @rig_apps//<m>:image
 ...                               │  (rules/rig.bzl pkg_opkg)
 ...                               ↓
 ...                              demo-<machine>_1.0.0_<arch>.ipk
@@ -72,7 +72,7 @@ Stage 1 — parse component.art
 
 
 Stage 2 — rig-deps JSON
-    [Documentation]    `artheia rig-deps demo.manifest.rig` emits
+    [Documentation]    `artheia rig-deps apps.manifest.rig` emits
     ...                the Bazel rig_ext extension's input.
     ...                Asserts machine list, per-machine arch, and
     ...                that demo_p1/p2/p3 components pin to

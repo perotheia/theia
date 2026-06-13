@@ -30,7 +30,7 @@ DemoSpecLayer = SoftwareSpecification(
 DemoSoftware = FcSoftware.squash(DemoSpecLayer)
 ```
 
-`artheia executor emit demo.manifest.rig --rig DemoSoftware` writes
+`artheia executor emit apps.manifest.rig --rig DemoSoftware` writes
 the supervisor's `executor.yaml`. `artheia gui emit` writes the
 GUI's `machines.yaml`. Both also accept legacy `Rig` exports during
 the migration window — see `_resolve_rig` in `artheia/cli.py`.

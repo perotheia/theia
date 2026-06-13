@@ -34,7 +34,7 @@ Three changes:
 ## Verification
 
 ```
-$ artheia generate-manifest demo.manifest.rig --out /tmp/out
+$ artheia generate-manifest apps.manifest.rig --out /tmp/out
 $ yq '.service_manifests[].instances[] | "\(.name) → \(.remote_machine)"' \
       /tmp/out/compute_host/service.yaml
 shwa → compute_host

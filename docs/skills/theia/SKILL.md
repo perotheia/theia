@@ -135,7 +135,7 @@ The `com` FC bridges theia↔gRPC to external tools (`supdbg`, `supervisor-gui`,
         │
         │ rig_ext (//rules:rig.bzl)
         ▼
- bazel build @rig_demo//…  ──►  .ipk bundles, //:install runtime layout
+ bazel build @rig_apps//…  ──►  .ipk bundles, //:install runtime layout
 ```
 
 Details and exact commands are in
@@ -146,7 +146,7 @@ Details and exact commands are in
 ```sh
 artheia parse system/system.art                 # full-tree resolve (validation)
 bazel build --config=linux //services/com/main:com //services/sm/main:sm …
-bazel build @rig_demo//:executor_json           # the manifest pipeline under Bazel
+bazel build @rig_apps//:executor_json           # the manifest pipeline under Bazel
 bazel build //system:art_sources                # the .art filegroup
 
 # Regen-stability guard — committed lib/main/impl/BUILD must equal gen-app output:

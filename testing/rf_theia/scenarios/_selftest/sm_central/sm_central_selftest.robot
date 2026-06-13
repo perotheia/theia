@@ -21,7 +21,7 @@ Documentation    Send a message to SM through the running CENTRAL stack.
 ...                   log: recv + dispatch of services_services_sm_SmRequest
 ...                   with the matching payload, and the statem's reaction.
 ...
-...              Prereq: binaries built + `bash demo/stage_local.sh` run.
+...              Prereq: binaries built + `bash apps/stage_local.sh` run.
 ...              Tag 'live' so CI gates it where the stack isn't staged.
 
 Library          ${CURDIR}/sm_central_lib.py

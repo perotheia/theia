@@ -107,7 +107,7 @@ After `up`:
 - **Central image's .ipk is empty today**. The 18 FC SwComponents
   are `bazel_buildable=False` (their binaries are bash daemons
   under `theia_runtime/`, not yet bridged into Bazel). So
-  `@rig_demo//central_host:image` is an empty filegroup; opkg-install
+  `@rig_apps//central_host:image` is an empty filegroup; opkg-install
   becomes a no-op. The supervisor runs but has no FC binaries to
   spawn — it logs "module missing" for each.
 

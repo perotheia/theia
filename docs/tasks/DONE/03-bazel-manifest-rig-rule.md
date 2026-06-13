@@ -59,7 +59,7 @@ source of truth for content; the BUILD just enumerates membership.
 
 ## Original ticket follows below
 
-Today `artheia generate-manifest demo.manifest.rig --out dist/manifest`
+Today `artheia generate-manifest apps.manifest.rig --out dist/manifest`
 runs by hand. Wire it into Bazel so:
 
 ```
@@ -92,7 +92,7 @@ def rig_manifest(name, rig_target, **kwargs):
     Args:
       name: target name (typically "rig").
       rig_target: dotted Python path to the Rig / SoftwareSpecification
-                  module (e.g. "demo.manifest.rig").
+                  module (e.g. "apps.manifest.rig").
     """
     native.genrule(
         name = name,
@@ -129,7 +129,7 @@ load("//rules:manifest.bzl", "rig_manifest", "rig_distribution")
 
 rig_manifest(
     name = "rig",
-    rig_target = "demo.manifest.rig",
+    rig_target = "apps.manifest.rig",
 )
 
 rig_distribution(

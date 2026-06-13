@@ -50,7 +50,7 @@ The JSON manifests are self-sufficient (verified): `application.json` carries
 ### Step 1 — `theia manifest` verb (the sole rig entry)
 Extract the `generate-manifest` call into its own verb:
     theia manifest [module] [--rig ATTR] [--out dist/manifest]
-Default `demo.manifest.zonal_rig --rig DemoSoftware → dist/manifest`. Emits
+Default `apps.manifest.zonal_rig --rig DemoSoftware → dist/manifest`. Emits
 `machines.json` + per-host `{machine,application,service,execution}.json`.
 `theia dist`/`install` STOP emitting manifests inline.
 

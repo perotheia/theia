@@ -20,15 +20,15 @@ MODULE.bazel
    ▼   load module extension
 //rules:rig.bzl::rig_ext
    │
-   ▼   declare(name="rig_demo", rig_module="demo.manifest.rig")
-synthetic repo @rig_demo//
+   ▼   declare(name="rig_apps", rig_module="apps.manifest.rig")
+synthetic repo @rig_apps//
    │
    ▼   genrule + sh + pkg_opkg
-@rig_demo//demo_host:image       ── deploy.ipk
-@rig_demo//demo_host:components  ── filegroup of buildable bins
-@rig_demo//:executor_yaml        ── supervisor manifest
-@rig_demo//:machines_yaml        ── GUI manifest
-@rig_demo//:all                  ── union of the above
+@rig_apps//demo_host:image       ── deploy.ipk
+@rig_apps//demo_host:components  ── filegroup of buildable bins
+@rig_apps//:executor_yaml        ── supervisor manifest
+@rig_apps//:machines_yaml        ── GUI manifest
+@rig_apps//:all                  ── union of the above
 ```
 
 At MODULE-resolution time, Bazel invokes `artheia rig-deps
@@ -54,8 +54,8 @@ declared in the user's BUILD.bazel files.
 
    ```python
    rig_ext = use_extension("//rules:rig.bzl", "rig_ext")
-   rig_ext.declare(name = "rig_demo", rig_module = "demo.manifest.rig")
-   use_repo(rig_ext, "rig_demo")
+   rig_ext.declare(name = "rig_apps", rig_module = "apps.manifest.rig")
+   use_repo(rig_ext, "rig_apps")
    ```
 
 3. Mark each SwComponent's `bazel_buildable=True` once its
@@ -79,18 +79,18 @@ declared in the user's BUILD.bazel files.
 
 ```
 # Just the executor manifest
-bazel build @rig_demo//:executor_yaml
-cat bazel-bin/external/+rig_ext+rig_demo/executor.yaml
+bazel build @rig_apps//:executor_yaml
+cat bazel-bin/external/+rig_ext+rig_apps/executor.yaml
 
 # Just the GUI manifest
-bazel build @rig_demo//:machines_yaml
+bazel build @rig_apps//:machines_yaml
 
 # Per-machine .ipk image
-bazel build @rig_demo//demo_host:image
-ls bazel-bin/external/+rig_ext+rig_demo/demo_host/*.ipk
+bazel build @rig_apps//demo_host:image
+ls bazel-bin/external/+rig_ext+rig_apps/demo_host/*.ipk
 
 # Everything
-bazel build @rig_demo//:all
+bazel build @rig_apps//:all
 ```
 
 The .ipk contains `/usr/bin/<name>` for each buildable
@@ -177,7 +177,7 @@ all machine images under `@rig//:all`.
 
 - **Bazel-driven supervisor launch**: there's no `bazel run`
   target that bringup a rig (no `theia run` equivalent inside
-  Bazel). Use `./theia.py run demo.manifest.rig` for that. The
+  Bazel). Use `./theia.py run apps.manifest.rig` for that. The
   Bazel side is for building artifacts; the workspace launcher
   is for orchestration.
 

@@ -9,13 +9,13 @@ ARA manifest sections (see docs/autosar/manifest.md):
 
   * Application — one ``<Cluster>_*`` group per ``cluster`` in the .art
                   (SwComponent + Executable + Process per member).
-  * Machine     — empty; rig layers (demo/manifest/rig.py) fill it.
+  * Machine     — empty; rig layers (apps/manifest/rig.py) fill it.
   * Service     — ServiceManifest instances (loader-derived in
                   platform.py from the same cluster members).
   * Execution   — Processes (one per cluster member).
 
 Upper layers patch this base by name (:class:`Override`) — see
-``demo/manifest/rig.py``.
+``apps/manifest/rig.py``.
 """
 
 from __future__ import annotations
@@ -68,7 +68,7 @@ PROCESSES = SERVICES_PROCESSES
 
 # ---------------------------------------------------------------------------
 # Machine section — EMPTY. Machines are a deploy-time concern; rig layers
-# (demo/manifest/rig.py) add MachineManifests. The spec declares none.
+# (apps/manifest/rig.py) add MachineManifests. The spec declares none.
 # ---------------------------------------------------------------------------
 MACHINES: list = []
 

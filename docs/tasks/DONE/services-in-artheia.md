@@ -71,4 +71,4 @@ placeholder until artheia cross-file imports land (see
 - `artheia parse` on every services/system/*/package.art → all OK.
 - `artheia gen-proto services/system/log/package.art` → emits LogRecord.proto.
 - `artheia gen-proto platform/supervisor/system/package.art` → unchanged.
-- `artheia generate-manifest demo.manifest.rig` → unchanged supervision tree.
+- `artheia generate-manifest apps.manifest.rig` → unchanged supervision tree.

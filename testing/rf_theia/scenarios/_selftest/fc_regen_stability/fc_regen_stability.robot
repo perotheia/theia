@@ -21,7 +21,7 @@ Documentation    Regen-stability guard: every committed FC's lib +
 ...                and re-run gen-app across all FCs.
 ...
 ...              Drives the daemon FCs (sm, com, per, ucm, log) AND
-...              the non-services FCs (demo×3, gateway, odd_path) —
+...              the non-services FCs (apps×3, gateway) —
 ...              gen-app stays byte-stable wherever the FC lives.
 Library          ${CURDIR}/fc_regen_lib.py
 
@@ -82,28 +82,28 @@ log regenerates byte-identically
 
 # ── Non-services FCs ──────────────────────────────────────────────────────
 # Same generator, different homes — proving gen-app's path-agnostic label
-# derivation. The demo is one spec, three process-compositions (--composition
-# appended to --out verbatim); gateway + odd_path_client are single-app FCs
+# derivation. The apps spec is one spec, three process-compositions
+# (--composition appended to --out verbatim); gateway is a single-app FC
 # living outside services/.
 
-demo Demo3WayP1 regenerates byte-identically
-    [Documentation]    demo/Demo3WayP1/{lib,main,impl/BUILD.bazel} ==
+apps Demo3WayP1 regenerates byte-identically
+    [Documentation]    apps/Demo3WayP1/{lib,main,impl/BUILD.bazel} ==
     ...                gen-app --composition Demo3WayP1 from
-    ...                demo/system/demo/component.art.
+    ...                apps/system/demo/component.art.
     [Tags]    fc-regen-stability    hermetic    selftest
     Regen And Diff FC    demo_p1
 
 
-demo Demo3WayP2 regenerates byte-identically
-    [Documentation]    demo/Demo3WayP2/{lib,main,impl/BUILD.bazel} ==
-    ...                gen-app --composition Demo3WayP2 from the demo spec.
+apps Demo3WayP2 regenerates byte-identically
+    [Documentation]    apps/Demo3WayP2/{lib,main,impl/BUILD.bazel} ==
+    ...                gen-app --composition Demo3WayP2 from the apps spec.
     [Tags]    fc-regen-stability    hermetic    selftest
     Regen And Diff FC    demo_p2
 
 
-demo Demo3WayP3 regenerates byte-identically
-    [Documentation]    demo/Demo3WayP3/{lib,main,impl/BUILD.bazel} ==
-    ...                gen-app --composition Demo3WayP3 from the demo spec.
+apps Demo3WayP3 regenerates byte-identically
+    [Documentation]    apps/Demo3WayP3/{lib,main,impl/BUILD.bazel} ==
+    ...                gen-app --composition Demo3WayP3 from the apps spec.
     [Tags]    fc-regen-stability    hermetic    selftest
     Regen And Diff FC    demo_p3
 
@@ -113,10 +113,3 @@ gateway regenerates byte-identically
     ...                gen-app output from platform/gateway/system/package.art.
     [Tags]    fc-regen-stability    hermetic    selftest
     Regen And Diff FC    gateway
-
-
-odd_path_client regenerates byte-identically
-    [Documentation]    applications/odd_path_client/{lib,main,impl/BUILD.bazel}
-    ...                == gen-app output from the vendor odd_path_monitor spec.
-    [Tags]    fc-regen-stability    hermetic    selftest
-    Regen And Diff FC    odd_path

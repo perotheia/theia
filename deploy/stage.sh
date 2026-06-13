@@ -6,8 +6,8 @@
 # from `bazel-bin/external/+rig_ext+rig_zonal/`.
 #
 # The distributed deploy is the 2-machine central+compute split — @rig_zonal
-# (demo.manifest.zonal_rig). (The single-machine local host install is a
-# separate path: `theia install` / demo/stage_local.sh, @rig_demo.)
+# (apps.manifest.zonal_rig). (The single-machine local host install is a
+# separate path: `theia install` / apps/stage_local.sh, @rig_apps.)
 #
 # Idempotent — re-running overwrites the staging area cleanly.
 #
@@ -48,14 +48,14 @@ machines=()
 # `artheia rig-deps`. This catches machines with no buildable
 # components (which won't show in bazel-bin).
 #
-# We need the PYTHON module name (e.g. `demo.manifest.rig`), not the
+# We need the PYTHON module name (e.g. `apps.manifest.rig`), not the
 # Bazel-side @rig_<name> alias passed as the first arg to this script.
 # For demo this is hardcoded; future rigs add their own mapping by
 # extending the case below.
 
 case "$RIG" in
-    rig_zonal) RIG_MODULE="demo.manifest.zonal_rig" ;;
-    rig_demo)  RIG_MODULE="demo.manifest.rig" ;;
+    rig_zonal) RIG_MODULE="apps.manifest.zonal_rig" ;;
+    rig_apps)  RIG_MODULE="apps.manifest.rig" ;;
     *)         RIG_MODULE="" ;;  # unknown rig; skip rig-deps discovery
 esac
 

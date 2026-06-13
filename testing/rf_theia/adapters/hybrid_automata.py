@@ -105,7 +105,7 @@ class HybridAutomata:
 
         env = os.environ.copy()
         env.pop("PYTHONPATH", None)
-        r = subprocess.run(["bash", "demo/stage_local.sh"], cwd=str(_WS),
+        r = subprocess.run(["bash", "apps/stage_local.sh"], cwd=str(_WS),
                            env=env, capture_output=True, text=True)
         if r.returncode != 0:
             raise AssertionError(

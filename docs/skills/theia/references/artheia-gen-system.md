@@ -26,7 +26,7 @@ All artheia commands assume `PATH="$PWD/.venv/bin:$PATH"`.
  serialized JSON ── executor.json, machines.yaml, dist/manifest/<machine>/*.json
    │  rig_ext (//rules:rig.bzl)                          → build-system.md
    ▼
- bazel build @rig_demo//… ── .ipk bundles; //:install runtime layout
+ bazel build @rig_apps//… ── .ipk bundles; //:install runtime layout
    │  puppet / deploy_rpi4.sh                            → provision-orchestrate.md
    ▼
  provisioned machines
@@ -59,7 +59,7 @@ process/execution tree, and the supervisor hierarchy).
 
 | command | TARGET | emits |
 | --- | --- | --- |
-| `artheia executor emit <module> [--machine M] [--out f]` | dotted module path (e.g. `demo.manifest.rig`) | `executor.json` — the supervisor tree (whole-rig, or sliced to one machine) |
+| `artheia executor emit <module> [--machine M] [--out f]` | dotted module path (e.g. `apps.manifest.rig`) | `executor.json` — the supervisor tree (whole-rig, or sliced to one machine) |
 | `artheia gui emit <module> [--out f]` | same | `machines.yaml` — per-machine gRPC endpoints for the GUI |
 | `artheia generate-manifest <module> [--out dist/manifest]` | same | per-machine `{machine,application,service,execution}.json` + `index.json` |
 
@@ -67,10 +67,10 @@ process/execution tree, and the supervisor hierarchy).
 attribute with `--rig` (defaults to `*Rig`/`Rig`). Examples:
 
 ```sh
-artheia executor emit demo.manifest.rig                       # whole-rig tree → stdout
-artheia executor emit demo.manifest.rig --machine compute_host --out central.json
-artheia gui emit demo.manifest.rig --out machines.yaml
-artheia generate-manifest demo.manifest.rig --out dist/manifest
+artheia executor emit apps.manifest.rig                       # whole-rig tree → stdout
+artheia executor emit apps.manifest.rig --machine compute_host --out central.json
+artheia gui emit apps.manifest.rig --out machines.yaml
+artheia generate-manifest apps.manifest.rig --out dist/manifest
 ```
 
 The four per-machine manifests: **machine.json** (hw arch, os packages),

@@ -167,10 +167,10 @@ that's bare-metal — separate toolchain, no shared object pipeline.
    once components grow real cc_binary targets).
 
    Verified:
-   - `bazel build @rig_demo//compute_host:image` (no flag) →
+   - `bazel build @rig_apps//compute_host:image` (no flag) →
      `demo-compute_host_1.0.0_arm64.ipk` (ComputeHost declared aarch64
      in rig.py)
-   - `bazel build @rig_demo//central_host:image` (no flag) →
+   - `bazel build @rig_apps//central_host:image` (no flag) →
      `demo-central_host_1.0.0_amd64.ipk` (currently broken by an
      unrelated `:ipk` target rename — pre-existing, not part of this
      task)

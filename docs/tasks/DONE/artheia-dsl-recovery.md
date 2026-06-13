@@ -309,10 +309,10 @@ this task lands.
 
 ## Acceptance criteria
 
-- `artheia executor emit demo.manifest.rig --rig DemoRig` produces
+- `artheia executor emit apps.manifest.rig --rig DemoRig` produces
   the exact same `executor.yaml` it does today (byte-identical
   except for stable sort).
-- `artheia gui emit demo.manifest.rig --rig DemoRig` produces the
+- `artheia gui emit apps.manifest.rig --rig DemoRig` produces the
   same `machines.yaml`.
 - `services/manifest/fc.py` and `demo/manifest/rig.py` read
   noticeably more like the legacy mosaic raj_syscomp.py — every
@@ -379,6 +379,6 @@ All 5 phases landed.
   squashes merge their `components` lists (FC + rig binaries)
   instead of wholesale replace.
 
-`artheia executor emit demo.manifest.rig` produces byte-identical
+`artheia executor emit apps.manifest.rig` produces byte-identical
 `executor.yaml` whether invoked via `DemoRig` (legacy) or
 `DemoSoftware` (new). 100 tests pass (was 60 pre-session).

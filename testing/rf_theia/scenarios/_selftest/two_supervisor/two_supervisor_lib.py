@@ -8,7 +8,7 @@ app p3. p3's DriverNode is a cross-process consumer of p1's CounterNode,
 so a green run proves the .art-declared cross-machine TIPC wiring holds
 when the two supervisor trees are brought up independently.
 
-Layout is produced by ``demo/stage_local.sh`` (install/<machine>/ with
+Layout is produced by ``apps/stage_local.sh`` (install/<machine>/ with
 supervisor + executor.json + bin/<child>). This lib only orchestrates:
 stage → launch central → launch compute → assert spawns → SIGTERM →
 assert clean exit. No Puppet/systemd — the supervisor binary is run
@@ -55,7 +55,7 @@ class TwoSupervisorLib:
 
     @keyword("Stage Install Tree")
     def stage_install_tree(self) -> None:
-        """Run demo/stage_local.sh to lay out install/{central,compute}/.
+        """Run apps/stage_local.sh to lay out install/{central,compute}/.
 
         Assumes the binaries are already built (5 FC daemons via Bazel,
         p1/p2/p3 via the demo CMake build, supervisor via CMake). The
@@ -65,7 +65,7 @@ class TwoSupervisorLib:
         env = os.environ.copy()
         env.pop("PYTHONPATH", None)
         r = subprocess.run(
-            ["bash", "demo/stage_local.sh"],
+            ["bash", "apps/stage_local.sh"],
             cwd=str(self._workspace), env=env,
             capture_output=True, text=True, check=False,
         )

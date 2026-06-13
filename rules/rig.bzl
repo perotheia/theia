@@ -1,32 +1,32 @@
 """rig.bzl — bzlmod module extension wiring rig.py into Bazel.
 
 A vendor's rig is described declaratively in a Python module
-(e.g. `demo/manifest/rig.py`) as a `SoftwareSpecification` literal.
+(e.g. `apps/manifest/rig.py`) as a `SoftwareSpecification` literal.
 The module extension below runs `artheia rig-deps <module>` at
 module-load time, reads the resulting JSON, and materializes a
 synthetic repository (one per rig) exposing per-machine targets:
 
-    @rig_demo//demo_host:image       # opkg .ipk for demo_host
-    @rig_demo//demo_host:executor    # executor.json only
-    @rig_demo//demo_host:components  # filegroup of all binaries
-    @rig_demo//executor_json         # combined executor.json (multi-host)
-    @rig_demo//machines_json         # GUI manifest
+    @rig_apps//demo_host:image       # opkg .ipk for demo_host
+    @rig_apps//demo_host:executor    # executor.json only
+    @rig_apps//demo_host:components  # filegroup of all binaries
+    @rig_apps//executor_json         # combined executor.json (multi-host)
+    @rig_apps//machines_json         # GUI manifest
 
 Usage from MODULE.bazel:
 
     rig_ext = use_extension("//rules:rig.bzl", "rig_ext")
-    rig_ext.declare(name = "rig_demo", rig_module = "demo.manifest.rig")
-    use_repo(rig_ext, "rig_demo")
+    rig_ext.declare(name = "rig_apps", rig_module = "apps.manifest.rig")
+    use_repo(rig_ext, "rig_apps")
 
 Then:
 
-    bazel build @rig_demo//demo_host:image      # the deploy bundle
-    bazel build @rig_demo//demo_host:executor   # just the supervisor manifest
+    bazel build @rig_apps//demo_host:image      # the deploy bundle
+    bazel build @rig_apps//demo_host:executor   # just the supervisor manifest
 
 The synthetic repo references the user's actual cc_binary / py_binary
 targets via the bazel_target strings declared in the rig's
 SwComponents. The user is responsible for those targets existing
-(e.g. `//demo:p1_main` resolves to a cc_binary in demo/BUILD.bazel).
+(e.g. `//apps:p1_main` resolves to a cc_binary in apps/BUILD.bazel).
 
 Implementation notes:
 - Module extensions run during MODULE.bazel resolution, BEFORE the
@@ -233,9 +233,9 @@ filegroup(
     # *target* machine, which is exactly what rig.py declares.
     #
     # That means:
-    #   bazel build @rig_demo//compute_host:image  → arm64 (ComputeHost
+    #   bazel build @rig_apps//compute_host:image  → arm64 (ComputeHost
     #                                                declared aarch64)
-    #   bazel build @rig_demo//central_host:image  → amd64
+    #   bazel build @rig_apps//central_host:image  → amd64
     #
     # --platforms=//rules/config:rpi4 is still meaningful — it drives the
     # underlying cc_toolchain selection (so any cc_binary in the rig
@@ -317,7 +317,7 @@ def _rig_repo_impl(ctx):
             c for c in flat if c["machine"] == m["name"]
         ]
 
-    # 4. Emit one subdirectory per machine: @rig_demo//demo_host:image etc.
+    # 4. Emit one subdirectory per machine: @rig_apps//demo_host:image etc.
     machine_names = ", ".join([m["name"] for m in machines])
     for m in machines:
         ctx.file(
@@ -331,7 +331,7 @@ def _rig_repo_impl(ctx):
             ) + _machine_targets(m, rig["vehicle"]["name"]),
         )
 
-    # 5. Top-level @rig_demo//:executor_json + machines_json via genrules.
+    # 5. Top-level @rig_apps//:executor_json + machines_json via genrules.
     # These call back into artheia at build time (so the JSON always
     # reflects the current rig.py state) — they aren't read at
     # module-extension-eval time.
@@ -356,7 +356,7 @@ alias(
 )
 
 # Per-machine supervisor trees. The rig module exports CentralRig /
-# ComputeRig (demo.manifest.rig), each a single-machine Rig with its own
+# ComputeRig (apps.manifest.rig), each a single-machine Rig with its own
 # supervision tree (central: platform tree minus shwa; compute: srv_sup ->
 # shwa, app_sup -> p3). The top-level //:install rule lays these into
 # install/central/executor.json and install/compute/executor.json.
@@ -414,7 +414,7 @@ rig_repo = repository_rule(
     attrs = {
         "rig_module": attr.string(
             mandatory = True,
-            doc = "Python dotted import path to the rig module, e.g. demo.manifest.rig.",
+            doc = "Python dotted import path to the rig module, e.g. apps.manifest.rig.",
         ),
         "rig_attr": attr.string(
             default = "",
@@ -438,7 +438,7 @@ _declare = tag_class(
     attrs = {
         "name": attr.string(
             mandatory = True,
-            doc = "Synthetic-repo name (e.g. rig_demo).",
+            doc = "Synthetic-repo name (e.g. rig_apps).",
         ),
         "rig_module": attr.string(
             mandatory = True,

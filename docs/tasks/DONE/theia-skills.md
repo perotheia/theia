@@ -34,7 +34,7 @@ Done.
   artheia CLI's `--package vendor.autosar` default).
 - Bazel rig repo targets were stale: doc said `executor_json` /
   `executor_json_central`; the real names are
-  `@rig_demo//<machine>:image`, `…:executor`, `…:components`,
+  `@rig_apps//<machine>:image`, `…:executor`, `…:components`,
   plus top-level `executor_yaml` + `machines_yaml` (and `:all`).
 - Puppet was described as "package-install body still a stub" —
   no longer true. `deploy/puppet/{provisioning,orchestration}.pp`

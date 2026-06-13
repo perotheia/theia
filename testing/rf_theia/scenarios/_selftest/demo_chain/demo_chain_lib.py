@@ -91,10 +91,10 @@ class DemoChainLib:
 
     @keyword("Stage 1 Parse Component Art")
     def stage1_parse(self) -> str:
-        """Run `artheia parse demo/system/demo/component.art` and
+        """Run `artheia parse apps/system/demo/component.art` and
         return the tree dump. Validates grammar + import resolution
         for the demo cluster + 3 compositions."""
-        r = self._artheia("parse", "demo/system/demo/component.art")
+        r = self._artheia("parse", "apps/system/demo/component.art")
         self._ok(r, "stage 1: artheia parse")
         return r.stdout
 
@@ -116,7 +116,7 @@ class DemoChainLib:
         assert self._workdir is not None, "call `Use Workdir` first"
         out = self._workdir / "rig.json"
         r = self._artheia(
-            "rig-deps", "demo.manifest.rig", "--out", str(out)
+            "rig-deps", "apps.manifest.rig", "--out", str(out)
         )
         self._ok(r, "stage 2: artheia rig-deps")
         if not out.exists():
@@ -170,7 +170,7 @@ class DemoChainLib:
         assert self._workdir is not None
         out = self._workdir / "demo_netgraph.json"
         r = self._artheia(
-            "gen-netgraph", "demo/system/demo/component.art",
+            "gen-netgraph", "apps/system/demo/component.art",
             "--out", str(out),
         )
         self._ok(r, "stage 3: artheia gen-netgraph")
@@ -198,7 +198,7 @@ class DemoChainLib:
         out_dir = self._workdir / "routing"
         out_dir.mkdir(exist_ok=True)
         r = self._artheia(
-            "gen-routing", "demo/system/demo/component.art",
+            "gen-routing", "apps/system/demo/component.art",
             "--composition", composition,
             "--out", str(out_dir),
         )
@@ -229,7 +229,7 @@ class DemoChainLib:
         out_dir = self._workdir / f"app_{composition.lower()}"
         out_dir.mkdir(exist_ok=True)
         r = self._artheia(
-            "gen-app-composition", "demo/system/demo/component.art",
+            "gen-app-composition", "apps/system/demo/component.art",
             "--composition", composition,
             "--out", str(out_dir),
         )
@@ -257,7 +257,7 @@ class DemoChainLib:
         assert self._workdir is not None
         out = self._workdir / "manifest"
         r = self._artheia(
-            "generate-manifest", "demo.manifest.rig",
+            "generate-manifest", "apps.manifest.rig",
             "--out", str(out),
         )
         self._ok(r, "stage 6: artheia generate-manifest")
@@ -350,7 +350,7 @@ class DemoChainLib:
         assert self._workdir is not None
         out = self._workdir / f"executor_{machine}.json"
         r = self._artheia(
-            "executor", "emit", "demo.manifest.rig",
+            "executor", "emit", "apps.manifest.rig",
             "--machine", machine,
             "--out", str(out),
         )
@@ -373,12 +373,12 @@ class DemoChainLib:
 
     @keyword("Stage 8 Bazel Build Image")
     def stage8_bazel_build(self, machine: str) -> str:
-        """`bazel build @rig_demo//<machine>:image` and return the
+        """`bazel build @rig_apps//<machine>:image` and return the
         produced .ipk path via `bazel cquery --output=files`."""
         assert self._workspace is not None
         env = os.environ.copy()
         env["PATH"] = f"{self._workspace}/.venv/bin:{env.get('PATH', '')}"
-        target = f"@rig_demo//{machine}:image"
+        target = f"@rig_apps//{machine}:image"
         b = subprocess.run(
             ["bazel", "build", target],
             cwd=str(self._workspace), env=env,

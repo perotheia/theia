@@ -1,0 +1,23 @@
+#!/bin/sh
+# theia-framework postinst — install artheia's third-party Python deps into the
+# SYSTEM (the artheia package itself ships under /opt/theia/lib, on PYTHONPATH via
+# /opt/theia/setup.{bash,zsh}). Deps go to the system so any python3 sees them.
+#
+# Offline-first: if the deb bundled the dep wheels under /opt/theia/wheels, install
+# from there with --no-index; else fall back to PyPI. Never fail the install on a
+# pip hiccup — artheia still imports if the deps are already present.
+set -e
+
+WHEELS=/opt/theia/wheels
+DEPS="textX Jinja2 click PyYAML"
+
+if [ -d "$WHEELS" ] && ls "$WHEELS"/*.whl >/dev/null 2>&1; then
+    python3 -m pip install --no-index --find-links "$WHEELS" $DEPS \
+        || echo "theia-framework: pip install from $WHEELS failed (deps may already be present)"
+else
+    python3 -m pip install $DEPS \
+        || echo "theia-framework: pip install from PyPI failed (offline? deps may already be present)"
+fi
+
+echo "theia-framework: installed. Activate with:  source /opt/theia/setup.bash"
+exit 0

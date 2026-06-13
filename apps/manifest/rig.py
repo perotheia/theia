@@ -5,9 +5,9 @@ Composition reference (``demo/system/demo/package.art``):
 ==============  ======================================  ==============
 process binary  hosted prototypes (.art)                start_cmd
 ==============  ======================================  ==============
-``demo_p1``     counter_p1, driver_p1, ticker_p1        ``demo/build/p1_main``
-``demo_p2``     observer_p2                             ``demo/build/p2_main``
-``demo_p3``     incrementer_p3                          ``demo/build/p3_main``
+``apps_p1``     counter_p1, driver_p1, ticker_p1        ``apps/build/p1_main``
+``apps_p2``     observer_p2                             ``apps/build/p2_main``
+``apps_p3``     incrementer_p3                          ``apps/build/p3_main``
 ==============  ======================================  ==============
 
 Each process binary boots a :class:`TimerService`, a :class:`TipcMux`,
@@ -134,7 +134,7 @@ CentralHost = MachineManifest(
     opkg_artifacts=list(_PLATFORM_OPKG_ARTIFACTS),
 )
 
-# (ComputeHost + AdminHost moved to demo/manifest/zonal_rig.py — this rig is
+# (ComputeHost + AdminHost moved to apps/manifest/zonal_rig.py — this rig is
 # single-machine: central only.)
 
 # Legacy alias for any caller that still references DemoHost (the
@@ -146,18 +146,18 @@ DemoHost = CentralHost
 # Process binaries — DERIVED from the .art, not hand-listed.
 # ---------------------------------------------------------------------------
 #
-# `demo/manifest/applications.py` is GENERATED from `cluster Applications`
+# `apps/manifest/applications.py` is GENERATED from `cluster Applications`
 # in demo/system/demo/component.art by `artheia gen-manifest`. It
 # carries one SwComponent / Executable / Process per cluster member, with
 # every path derived from the (base_dir=demo, ident) directory convention
-# (app dir demo/<ident>, bazel //demo/<ident>:<ident>, start_cmd bin/<ident>)
+# (app dir apps/<ident>, bazel //apps/<ident>:<ident>, start_cmd bin/<ident>)
 # and each Process.nodes set from the composition's hosted prototypes.
 #
 # rig.py consumes those directly — the hand-written 5-tuple table is gone.
 # This module keeps only the deploy concerns: machines, host pinning,
 # PTM, and the app_sup override.
 
-from demo.manifest.applications import (  # noqa: E402
+from apps.manifest.applications import (  # noqa: E402
     APPLICATIONS_COMPONENTS as _APP_COMPONENTS,
     APPLICATIONS_EXECUTABLES as DEMO_EXECUTABLES,
     APPLICATIONS_PROCESSES as DEMO_PROCESSES,
@@ -276,7 +276,7 @@ if DemoRig.applications:
 # ---------------------------------------------------------------------------
 
 # Single-machine rig: every FC lands on central. (The 2-machine split that
-# pins shwa → compute lives in demo/manifest/zonal_rig.py.)
+# pins shwa → compute lives in apps/manifest/zonal_rig.py.)
 _FC_HOST_MACHINE: dict[str, str] = {}
 _DEFAULT_FC_HOST_MACHINE = CentralHost.name
 
@@ -368,8 +368,8 @@ DemoRig.process_to_machine_mappings = list(
 #   compute_app on compute — the three demo binaries (Demo3Way's
 #                             per-process compositions).
 #
-# This split is what makes `bazel build @rig_demo//central_host:image`
-# and `@rig_demo//compute_host:image` produce two distinct .ipks for
+# This split is what makes `bazel build @rig_apps//central_host:image`
+# and `@rig_apps//compute_host:image` produce two distinct .ipks for
 # Docker deployment under `deploy/`.
 
 _PlatformAppOverlay = ApplicationManifest(
@@ -467,7 +467,7 @@ from services.manifest.service import (  # noqa: E402
 )
 
 # Single-machine: central hosts EVERYTHING — all FCs + all demo apps. (The
-# compute partition lives in demo/manifest/zonal_rig.py.)
+# compute partition lives in apps/manifest/zonal_rig.py.)
 _central_fc_components = list(_FC_COMPONENTS)
 _central_fc_processes = list(_FC_PROCESSES)
 _central_app_components = list(DEMO_BINARIES)
@@ -522,8 +522,8 @@ CentralSoftware: SoftwareSpecification = SoftwareSpecification(
 )
 
 
-# Materialized rig — what `artheia executor emit demo.manifest.rig --rig
+# Materialized rig — what `artheia executor emit apps.manifest.rig --rig
 # CentralRig` consumes to write install/central/executor.json. This rig.py is
 # SINGLE-MACHINE (central only); the 2-machine central+compute split is in
-# demo/manifest/zonal_rig.py (ComputeRig + ComputeSoftware live there).
+# apps/manifest/zonal_rig.py (ComputeRig + ComputeSoftware live there).
 CentralRig: Rig = CentralSoftware.to_rig()

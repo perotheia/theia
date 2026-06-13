@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# demo/stage_local.sh — lay out install/central for a local single-machine run
+# apps/stage_local.sh — lay out install/central for a local single-machine run
 # of the ara::exec supervisor (gen-app FC).
 #
 # THIN WRAPPER around `theia stage-local`: the build + install/ population +

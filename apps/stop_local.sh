@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# demo/stop_local.sh — tear down a local single-machine run started by
+# apps/stop_local.sh — tear down a local single-machine run started by
 # stage_local.sh + `./supervisor`.
 #
 # `killall supervisor` is NOT enough: when the supervisor dies (especially
@@ -9,9 +9,9 @@
 # standalone services-log collector (if any), and stale `tdb logcat` clients.
 #
 # Usage:
-#   demo/stop_local.sh           # graceful (SIGTERM), then SIGKILL stragglers
-#   demo/stop_local.sh -9        # go straight to SIGKILL
-#   demo/stop_local.sh -n        # dry run — list what WOULD be killed
+#   apps/stop_local.sh           # graceful (SIGTERM), then SIGKILL stragglers
+#   apps/stop_local.sh -9        # go straight to SIGKILL
+#   apps/stop_local.sh -n        # dry run — list what WOULD be killed
 set -uo pipefail
 
 SIG_FIRST="TERM"

@@ -1,7 +1,7 @@
-# demo/manifest — Python rig + transitive .art inputs.
+# apps/manifest — Python rig + transitive .art inputs.
 #
 # Exposes `rig_sources` so //platform/manifest:rig can depend on every
-# file artheia might read while materializing demo.manifest.rig.
+# file artheia might read while materializing apps.manifest.rig.
 #
 # Bazel can't follow Python's runtime imports, so we list the
 # upstream filegroups explicitly. Touching any of these forces a
@@ -16,7 +16,7 @@ filegroup(
         # Generated application manifest (cluster Applications); rig.py
         # imports APPLICATIONS_* from it. Regenerate with
         # `artheia gen-manifest demo/system/demo/component.art
-        #  demo/manifest/applications.py`.
+        #  apps/manifest/applications.py`.
         "applications.py",
         # FC layer the rig inherits from.
         "//services/manifest:service_sources",

@@ -36,6 +36,6 @@ cc_library(
         # in the (write-once, app-owned) impl/<Node>_state.hh headers,
         # exposed by the leaf demo_state target — depended
         # on here so the lib<-impl include is a clean DAG, not a cycle.
-        "//demo/Demo3WayP1/impl:demo_state",
+        "//apps/Demo3WayP1/impl:demo_state",
     ],
 )

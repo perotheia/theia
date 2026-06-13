@@ -36,6 +36,6 @@ cc_library(
         "-fPIC",
     ],
     deps = [
-        "//demo/Demo3WayP3/lib:demo_lib",
+        "//apps/Demo3WayP3/lib:demo_lib",
     ],
 )

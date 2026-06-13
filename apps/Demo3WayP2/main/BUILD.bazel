@@ -17,8 +17,8 @@ cc_binary(
         "-Wextra",
     ],
     deps = [
-        "//demo/Demo3WayP2/lib:demo_lib",
-        "//demo/Demo3WayP2/impl:demo_impl",
+        "//apps/Demo3WayP2/lib:demo_lib",
+        "//apps/Demo3WayP2/impl:demo_impl",
         # Crash forensics — main.cc installs the fatal-signal handler.
         "//platform/supervisor/tombstone:tombstone",
     ],

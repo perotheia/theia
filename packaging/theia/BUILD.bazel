@@ -39,7 +39,9 @@ pkg_deb(
     version = _VERSION,
     description = "Theia runtime: gen_server/statem/runnable C++ sources, supervisor, tombstone, runtime protos",
     section = "devel",
-    depends = "theia-framework",
+    # libnanopb-dev: pb.h + libprotobuf-nanopb.a the runtime sources compile/link
+    # against. build-essential: gcc/g++ for the workspace bazel build.
+    depends = "theia-framework, libnanopb-dev, build-essential",
     files = {
         "//platform/supervisor/main:supervisor": "/opt/theia/bin/supervisor",
     },

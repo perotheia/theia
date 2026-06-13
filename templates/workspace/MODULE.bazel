@@ -21,17 +21,19 @@ bazel_dep(name = "rules_python", version = "1.7.0")
 # ── Nanopb (protobuf for embedded C — the wire codec gen-proto emits) ──────
 bazel_dep(name = "nanopb", version = "0.4.9.1")
 
-# ── Rig module extension (artheia) ─────────────────────────────────────────
-# Materializes a synthetic @<name>// repo from your rig.py at module-resolution
-# time (per-machine deploy bundles). Requires `artheia` on PATH — installed by
-# the theia-framework deb (or `pip install artheia`).
-rig_ext = use_extension("@theia_framework//rules:rig.bzl", "rig_ext")
-
-rig_ext.declare(
-    name = "rig_myapp",
-    rig_module = "manifest.rig",
-)
-use_repo(rig_ext, "rig_myapp")
+# ── DEPLOY (optional): the rig extension ───────────────────────────────────
+# `bazel build //myapp/...` needs NOTHING from the framework repo — the runtime/
+# tombstone/proto labels are all in-workspace (the platform/ wrappers). The rig
+# extension is only for DEPLOY (`theia install`/`theia manifest`, which
+# materialize a @rig_myapp// repo from manifest/rig.py). Uncomment when your
+# manifest/rig.py is filled in. It mounts the installed framework
+# (/opt/theia, shipped by the theia-framework deb with a REPO.bazel marker):
+#
+#     bazel_dep(name = "theia_framework", version = "0.1.0")
+#     local_path_override(module_name = "theia_framework", path = "/opt/theia")
+#     rig_ext = use_extension("@theia_framework//rules:rig.bzl", "rig_ext")
+#     rig_ext.declare(name = "rig_myapp", rig_module = "manifest.rig")
+#     use_repo(rig_ext, "rig_myapp")
 
 # ── Installed Theia runtime (from the theia-runtime deb at /opt/theia/src) ──
 # Exposes the runtime sources/headers + supervisor tombstone as a local repo so

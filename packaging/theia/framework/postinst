@@ -9,7 +9,8 @@
 set -e
 
 WHEELS=/opt/theia/wheels
-DEPS="textX Jinja2 click PyYAML"
+# nanopb ships the `nanopb_generator` CLI the proto genrules call at build time.
+DEPS="textX Jinja2 click PyYAML nanopb"
 
 if [ -d "$WHEELS" ] && ls "$WHEELS"/*.whl >/dev/null 2>&1; then
     python3 -m pip install --no-index --find-links "$WHEELS" $DEPS \

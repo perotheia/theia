@@ -6,7 +6,7 @@
 //   platform/system/services/<short>/  →  system.services.<short>
 //   platform/system/gateway/            →  system.gateway
 //   platform/system/supervisor/         →  system.supervisor
-//   platform/system/demo/               →  system.demo
+//   apps/system/demo/               →  system.demo
 //   platform/system/autosar/mlbevo_gen2/{kcan,fibex}/
 //                                       →  system.autosar.mlbevo_gen2.{kcan,fibex}
 //
@@ -28,10 +28,10 @@
 
 package system
 
-import system.services.*    // ../../services/system/system.art (FC bundle)
-import system.demo.*        // ../../demo/system/demo/component.art (demo rig)
-import system.supervisor.*  // ../supervisor/system/component.art
-import system.gateway.*     // ../../gateway/system/component.art
+import system.services.*    // system/services → ../services/system/services (Services bundle)
+import system.demo.*        // system/demo     → ../apps/system/demo       (Applications)
+import system.supervisor.*  // system/supervisor → ../platform/supervisor/system
+import system.gateway.*     // system/gateway    → ../platform/gateway/system
 
 
 // ---- forward-decl: external clusters (real defs in component.art) -------

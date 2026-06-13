@@ -1,0 +1,44 @@
+"""
+<your-app> — a downstream Theia workspace.
+
+Stripped from the Theia monorepo MODULE.bazel: keeps the standard Bazel rules
+the runtime + generated apps need, plus the artheia `rig_ext` extension. Drops
+the PERO gateway/PSP/firmware toolchains (rules_foreign_cc, ARM/TI cross-compile)
+— a bare OTP-app workspace doesn't need them. Replace `rig_myapp` with your rig.
+"""
+
+module(
+    name = "myapp",
+    version = "0.1.0",
+)
+
+# ── Standard Bazel rules (runtime + generated apps compile against these) ───
+bazel_dep(name = "platforms", version = "0.0.11")
+bazel_dep(name = "rules_cc", version = "0.2.17")
+bazel_dep(name = "rules_pkg", version = "1.1.0")
+bazel_dep(name = "rules_python", version = "1.7.0")
+
+# ── Nanopb (protobuf for embedded C — the wire codec gen-proto emits) ──────
+bazel_dep(name = "nanopb", version = "0.4.9.1")
+
+# ── Rig module extension (artheia) ─────────────────────────────────────────
+# Materializes a synthetic @<name>// repo from your rig.py at module-resolution
+# time (per-machine deploy bundles). Requires `artheia` on PATH — installed by
+# the theia-framework deb (or `pip install artheia`).
+rig_ext = use_extension("@theia_framework//rules:rig.bzl", "rig_ext")
+
+rig_ext.declare(
+    name = "rig_myapp",
+    rig_module = "manifest.rig",
+)
+use_repo(rig_ext, "rig_myapp")
+
+# ── Installed Theia runtime (from the theia-runtime deb at /opt/theia/src) ──
+# Exposes the runtime sources/headers + supervisor tombstone as a local repo so
+# the labels gen-app emits (//platform/runtime:runtime,
+# //platform/supervisor/tombstone:tombstone) resolve. The BUILD wrappers live in
+# THIS workspace under platform/ (see platform/runtime/BUILD.bazel); they
+# `#include` the installed headers via the cc_library `includes`.
+#
+# Nothing else to declare — the runtime is header+source only (the supervisor is
+# a prebuilt binary you run, not a bazel dep).

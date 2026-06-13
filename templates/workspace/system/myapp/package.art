@@ -1,0 +1,38 @@
+// myapp — a minimal one-node Theia FC (gen_server). Copy + edit this.
+//
+// Scaffold it with:
+//   artheia gen-app --kind fc system/myapp/package.art --out myapp --ns my::app
+// then `bazel build //myapp/...`. The generated app links the INSTALLED
+// runtime + tombstone via the platform/ wrappers (see ../../platform/).
+
+package system.myapp
+
+// A request the node handles, and its reply. gen-proto turns these into the
+// nanopb wire codec; the runtime ships the framing (TheiaMsgHeader).
+message Ping {
+    uint32 seq
+}
+message Pong {
+    uint32 seq
+}
+
+// Static deploy knobs (per-FC JSON, read once at boot). Optional.
+message HelloConfig {
+    string greeting = "hello"     // declared default (seeds first boot)
+    uint32 max_seq  = 100
+}
+
+interface clientServer PingIf {
+    operation Ping(in p:Ping) returns Pong
+}
+
+// One atomic gen_server node. `tipc type=` is its address — keep it unique
+// system-wide (run `artheia check-addresses` over your aggregator .art).
+node atomic HelloNode {
+    tipc type=0x90010001 instance=0
+    config HelloConfig
+    ports {
+        // server endpoint: handle_call(Ping) -> Pong
+        server api provides PingIf
+    }
+}

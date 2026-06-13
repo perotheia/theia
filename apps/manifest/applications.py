@@ -1,21 +1,21 @@
-"""Adaptive Platform manifest — GENERATED from demo/system/demo/component.art.
+"""Adaptive Platform manifest — GENERATED from apps/system/demo/component.art.
 
 Do not edit by hand. Edit the ``cluster`` declarations in the source
 ``.art`` and regenerate:
 
-    artheia gen-manifest demo/system/demo/component.art <this file>
+    artheia gen-manifest-proto apps/system/demo/component.art <this file>
 
 ARA manifest sections (see docs/autosar/manifest.md):
 
   * Application — one ``<Cluster>_*`` group per ``cluster`` in the .art
                   (SwComponent + Executable + Process per member).
-  * Machine     — empty; rig layers (demo/manifest/rig.py) fill it.
+  * Machine     — empty; rig layers (apps/manifest/rig.py) fill it.
   * Service     — ServiceManifest instances (loader-derived in
                   platform.py from the same cluster members).
   * Execution   — Processes (one per cluster member).
 
 Upper layers patch this base by name (:class:`Override`) — see
-``demo/manifest/rig.py``.
+``apps/manifest/rig.py``.
 """
 
 from __future__ import annotations
@@ -37,23 +37,23 @@ from artheia.manifest.utils import (
 # ---------------------------------------------------------------------------
 # Application section — cluster `Applications`.
 # Each member: (ident, composition, [hosted node names]) — all from the .art.
-# Build/deploy paths derive from (base_dir='demo', ident) via the
+# Build/deploy paths derive from (base_dir='apps', ident) via the
 # directory convention (artheia.manifest.utils).
 # ---------------------------------------------------------------------------
 APPLICATIONS_MEMBERS: list[tuple[str, str, list[str]]] = [
     ('p1', 'Demo3WayP1', ['counter', 'driver', 'ticker']),
     ('p2', 'Demo3WayP2', ['observer']),
     ('p3', 'Demo3WayP3', ['incrementer']),
-    ('p4', 'Demo3WayP4', ['demo_fsm', 'demo_gate']),   # gen_statem test FSM
+    ('p4', 'Demo3WayP4', ['demo_fsm', 'demo_gate'])
 ]
 APPLICATIONS_SHORTS = [m[0] for m in APPLICATIONS_MEMBERS]
 APPLICATIONS_COMPONENTS = [
-    app_component_for('demo', ident, comp)
+    app_component_for('apps', ident, comp)
     for ident, comp, _ in APPLICATIONS_MEMBERS
 ]
 APPLICATIONS_EXECUTABLES = [_executable_for(ident) for ident, _, _ in APPLICATIONS_MEMBERS]
 APPLICATIONS_PROCESSES = [
-    app_process_for('demo', ident, nodes)
+    app_process_for('apps', ident, nodes)
     for ident, _, nodes in APPLICATIONS_MEMBERS
 ]
 
@@ -66,7 +66,7 @@ PROCESSES = APPLICATIONS_PROCESSES
 
 # ---------------------------------------------------------------------------
 # Machine section — EMPTY. Machines are a deploy-time concern; rig layers
-# (demo/manifest/rig.py) add MachineManifests. The spec declares none.
+# (apps/manifest/rig.py) add MachineManifests. The spec declares none.
 # ---------------------------------------------------------------------------
 MACHINES: list = []
 

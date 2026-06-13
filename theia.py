@@ -114,6 +114,43 @@ def _bazel_bin(target: str) -> Path:
     return WORKSPACE / "bazel-bin" / pkg / name
 
 
+def _discover_rig_module(zonal: bool = False) -> "str | None":
+    """Find the workspace's rig Python module — name-INDEPENDENT, so Theia works
+    in the monorepo (apps.manifest.rig) AND a downstream workspace (manifest.rig)
+    with no hardcoded name.
+
+    Resolution order:
+      1. $THEIA_RIG_MODULE (zonal: $THEIA_ZONAL_RIG_MODULE) — explicit override.
+      2. The single `*/manifest/rig.py` (or zonal_rig.py) under the workspace
+         → its dotted module (apps/manifest/rig.py → apps.manifest.rig;
+         manifest/rig.py → manifest.rig).
+    Returns None if none/ambiguous (caller errors helpfully)."""
+    leaf = "zonal_rig.py" if zonal else "rig.py"
+    env = os.environ.get(
+        "THEIA_ZONAL_RIG_MODULE" if zonal else "THEIA_RIG_MODULE")
+    if env:
+        return env
+    # Trees that are not the WORKSPACE's deploy rig: vendored repos, the venv,
+    # bazel/build outputs, the framework's own internals (artheia.manifest.*),
+    # and the shipped workspace template.
+    _skip = {"up", ".venv", "bazel-bin", "bazel-out", "external", "vendor",
+             "artheia", "templates", "build", ".git"}
+    hits = []
+    for p in WORKSPACE.glob(f"**/manifest/{leaf}"):
+        rel = p.relative_to(WORKSPACE)
+        if any(seg in _skip for seg in rel.parts):
+            continue
+        # dotted module = the path minus the .py, dirs joined by '.'
+        hits.append(".".join(rel.with_suffix("").parts))
+    if len(hits) == 1:
+        return hits[0]
+    if not hits:
+        return None
+    # Ambiguous: prefer a top-level `manifest.<leaf>` (the downstream convention).
+    top = f"manifest.{leaf[:-3]}"
+    return top if top in hits else None
+
+
 def _load_install_components(manifest_root: Path):
     """Read the generated AUTOSAR application.json and return what to build/stage.
 
@@ -374,9 +411,19 @@ def cmd_install(args: list[str]) -> int:
 
     (`theia stage-local` is a back-compat alias for this verb.)"""
     machine = next((a for a in args if not a.startswith("-")), "central")
-    rig = {"central": "CentralRig"}.get(machine, "CentralRig")
+    rig = os.environ.get("THEIA_RIG", "CentralRig")
     dest = WORKSPACE / "install" / machine
     manifest_root = WORKSPACE / "install" / "manifest"
+
+    # Name-independent rig discovery — apps.manifest.rig in the monorepo,
+    # manifest.rig in a downstream workspace, or $THEIA_RIG_MODULE. No hardcoded
+    # module name (so `theia` carries no project identity).
+    rig_module = _discover_rig_module()
+    if rig_module is None:
+        print("theia: no rig found — expected a `manifest/rig.py` (or set "
+              "$THEIA_RIG_MODULE). A workspace declares its deploy via "
+              "manifest/rig.py.", file=sys.stderr)
+        return 1
 
     # 0. Address-collision gate — fail BEFORE building/staging if two nodes
     #    share a TIPC (type, instance) anywhere in the deployed FC set.
@@ -386,10 +433,9 @@ def cmd_install(args: list[str]) -> int:
     # 1. The four AUTOSAR manifest kinds (machine/application/service/
     #    execution.json) per machine → install/manifest/<host>/. This is the
     #    source of truth for WHAT to build/stage — runs FIRST so the binary set
-    #    is derived from it, not hand-listed. Single-machine local rig
-    #    (apps.manifest.rig) — no --rig attr needed.
+    #    is derived from it, not hand-listed. Rig module discovered above.
     if (rc := _run([
-        "artheia", "generate-manifest", "apps.manifest.rig",
+        "artheia", "generate-manifest", rig_module,
         "--out", str(manifest_root),
     ])) != 0:
         return rc
@@ -407,10 +453,10 @@ def cmd_install(args: list[str]) -> int:
     if (rc := _run(["bazel", "build", *targets])) != 0:
         return rc
 
-    # 3. executor.json — the supervisor tree for this machine.
+    # 3. executor.json — the supervisor tree for this machine (same discovered rig).
     dest.mkdir(parents=True, exist_ok=True)
     if (rc := _run([
-        "artheia", "executor", "emit", "apps.manifest.rig",
+        "artheia", "executor", "emit", rig_module,
         "--rig", rig, "--out", str(dest / "executor.json"),
     ])) != 0:
         return rc
@@ -509,8 +555,10 @@ def cmd_manifest(args: list[str]) -> int:
     # silently mis-wires the runtime, so fail before emitting any manifest.
     if (rc := _check_tipc_addresses()) != 0:
         return rc
-    module = next((a for a in args if not a.startswith("-")), _ZONAL_RIG_MODULE)
-    rig_attr = _ZONAL_RIG_ATTR if module == _ZONAL_RIG_MODULE else None
+    # Discovered zonal rig (name-independent) unless one is passed explicitly.
+    default_zonal = _discover_rig_module(zonal=True) or _ZONAL_RIG_MODULE
+    module = next((a for a in args if not a.startswith("-")), default_zonal)
+    rig_attr = _ZONAL_RIG_ATTR if module == default_zonal else None
     out = WORKSPACE / _MANIFEST_DIR
     cmd = ["artheia", "generate-manifest", module, "--out", str(out)]
     if rig_attr:

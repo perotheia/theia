@@ -1,14 +1,16 @@
 """
-pero_theia — PERO CMP monorepo Bazel module.
+pero_theia — standalone Theia Bazel module (the AUTOSAR-Adaptive-style platform).
 
-Component map:
-  //pero_cmp_ti/...        Hercules TMS570 firmware (arm-none-eabi cross-compile)
-  //pero_cmp_ti_gw/...     Hercules gateway firmware (arm-none-eabi cross-compile)
-  //pero_cmp_lnx/...       Linux host library (libcmpdecoder, libgw)
-  //pero_cmp_gw_svc/...    Gateway NIF service
-  //pero_cmp_gw_cln_demo/... Gateway client demo
-  //mlbevo_gen2_cmp_psp/...  Platform support package (libpsp, libcodec)
-  //mlbevo_gen2_cmp_demo/... Demo app + signal tools
+Component map (standalone theia.git):
+  //platform/runtime/...   actor runtime (GenServer/StateM/Runnable, header-lib)
+  //platform/supervisor/.. OTP-style supervisor binary + tombstone
+  //services/...           the platform Functional Clusters (com/log/per/sm/ucm/shwa)
+  //apps/...               the in-repo demo apps (CI exercise of Theia)
+  //packaging/theia/...    the ROS2-style .deb package set
+
+The gateway / Hercules-firmware / AUTOSAR-PSP / per-vehicle vendor trees are NOT
+part of theia.git — they live in their own consuming workspaces (e.g. gataway_ws)
+that import Theia. See docs/tasks/TODO/repo-split-standalone-theia.md.
 """
 
 module(

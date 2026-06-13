@@ -4,11 +4,11 @@
 // package. The directory layout mirrors the package FQN one-to-one:
 //
 //   platform/system/services/<short>/  →  system.services.<short>
-//   platform/system/gateway/            →  system.gateway
 //   platform/system/supervisor/         →  system.supervisor
 //   apps/system/demo/               →  system.demo
-//   platform/system/autosar/mlbevo_gen2/{kcan,fibex}/
-//                                       →  system.autosar.mlbevo_gen2.{kcan,fibex}
+//
+// (The gateway + AUTOSAR vendor trees are NOT part of standalone theia.git;
+//  a consuming workspace adds system.gateway / system.autosar.* itself.)
 //
 // This file does NOT declare a top-level composition. In the new
 // abstraction ladder:
@@ -31,7 +31,11 @@ package system
 import system.services.*    // system/services → ../services/system/services (Services bundle)
 import system.demo.*        // system/demo     → ../apps/system/demo       (Applications)
 import system.supervisor.*  // system/supervisor → ../platform/supervisor/system
-import system.gateway.*     // system/gateway    → ../platform/gateway/system
+
+// NB: the gateway is NOT part of standalone theia.git. `GatewayBridge` + the
+// vehicle-bus driver layer live in a CONSUMING workspace (gataway_ws), whose
+// own aggregator imports these Theia clusters and Appends GatewayBridge into
+// cluster Platform / drv_sup. See docs/tasks/TODO/repo-split-standalone-theia.md.
 
 
 // ---- forward-decl: external clusters (real defs in component.art) -------
@@ -41,7 +45,6 @@ cluster Applications { }
 // ---- forward-decl: compositions referenced by cluster Platform ----------
 
 composition Supervisor     { }
-composition GatewayBridge  { }
 
 // ---- compute supervisor: same nodes, TIPC instance 1 --------------------
 //
@@ -66,6 +69,6 @@ composition ComputeSupervisor {
 cluster Platform {
     composition Supervisor         sup
     composition ComputeSupervisor  compute_sup
-    composition GatewayBridge      gw
+    // GatewayBridge is Appended here by gataway_ws (not standalone theia.git).
 }
 

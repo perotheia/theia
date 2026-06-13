@@ -3,17 +3,19 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "theia-vendor"
+name = "theia-workspace"
 version = "0.0.1"
-description = "Vendor data for the Theia runtime: concrete vehicle deployments and installable software packages consumed by the artheia toolchain."
+description = "In-repo Theia workspace Python layer: the platform services + demo apps manifest packages consumed by the artheia toolchain."
 requires-python = ">=3.10"
 authors = [{ name = "Theia Runtime" }]
 license = { text = "MIT" }
 
-# vendor depends on the artheia ADT; install artheia separately
+# Depends on the artheia ADT; install artheia separately
 # (pip install -e artheia/) before installing this.
+# Vendor projects (gateway, AUTOSAR PSP, per-vehicle rigs) live in their OWN
+# consuming workspaces (e.g. gataway_ws) — no longer part of standalone theia.git.
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["vendor*", "services*", "apps*"]
-exclude = ["artheia*", "autosar*", "gateway*", "docs*", "up*", "tests*"]
+include = ["services*", "apps*"]
+exclude = ["artheia*", "autosar*", "gateway*", "docs*", "up*", "tests*", "vendor*"]

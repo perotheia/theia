@@ -85,7 +85,7 @@ from services.manifest.service import ServicesSoftware
 # Two-host topology designed for the Docker-compose deployment under
 # `deploy/`:
 #
-#   central — services (18 FCs) + gateway. The GUI connects here for
+#   central — services (18 FCs). The GUI connects here for
 #             supervisor introspection.
 #   compute — demo binaries (3 process binaries materializing
 #             Demo3Way's per-process compositions).
@@ -102,12 +102,7 @@ _PLATFORM_OPKG_ARTIFACTS = [
         target_dir="/opt/theia/supervisor/",
         systemd_unit="/etc/systemd/system/theia-supervisor.service",
     ),
-    OpkgArtifact(
-        name="gateway",
-        bazel_target="//platform/gateway/main:gateway",
-        target_dir="/opt/theia/gateway/",
-        systemd_unit="/etc/systemd/system/theia-gateway.service",
-    ),
+    # gateway opkg lives in gataway_ws, not standalone theia.git.
 ]
 
 CentralHost = MachineManifest(
@@ -123,10 +118,10 @@ CentralHost = MachineManifest(
         address=IPv4Address("127.0.0.1"),
         port=7700,
     ),
-    # Provisioning: etcd from Ubuntu apt; supervisor + gateway as
-    # Theia opkgs under /opt/theia/ with systemd units. Application
-    # .ipks (the FCs, the demo binaries) land via the orchestration
-    # phase reading application.yaml — not listed here.
+    # Provisioning: etcd from Ubuntu apt; supervisor as a Theia opkg
+    # under /opt/theia/ with a systemd unit. Application .ipks (the FCs,
+    # the demo binaries) land via the orchestration phase reading
+    # application.yaml — not listed here.
     os_packages=[
         OsPackage(name="etcd-server", source="apt"),
         OsPackage(name="libsystemd0", source="apt"),
@@ -138,7 +133,7 @@ CentralHost = MachineManifest(
 # single-machine: central only.)
 
 # Legacy alias for any caller that still references DemoHost (the
-# original single-host name). Points at central — the services+gateway side
+# original single-host name). Points at central — the services side
 # is what most existing tests assert against.
 DemoHost = CentralHost
 
@@ -167,10 +162,10 @@ from apps.manifest.applications import (  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Platform-fabric SwComponents — these are the daemons referenced by
-# `cluster Platform { composition Supervisor sup, composition
-# GatewayBridge gw }` in platform/system/system.art. They live alongside
-# the FCs (`cluster Services`) and the demo binaries (`cluster
-# Demo3Way`) but are functionally distinct: they ARE the platform.
+# `cluster Platform { composition Supervisor sup }` in system/system.art.
+# They live alongside the FCs (`cluster Services`) and the demo binaries
+# (`cluster Demo3Way`) but are functionally distinct: they ARE the platform.
+# (The gateway daemon, formerly here, moved to gataway_ws.)
 #
 # Matches the opkg artifacts declared on each TARGET machine
 # (CentralHost / ComputeHost) — same bazel_target stems.
@@ -184,25 +179,11 @@ _PLATFORM_FABRIC_COMPONENTS: list[SwComponent] = [
         art_node="system.supervisor/Supervisor",
         bazel_buildable=True,
     ),
-    SwComponent(
-        name="gateway",
-        bazel_target="//platform/gateway/main:gateway",
-        owner="platform",
-        art_node="system.gateway/GatewayBridge",
-        bazel_buildable=True,
-    ),
+    # NB: the gateway is NOT part of standalone theia.git — it lives in a
+    # consuming workspace (gataway_ws), whose rig adds the gateway SwComponent
+    # + its execution process + the drv_sup Append. See
+    # docs/tasks/TODO/repo-split-standalone-theia.md.
 ]
-
-# Execution Manifest Process for the gateway — the supervisor tree's `gateway`
-# leaf (under drv_sup) resolves to THIS, giving it start_cmd=["bin/gateway"].
-# nodes = the GatewayBridge composition's hosted prototypes, so executor.json
-# lists them statically (the bus mega-nodes + the two gateway own nodes).
-from artheia.manifest.utils import app_process_for as _app_process_for  # noqa: E402
-
-GATEWAY_PROCESS = _app_process_for(
-    "platform", "gateway",
-    ["flexray_bus", "kcan_bus", "gw_svc", "cmp_gw"],
-)
 
 # DEMO_BINARIES = the demo per-process binaries (compute-bound AAs),
 # straight from the generated applications.py. Kept separate from
@@ -237,7 +218,7 @@ DemoLayer = Layer(
     set_vehicle=VehicleIdentity(name="demo", make="theia", model="gen_server-demo"),
     add_machines=[DemoHost],
     add_components=DEMO_COMPONENTS,
-    add_executions=DEMO_PROCESSES + [GATEWAY_PROCESS],
+    add_executions=DEMO_PROCESSES,
     # Override (not Append) so we REPLACE app_sup's empty children list
     # with the demo apps — Override does replace(base, **patch).
     override_supervisors=[
@@ -309,9 +290,6 @@ for _sm in DemoRig.service_manifests:
 #                TARGET runs its own supervisor binary — the
 #                "supervisor" SwComponent here names the .ipk artifact
 #                only; central is the canonical host of record.
-#   gateway    — same story: .ipk lives in compute_app via
-#                DEMO_COMPONENTS, but the gateway daemon binds to
-#                central's hardware.
 #
 # PTM is **sparse-positive** — it lists only deviations from the AA
 # default. Unmapped Processes fall through to AA host_machine.
@@ -322,7 +300,6 @@ from artheia.manifest.machine import ProcessToMachineMapping  # noqa: E402
 _PROCESS_HOST_OVERRIDES: dict[str, str] = {
     # Single-machine: everything on central. (shwa→compute pin is in zonal_rig.)
     "supervisor": CentralHost.name,
-    "gateway":    CentralHost.name,
 }
 
 _PTM_ENTRIES = [
@@ -358,9 +335,9 @@ DemoRig.process_to_machine_mappings = list(
 
 # Two ApplicationManifests, each bound to its own machine:
 #
-#   platform_app on central — services (18 FCs from ServicesSoftware) +
-#                              gateway. Same-identity Append merges
-#                              into ServicesSoftware's platform_app: host
+#   platform_app on central — services (18 FCs from ServicesSoftware).
+#                              Same-identity Append merges into
+#                              ServicesSoftware's platform_app: host
 #                              binding overrides "" → central_host,
 #                              components stay as the 18 FCs (the
 #                              demo binaries are routed to compute_app
@@ -377,8 +354,8 @@ _PlatformAppOverlay = ApplicationManifest(
     host_machine=CentralHost.name,
     # The 18 FC components come from ServicesSoftware (the platform base);
     # the squash merges them in by same-identity (name="platform_app").
-    # We add the platform-fabric components here — supervisor + gateway
-    # — because they belong on central and platform_app is its AA.
+    # We add the platform-fabric components here — supervisor — because
+    # they belong on central and platform_app is its AA.
     components=list(_PLATFORM_FABRIC_COMPONENTS),
 )
 
@@ -400,7 +377,7 @@ DemoSpecLayer = SoftwareSpecification(
         Append(_CentralDemoApp),
     }),
     execution_manifests=cast(set[SetTransformTypes], {
-        Append(p) for p in DEMO_PROCESSES + [GATEWAY_PROCESS]
+        Append(p) for p in DEMO_PROCESSES
     }),
     # Carry the pinned service_manifests from the legacy DemoRig
     # (built via merge_layers above) into the structured-DSL output.
@@ -510,8 +487,7 @@ CentralSoftware: SoftwareSpecification = SoftwareSpecification(
                        _central_app_components)),
     }),
     execution_manifests=cast(set[SetTransformTypes], {
-        Append(p) for p in (_central_fc_processes + _central_app_processes
-                            + [GATEWAY_PROCESS])
+        Append(p) for p in (_central_fc_processes + _central_app_processes)
     }),
     service_manifests=cast(set[SetTransformTypes], {
         Append(_sm) for _sm in DemoRig.service_manifests

@@ -53,7 +53,7 @@ def _run(argv: list[str]) -> int:
 # routes purely by address, so a collision is a silent runtime mis-wire.
 _ADDRESS_CHECK_ARTS = (
     "system/services/cluster.art",   # all platform FCs (com + per + …)
-    "system/system.art",             # demo + supervisor + gateway
+    "system/system.art",             # demo + supervisor (+ whatever the ws adds)
 )
 
 
@@ -959,7 +959,166 @@ def cmd_compdb(args: list[str]) -> int:
     return 0
 
 
+def cmd_init(args: list[str]) -> int:
+    """Scaffold the CURRENT directory as a Theia consuming workspace.
+
+    The catkin-`catkin init` / ROS-`colcon` analogue: turns an empty repo into
+    a workspace that builds apps against a SIBLING Theia source checkout (or an
+    installed /opt/theia prefix later). Run it from your workspace root after
+    `source /path/to/theia/setup.sh`:
+
+        cd ~/repo/launch-box/gataway_ws
+        source ../theia/setup.sh        # exports THEIA_ROOT
+        theia init [--name <ws>]        # scaffolds here, links to $THEIA_ROOT
+
+    It creates, in the CWD (never overwriting an existing file):
+      - system/system.art   — the workspace aggregator. Imports the Theia
+        clusters (services / supervisor) you'll deploy, plus a stub you fill in
+        by hand (link system/<yourthing> + add its cluster). You then `theia
+        manifest` against it.
+      - manifest/rig.py      — a one-machine, one-app rig stub importing the
+        generated sidecars.
+      - .theia               — records THEIA_ROOT (the source it's bound to).
+
+    Theia itself is NOT vendored: system/runtime + the platform/ wrappers are
+    SYMLINKS into $THEIA_ROOT, so a Theia bump is a re-source, not a re-copy."""
+    if "-h" in args or "--help" in args:
+        print(cmd_init.__doc__, file=sys.stderr)
+        return 0
+
+    theia_root = os.environ.get("THEIA_ROOT")
+    if not theia_root:
+        print("theia init: THEIA_ROOT is unset — `source /path/to/theia/setup.sh` "
+              "first so the workspace knows where the Theia source lives.",
+              file=sys.stderr)
+        return 2
+    theia_root = Path(theia_root).resolve()
+    if not (theia_root / "system" / "system.art").is_file():
+        print(f"theia init: THEIA_ROOT={theia_root} doesn't look like a Theia "
+              "checkout (no system/system.art).", file=sys.stderr)
+        return 2
+
+    # The workspace to scaffold is the CALLER's cwd (main() chdir'd to the Theia
+    # checkout before dispatch; THEIA_INVOCATION_CWD preserves where we started).
+    ws = Path(os.environ.get("THEIA_INVOCATION_CWD", Path.cwd())).resolve()
+    name = ws.name
+    for i, a in enumerate(args):
+        if a == "--name" and i + 1 < len(args):
+            name = args[i + 1]
+    if theia_root == ws:
+        print("theia init: refusing to init the Theia checkout itself "
+              "(run from your CONSUMING workspace dir).", file=sys.stderr)
+        return 2
+
+    created: list[str] = []
+
+    def _write(rel: str, content: str) -> None:
+        p = ws / rel
+        if p.exists():
+            print(f"theia init: keep existing {rel}", file=sys.stderr)
+            return
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content)
+        created.append(rel)
+
+    def _link(rel: str, target: Path) -> None:
+        p = ws / rel
+        if p.exists() or p.is_symlink():
+            print(f"theia init: keep existing {rel}", file=sys.stderr)
+            return
+        p.parent.mkdir(parents=True, exist_ok=True)
+        # Relative symlink so the workspace stays relocatable as a pair with theia.
+        rel_target = os.path.relpath(target, p.parent)
+        p.symlink_to(rel_target)
+        created.append(f"{rel} -> {rel_target}")
+
+    # system/ aggregator + the runtime link (Theia's .art import root).
+    _link("system/runtime", theia_root / "system" / "runtime")
+    _link("system/services", theia_root / "system" / "services")
+    _link("system/supervisor", theia_root / "system" / "supervisor")
+    _write("system/system.art", _INIT_SYSTEM_ART.replace("@NAME@", name))
+    _write("manifest/rig.py", _INIT_RIG_PY.replace("@NAME@", name))
+    _write(".theia", f"THEIA_ROOT={theia_root}\nname={name}\n")
+    _write("README.md", _INIT_README.replace("@NAME@", name)
+                                   .replace("@THEIA_ROOT@", str(theia_root)))
+
+    print(f"\ntheia init: scaffolded '{name}' against {theia_root}", file=sys.stderr)
+    for c in created:
+        print(f"  + {c}", file=sys.stderr)
+    print("\nNext: link your app/gateway .art into system/ and add its cluster to "
+          "system/system.art, then `theia manifest`.", file=sys.stderr)
+    return 0
+
+
+_INIT_SYSTEM_ART = '''\
+// @NAME@ — Theia consuming-workspace aggregator.
+//
+// Imports the Theia platform clusters you deploy (resolved through the
+// system/ symlinks into $THEIA_ROOT) and adds THIS workspace's own
+// app/gateway clusters. `theia manifest` walks this file.
+//
+// To add your component:
+//   1. symlink its spec under system/  (e.g. system/gateway -> ../<sub>/system)
+//   2. `import system.<yourthing>.*` below
+//   3. add its cluster / Append its composition into cluster Platform
+
+package system
+
+import system.services.*     // the platform FCs (com / log / per / sm / ucm / shwa)
+import system.supervisor.*   // the OTP-style supervisor
+
+// --- forward-decl: the Theia clusters this workspace deploys --------------
+cluster Services { }
+
+composition Supervisor { }
+
+// --- this workspace's deployment -----------------------------------------
+cluster Platform {
+    composition Supervisor  sup
+    // Append your app/gateway composition here once linked + imported.
+}
+'''
+
+_INIT_RIG_PY = '''\
+"""@NAME@ deploy rig — one machine, the services + this workspace's app(s).
+
+Combines the Theia services manifest with this workspace's generated app
+sidecar. After `theia init` + linking your app, run `theia manifest` to emit
+dist/manifest/, then `theia install` / `theia start`.
+
+This is a STUB — wire it to your generated sidecars (gen-manifest emits an
+executor.py; gen-rig-combine merges services + apps). See
+$THEIA_ROOT/docs/skills/theia/references/deployment.md.
+"""
+# from services.manifest.service import ServicesSoftware, SERVICES_SUPERVISORS
+# from @NAME@.manifest.app import App_Software, APP_SHORTS
+#
+# @NAME@_Rig = ...  # combine, then .to_rig()
+'''
+
+_INIT_README = '''\
+# @NAME@ — Theia consuming workspace
+
+Built against a SIBLING Theia source checkout (THEIA_ROOT=@THEIA_ROOT@),
+not vendored. system/runtime + system/services + system/supervisor are
+symlinks into it.
+
+```sh
+source @THEIA_ROOT@/setup.sh     # exports THEIA_ROOT, puts `theia` on PATH
+theia init                       # (already run — scaffolded this dir)
+# link your app/gateway spec, import it in system/system.art, then:
+theia manifest
+theia install
+theia start && tdb ps
+```
+
+When Theia ships as a deb, swap the sibling source for /opt/theia
+(THEIA_ROOT=/opt/theia) — the symlinks + rig stay the same.
+'''
+
+
 COMMANDS = {
+    "init":        (cmd_init,        "scaffold the CWD as a Theia consuming workspace (sibling-source)"),
     "rig":         (cmd_rig,         "docker compose {up|down} the deploy stack"),
     "provision":   (cmd_provision,   "puppet apply — Phase 1 (os pkgs + .ipk)"),
     "orchestrate": (cmd_orchestrate, "puppet apply — Phase 2 remote (app rollout)"),
@@ -993,6 +1152,9 @@ def main(argv: list[str]) -> int:
         _usage()
         return 2
     fn, _desc = entry
+    # Preserve the caller's CWD before chdir — `init` scaffolds THERE, not in
+    # the Theia checkout. Every other verb wants workspace-relative paths.
+    os.environ.setdefault("THEIA_INVOCATION_CWD", str(Path.cwd()))
     os.chdir(WORKSPACE)  # bazel / compose / puppet paths are workspace-relative
     return fn(rest)
 

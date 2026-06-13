@@ -8,8 +8,8 @@
 # We do NOT follow_symlinks here. The per-FC entries under
 # system/services/ symlink into the real component trees
 # (services/<fc>/system/<fc>/, services/nop/<fc>/), and the
-# top-level entries (demo/, gateway/, supervisor/, …) symlink to
-# their owning repos; Bazel treats these as opaque inputs (artheia
+# top-level entries (demo/, supervisor/, …) symlink to their owning
+# trees; Bazel treats these as opaque inputs (artheia
 # chases them at runtime), so they aren't re-exposed as Bazel
 # sources. Only the physical aggregators (system.art,
 # services/cluster.art) are globbed here.

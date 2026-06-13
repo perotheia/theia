@@ -629,10 +629,13 @@ _RELEASE_ARCH = {
 }
 
 # The bazel-buildable package targets: (deb_target, ipk_target). Python wheels
-# (framework, rf) + the CMake GUI are handled out-of-band below.
+# (framework, rf) + the CMake GUI are handled out-of-band below. The .ipk is the
+# opt-in hatch (theia release --ipk); .deb is the default. theia-services-manifest
+# has no .ipk (it's a build-time / workspace artifact, not an embedded one).
 _RELEASE_BAZEL_PKGS = [
     ("//packaging/theia:theia-runtime_deb",  "//packaging/theia:theia-runtime_ipk"),
     ("//packaging/theia:theia-services_deb", "//packaging/theia:theia-services_ipk"),
+    ("//packaging/theia:theia-services-manifest_deb", None),
 ]
 
 
@@ -759,10 +762,12 @@ def cmd_release(args: list[str]) -> int:
       theia-rf         rf_theia harness wheel (minus scenarios/_selftest)
       (theia-tools — supervisor-GUI + rtdb — assembled when its CMake build is wired)
 
-    Each bazel package emits a .deb (dist/debian/) AND a .ipk (dist/ipkg/). Pass
-    `--arch host,rpi4` to build for several platforms (default: host). Python
-    wheels are arch-independent (built once). Skip the C++/bazel set with
-    `--python-only` (just the framework + rf wheels)."""
+    Each bazel package emits a .deb (dist/debian/) — the default + primary, since
+    Theia is always deployed on Debian-derived platforms. Pass `--ipk` to ALSO
+    emit the embedded/opkg .ipk (dist/ipkg/) — the opt-in hatch for a non-Debian
+    target. `--arch host,rpi4` builds several platforms (default: host); Python
+    wheels are arch-independent (built once). `--python-only` skips the C++/bazel
+    set (just the framework + rf wheels)."""
     import json   # noqa: F401  (kept for parity / future manifest reads)
     import shutil
 
@@ -783,9 +788,11 @@ def cmd_release(args: list[str]) -> int:
     deb_dir = WORKSPACE / _DIST_DEBIAN
     ipk_dir = WORKSPACE / _DIST_IPKG
     deb_dir.mkdir(parents=True, exist_ok=True)
-    ipk_dir.mkdir(parents=True, exist_ok=True)
 
     python_only = "--python-only" in args
+    # .deb is the default + primary (Theia is always Debian-derived). --ipk is the
+    # opt-in hatch that ALSO emits the embedded/opkg .ipk under dist/ipkg/.
+    want_ipk = "--ipk" in args
 
     # ── Step 1: framework — artheia + deps + rules → a real .deb (/opt/theia,
     #    ROS2-style setup.bash). Arch-independent (Architecture: all). ──────────
@@ -810,19 +817,20 @@ def cmd_release(args: list[str]) -> int:
               file=sys.stderr)
         return 0
 
-    # ── Steps 2+3: runtime + services .deb/.ipk via bazel, per arch. ──────────
+    # ── Steps 2+3: runtime + services .deb (+ .ipk with --ipk) via bazel. ─────
     for arch in archs:
         platform = _RELEASE_ARCH[arch]
         deb_targets = [d for d, _ in _RELEASE_BAZEL_PKGS]
-        ipk_targets = [i for _, i in _RELEASE_BAZEL_PKGS]
-        # .deb (per arch — emits *_amd64.deb / *_arm64.deb).
+        # .deb (default — per arch, emits *_amd64.deb / *_arm64.deb).
         if (rc := _run(["bazel", "build", *deb_targets,
                         f"--platforms={platform}"])) != 0:
             return rc
-        # .ipk (embedded/opkg).
-        if (rc := _run(["bazel", "build", *ipk_targets,
-                        f"--platforms={platform}"])) != 0:
-            return rc
+        # .ipk hatch (embedded/opkg) — only with --ipk.
+        if want_ipk:
+            ipk_targets = [i for _, i in _RELEASE_BAZEL_PKGS if i]
+            if (rc := _run(["bazel", "build", *ipk_targets,
+                            f"--platforms={platform}"])) != 0:
+                return rc
 
     # ── Step 4 (collect): copy bazel-bin outputs into dist/. ─────────────────
     bin_root = WORKSPACE / "bazel-bin" / "packaging" / "theia"
@@ -833,15 +841,20 @@ def cmd_release(args: list[str]) -> int:
         dst.mkdir(parents=True, exist_ok=True)
         shutil.copy2(f, dst / f.name)
         n_deb += 1
-    for f in bin_root.glob("*.ipk"):
-        pkg = f.name.split("_")[0]
-        dst = ipk_dir / pkg
-        dst.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(f, dst / f.name)
-        n_ipk += 1
+    if want_ipk:
+        ipk_dir.mkdir(parents=True, exist_ok=True)
+        for f in bin_root.glob("*.ipk"):
+            pkg = f.name.split("_")[0]
+            dst = ipk_dir / pkg
+            dst.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(f, dst / f.name)
+            n_ipk += 1
 
-    print(f"theia release: {n_deb} .deb → {deb_dir}/, {n_ipk} .ipk → {ipk_dir}/ "
-          f"(+ framework & rf wheels); arch={','.join(archs)}", file=sys.stderr)
+    msg = f"theia release: {n_deb} .deb → {deb_dir}/"
+    if want_ipk:
+        msg += f", {n_ipk} .ipk → {ipk_dir}/"
+    print(f"{msg} (+ framework & rf wheels); arch={','.join(archs)}",
+          file=sys.stderr)
     return 0
 
 

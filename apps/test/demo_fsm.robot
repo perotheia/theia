@@ -18,7 +18,7 @@ Documentation    Demo FSM gen_statem — drive events via artheia.probe, assert
 ...              FSM `data` (OTP `{State, Data}` Data term: visits + reason).
 ...
 ...              Prereq: binaries built + staged (Start Statem Stack runs
-...              demo/stage_local.sh). The suite stages + runs the supervisor;
+...              apps/stage_local.sh). The suite stages + runs the supervisor;
 ...              it does NOT build. Tag 'live'.
 
 Library          rf_theia.TheiaTestLibrary

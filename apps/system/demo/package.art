@@ -228,7 +228,7 @@ node atomic DemoFsmGate {
 // DemoFsmTester carries a `sender` on DemoFsmIn so artheia.probe can bind a
 // tester identity and cast DemoStart/DemoFinish/DemoReset at DemoFsmGate —
 // ordered, over one persistent connection — to drive the FSM standalone
-// (demo/test/fsm_drive.py + the rf statem scenario). It lives in THIS package
+// (apps/test/fsm_drive.py + the rf statem scenario). It lives in THIS package
 // (no import/extern: DemoFsmGate + DemoFsmIn are siblings here) so it resolves
 // through the canonical `system/demo` symlink like every other demo node.
 //

@@ -11,7 +11,7 @@ This is the event-injection half of the statem rf-testing loop (Step B). The
 observer/`Wait For State` half (Step C) asserts the resulting STATEM trace.
 
 Run (supervisor + p4 live, e.g. `theia install central` then the supervisor):
-    PATH="$PWD/.venv/bin:$PATH" python demo/test/fsm_drive.py
+    PATH="$PWD/.venv/bin:$PATH" python apps/test/fsm_drive.py
 """
 import sys
 import time

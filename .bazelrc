@@ -8,6 +8,14 @@ build --incompatible_enable_cc_toolchain_resolution
 # Used by //rules/psp.bzl for PspGenerate.
 build --action_env=PATH
 
+# nanopb's pb.h: the generated *.pb.h #include <pb.h>, which the proto
+# cc_libraries expect on the system include path (the @nanopb bazel module
+# doesn't cleanly expose a cc_library here). libnanopb-dev installs it either
+# flat (/usr/include/pb.h — older) or under /usr/include/nanopb/ (0.4.8+).
+# Add the subdir to the include path so both layouts resolve; harmless when the
+# dir is absent (-I to a missing dir is ignored).
+build --copt=-I/usr/include/nanopb
+
 # ── Host (Linux x86_64) ───────────────────────────────────────────────────
 build:linux --cpu=k8
 build:linux --compiler=gcc

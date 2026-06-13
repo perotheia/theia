@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# `theia` launcher — execs theia.py next to this shim, so `theia <verb>` works on
+# any checkout once setup.sh puts the repo root (THEIA_ROOT) on PATH. (The venv
+# console-script symlink only exists where artheia was pip-installed; this shim
+# makes the command available without it — e.g. in a fresh consuming workspace
+# that sources a sibling theia's setup.sh.)
+here="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+exec python3 "$here/theia.py" "$@"

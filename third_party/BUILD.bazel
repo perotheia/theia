@@ -69,7 +69,13 @@ cc_import(
 
 cc_library(
     name = "etcd_cc",
-    hdrs = glob(["etcd-cpp-apiv3/install/include/**/*.hpp"]),
+    # allow_empty: etcd-cpp-apiv3/install/ is a BUILD output (the submodule's
+    # source has no install/ until it's compiled). On a fresh clone that dir is
+    # absent — without allow_empty the glob aborts and the WHOLE third_party
+    # package fails to load, cascading to unrelated targets (nlohmann_json, the
+    # supervisor build). per's etcd_store is the only consumer; it builds this
+    # after building etcd. allow_empty keeps the package loadable meanwhile.
+    hdrs = glob(["etcd-cpp-apiv3/install/include/**/*.hpp"], allow_empty = True),
     includes = ["etcd-cpp-apiv3/install/include"],
     deps = [
         ":etcd_cpp_so",

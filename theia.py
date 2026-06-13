@@ -1036,6 +1036,13 @@ def cmd_init(args: list[str]) -> int:
     _link("system/runtime", theia_root / "system" / "runtime")
     _link("system/services", theia_root / "system" / "services")
     _link("system/supervisor", theia_root / "system" / "supervisor")
+    # The runtime .art package: services import `platform.runtime.*` (ChildControlIf,
+    # TraceControlPush, LogLevelPush), which the resolver maps to
+    # platform/runtime/package.art. Link it to the sibling Theia's runtime spec so
+    # a linked-in per/supervisor .art resolves. Mirrors the in-repo
+    # platform/runtime/package.art → system/runtime/package.art symlink.
+    _link("platform/runtime/package.art",
+          theia_root / "platform" / "runtime" / "system" / "runtime" / "package.art")
     _write("system/system.art", _INIT_SYSTEM_ART.replace("@NAME@", name))
     _write("manifest/rig.py", _INIT_RIG_PY.replace("@NAME@", name))
     _write(".theia", f"THEIA_ROOT={theia_root}\nname={name}\n")

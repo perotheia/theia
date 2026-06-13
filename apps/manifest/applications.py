@@ -72,16 +72,18 @@ MACHINES: list = []
 
 
 # ---------------------------------------------------------------------------
-# Supervisor tree — SIDECARED in services/manifest/executor.py.
+# Supervisor tree — SIDECARED in the sibling ``executor.py`` (same package).
 #
-# The supervisor hierarchy (restart strategies + child grouping) is
-# hand-authored and has NO .art declaration, so it must survive any
-# regeneration of THIS file. It lives in the executor.py sidecar; we
-# re-export it here so existing consumers keep reading ``SUPERVISORS``
-# unchanged. Edit the tree in executor.py.
+# The supervisor hierarchy (restart strategies + child grouping) has NO .art
+# declaration, so it lives in a sidecar that survives regeneration of THIS file.
+# gen-manifest emits executor.py alongside this module; we re-export its
+# SUPERVISORS so consumers read ``<this>.SUPERVISORS`` unchanged. Edit the tree
+# in executor.py. (For an apps manifest the sidecar is a single ``app_sup`` node
+# with the app members as children; the full platform tree is the services
+# sidecar — the rig combines them.)
 # ---------------------------------------------------------------------------
 
-from services.manifest.executor import SUPERVISORS  # noqa: E402,F401
+from .executor import SUPERVISORS  # noqa: E402,F401
 
 
 # ---------------------------------------------------------------------------

@@ -17,7 +17,20 @@ here="$(cd "$(dirname "$0")" && pwd)"
 ln -sfn "$SRC/runtime"              "$here/platform/runtime/runtime_src"
 ln -sfn "$SRC/supervisor/tombstone" "$here/platform/supervisor/tombstone/tombstone_src"
 
+# The runtime's .art package (defines ChildControlIf, the LogLevel/TraceControl
+# push interfaces). Services import `platform.runtime.*`; that resolves to
+# platform/runtime/package.art — which must point at the installed runtime spec
+# so `artheia executor emit`/`generate-manifest` can parse a service .art
+# (e.g. per) downstream. Mirrors the in-repo
+# platform/runtime/package.art → system/runtime/package.art symlink.
+ln -sfn "runtime_src/system/runtime/package.art" "$here/platform/runtime/package.art"
+# Also expose it as system/runtime (the canonical import path) for any .art that
+# imports the runtime via that route.
+mkdir -p "$here/system"
+ln -sfn "$SRC/runtime/system/runtime" "$here/system/runtime"
+
 echo "setup: wired platform/runtime → $SRC/runtime"
+echo "setup: wired platform/runtime/package.art → the runtime .art (ChildControlIf)"
 echo "setup: wired platform/supervisor/tombstone → $SRC/supervisor/tombstone"
 echo "Now: artheia gen-app --kind fc system/myapp/package.art --out myapp --ns my::app"
 echo "Then: bazel build //myapp/..."

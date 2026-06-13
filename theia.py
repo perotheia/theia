@@ -569,6 +569,123 @@ def cmd_dist(args: list[str]) -> int:
     return rc_final
 
 
+# ── theia release — build the installable package set (.deb + .ipk) ──────────
+_DIST_DEBIAN = "dist/debian"
+_DIST_IPKG = "dist/ipkg"
+
+# arch token (from --arch) → bazel platform label. host = this machine (amd64);
+# rpi4 = aarch64 cross-build (needs the rpi4 C++ toolchain registered).
+_RELEASE_ARCH = {
+    "host": "//rules/config:host",
+    "rpi4": "//rules/config:rpi4",
+}
+
+# The bazel-buildable package targets: (deb_target, ipk_target). Python wheels
+# (framework, rf) + the CMake GUI are handled out-of-band below.
+_RELEASE_BAZEL_PKGS = [
+    ("//packaging/theia:theia-runtime_deb",  "//packaging/theia:theia-runtime_ipk"),
+    ("//packaging/theia:theia-services_deb", "//packaging/theia:theia-services_ipk"),
+]
+
+
+def cmd_release(args: list[str]) -> int:
+    """Build the installable Theia package set → dist/debian/ + dist/ipkg/.
+
+    The 4-step build (framework → runtime → services → package) that produces the
+    ROS2-style independent packages:
+      theia-framework  artheia Python wheel (Architecture: all)
+      theia-runtime    runtime sources + supervisor + tombstone + tdb + protos
+      theia-services   com/per/sm/ucm/log/shwa binaries + services protos
+      theia-rf         rf_theia harness wheel (minus scenarios/_selftest)
+      (theia-tools — supervisor-GUI + rtdb — assembled when its CMake build is wired)
+
+    Each bazel package emits a .deb (dist/debian/) AND a .ipk (dist/ipkg/). Pass
+    `--arch host,rpi4` to build for several platforms (default: host). Python
+    wheels are arch-independent (built once). Skip the C++/bazel set with
+    `--python-only` (just the framework + rf wheels)."""
+    import json   # noqa: F401  (kept for parity / future manifest reads)
+    import shutil
+
+    if "-h" in args or "--help" in args:
+        print(cmd_release.__doc__, file=sys.stderr)
+        return 0
+
+    archs = ["host"]
+    for i, a in enumerate(args):
+        if a == "--arch" and i + 1 < len(args):
+            archs = [x.strip() for x in args[i + 1].split(",") if x.strip()]
+    for a in archs:
+        if a not in _RELEASE_ARCH:
+            print(f"theia release: unknown arch '{a}' "
+                  f"(known: {', '.join(_RELEASE_ARCH)})", file=sys.stderr)
+            return 2
+
+    deb_dir = WORKSPACE / _DIST_DEBIAN
+    ipk_dir = WORKSPACE / _DIST_IPKG
+    deb_dir.mkdir(parents=True, exist_ok=True)
+    ipk_dir.mkdir(parents=True, exist_ok=True)
+
+    python_only = "--python-only" in args
+
+    # ── Step 1: framework — the artheia Python wheel (arch-independent). ──────
+    fw_out = deb_dir / "theia-framework"
+    fw_out.mkdir(parents=True, exist_ok=True)
+    if (rc := _run([sys.executable, "-m", "pip", "wheel",
+                    str(WORKSPACE / "artheia"), "--no-deps",
+                    "-w", str(fw_out)])) != 0:
+        print("theia release: framework wheel build failed.", file=sys.stderr)
+        return rc
+
+    # ── Step 4 (python part): rf harness wheel (minus _selftest, per its
+    #    pyproject find.exclude). Arch-independent. ────────────────────────────
+    rf_out = deb_dir / "theia-rf"
+    rf_out.mkdir(parents=True, exist_ok=True)
+    if (rc := _run([sys.executable, "-m", "pip", "wheel",
+                    str(WORKSPACE / "testing"), "--no-deps",
+                    "-w", str(rf_out)])) != 0:
+        print("theia release: rf wheel build failed.", file=sys.stderr)
+        return rc
+
+    if python_only:
+        print(f"theia release: python wheels → {fw_out}, {rf_out}",
+              file=sys.stderr)
+        return 0
+
+    # ── Steps 2+3: runtime + services .deb/.ipk via bazel, per arch. ──────────
+    for arch in archs:
+        platform = _RELEASE_ARCH[arch]
+        deb_targets = [d for d, _ in _RELEASE_BAZEL_PKGS]
+        ipk_targets = [i for _, i in _RELEASE_BAZEL_PKGS]
+        # .deb (per arch — emits *_amd64.deb / *_arm64.deb).
+        if (rc := _run(["bazel", "build", *deb_targets,
+                        f"--platforms={platform}"])) != 0:
+            return rc
+        # .ipk (embedded/opkg).
+        if (rc := _run(["bazel", "build", *ipk_targets,
+                        f"--platforms={platform}"])) != 0:
+            return rc
+
+    # ── Step 4 (collect): copy bazel-bin outputs into dist/. ─────────────────
+    bin_root = WORKSPACE / "bazel-bin" / "packaging" / "theia"
+    n_deb = n_ipk = 0
+    for f in bin_root.glob("*.deb"):
+        pkg = f.name.split("_")[0]          # theia-runtime_0.1.0_amd64.deb → theia-runtime
+        dst = deb_dir / pkg
+        dst.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(f, dst / f.name)
+        n_deb += 1
+    for f in bin_root.glob("*.ipk"):
+        pkg = f.name.split("_")[0]
+        dst = ipk_dir / pkg
+        dst.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(f, dst / f.name)
+        n_ipk += 1
+
+    print(f"theia release: {n_deb} .deb → {deb_dir}/, {n_ipk} .ipk → {ipk_dir}/ "
+          f"(+ framework & rf wheels); arch={','.join(archs)}", file=sys.stderr)
+    return 0
+
+
 # Default scope for the compile DB: the in-tree, LINUX-buildable C++ trees
 # clangd needs to index. Kept explicit (not `//...`) so the aquery doesn't
 # drag in (a) vendor 3pp / external repos with their own build systems, or
@@ -677,6 +794,7 @@ COMMANDS = {
     "stop":        (cmd_stop,        "stop the supervisor started by `theia start` (graceful)"),
     "manifest":    (cmd_manifest,    "rig.py → dist/manifest/*.json (sole rig entry for deploy)"),
     "dist":        (cmd_dist,        "per-host .ipk from dist/manifest/ JSON (no rig.py)"),
+    "release":     (cmd_release,     "build the installable package set (.deb+.ipk) → dist/debian + dist/ipkg"),
     "compdb":      (cmd_compdb,      "regen compile_commands.json from bazel (clangd)"),
 }
 

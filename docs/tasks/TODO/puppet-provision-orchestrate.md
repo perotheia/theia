@@ -1,3 +1,5 @@
+[tag:TODO] 
+
 # Puppet provision/orchestrate — machine-generic, manifest-driven
 
 The deploy lifecycle, unified around puppet as the always-on convergence agent.
@@ -10,7 +12,7 @@ The deploy lifecycle, unified around puppet as the always-on convergence agent.
   the supervisor can boot. This is the cheap, stable base.
 - **orchestrate** (Phase 2, frequent): install the per-machine `.ipk` (supervisor
   + FC/app binaries) + the REAL configs (execution.json.supervisor_tree →
-  executor.json, machines.json, params). Then the supervisor runs the real tree.
+    executor.json, machines.json, params). Then the supervisor runs the real tree.
 
 Both are **machine-generic**: take `$machine` (from `FACTER_theia_machine`), read
 `<machine>/{machine,application,execution}.json`. NO per-host .pp files
@@ -53,13 +55,13 @@ root) on every machine. After orchestrate: the real tree runs.
 4. **theia::provisioning** — slim to: etcd (manifest-driven, skip if external) +
    empty executor.json. Drop the .ipk/systemd-unit/setcap work → that moves to
    orchestrate (or stays minimal). Machine-generic ($machine param).
-5. **theia::orchestration** — install <machine>.ipk (supervisor + apps) + real
+5. **theia::orchestration** — install \<machine\>.ipk (supervisor + apps) + real
    executor.json (from execution.json.supervisor_tree) + machines.json + setcap.
    Machine-generic.
 6. **Drop central.pp / compute.pp** — provision/orchestrate read $machine from
    FACTER_theia_machine; no per-host site manifests.
 7. **theia provision / theia orchestrate** (theia.py) — host-side verbs that
-   `puppet apply` the machine-generic class with FACTER_theia_machine=<m>.
+   `puppet apply` the machine-generic class with FACTER_theia_machine=\<m\>.
 
 ## Open / to confirm during impl
 
@@ -68,7 +70,7 @@ root) on every machine. After orchestrate: the real tree runs.
 - Does provision really do ONLY etcd + empty executor (lighter than the current
   provisioning.pp which also installs the bundle)? → per user: provision=etcd,
   orchestrate=ipkg+configs. Move the bundle install to orchestrate.
-- machines.json (RigIndex) vs per-machine: orchestrate reads <machine>/*; the
+- machines.json (RigIndex) vs per-machine: orchestrate reads \<machine\>/*; the
   machine list comes from the top-level machines.json.
 
 ## Status

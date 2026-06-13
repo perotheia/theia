@@ -1,0 +1,23 @@
+# platform/proto — the app's generated nanopb codecs, aggregated as the single
+# cc_library the gen-app lib slice depends on (//platform/proto:platform_protos).
+#
+# In the monorepo this aggregates every FC's proto; in YOUR workspace it
+# aggregates only the packages your app defines. Add each package's _pb_c/_pb_h
+# (from platform/proto/system/<pkg>/BUILD.bazel) to the lists below as you grow.
+# proto is the include root, so generated code #includes "system/<pkg>/<pkg>.pb.h".
+
+package(default_visibility = ["//visibility:public"])
+
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+cc_library(
+    name = "platform_protos",
+    srcs = [
+        "//platform/proto/system/myapp:myapp_pb_c",
+    ],
+    hdrs = [
+        "//platform/proto/system/myapp:myapp_pb_h",
+    ],
+    includes = ["."],
+    linkopts = ["-l:libprotobuf-nanopb.a"],
+)

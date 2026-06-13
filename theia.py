@@ -624,7 +624,8 @@ def _build_framework_deb(out_dir: Path, version: str = "0.1.0") -> int:
     # artheia's deps as wheels for the offline system install (postinst).
     if (rc := _run([sys.executable, "-m", "pip", "download",
                     "--dest", str(opt / "wheels"),
-                    "textX>=4.0", "Jinja2>=3.1", "click>=8.1", "PyYAML>=6.0"])) != 0:
+                    "textX>=4.0", "Jinja2>=3.1", "click>=8.1", "PyYAML>=6.0",
+                    "nanopb>=0.4.9"])) != 0:
         # Non-fatal: postinst falls back to PyPI if the wheels aren't bundled.
         print("theia release: framework dep download failed — deb postinst will "
               "fetch from PyPI instead.", file=sys.stderr)
@@ -633,6 +634,14 @@ def _build_framework_deb(out_dir: Path, version: str = "0.1.0") -> int:
     for d in ("rules", "toolchains"):
         if (WORKSPACE / d).is_dir():
             shutil.copytree(WORKSPACE / d, opt / d, dirs_exist_ok=True)
+    # Make /opt/theia a valid Bazel repo so a workspace can
+    # `local_repository(name="theia_framework", path="/opt/theia")` and load
+    # @theia_framework//rules:rig.bzl. A bare REPO.bazel + a root BUILD is enough.
+    (opt / "REPO.bazel").write_text('repo(name = "theia_framework")\n')
+    if not (opt / "BUILD.bazel").exists():
+        (opt / "BUILD.bazel").write_text(
+            '# theia_framework repo root.\n'
+            'package(default_visibility = ["//visibility:public"])\n')
     # theia.py itself (the workspace lifecycle driver) + setup scripts.
     shutil.copy2(WORKSPACE / "theia.py", opt / "theia.py")
     for s in ("setup.bash", "setup.zsh"):

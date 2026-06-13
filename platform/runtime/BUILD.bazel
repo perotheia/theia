@@ -99,6 +99,12 @@ filegroup(
     srcs = glob(["include/*.hh", "src/*.cc"]) + [
         "system/runtime/package.art",
         "proto/platform_runtime/runtime.proto",
+        # Ship the BUILT nanopb codec too (genrule outputs) so a downstream
+        # workspace compiles against it without re-running nanopb_generator —
+        # the runtime cc_library and the workspace wrapper both expect
+        # proto/platform_runtime/runtime.pb.{c,h} present.
+        "proto/platform_runtime/runtime.pb.c",
+        "proto/platform_runtime/runtime.pb.h",
     ],
     visibility = ["//visibility:public"],
 )

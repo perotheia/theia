@@ -29,7 +29,15 @@ dev = [
 rf-theia-mcp = "rf_theia.adapters.mcp_server:main"
 
 [tool.setuptools.packages.find]
+# Ship the harness (library, adapters, runtime, testkit, the shipped scenario
+# suites) but NOT the self-test scenarios — `scenarios/_selftest/` is Theia's own
+# regression suite, kept in-repo for CI and deliberately excluded from the
+# distributed package. (The scenario dirs are PEP-420 namespace packages, so they
+# are otherwise picked up by `rf_theia*`.)
 include = ["rf_theia*"]
+exclude = ["rf_theia.scenarios._selftest", "rf_theia.scenarios._selftest.*"]
 
 [tool.pytest.ini_options]
-testpaths = ["rf_theia/scenarios/selftest"]
+# The on-disk dir is `_selftest` (leading underscore). pytest runs the self-test
+# suite from the repo; it is not part of the distributed package (see find.exclude).
+testpaths = ["rf_theia/scenarios/_selftest"]

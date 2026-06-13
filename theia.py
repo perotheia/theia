@@ -631,12 +631,14 @@ _RELEASE_ARCH = {
 
 # The bazel-buildable package targets: (deb_target, ipk_target). Python wheels
 # (framework, rf) + the CMake GUI are handled out-of-band below. The .ipk is the
-# opt-in hatch (theia release --ipk); .deb is the default. theia-services-manifest
-# has no .ipk (it's a build-time / workspace artifact, not an embedded one).
+# opt-in hatch (theia release --ipk); .deb is the default. Runtime/services split
+# into machine + -dev: the .ipk (embedded) is machine-only — a -dev package is
+# build-time, never shipped to an embedded target, so it has no .ipk.
 _RELEASE_BAZEL_PKGS = [
-    ("//packaging/theia:theia-runtime_deb",  "//packaging/theia:theia-runtime_ipk"),
-    ("//packaging/theia:theia-services_deb", "//packaging/theia:theia-services_ipk"),
-    ("//packaging/theia:theia-services-manifest_deb", None),
+    ("//packaging/theia:theia-runtime_deb",      "//packaging/theia:theia-runtime_ipk"),
+    ("//packaging/theia:theia-runtime-dev_deb",  None),
+    ("//packaging/theia:theia-services_deb",     "//packaging/theia:theia-services_ipk"),
+    ("//packaging/theia:theia-services-dev_deb",  None),
 ]
 
 

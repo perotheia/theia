@@ -3,19 +3,24 @@
 A minimal **downstream** Theia workspace — what you scaffold AFTER
 
 ```sh
-sudo apt install ./theia-framework_*.deb ./theia-runtime_*.deb
+# To BUILD apps you need the -dev packages (sources/headers/protos):
+sudo apt install ./theia-framework_*.deb \
+                 ./theia-runtime_*.deb ./theia-runtime-dev_*.deb
 ```
 
 to build an OTP-like app system on the Theia supervisor **without** the ARA
 services, GUI tools, or the RF test harness. Copy this directory to a new repo
 and start authoring `.art` specs.
 
-What's installed by the two debs:
+Theia is split into runtime/-dev: a machine that only RUNS apps installs the
+binary-only `theia-runtime` (+ `theia-services`); a workspace that BUILDS apps
+adds the `-dev` packages (sources, headers, protos). What's installed here:
 
 | deb | provides | where |
 |---|---|---|
 | `theia-framework` | the `artheia` CLI (gen-app/gen-proto/gen-manifest/executor emit) + the rig DSL + bazel `rules/` | `pip` (venv) + `/opt/theia` |
-| `theia-runtime` | runtime sources/headers your app compiles against, the `supervisor` binary, `tombstone`, the runtime proto, and `tdb` | `/opt/theia/src`, `/opt/theia/bin` |
+| `theia-runtime` | the `supervisor` binary (run-time fabric) + `tdb` | `/opt/theia/bin` |
+| `theia-runtime-dev` | runtime sources/headers your app compiles against, `tombstone`, the runtime proto + `.art` | `/opt/theia/src` |
 
 This template wires Bazel so the labels `gen-app` emits —
 `//platform/runtime:runtime` and `//platform/supervisor/tombstone:tombstone` —

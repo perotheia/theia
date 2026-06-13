@@ -29,22 +29,40 @@ package(default_visibility = ["//visibility:public"])
 
 _VERSION = "0.1.0"
 
-# ── theia-runtime ──────────────────────────────────────────────────────────
-# The fabric a Theia app system runs under: runtime sources/headers (apps compile
-# against these), the supervisor binary + tombstone lib, and the runtime control
-# proto. tdb (python probe client) is added by `theia release` (no bazel artifact).
+# Debian runtime/-dev split: a RUNTIME-ONLY machine gets just the binaries (+ the
+# shared libs they link); everything build-time — sources, headers, protos, the
+# .art tree, the Python manifest — lives in the matching -dev package, which
+# Depends on the runtime one. A target that only RUNS Theia installs
+# theia-runtime [+ theia-services]; a workspace that BUILDS apps adds the -dev's.
+
+# ── theia-runtime (machine) ──────────────────────────────────────────────────
+# Just the supervisor binary — the fabric an app system runs under. No build
+# artifacts. tdb (python probe) is added by `theia release` (no bazel artifact).
 pkg_deb(
     name = "theia-runtime_deb",
     package = "theia-runtime",
     version = _VERSION,
-    description = "Theia runtime: gen_server/statem/runnable C++ sources, supervisor, tombstone, runtime protos",
-    section = "devel",
-    # libnanopb-dev: pb.h + libprotobuf-nanopb.a the runtime sources compile/link
-    # against. build-essential: gcc/g++ for the workspace bazel build.
-    depends = "theia-framework, libnanopb-dev, build-essential",
+    description = "Theia runtime: the supervisor binary (run-time fabric)",
+    section = "misc",
     files = {
         "//platform/supervisor/main:supervisor": "/opt/theia/bin/supervisor",
     },
+)
+
+# ── theia-runtime-dev (build) ────────────────────────────────────────────────
+# The runtime SOURCES a workspace compiles its apps against: gen_server/statem/
+# runnable headers + .cc, tombstone, the runtime control proto (.proto + the
+# BUILT .pb.{c,h}; the workspace links them without re-running nanopb), the
+# runtime .art (defines ChildControlIf etc.).
+pkg_deb(
+    name = "theia-runtime-dev_deb",
+    package = "theia-runtime-dev",
+    version = _VERSION,
+    description = "Theia runtime development files: gen_server/statem/runnable sources + headers, tombstone, runtime proto + .art",
+    section = "devel",
+    # libnanopb-dev: pb.h + libprotobuf-nanopb.a the runtime sources compile/link
+    # against. build-essential: gcc/g++ for the workspace bazel build.
+    depends = "theia-runtime, theia-framework, libnanopb-dev, build-essential",
     data = [
         "//platform/runtime:runtime_dist_srcs",
         "//platform/supervisor/tombstone:tombstone_dist_hdrs",
@@ -53,13 +71,13 @@ pkg_deb(
     strip_prefix = "platform",
 )
 
-# ── theia-services ─────────────────────────────────────────────────────────
-# The ARA platform services as compiled binaries + the generated services protos.
+# ── theia-services (machine) ─────────────────────────────────────────────────
+# The ARA platform service binaries + the shared lib per links. No build files.
 pkg_deb(
     name = "theia-services_deb",
     package = "theia-services",
     version = _VERSION,
-    description = "Theia ARA platform services: com, per, sm, ucm, log, shwa (binaries) + protos",
+    description = "Theia ARA platform services: com, per, sm, ucm, log, shwa (binaries)",
     section = "misc",
     # System libs per's etcd stack links: grpc++/protobuf + cpprest (etcd-cpp-
     # apiv3's HTTP client) + openssl. libetcd-cpp-api.so itself is bundled below.
@@ -75,40 +93,38 @@ pkg_deb(
         # the postinst ldconfig's it onto the loader path.
         "//third_party:etcd_cpp_so_file": "/opt/theia/lib/libetcd-cpp-api.so",
     },
-    data = [
-        "//platform/proto/system/services/com:com.proto",
-        "//platform/proto/system/services/per:per.proto",
-        "//platform/proto/system/services/sm:sm.proto",
-        "//platform/proto/system/services/ucm:ucm.proto",
-        "//platform/proto/system/services/log:log.proto",
-        "//platform/proto/system/services/shwa:shwa.proto",
-    ],
-    prefix = "/opt/theia/proto",
-    strip_prefix = "platform/proto",
     # ldconfig /opt/theia/lib so per finds libetcd-cpp-api.so.
     postinst = "#!/bin/sh\necho /opt/theia/lib > /etc/ld.so.conf.d/theia.conf\nldconfig\n",
 )
 
-# The consolidated Services manifest → /opt/theia/services, so a downstream
-# workspace relinks ONE dir (system/services → /opt/theia/services). Separate
-# pkg_deb (theia-services-manifest) layered with the binaries deb — kept apart
-# so a target that only RUNS prebuilt services (no workspace build) can skip it.
+# ── theia-services-dev (build) ───────────────────────────────────────────────
+# Everything a WORKSPACE needs from services to build/deploy against them: the
+# generated service protos, the consolidated .art manifest tree (relink
+# system/services → /opt/theia/services), and the Python manifest
+# (services.manifest.service + executor.py sidecar) for `gen-rig-combine`.
+# Folds in the former theia-services-manifest.
 pkg_deb(
-    name = "theia-services-manifest_deb",
-    package = "theia-services-manifest",
+    name = "theia-services-dev_deb",
+    package = "theia-services-dev",
     version = _VERSION,
-    description = "Theia services .art manifest + the Python manifest (service.py + executor.py sidecar) — relink system/services here, combine via gen-rig-combine",
+    description = "Theia services development files: protos, .art manifest tree, Python manifest (service.py + executor.py sidecar)",
     section = "devel",
-    depends = "theia-services",
-    # The .art tree → /opt/theia/services (relink system/services here).
+    depends = "theia-services, theia-framework",
+    # The .art manifest tree → /opt/theia/services (relink system/services here).
     data = ["//services/system/services:services_manifest"],
     prefix = "/opt/theia/services",
     strip_prefix = "services/system/services",
-    # The Python manifest (services.manifest.service + .executor sidecar) →
-    # /opt/theia/lib/.../site-packages/services/manifest/ — importable as
-    # `services.manifest.service` once setup.bash puts it on PYTHONPATH. A
-    # downstream `gen-rig-combine services.manifest.service <apps>` consumes it.
+    # protos → /opt/theia/proto/... ; the Python manifest → site-packages
+    # (importable as services.manifest.service once setup.bash puts it on
+    # PYTHONPATH). Explicit dests because they live under different source roots
+    # than the .art `data` tree above.
     files = {
+        "//platform/proto/system/services/com:com.proto": "/opt/theia/proto/system/services/com/com.proto",
+        "//platform/proto/system/services/per:per.proto": "/opt/theia/proto/system/services/per/per.proto",
+        "//platform/proto/system/services/sm:sm.proto": "/opt/theia/proto/system/services/sm/sm.proto",
+        "//platform/proto/system/services/ucm:ucm.proto": "/opt/theia/proto/system/services/ucm/ucm.proto",
+        "//platform/proto/system/services/log:log.proto": "/opt/theia/proto/system/services/log/log.proto",
+        "//platform/proto/system/services/shwa:shwa.proto": "/opt/theia/proto/system/services/shwa/shwa.proto",
         "//services:__init__.py": "/opt/theia/lib/python3.10/site-packages/services/__init__.py",
         "//services/manifest:__init__.py": "/opt/theia/lib/python3.10/site-packages/services/manifest/__init__.py",
         "//services/manifest:service.py": "/opt/theia/lib/python3.10/site-packages/services/manifest/service.py",
@@ -150,7 +166,18 @@ pkg_opkg(
 # Convenience: build the bazel-buildable package set in one shot.
 filegroup(
     name = "debs",
-    srcs = [":theia-runtime_deb", ":theia-services_deb", ":theia-services-manifest_deb"],
+    srcs = [
+        ":theia-runtime_deb",
+        ":theia-runtime-dev_deb",
+        ":theia-services_deb",
+        ":theia-services-dev_deb",
+    ],
+)
+
+# Machine-only debs (a run-time target — no -dev build files).
+filegroup(
+    name = "machine_debs",
+    srcs = [":theia-runtime_deb", ":theia-services_deb"],
 )
 
 filegroup(

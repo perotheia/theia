@@ -66,12 +66,13 @@ SUPERVISORS: list[SupervisorNode] = [
     SupervisorNode(
         name="drv_sup",
         strategy=RestartStrategy.ONE_FOR_ONE,
-        # Driver / data-path layer. "gateway" = the GatewayBridge composition
-        # (platform/gateway): GatewayService + CmpGwService (the ASAM-CMP UDP
-        # bridge from Hercules) + the PSP Kcan_Bus / Flexray_Bus mega-nodes.
-        # It bridges the vehicle buses into the Theia fabric, so it's its own
-        # driver sub-supervisor rather than a host service.
-        children=["gateway"],
+        # Driver / data-path mount-point. EMPTY in standalone theia.git — the
+        # gateway (GatewayBridge: GatewayService + CmpGwService + the PSP
+        # Kcan_Bus / Flexray_Bus mega-nodes) lives in a consuming workspace
+        # (gataway_ws), which Appends "gateway" here. Kept as its own driver
+        # sub-supervisor so a downstream bus driver lands under it, not among
+        # the host services. See docs/tasks/TODO/repo-split-standalone-theia.md.
+        children=[],
     ),
     SupervisorNode(
         name="network_sup",
@@ -84,7 +85,7 @@ SUPERVISORS: list[SupervisorNode] = [
         # "log" = the log[trace] FC (services/log/): the ring-buffer trace
         # hub — TraceStreamPump (raw record fan-out, tipc 0x80010013) +
         # TraceCtl (Subscribe/Configure control plane, tipc 0x80010014).
-        # It MUST be forked: tdb logcat / artheia.observer Subscribe to
+        # It MUST be forked: tdb tracecat / artheia.observer Subscribe to
         # TraceCtl, and per-node Tracer records egress to the pump. Without
         # it, `tdb trace <node>` stores config but nothing receives the
         # records and Subscribe has no listener. (The earlier "no daemon —

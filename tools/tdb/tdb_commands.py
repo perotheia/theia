@@ -7,7 +7,7 @@ Every cmd_* takes (args, sup, trace_factory) and uses ONLY:
     get_system_info, configure_trace, get_trace_config, configure_log_level,
     get_log_level_config, restart_child, terminate_hold) returning plain dicts;
   - trace_factory(): a zero-arg callable returning a trace client with
-    .records(timeout) / .stop() (logcat).
+    .records(timeout) / .stop() (tracecat).
 So the SAME command bodies serve both transports — tdb passes TIPC-backed
 clients, rtdb passes gRPC-backed ones. _render_tree etc. live here so local +
 remote print identically.
@@ -455,18 +455,21 @@ def _fmt_content(content: dict) -> str:
     return "{" + ", ".join(f"{k}: {v(val)}" for k, val in content.items()) + "}"
 
 
-def cmd_logcat(args, _sup, trace_factory) -> int:
+def cmd_tracecat(args, _sup, trace_factory) -> int:
+    # Follows the TRACE firehose (subscribe to log[trace], decode + print) —
+    # NOT logs. Named `tracecat`; `logcat` kept as a back-compat alias. A real
+    # log-tailing `logcat` (svc/log syslog sink watcher) is a separate feature.
     # -g get ring size / -c clear are firehose-control follow-ups; the default
-    # is "follow live records" (subscribe to log[trace], decode + print).
+    # is "follow live records".
     if "-g" in args or "-c" in args:
-        print("logcat -g/-c (ring size / clear) — not wired yet", file=sys.stderr)
+        print("tracecat -g/-c (ring size / clear) — not wired yet", file=sys.stderr)
         return 2
     # --json: one JSON object per line (NDJSON) — full header + decoded inner
     # proto — for piping into jq / a log pipeline. No human banner on stdout.
     as_json = "--json" in args
     trace = trace_factory()
     if not as_json:
-        print("logcat: following trace firehose (Ctrl-C to stop) ...")
+        print("tracecat: following trace firehose (Ctrl-C to stop) ...")
     try:
         for rec in trace.records(timeout=600.0):
             if as_json:
@@ -512,7 +515,8 @@ _COMMANDS = {
     "loglevel": cmd_loglevel,
     "restart": cmd_restart,
     "terminate": cmd_terminate,
-    "logcat": cmd_logcat,
+    "tracecat": cmd_tracecat,
+    "logcat": cmd_tracecat,   # back-compat alias (the firehose is TRACES, not logs)
 }
 
 _HELP = """tdb — Theia Debug Bridge. commands:
@@ -527,7 +531,7 @@ _HELP = """tdb — Theia Debug Bridge. commands:
   trace <node> <KIND> off  remove just that KIND; `trace <node> off` stops all
   trace-config             show stored trace config
   loglevel [<node> [lvl]]  show all/one node's log level; with lvl, SET it live
-  logcat [--json]          follow the trace firehose (--json = NDJSON)
+  tracecat [--json]        follow the trace firehose (--json = NDJSON; alias: logcat)
   restart <name>           restart a child
   terminate <name>         stop-and-hold a child
   help                     this help

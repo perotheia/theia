@@ -8,10 +8,10 @@ proxy): control RPCs + the GetTree-poll live tree (Subscribe). Its methods
 return the protobuf reply objects directly — tdb_commands._g reads fields off a
 dict OR a protobuf message via getattr, so no dict conversion is needed.
 
-TraceClient drives the collector's TraceStream gRPC (logcat). It wraps each
+TraceClient drives the collector's TraceStream gRPC (tracecat). It wraps each
 gRPC TraceRecord in a small adapter exposing the same attrs tdb's
 artheia.observer records do (src/kind/msg_type/corr_id/ts_ns/content/to_dict),
-so the shared cmd_logcat renders identically.
+so the shared cmd_tracecat renders identically.
 """
 from __future__ import annotations
 
@@ -145,13 +145,13 @@ class PerClient:
 
 
 # ---------------------------------------------------------------------------
-# trace (logcat) — gRPC TraceStream, adapted to tdb's record shape
+# trace (tracecat) — gRPC TraceStream, adapted to tdb's record shape
 # ---------------------------------------------------------------------------
 
 class _RecordView:
-    """Wraps a gRPC TraceRecord so the shared cmd_logcat sees the SAME attrs
+    """Wraps a gRPC TraceRecord so the shared cmd_tracecat sees the SAME attrs
     artheia.observer records expose. content is the decoded inner message dict
-    when a decoder is available, else None (cmd_logcat prints raw header only)."""
+    when a decoder is available, else None (cmd_tracecat prints raw header only)."""
 
     def __init__(self, rec, content=None, data=None) -> None:
         self.ts_ns    = rec.ts_ns

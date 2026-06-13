@@ -89,7 +89,7 @@ public:
 
     // State enum → its .art name. The GenStateM base calls this when it emits
     // a STATEM trace so the record carries from/to state names (OFF→STARTING),
-    // not just the bare ordinal — what `tdb logcat` / the GUI / rf assert on.
+    // not just the bare ordinal — what `tdb tracecat` / the GUI / rf assert on.
     static const char* state_name(DemoFsmState s) {
         switch (s) {
         case DemoFsmState::IDLE: return "IDLE";

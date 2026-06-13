@@ -1,23 +1,26 @@
-"""deb.bzl — Bazel rule for building Debian .deb packages.
+"""deb.bzl — the ONE Theia packaging rule (`pkg_deb`).
 
-A .deb is an ar(1) archive: debian-binary + control.tar.gz + data.tar.gz — the
-SAME on-disk format as the .ipk that rules/opkg.bzl builds, so this rule is a
-near-clone of pkg_opkg with three .deb-isms:
+A .deb and an opkg .ipk are the SAME on-disk format: an ar(1) archive of
+debian-binary + control.tar.gz + data.tar.gz. dpkg installs both. So this single
+rule emits either, switched by `format`:
 
-  * output name  <package>_<version>_<arch>.deb  (arch = amd64/arm64/all, the
-    Debian names, not the opkg x86_64/aarch64);
-  * control file carries Installed-Size (dpkg shows it; apt sums it);
-  * `data` accepts filegroups/trees (a runtime ships whole include/ + src/
-    subtrees), staged preserving their workspace-relative path under `prefix`.
+  * format = "deb" (default) — output <package>_<version>_<arch>.deb, Debian arch
+    names (amd64/arm64/all), control carries Installed-Size.
+  * format = "ipk" — output <package>_<version>_<arch>.ipk, opkg arch names
+    (x86_64/aarch64/all), leaner control (no Installed-Size). The opt-in "hatch"
+    for an embedded/opkg target; everything else is the same archive.
 
-`files` keeps the pkg_opkg single-file → explicit-dest mapping for binaries; use
-`data` + `prefix` for source/header trees. Both land in the same data.tar.gz.
+Theia is always deployed on Debian-derived platforms (host/rpi4/docker, all
+dpkg), so .deb is the default and primary; .ipk is one attr away if a non-Debian
+target ever appears. `pkg_opkg` (rules/opkg.bzl) is kept as a thin alias =
+pkg_deb(format="ipk") for back-compat.
 
-This is Theia's OWN packaging (dist/debian/); the embedded/opkg path stays on
-pkg_opkg (dist/ipkg/). The two share rules/opkg.bzl's _render_control shape.
+`files` is the single-file → explicit-dest map (binaries, scripts); `data` +
+`prefix` stages whole source/header trees preserving their workspace-relative
+path. Both land in the same data.tar.gz.
 """
 
-# Bazel CPU constraint value → Debian architecture name.
+# Bazel CPU constraint value → arch name, per format.
 _DEB_ARCH = {
     "x86_64": "amd64",
     "k8": "amd64",
@@ -25,8 +28,20 @@ _DEB_ARCH = {
     "arm64": "arm64",
     "all": "all",
 }
+_IPK_ARCH = {
+    "amd64": "x86_64",
+    "k8": "x86_64",
+    "x86_64": "x86_64",
+    "arm64": "aarch64",
+    "aarch64": "aarch64",
+    "all": "all",
+}
 
-def _render_control(attrs, arch, installed_kb):
+def _arch_for(fmt, raw):
+    table = _IPK_ARCH if fmt == "ipk" else _DEB_ARCH
+    return table.get(raw, raw)
+
+def _render_control(attrs, arch, installed_kb, fmt):
     lines = [
         "Package: " + attrs.package,
         "Version: " + attrs.version,
@@ -34,8 +49,10 @@ def _render_control(attrs, arch, installed_kb):
         "Section: " + attrs.section,
         "Priority: " + attrs.priority,
         "Maintainer: " + attrs.maintainer,
-        "Installed-Size: " + str(installed_kb),
     ]
+    # Installed-Size is a dpkg/.deb nicety; opkg control is leaner.
+    if fmt == "deb":
+        lines.append("Installed-Size: " + str(installed_kb))
     if attrs.depends:
         lines.append("Depends: " + attrs.depends)
     if attrs.provides:
@@ -49,7 +66,8 @@ def _exec_mode(dest):
     return "755" if ("/bin/" in dest or "/sbin/" in dest) else "644"
 
 def _pkg_deb_impl(ctx):
-    arch = _DEB_ARCH.get(ctx.attr.arch, ctx.attr.arch)
+    fmt = ctx.attr.format
+    arch = _arch_for(fmt, ctx.attr.arch)
 
     # (1) explicit single-file → dest entries (binaries, configs).
     src_files = []
@@ -80,7 +98,8 @@ def _pkg_deb_impl(ctx):
             " \"$SRC" + str(idx) + "\" \"$STAGE" + dest + "\"",
         )
 
-    deb_name = ctx.attr.package + "_" + ctx.attr.version + "_" + arch + ".deb"
+    ext = ".ipk" if fmt == "ipk" else ".deb"
+    deb_name = ctx.attr.package + "_" + ctx.attr.version + "_" + arch + ext
     out_deb = ctx.actions.declare_file(deb_name)
 
     src_vars = []
@@ -110,7 +129,7 @@ def _pkg_deb_impl(ctx):
         "INSTALLED_KB=$(du -sk \"$STAGE\" | cut -f1)\n" +
         # control rendered at action time so Installed-Size reflects the stage.
         "cat > \"$CTRL/control\" << __CONTROL_EOF__\n" +
-        _render_control(ctx.attr, arch, "$INSTALLED_KB") +
+        _render_control(ctx.attr, arch, "$INSTALLED_KB", fmt) +
         "__CONTROL_EOF__\n" +
         _script_block("postinst", ctx.attr.postinst) +
         _script_block("prerm", ctx.attr.prerm) +
@@ -156,5 +175,16 @@ pkg_deb = rule(
         "postinst": attr.string(default = ""),
         "prerm": attr.string(default = ""),
         "conffiles": attr.string(default = ""),
+        # "deb" (default, Debian arch names + Installed-Size) or "ipk" (opkg arch
+        # names, leaner control). Same archive either way.
+        "format": attr.string(default = "deb", values = ["deb", "ipk"]),
     },
 )
+
+def pkg_opkg(name, **kwargs):
+    """Back-compat alias — an .ipk is pkg_deb(format="ipk"). Theia is always on
+    Debian-derived platforms, so prefer plain pkg_deb (.deb); use this only for a
+    non-Debian/opkg target. Drops the legacy `arch` default of x86_64 onto the
+    rule's amd64 default, which _IPK_ARCH maps back to x86_64."""
+    kwargs.pop("format", None)
+    pkg_deb(name = name, format = "ipk", **kwargs)

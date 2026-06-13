@@ -18,5 +18,5 @@ alias(
     visibility = ["//visibility:public"],
 )
 
-# Individual files for the theia-services-manifest deb (single-file labels).
+# Individual files for the theia-services-dev deb (single-file labels).
 exports_files(["__init__.py", "service.py", "executor.py"])

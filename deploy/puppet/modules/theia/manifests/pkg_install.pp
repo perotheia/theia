@@ -1,26 +1,31 @@
 # theia::pkg_install — install the Theia PACKAGE SET (.deb / .ipk) on a target.
 #
 # The ROS2-style decomposition (theia release → dist/debian + dist/ipkg) lets a
-# remote machine install just the packages it needs, in dependency order:
+# remote machine install just the packages it needs, in dependency order. The
+# MACHINE packages are binary-only (no build artifacts); the -dev packages carry
+# the sources/protos/manifest a WORKSPACE needs to build apps:
 #
-#     theia-framework  (apt — python wheel + rules; only where the user BUILDS)
-#     theia-runtime    (supervisor binary + tombstone + runtime sources)
-#     theia-services   (com/per/sm/ucm/log/shwa)         — OPTIONAL
-#     <user apps>                                         — OPTIONAL
+#     theia-framework      (apt — python wheel + rules; only where the user BUILDS)
+#     theia-runtime        (supervisor binary)                    — required
+#     theia-services       (com/per/sm/ucm/log/shwa + libetcd)    — OPTIONAL
+#     theia-runtime-dev    (runtime sources/headers + protos)     — DEV only
+#     theia-services-dev   (service protos + .art + py manifest)  — DEV only
+#     <user apps>                                                  — OPTIONAL
 #
-# This replaces the old per-machine single-.ipk install (theia::install) + the
-# supervisor bind-mount: theia-runtime now PACKAGES the supervisor, so a target
-# is self-contained from the deb/ipk set alone.
+# A pure DEPLOY target installs only the machine packages (theia-runtime
+# [+ theia-services]) — zero build files. A target that also BUILDS apps adds the
+# -dev packages (`dev => true`). theia-runtime PACKAGES the supervisor, so a
+# target is self-contained from the machine set alone.
 #
 # Packages arrive under $pkg_dir (a docker volume / scp drop of dist/debian or
 # dist/ipkg). Each is dpkg-installed if present; a missing OPTIONAL package is
-# skipped (a runtime-only target needs no services). `dpkg --install` handles
-# both .deb and .ipk (same ar format).
+# skipped. `dpkg --install` handles both .deb and .ipk (same ar format).
 #
 # Parameters:
 #   pkg_dir   — dir holding the theia-*_*.{deb,ipk} files (default /opt/theia/pkg).
 #   ext       — "deb" or "ipk" (which artifact set to install; default deb).
 #   services  — install theia-services too? (default true)
+#   dev       — also install the -dev packages (a build target)? (default false)
 #   app_globs — extra package globs to install AFTER services (the user's own
 #               app debs/ipks), in order. Default []: runtime-only target.
 
@@ -28,14 +33,17 @@ class theia::pkg_install (
     String        $pkg_dir   = '/opt/theia/pkg',
     Enum['deb','ipk'] $ext   = 'deb',
     Boolean       $services  = true,
+    Boolean       $dev       = false,
     Array[String] $app_globs = [],
 ) {
     # Ordered install: runtime first (everything depends on it), then services,
-    # then the user's apps. dpkg resolves nothing from a feed here — these are
-    # explicit local-file installs, so we sequence them ourselves.
+    # then (if a build target) the -dev packages, then the user's apps. dpkg
+    # resolves nothing from a feed — these are explicit local-file installs.
     $base = [
-        ['theia-runtime', true],            # required
-        ['theia-services', $services],      # optional
+        ['theia-runtime', true],                      # required
+        ['theia-services', $services],                # optional
+        ['theia-runtime-dev', $dev],                  # DEV only
+        ['theia-services-dev', $dev and $services],   # DEV only
     ]
 
     $base.each |$pair| {
@@ -58,6 +66,15 @@ class theia::pkg_install (
     if $services {
         Exec['theia::pkg_install::theia-runtime']
           -> Exec['theia::pkg_install::theia-services']
+    }
+    # -dev packages depend on their machine package — install after.
+    if $dev {
+        Exec['theia::pkg_install::theia-runtime']
+          -> Exec['theia::pkg_install::theia-runtime-dev']
+        if $services {
+            Exec['theia::pkg_install::theia-services']
+              -> Exec['theia::pkg_install::theia-services-dev']
+        }
     }
 
     # User app packages, installed last (they depend on runtime [+services]).

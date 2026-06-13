@@ -11,19 +11,21 @@ dist/
 /up/
 /HANDOFF.md
 
-# Component-repo checkout paths from .repo/manifests/default.xml.
-# pero_theia sits at workspace root; the projects below are sibling
-# git repos checked out into this tree by `repo sync` and must not
-# appear as untracked in pero_theia.
+# Standalone theia.git: artheia + etcd-cpp-apiv3 are git SUBMODULES (tracked).
+# The gateway / AUTOSAR-PSP / per-vehicle vendor trees are NOT part of theia.git
+# — they live in their own consuming workspaces (e.g. gataway_ws) as submodules.
+# On a legacy google-repo checkout artheia is still a repo-sync sibling; keep it
+# ignored there. A fresh standalone clone has none of these dirs.
 /artheia/
-/autosar/demo/mlbevo_gen2_cmp_demo/
-/gateway/demo/pero_cmp_gw_cln_demo/
-/gateway/firmware/pero_cmp_ti/
-/gateway/firmware/pero_cmp_ti_gw/
-/gateway/libs/libgw/
-/gateway/libs/pero_cmp_lnx/
+# Leftover google-repo sibling checkouts on a legacy workspace — separate git
+# repos (their .git → .repo/projects/…). Never commit them into theia.git; they
+# moved to gataway_ws. (Absent on a fresh clone.)
+/gateway/
 /platform/gateway/
-# vendor/autosar/mlbevo_gen2_cmp_psp/ — optional, see .repo/local_manifests/psp.xml
+/vendor/
+/third_party/etcd-cpp-apiv3/
+# pip editable-install build metadata.
+*.egg-info/
 
 # Local agent/IDE state — never tracked.
 /.claude/
@@ -38,14 +40,8 @@ dist/
 *.pb.h
 *.pb.cc
 
-# Vendor implementations are tracked separately (their own GitLab repos,
-# wired in via .repo/local_manifests/ on demand). Do not commit generated
-# vendor artifacts to pero_theia. Keep the namespace marker
-# (vendor/__init__.py) tracked so `pip install -e .` resolves vendor.*
-# even when the data dirs are absent.
-/vendor/*/
-!/vendor/.gitkeep
-/vendor/packages/
+# (vendor/ removed — vendor projects live in their own consuming workspaces,
+#  not in standalone theia.git.)
 /vendor/vehicles/
 /vendor/apps/
 /theia_vendor.egg-info/

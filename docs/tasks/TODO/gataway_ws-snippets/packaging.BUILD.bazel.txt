@@ -1,0 +1,187 @@
+"""packaging/BUILD.bazel — opkg (.ipk) packages for PERO CMP gateway stack.
+
+Build all packages:
+  bazel build //packaging:all
+
+Install to a local directory:
+  bazel build //packaging:install
+  ls bazel-bin/packaging/pero_install/
+
+Individual packages:
+  bazel build //packaging:pero-libcmpdecoder
+  bazel build //packaging:pero-libgw
+  bazel build //packaging:pero-libpsp
+  bazel build //packaging:pero-gw-svc
+  bazel build //packaging:pero-gw-client
+  bazel build //packaging:pero-gw-firmware
+"""
+
+load("//rules:opkg.bzl", "pkg_opkg")
+
+package(default_visibility = ["//visibility:public"])
+
+_VERSION = "1.0.0"
+_ARCH    = "x86_64"
+_ARCH_ALL = "all"
+
+# ── 1. libcmpdecoder — ASAM-CMP receiver, FIBEX parser, PSP loader ─────────
+pkg_opkg(
+    name        = "pero-libcmpdecoder",
+    package     = "pero-libcmpdecoder",
+    version     = _VERSION,
+    arch        = _ARCH,
+    description = "PERO CMP decoder library (ASAM-CMP, FIBEX, PSP loader)",
+    section     = "libs",
+    files = {
+        "//gateway/libs/pero_cmp_lnx/lib:cmpdecoder_so_file": "/usr/lib/libcmpdecoder.so",
+    },
+    postinst = "#!/bin/sh\nldconfig\n",
+)
+
+# ── 2. libpsp — Platform Support Package dispatch + codec library ───────────
+pkg_opkg(
+    name        = "pero-libpsp",
+    package     = "pero-libpsp",
+    version     = _VERSION,
+    arch        = _ARCH,
+    description = "PERO CMP platform support package (MLBevo Gen2 codec + dispatch)",
+    section     = "libs",
+    files = {
+        "//autosar/mlbevo_gen2_cmp_psp:psp_so": "/usr/lib/libpsp.so",
+    },
+    postinst = "#!/bin/sh\nldconfig\n",
+)
+
+# ── 3. libgw — Gateway NIF (CmpReceiver → PSP → TIPC + UDP TX) ─────────────
+pkg_opkg(
+    name        = "pero-libgw",
+    package     = "pero-libgw",
+    version     = _VERSION,
+    arch        = _ARCH,
+    description = "PERO CMP gateway NIF library (TIPC server, UDP TX, GwNif)",
+    section     = "libs",
+    depends     = "pero-libcmpdecoder, pero-libpsp",
+    files = {
+        "//gateway/libs/libgw:gw_so_file": "/usr/lib/libgw.so",
+    },
+    postinst = "#!/bin/sh\nldconfig\n",
+)
+
+# ── 4. pero-gw-svc — Linux gateway NIF service ─────────────────────────────
+pkg_opkg(
+    name        = "pero-gw-svc",
+    package     = "pero-gw-svc",
+    version     = _VERSION,
+    arch        = _ARCH,
+    description = "PERO CMP gateway NIF service (ASAM-CMP UDP → TIPC clients)",
+    depends     = "pero-libgw, pero-libcmpdecoder, pero-libpsp",
+    files = {
+        "//platform/gateway:cmp_gw": "/usr/bin/cmp_gw",
+    },
+    postinst = """#!/bin/sh
+# Enable and start the service if systemd is available
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl daemon-reload
+fi
+""",
+)
+
+# ── 5. pero-gw-client — TIPC gateway client demo ───────────────────────────
+pkg_opkg(
+    name        = "pero-gw-client",
+    package     = "pero-gw-client",
+    version     = _VERSION,
+    arch        = _ARCH,
+    description = "PERO CMP gateway client demo (TIPC RX + TX_REQUEST)",
+    files = {
+        "//gateway/demo/pero_cmp_gw_cln_demo:cmp_gw_client": "/usr/bin/cmp_gw_client",
+    },
+)
+
+# ── 6. pero-gw-firmware — Hercules TMS570 gateway firmware binary ───────────
+# Architecture is 'all' because this is a data file (flashable ELF),
+# not an executable that runs on the package manager's target.
+pkg_opkg(
+    name        = "pero-gw-firmware",
+    package     = "pero-gw-firmware",
+    version     = _VERSION,
+    arch        = _ARCH_ALL,
+    description = "PERO CMP Hercules TMS570 gateway firmware (ASAM-CMP RX+TX)",
+    section     = "firmware",
+    files = {
+        # Firmware ELF built by cross-compile; packaged as a data file for flashing.
+        # Build: bazel build //pero_cmp_ti_gw:pero_cmp_ti_gw.elf --config=cortex_r4f
+        # For now use a placeholder; comment out until cross-compile is available.
+        # "//gateway/firmware/pero_cmp_ti_gw:pero_cmp_ti_gw.elf": "/usr/share/pero-gw-fw/pero_cmp_ti_gw.elf",
+        # Use cmp_gw as a placeholder to keep the target buildable on host
+        "//platform/gateway:cmp_gw": "/usr/share/pero-gw-fw/README",
+    },
+)
+
+# ── Meta-package: full GW stack ─────────────────────────────────────────────
+pkg_opkg(
+    name        = "pero-gw-stack",
+    package     = "pero-gw-stack",
+    version     = _VERSION,
+    arch        = _ARCH,
+    description = "PERO CMP full gateway stack (meta-package)",
+    depends     = "pero-libcmpdecoder, pero-libpsp, pero-libgw, pero-gw-svc, pero-gw-client",
+    files = {
+        # Empty package — only installs deps
+        "//platform/gateway:cmp_gw": "/usr/share/pero-gw-stack/installed",
+    },
+)
+
+# ── Install target: collect all .ipk files into one directory ───────────────
+# ── Packages index (opkg repo metadata) ──────────────────────────────────────
+# Generates Packages index from the .ipk files; use //packaging:install_dir
+# (below) or the dist.sh script to copy everything to a directory.
+genrule(
+    name = "Packages",
+    srcs = [
+        ":pero-libcmpdecoder",
+        ":pero-libpsp",
+        ":pero-libgw",
+        ":pero-gw-svc",
+        ":pero-gw-client",
+        ":pero-gw-firmware",
+        ":pero-gw-stack",
+    ],
+    outs = ["Packages.idx"],
+    cmd  = ("{ for f in $(SRCS); do " +
+            "    printf 'Filename: %s\\n' $$(basename \"$$f\"); " +
+            "    ar p \"$$f\" control.tar.gz 2>/dev/null | tar xzO ./control 2>/dev/null || true; " +
+            "    printf '\\n'; " +
+            "  done; } > $@"),
+    local = True,
+)
+
+# ── dist.sh — helper script that copies .ipk + Packages to an output dir ────
+genrule(
+    name = "install",
+    srcs = [
+        ":pero-libcmpdecoder",
+        ":pero-libpsp",
+        ":pero-libgw",
+        ":pero-gw-svc",
+        ":pero-gw-client",
+        ":pero-gw-firmware",
+        ":pero-gw-stack",
+        ":Packages",
+    ],
+    outs = ["dist.sh"],
+    cmd  = (
+        "{ " +
+        "  printf '#!/bin/sh\\n# PERO CMP opkg dist installer\\n'; " +
+        "  printf 'DEST=$${1:-/opt/pero-gw/dist}\\n'; " +
+        "  printf 'mkdir -p \"$$DEST\"\\n'; " +
+        "  for f in $(SRCS); do " +
+        "    printf 'cp \"%s\" \"$$DEST/\"\\n' \"$$f\"; " +
+        "  done; " +
+        "  printf 'echo \"Packages installed to: $$DEST\"\\n'; " +
+        "  printf 'ls -lh \"$$DEST\"\\n'; " +
+        "} > $@ && chmod +x $@"
+    ),
+    local = True,
+    executable = True,
+)

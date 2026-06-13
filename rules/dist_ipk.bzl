@@ -32,14 +32,17 @@ Usage (one target per host, the (i) macro form):
 # (skipped if no host wants it).
 ALL_BINARIES = [
     "//platform/supervisor/main:supervisor",
+    "//services/com/main:com",
     "//services/log/main:log",
     "//services/per/main:per",
     "//services/sm/main:sm",
     "//services/ucm/main:ucm",
     "//services/shwa/main:shwa",
+    "//platform/gateway/main:gateway",
     "//apps/Demo3WayP1/main:demo",
     "//apps/Demo3WayP2/main:demo",
     "//apps/Demo3WayP3/main:demo",
+    "//apps/Demo3WayP4/main:demo",
 ]
 
 # Shared libs bundled at /opt/theia/lib/<basename> for every host (harmless if a
@@ -51,16 +54,19 @@ DEFAULT_LIBS = [
 ]
 
 
-def _dist_ipk_impl(ctx):
-    out_ipk = ctx.actions.declare_file(ctx.attr.package + ".ipk")
+def _dist_pkg_impl(ctx):
+    fmt = ctx.attr.format
+    ext = ".ipk" if fmt == "ipk" else ".deb"
+    out = ctx.actions.declare_file(ctx.attr.package + ext)
     bins = ctx.files.binaries
     libs = ctx.files.libs
     args = ctx.actions.args()
     args.add("--app", ctx.file.application_json)
     args.add("--machine", ctx.file.machine_json)
-    args.add("--out", out_ipk)
+    args.add("--out", out)
     args.add("--package", ctx.attr.package)
     args.add("--version", ctx.attr.version)
+    args.add("--format", fmt)
     for b in bins:
         args.add("--bin", b)
     for l in libs:
@@ -71,15 +77,15 @@ def _dist_ipk_impl(ctx):
         arguments = [args],
         inputs = depset(
             [ctx.file.application_json, ctx.file.machine_json] + bins + libs),
-        outputs = [out_ipk],
-        mnemonic = "PackIpk",
-        progress_message = "Packing %s.ipk from application.json" % ctx.attr.package,
+        outputs = [out],
+        mnemonic = "PackPkg",
+        progress_message = "Packing %s%s from application.json" % (ctx.attr.package, ext),
     )
-    return [DefaultInfo(files = depset([out_ipk]))]
+    return [DefaultInfo(files = depset([out]))]
 
 
-_dist_ipk = rule(
-    implementation = _dist_ipk_impl,
+_dist_pkg = rule(
+    implementation = _dist_pkg_impl,
     attrs = {
         "package": attr.string(mandatory = True),
         "version": attr.string(default = "1.0.0"),
@@ -87,6 +93,7 @@ _dist_ipk = rule(
         "machine_json": attr.label(allow_single_file = [".json"], mandatory = True),
         "binaries": attr.label_list(allow_files = True, default = ALL_BINARIES),
         "libs": attr.label_list(allow_files = True, default = DEFAULT_LIBS),
+        "format": attr.string(default = "deb", values = ["deb", "ipk"]),
         "_packer": attr.label(
             default = "//rules:pack_ipk",
             executable = True,
@@ -96,15 +103,32 @@ _dist_ipk = rule(
 )
 
 
-def dist_ipk(name, manifest_dir = None, **kwargs):
-    """Per-host .ipk from dist/manifest/<name>/{application,machine}.json.
+def dist_pkg(name, manifest_dir = None, format = "deb", **kwargs):
+    """Per-host deploy bundle from dist/manifest/<name>/{application,machine}.json.
 
-    `name` is the host (central / compute / …). manifest_dir defaults to
-    //dist/manifest/<name>. The .ipk target is <name>_ipk (package=<name>)."""
+    `name` is the host (central / compute / …). Emits a .deb (default) or .ipk
+    (format="ipk") — the SAME ar archive, dpkg-installed either way. The target is
+    <name>_pkg (package=<name>); manifest_dir defaults to //dist/manifest/<name>."""
     mdir = manifest_dir or "//dist/manifest/%s" % name
-    _dist_ipk(
+    _dist_pkg(
+        name = "%s_pkg" % name,
+        package = name,
+        format = format,
+        application_json = "%s:application.json" % mdir,
+        machine_json = "%s:machine.json" % mdir,
+        **kwargs
+    )
+
+
+def dist_ipk(name, manifest_dir = None, **kwargs):
+    """Back-compat alias — the old per-host .ipk target (<name>_ipk). Prefer
+    dist_pkg (emits .deb). Kept so existing `theia manifest`-generated BUILD glue
+    + callers keep working."""
+    mdir = manifest_dir or "//dist/manifest/%s" % name
+    _dist_pkg(
         name = "%s_ipk" % name,
         package = name,
+        format = "ipk",
         application_json = "%s:application.json" % mdir,
         machine_json = "%s:machine.json" % mdir,
         **kwargs

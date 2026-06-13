@@ -82,6 +82,22 @@ pkg_deb(
     strip_prefix = "platform/proto",
 )
 
+# The consolidated Services manifest → /opt/theia/services, so a downstream
+# workspace relinks ONE dir (system/services → /opt/theia/services). Separate
+# pkg_deb (theia-services-manifest) layered with the binaries deb — kept apart
+# so a target that only RUNS prebuilt services (no workspace build) can skip it.
+pkg_deb(
+    name = "theia-services-manifest_deb",
+    package = "theia-services-manifest",
+    version = _VERSION,
+    description = "Theia services .art manifest (com/log/per/sm/ucm/shwa) — relink system/services here",
+    section = "devel",
+    depends = "theia-services",
+    data = ["//services/system/services:services_manifest"],
+    prefix = "/opt/theia/services",
+    strip_prefix = "services/system/services",
+)
+
 # Matching .ipk for the embedded/opkg path (dist/ipkg/). Same binary set; the
 # runtime sources aren't shipped to embedded targets (they run prebuilt binaries),
 # so the runtime ipk is binary-only (supervisor).
@@ -116,7 +132,7 @@ pkg_opkg(
 # Convenience: build the bazel-buildable package set in one shot.
 filegroup(
     name = "debs",
-    srcs = [":theia-runtime_deb", ":theia-services_deb"],
+    srcs = [":theia-runtime_deb", ":theia-services_deb", ":theia-services-manifest_deb"],
 )
 
 filegroup(

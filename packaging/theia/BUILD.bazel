@@ -97,12 +97,23 @@ pkg_deb(
     name = "theia-services-manifest_deb",
     package = "theia-services-manifest",
     version = _VERSION,
-    description = "Theia services .art manifest (com/log/per/sm/ucm/shwa) — relink system/services here",
+    description = "Theia services .art manifest + the Python manifest (service.py + executor.py sidecar) — relink system/services here, combine via gen-rig-combine",
     section = "devel",
     depends = "theia-services",
+    # The .art tree → /opt/theia/services (relink system/services here).
     data = ["//services/system/services:services_manifest"],
     prefix = "/opt/theia/services",
     strip_prefix = "services/system/services",
+    # The Python manifest (services.manifest.service + .executor sidecar) →
+    # /opt/theia/lib/.../site-packages/services/manifest/ — importable as
+    # `services.manifest.service` once setup.bash puts it on PYTHONPATH. A
+    # downstream `gen-rig-combine services.manifest.service <apps>` consumes it.
+    files = {
+        "//services:__init__.py": "/opt/theia/lib/python3.10/site-packages/services/__init__.py",
+        "//services/manifest:__init__.py": "/opt/theia/lib/python3.10/site-packages/services/manifest/__init__.py",
+        "//services/manifest:service.py": "/opt/theia/lib/python3.10/site-packages/services/manifest/service.py",
+        "//services/manifest:executor.py": "/opt/theia/lib/python3.10/site-packages/services/manifest/executor.py",
+    },
 )
 
 # Matching .ipk for the embedded/opkg path (dist/ipkg/). Same binary set; the

@@ -1,0 +1,5 @@
+# services/ — top-level package marker, exported so the theia-services-manifest
+# deb can stage the Python manifest as an importable `services` package.
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["__init__.py"])

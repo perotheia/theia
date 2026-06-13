@@ -21,7 +21,7 @@ Verbs (identical to tdb, minus get-snapshot which is TIPC/per-only):
   trace ...                ConfigureTrace (control path: rtdb → com → supervisor)
   trace-config             stored trace config (GetTraceConfig)
   loglevel [<node> [lvl]]  read / set a node's log level
-  logcat [--json]          follow the trace stream (collector TraceStream gRPC)
+  tracecat [--json]        follow the trace stream (collector TraceStream gRPC; alias: logcat)
   restart / terminate      child lifecycle
   help / quit
 """
@@ -103,7 +103,7 @@ class _Session:
         return self._sup
 
     def trace_factory(self) -> TraceClient:
-        # logcat → the collector's TraceStream gRPC (services/log egress-direct;
+        # tracecat → the collector's TraceStream gRPC (services/log egress-direct;
         # moves into com's TraceForwarder later). Default endpoint :7710.
         return TraceClient.from_workspace()
 

@@ -58,6 +58,14 @@ cluster Applications {
     composition Demo3WayP3 p3
     composition Demo3WayP4 p4
 
-    connect observer.counter_call    to counter.srv  // FIXME: duplication
+    // Cross-process fan-in onto counter (P1): a server/receiver port takes
+    // many clients. NOT a duplicate of P1's internal driver→counter wiring —
+    // these are the OTHER callers, living in other processes:
+    //   observer(P2).counter_call → counter.srv     (2nd Get client; driver is the 1st, in-process)
+    //   incrementer(P3).inc_out   → counter.inc_in   (2nd Inc source; driver is the 1st, in-process)
+    // The composition-level driver→counter connects (in Demo3WayP1) are the
+    // in-process half; these are the inter-process half — different sources,
+    // one shared destination endpoint.
+    connect observer.counter_call    to counter.srv
     connect incrementer.inc_out      to counter.inc_in
 }

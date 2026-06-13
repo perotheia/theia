@@ -40,7 +40,7 @@ path with no gRPC surface). `--target host:port` selects the `com` endpoint
 | `trace [off] <node> [KIND]` | ConfigureTrace — rtdb → com → supervisor → node |
 | `trace-config` | stored trace config (GetTraceConfig) |
 | `loglevel [<node> [lvl]]` | read / set a node's log level (live) |
-| `logcat [--json]` | follow the trace stream (collector TraceStream gRPC) |
+| `tracecat [--json]` | follow the trace stream (collector TraceStream gRPC; alias: `logcat`) |
 | `restart <name>` / `terminate <name>` | child lifecycle |
 
 ## How the wire path looks
@@ -56,9 +56,11 @@ The live tree is a **poll**, not a push: the supervisor's event firehose is
 in-process only (no remote egress), so `com`'s `Subscribe` polls `GetTree` and
 streams each `TreeSnapshot` — exactly what `tdb ps --follow` does locally.
 
-`logcat` subscribes to the collector's own `TraceStream` gRPC (default
-`:7710`, `services/log` egress-direct); that endpoint moves into a `com`
-`TraceForwarder` runnable in a later phase.
+`tracecat` (alias `logcat`) subscribes to the collector's own `TraceStream`
+gRPC (default `:7710`, `services/log` egress-direct); that endpoint moves into
+a `com` `TraceForwarder` runnable in a later phase. It follows TRACES, not logs
+— a real log-tailing `logcat` (a `svc/log` syslog-sink watcher) is a separate,
+unimplemented feature.
 
 ## Regenerating stubs
 

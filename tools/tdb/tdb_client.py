@@ -6,7 +6,7 @@ from tools/tdb/system/tdb.art (imported supervisor + log interfaces). If the
 Theia transport changes, the runtime + probe change and this file does not.
 See feedback-clients-via-art-probe + docs/tasks/TODO/e2e-local-stage-tdb.md.
 
-This is the wiring layer the `tdb` CLI (ps / trace / logcat / supervisor)
+This is the wiring layer the `tdb` CLI (ps / trace / tracecat / supervisor)
 sits on. The CLI itself is a follow-up; this proves the client path.
 
     sup = SupervisorClient.from_workspace(REPO)
@@ -239,7 +239,7 @@ class TraceClient:
     """Subscribes to log[trace] and yields decoded records.
 
     Thin wrapper over artheia.observer.TraceObserver — the SAME probe-backed
-    path observer_stream.py exercises. Re-homed here so `tdb trace` / `logcat`
+    path observer_stream.py exercises. Re-homed here so `tdb trace` / `tracecat`
     have one entry point.
     """
 

@@ -115,9 +115,9 @@ node runnable ComGrpcProxy {
 //   - binds its own SEQPACKET TIPC subscriber socket (0x8001000A),
 //   - gen_call SubscribeReq to log[trace]'s TraceCtl (0x80010014/0) with that
 //     address, so the hub fans TraceRecord casts to it (the SAME path tdb
-//     logcat / artheia.observer uses),
+//     tracecat / artheia.observer uses),
 //   - re-streams each record over its own gRPC TraceStream service to the
-//     GUI / rf-theia / rtdb logcat.
+//     GUI / rf-theia / rtdb tracecat.
 //
 // reporting=false, its own TIPC address (…0A) clear of the FC range, ComDaemon
 // (…08) and ComGrpcProxy (…09). do_* bodies in impl/TraceForwarder_handlers.cc.

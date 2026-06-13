@@ -20,8 +20,9 @@ adb-shaped verbs:
   trace off                stop ALL active traces
   trace-config             show the stored trace config (GetTraceConfig)
   loglevel [<node> [lvl]]  show all/one node's log level; with lvl, SET it live
-  logcat [--json|-c|-g]    follow the trace firehose (subscribe to log[trace]);
+  tracecat [--json|-c|-g]  follow the trace firehose (subscribe to log[trace]);
                            --json = NDJSON (header + decoded inner proto) per line
+                           (alias: logcat — the firehose carries TRACES, not logs)
   restart <name>           RestartChild
   terminate <name>         TerminateChild (stop-and-hold: no_restart=true)
   help / quit

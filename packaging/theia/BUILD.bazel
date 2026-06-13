@@ -61,7 +61,9 @@ pkg_deb(
     version = _VERSION,
     description = "Theia ARA platform services: com, per, sm, ucm, log, shwa (binaries) + protos",
     section = "misc",
-    depends = "theia-runtime",
+    # System libs per's etcd stack links: grpc++/protobuf + cpprest (etcd-cpp-
+    # apiv3's HTTP client) + openssl. libetcd-cpp-api.so itself is bundled below.
+    depends = "theia-runtime, libgrpc++1, libprotobuf23, libcpprest2.10",
     files = {
         "//services/com/main:com": "/opt/theia/bin/com",
         "//services/per/main:per": "/opt/theia/bin/per",
@@ -69,6 +71,9 @@ pkg_deb(
         "//services/ucm/main:ucm": "/opt/theia/bin/ucm",
         "//services/log/main:log": "/opt/theia/bin/log",
         "//services/shwa/main:shwa": "/opt/theia/bin/shwa",
+        # per's etcd C++ client — bundled (not in apt). Lands in /opt/theia/lib;
+        # the postinst ldconfig's it onto the loader path.
+        "//third_party:etcd_cpp_so_file": "/opt/theia/lib/libetcd-cpp-api.so",
     },
     data = [
         "//platform/proto/system/services/com:com.proto",
@@ -80,6 +85,8 @@ pkg_deb(
     ],
     prefix = "/opt/theia/proto",
     strip_prefix = "platform/proto",
+    # ldconfig /opt/theia/lib so per finds libetcd-cpp-api.so.
+    postinst = "#!/bin/sh\necho /opt/theia/lib > /etc/ld.so.conf.d/theia.conf\nldconfig\n",
 )
 
 # The consolidated Services manifest → /opt/theia/services, so a downstream

@@ -6,8 +6,8 @@ Hand-edits to generated files (lib/, main/, and the BUILD.bazel in
 impl/) are forbidden — they cause silent drift and break the gen →
 build dependency that the rest of the toolchain assumes.
 
-gen-app is path-agnostic: an FC can live ANYWHERE (services/, demo/,
-platform/, applications/), and the generated cross-slice Bazel labels
+gen-app is path-agnostic: an FC can live ANYWHERE (services/, apps/,
+platform/), and the generated cross-slice Bazel labels
 are derived from --out. This harness mirrors that — each FC carries an
 explicit out-path (and optional --composition), NOT a hardcoded
 services/<short> shape.
@@ -19,7 +19,7 @@ from the diff (it's user-owned business logic), but impl/BUILD.bazel
 IS checked — it carries no business logic.
 
 Drives the daemon FCs (sm, com, per, ucm, log) AND the non-services
-FCs (the demo compositions, the gateway, odd_path_client) — proving
+FCs (the apps compositions, the gateway) — proving
 gen-app stays byte-stable regardless of where the FC lives.
 """
 from __future__ import annotations
@@ -73,16 +73,13 @@ FC_SPECS = [
     FcSpec("log", "services/log/system/log/package.art", "ara::log", "services/log"),
     # Non-services FCs — same generator, different homes. These prove
     # gen-app's path-agnostic label derivation (//<out>/lib:<short>_lib).
-    # The demo is one spec with three process-compositions; each is its
+    # The apps spec is one spec with three process-compositions; each is its
     # own app dir via --composition (appended to --out verbatim).
-    FcSpec("demo_p1", "demo/system/demo/component.art", "demo", "demo", "Demo3WayP1"),
-    FcSpec("demo_p2", "demo/system/demo/component.art", "demo", "demo", "Demo3WayP2"),
-    FcSpec("demo_p3", "demo/system/demo/component.art", "demo", "demo", "Demo3WayP3"),
+    FcSpec("demo_p1", "apps/system/demo/component.art", "demo", "apps", "Demo3WayP1"),
+    FcSpec("demo_p2", "apps/system/demo/component.art", "demo", "apps", "Demo3WayP2"),
+    FcSpec("demo_p3", "apps/system/demo/component.art", "demo", "apps", "Demo3WayP3"),
     FcSpec("gateway", "platform/gateway/system/package.art",
            "ara::gateway", "platform/gateway"),
-    FcSpec("odd_path",
-           "vendor/odd_path_monitor/system/odd_path_monitor/component.art",
-           "ara::odd_path_monitor", "applications/odd_path_client"),
 ]
 
 

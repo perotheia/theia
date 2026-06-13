@@ -108,40 +108,64 @@ def cmd_orchestrate(args: list[str]) -> int:
     return _puppet("orchestration.pp", args)
 
 
-# Central single-machine local stage: the bin-name (executor.json start_cmd
-# leaf, bin/<name>) -> bazel target the binary is built from. The supervisor is
-# handled separately (lands at <dest>/supervisor, not bin/).
-_LOCAL_BINARIES = {
-    "com":  "//services/com/main:com",
-    "log":  "//services/log/main:log",
-    "sm":   "//services/sm/main:sm",
-    "per":  "//services/per/main:per",
-    "ucm":  "//services/ucm/main:ucm",
-    "shwa": "//services/shwa/main:shwa",
-    "gateway": "//platform/gateway/main:gateway",  # GatewayBridge (drv_sup)
-    "p1":   "//demo/Demo3WayP1/main:demo",
-    "p2":   "//demo/Demo3WayP2/main:demo",
-    "p3":   "//demo/Demo3WayP3/main:demo",
-    "p4":   "//demo/Demo3WayP4/main:demo",   # gen_statem test FSM
-}
-_LOCAL_SUPERVISOR = "//platform/supervisor/main:supervisor"
-
-
 def _bazel_bin(target: str) -> Path:
     """//pkg/dir:name -> WORKSPACE/bazel-bin/pkg/dir/name."""
     pkg, name = target.lstrip("/").split(":", 1)
     return WORKSPACE / "bazel-bin" / pkg / name
 
 
+def _load_install_components(manifest_root: Path):
+    """Read the generated AUTOSAR application.json and return what to build/stage.
+
+    The deploy MANIFEST is the single source of truth — no hardcoded binary
+    list. `artheia generate-manifest` writes
+    ``<manifest_root>/<host>/application.json`` whose ``applications[].components[]``
+    each carry ``name`` (the staged ``bin/<name>`` leaf), ``bazel_target`` (the
+    label), ``owner`` (``apps``/``services``/``platform``) and ``bazel_buildable``.
+
+    Returns ``(supervisor_target, {name: target})`` over the buildable components,
+    with the ``supervisor`` entry split out (it lands at ``<dest>/supervisor``,
+    not ``bin/``). Raises if no application.json is found."""
+    import json
+
+    appjsons = sorted(manifest_root.glob("*/application.json"))
+    if not appjsons:
+        raise FileNotFoundError(
+            f"no application.json under {manifest_root} — "
+            f"`artheia generate-manifest` must run first")
+    data = json.loads(appjsons[0].read_text())
+    supervisor_target = None
+    binaries: dict[str, str] = {}
+    for app in data.get("applications", []):
+        for c in app.get("components", []):
+            if not c.get("bazel_buildable", True):
+                continue
+            name, target = c.get("name"), c.get("bazel_target")
+            if not name or not target:
+                continue
+            if name == "supervisor":
+                supervisor_target = target
+            else:
+                binaries[name] = target
+    if supervisor_target is None:
+        raise ValueError(
+            f"{appjsons[0]} has no 'supervisor' component — the rig must "
+            f"include the supervisor in its application set")
+    return supervisor_target, binaries
+
+
 def _fc_art_path(fc: str, target: str):
-    """The .art the gen-params emitter reads for an FC. Services FCs live at the
-    canonical symlink path system/services/<fc>/package.art; demo apps
-    (//demo/...) at system/demo/package.art. Returns a Path or None if absent
-    (an FC with no .art simply gets no params file)."""
-    if target.startswith("//demo/"):
+    """The .art the gen-params emitter reads for an FC, derived from the bazel
+    target. Services FCs (``//services/<fc>/...``) live at the canonical symlink
+    path system/services/<fc>/package.art; app compositions (``//apps/...``) at
+    system/demo/package.art. Returns a Path or None if absent (an FC with no
+    .art simply gets no params file)."""
+    if target.startswith("//services/"):
+        cand = WORKSPACE / "system" / "services" / fc / "package.art"
+    elif target.startswith("//apps/"):
         cand = WORKSPACE / "system" / "demo" / "package.art"
     else:
-        cand = WORKSPACE / "system" / "services" / fc / "package.art"
+        return None      # platform FCs (gateway) carry their own params path
     return cand if cand.exists() else None
 
 
@@ -338,45 +362,67 @@ def cmd_install(args: list[str]) -> int:
     """LOCAL install: build + populate $WORKSPACE/install/<machine>/ via puppet.
 
     The dev inner-loop counterpart of the remote .ipk deploy, and the inherited
-    home of demo/stage_local.sh. bazel builds the binaries (its job) + artheia
-    emits executor.json + per-FC params; then `puppet apply theia::local_install`
-    copies them into install/<machine>/ and applies the SAME setcap contract
-    (theia::postinstall) a real deploy uses — "bazel builds, puppet orchestrates
-    the host". Default machine: central. Pass a machine name to override.
+    home of apps/stage_local.sh. The deploy MANIFEST is the single source of
+    truth — `artheia generate-manifest` first emits the AUTOSAR manifests, then
+    the buildable binary set (supervisor + every child) is READ BACK from
+    application.json (no hardcoded binary list). bazel builds those targets +
+    artheia emits executor.json + per-FC params; then `puppet apply
+    theia::local_install` copies them into install/<machine>/ and applies the
+    SAME setcap contract (theia::postinstall) a real deploy uses — "bazel builds,
+    puppet orchestrates the host". Default machine: central. Pass a machine name
+    to override.
 
     (`theia stage-local` is a back-compat alias for this verb.)"""
-    import json
-
     machine = next((a for a in args if not a.startswith("-")), "central")
     rig = {"central": "CentralRig"}.get(machine, "CentralRig")
     dest = WORKSPACE / "install" / machine
+    manifest_root = WORKSPACE / "install" / "manifest"
 
     # 0. Address-collision gate — fail BEFORE building/staging if two nodes
     #    share a TIPC (type, instance) anywhere in the deployed FC set.
     if (rc := _check_tipc_addresses()) != 0:
         return rc
 
-    # 1. bazel build — the supervisor + every child binary.
-    targets = [_LOCAL_SUPERVISOR, *_LOCAL_BINARIES.values()]
+    # 1. The four AUTOSAR manifest kinds (machine/application/service/
+    #    execution.json) per machine → install/manifest/<host>/. This is the
+    #    source of truth for WHAT to build/stage — runs FIRST so the binary set
+    #    is derived from it, not hand-listed. Single-machine local rig
+    #    (apps.manifest.rig) — no --rig attr needed.
+    if (rc := _run([
+        "artheia", "generate-manifest", "apps.manifest.rig",
+        "--out", str(manifest_root),
+    ])) != 0:
+        return rc
+
+    # 1b. Read the buildable binary set from the manifest: {bin-name: target}
+    #     plus the supervisor (split out — it lands at <dest>/supervisor).
+    try:
+        supervisor_target, binaries = _load_install_components(manifest_root)
+    except (FileNotFoundError, ValueError) as e:
+        print(f"theia: {e}", file=sys.stderr)
+        return 1
+
+    # 2. bazel build — the supervisor + every child binary, all from the manifest.
+    targets = [supervisor_target, *binaries.values()]
     if (rc := _run(["bazel", "build", *targets])) != 0:
         return rc
 
-    # 2. executor.json — the supervisor tree for this machine.
+    # 3. executor.json — the supervisor tree for this machine.
     dest.mkdir(parents=True, exist_ok=True)
     if (rc := _run([
-        "artheia", "executor", "emit", "demo.manifest.rig",
+        "artheia", "executor", "emit", "apps.manifest.rig",
         "--rig", rig, "--out", str(dest / "executor.json"),
     ])) != 0:
         return rc
 
-    # 2b. Per-FC static params JSON — config/<fc>.json, one per FC that declares
+    # 3b. Per-FC static params JSON — config/<fc>.json, one per FC that declares
     #     a params {} block. Read once at boot by the runtime config singleton
     #     (init_config(<fc>) resolves $THEIA_CONFIG_DIR/<fc>.json; the supervisor
     #     sets THEIA_CONFIG_DIR=config in the child env, see executor emit). A
     #     params-less FC emits an empty {nodes:{}} (harmless; lookups default).
     cfg_dir = dest / "config"
     cfg_dir.mkdir(parents=True, exist_ok=True)
-    for fc, target in _LOCAL_BINARIES.items():
+    for fc, target in binaries.items():
         art = _fc_art_path(fc, target)
         if art is None:
             continue
@@ -387,23 +433,14 @@ def cmd_install(args: list[str]) -> int:
             return rc
     print(f"staged {cfg_dir}/<fc>.json (static params)")
 
-    # 2c. The four AUTOSAR manifest kinds (machine/application/service/
-    #     execution.json) per machine → install/manifest/<machine>/. Single-
-    #     machine local rig (demo.manifest.rig) — no --rig attr needed.
-    if (rc := _run([
-        "artheia", "generate-manifest", "demo.manifest.rig",
-        "--out", str(WORKSPACE / "install" / "manifest"),
-    ])) != 0:
-        return rc
-
-    # 3. puppet apply theia::local_install — copy binaries + setcap. The binary
+    # 4. puppet apply theia::local_install — copy binaries + setcap. The binary
     #    map is passed as a Puppet hash literal via -e.
-    bins = {n: str(_bazel_bin(t)) for n, t in _LOCAL_BINARIES.items()}
+    bins = {n: str(_bazel_bin(t)) for n, t in binaries.items()}
     bins_pp = ", ".join(f"'{n}' => '{p}'" for n, p in bins.items())
     manifest = (
         "class { 'theia::local_install': "
         f"dest => '{dest}', "
-        f"supervisor_src => '{_bazel_bin(_LOCAL_SUPERVISOR)}', "
+        f"supervisor_src => '{_bazel_bin(supervisor_target)}', "
         f"binaries => {{ {bins_pp} }}, "
         "}"
     )
@@ -421,7 +458,7 @@ def cmd_install(args: list[str]) -> int:
 # is touched for deploy — `theia manifest` emits JSON, and `theia dist` then
 # works purely from that JSON (no rig.py). Dev iteration uses `bazel build
 # @rig_zonal//<host>:image` directly (rules/rig.bzl), unchanged.
-_ZONAL_RIG_MODULE = "demo.manifest.zonal_rig"
+_ZONAL_RIG_MODULE = "apps.manifest.zonal_rig"
 _ZONAL_RIG_ATTR = "DemoSoftware"
 _MANIFEST_DIR = "dist/manifest"
 
@@ -462,7 +499,7 @@ def cmd_manifest(args: list[str]) -> int:
     """THE sole rig entry for deploy: run the Python rig once and emit the JSON
     manifest set to dist/manifest/ — machines.json + per-host {machine,
     application,service,execution}.json — plus the bazel glue (`theia dist`
-    consumes the JSON, never the rig). Default rig: demo.manifest.zonal_rig
+    consumes the JSON, never the rig). Default rig: apps.manifest.zonal_rig
     --rig DemoSoftware. Pass a module / --rig / --out to override.
 
     Dev iteration stays on `bazel build @rig_zonal//<host>:image` (rules/rig.bzl)
@@ -542,7 +579,7 @@ def cmd_dist(args: list[str]) -> int:
 _COMPDB_TARGETS = [
     "//services/...",
     "//platform/...",
-    "//demo/...",
+    "//apps/...",
     "//gateway/libs/...",
 ]
 
@@ -553,7 +590,7 @@ def cmd_compdb(args: list[str]) -> int:
     Runs `bazel aquery mnemonic(CppCompile, <targets>)` and writes the
     {file, arguments, directory} entries to compile_commands.json at the
     workspace root. Pass target patterns to narrow the scope; default
-    covers services/platform/demo/gateway. Pass `--config=<x>` (or any
+    covers services/platform/apps/gateway. Pass `--config=<x>` (or any
     bazel flag starting with -) and it's forwarded to the aquery.
     """
     import json

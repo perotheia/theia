@@ -16,7 +16,7 @@ filegroups (``//platform/manifest:central_host_manifest`` etc).
 Why this exists separately from ``rules/rig.bzl``:
 
 - ``rig.bzl`` is a *module extension* — it runs at MODULE.bazel
-  resolution time and synthesizes a whole repo (``@rig_demo``) for
+  resolution time and synthesizes a whole repo (``@rig_apps``) for
   the .ipk packaging path.
 - This file is a plain Starlark *macro* — it runs at analysis time
   and emits genrules consumed by user-side BUILD files. Lighter, no
@@ -42,7 +42,7 @@ def rig_manifest(name, rig_target, machines, **kwargs):
     Args:
       name: target name (typically ``rig``).
       rig_target: dotted Python path to the Rig / SoftwareSpecification
-                  module (e.g. ``"demo.manifest.rig"``).
+                  module (e.g. ``"apps.manifest.rig"``).
       machines: list of machine names (matches ``Machine.name`` in
                 rig.py). Static here because Bazel needs to know
                 outputs at analysis time; the rig.py is the source of

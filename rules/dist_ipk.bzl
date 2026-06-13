@@ -37,9 +37,9 @@ ALL_BINARIES = [
     "//services/sm/main:sm",
     "//services/ucm/main:ucm",
     "//services/shwa/main:shwa",
-    "//demo/Demo3WayP1/main:demo",
-    "//demo/Demo3WayP2/main:demo",
-    "//demo/Demo3WayP3/main:demo",
+    "//apps/Demo3WayP1/main:demo",
+    "//apps/Demo3WayP2/main:demo",
+    "//apps/Demo3WayP3/main:demo",
 ]
 
 # Shared libs bundled at /opt/theia/lib/<basename> for every host (harmless if a

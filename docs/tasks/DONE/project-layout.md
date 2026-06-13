@@ -54,4 +54,4 @@ import another package for a forward-decl.
 Verified: `artheia parse system/system.art` (full tree), PlatformServices
 load (18 FCs), executor emit, gen-netgraph, fc_regen_stability 5/5
 byte-identical, artheia pytest 169/1, `bazel build //system:art_sources` +
-`@rig_demo//:executor_json`, host build of all 5 FC daemons.
+`@rig_apps//:executor_json`, host build of all 5 FC daemons.

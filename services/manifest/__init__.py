@@ -5,7 +5,7 @@ the ``cluster Services`` FCs (from ``services/system/system.art``) as
 :class:`SwComponent`, :class:`Executable`, and :class:`Process`
 (Execution Manifest) entries.
 
-Upper layers (e.g. ``demo/manifest/rig.py``) compose on top via
+Upper layers (e.g. ``apps/manifest/rig.py``) compose on top via
 :func:`artheia.manifest.merge_layers`.
 """
 

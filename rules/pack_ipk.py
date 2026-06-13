@@ -40,7 +40,7 @@ def _arch(machine_json: str) -> str:
 
 
 def _target_pkg_path(bazel_target: str) -> str:
-    """`//demo/Demo3WayP1/main:demo` → `demo/Demo3WayP1/main/demo` — the path
+    """`//apps/Demo3WayP1/main:demo` → `apps/Demo3WayP1/main/demo` — the path
     segment that uniquely identifies the binary (so the demo p1/p2/p3, which are
     ALL named `demo`, are distinguished by package, not basename)."""
     label = bazel_target.lstrip("/")

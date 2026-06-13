@@ -1,6 +1,6 @@
 # services/manifest — service-layer Python sources.
 #
-# Exposed for downstream manifest builds (//demo/manifest:rig_sources).
+# Exposed for downstream manifest builds (//apps/manifest:rig_sources).
 #
 # The export name kept the historical alias `fc_sources` for one
 # release as a backwards-compat shim. New callers use `service_sources`.

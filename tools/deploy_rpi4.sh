@@ -14,7 +14,7 @@
 #     tools/deploy_rpi4.sh compute_host pi@192.168.1.42
 #
 # Assumptions:
-#   - The rig is //demo:demo (i.e. @rig_demo). For other rigs, edit
+#   - The rig is //apps:apps (i.e. @rig_apps). For other rigs, edit
 #     RIG_TARGET below or pass --rig.
 #   - The Pi runs Raspberry Pi OS 12 (bookworm), aarch64 — matches
 #     the sysroot at third_party/sysroot/rpi4/.
@@ -23,19 +23,19 @@
 
 set -euo pipefail
 
-RIG_TARGET="@rig_demo"
+RIG_TARGET="@rig_apps"
 PLATFORM_FLAG="--platforms=//rules/config:rpi4"
 
 usage() {
     cat <<EOF
 Usage: $(basename "$0") [--rig <bazel-target>] [--no-platform] <machine> <ssh-target>
 
-  <machine>     One of the machine names from demo/manifest/rig.py
+  <machine>     One of the machine names from apps/manifest/rig.py
                 (e.g. compute_host).
   <ssh-target>  user@host or just host (e.g. pi@192.168.1.42).
 
 Options:
-  --rig <T>      Override @rig_demo with another @rig_<name> target.
+  --rig <T>      Override @rig_apps with another @rig_<name> target.
   --no-platform  Skip --platforms=//rules/config:rpi4 (use rig-declared arch
                  only — useful when the rig's cc_binary components don't
                  cross-compile yet and you only want the .ipk metadata).

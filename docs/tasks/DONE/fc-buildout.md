@@ -214,7 +214,7 @@ Per-FC handler behaviour (noop minimum):
 
 - `manifest/services/__init__.py` (aggregator) feeds all 5 FCs
   (sm + 4 new) into the supervisor tree.
-- `artheia executor emit --machine central_host demo.manifest.rig`
+- `artheia executor emit --machine central_host apps.manifest.rig`
   shows all 5 under core_sup with real start_cmd paths.
 - `bazel test //services/system/...:test_*` exercises each FC's
   in-process integration test.
@@ -300,7 +300,7 @@ Five buildable + runnable FC binaries:
   per  (gen-app emitted; persistency backend)
 
 All five appear under `core_sup` in
-`artheia executor emit --machine central_host demo.manifest.rig`
+`artheia executor emit --machine central_host apps.manifest.rig`
 with real `bazel-bin/...` start_cmd paths.
 
 The remaining 13 FCs in CLUSTERS (core, crypto, nm, osi, idsm, diag,

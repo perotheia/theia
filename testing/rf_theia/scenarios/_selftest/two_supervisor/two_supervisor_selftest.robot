@@ -1,7 +1,7 @@
 *** Settings ***
 Documentation    Live two-supervisor central/compute selftest.
 ...
-...              The demo rig (demo/manifest/rig.py) splits its software
+...              The apps rig (apps/manifest/rig.py) splits its software
 ...              onto two TARGET machines:
 ...
 ...                central_host (CentralRig)
@@ -29,7 +29,7 @@ Documentation    Live two-supervisor central/compute selftest.
 ...
 ...              Prereq: binaries built (Bazel FC daemons + demo CMake
 ...              apps + supervisor CMake). The suite stages them via
-...              demo/stage_local.sh; it does NOT build. Tag 'live' so
+...              apps/stage_local.sh; it does NOT build. Tag 'live' so
 ...              CI can gate it where the binaries aren't present.
 
 Library          ${CURDIR}/two_supervisor_lib.py
@@ -46,7 +46,7 @@ ${WORKSPACE}     ${CURDIR}/../../../../..
 
 *** Test Cases ***
 Stage Per-Machine Install Tree
-    [Documentation]    demo/stage_local.sh lays out install/central and
+    [Documentation]    apps/stage_local.sh lays out install/central and
     ...                install/compute, each with supervisor +
     ...                executor.json + bin/<child>.
     Stage Install Tree

@@ -82,7 +82,7 @@ subscribe to that trace via `tdb → log[trace]`.
   (`bazel-bin/platform/supervisor/supervisor/bin/supervisor` → now
   `//platform/supervisor/main:supervisor`), CMake log build
   (`services/log/build/services-log` → now `//services/log/main:log`),
-  `demo.manifest.rig` ref, 2-machine assumption, no executor.json env wiring
+  `apps.manifest.rig` ref, 2-machine assumption, no executor.json env wiring
   (supervisor reads THEIA_SUPERVISOR_MANIFEST, not argv).
 
 - **B5 — manifest → executor.json shape.** `load_manifest` (spec.cpp) expects

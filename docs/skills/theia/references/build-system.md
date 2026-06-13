@@ -16,23 +16,23 @@ Do **not** commit `MODULE.bazel.lock`.
 
 ```python
 rig_ext = use_extension("//rules:rig.bzl", "rig_ext")
-rig_ext.declare(name = "rig_demo", rig_module = "demo.manifest.rig")
-use_repo(rig_ext, "rig_demo")
+rig_ext.declare(name = "rig_apps", rig_module = "apps.manifest.rig")
+use_repo(rig_ext, "rig_apps")
 ```
 
-`rules/rig.bzl` runs `artheia rig-deps demo.manifest.rig` at module-load
+`rules/rig.bzl` runs `artheia rig-deps apps.manifest.rig` at module-load
 time, reads the JSON, and generates BUILD content for the synthetic
-`@rig_demo` repo. The per-machine subtree is named after the machine in
+`@rig_apps` repo. The per-machine subtree is named after the machine in
 the rig (e.g. `central_host`, `compute_host`, `demo_host`):
 
 | target | what it is |
 | --- | --- |
-| `@rig_demo//<machine>:image` | the `pkg_opkg` `.ipk` for that machine |
-| `@rig_demo//<machine>:executor` | per-machine `executor.yaml` (supervisor input) |
-| `@rig_demo//<machine>:components` | filegroup of every binary on that machine |
-| `@rig_demo//:executor_yaml` | combined whole-rig `executor.yaml` |
-| `@rig_demo//:machines_yaml` | GUI manifest (per-machine gRPC endpoints) |
-| `@rig_demo//:all` | builds every machine + both top-level yamls |
+| `@rig_apps//<machine>:image` | the `pkg_opkg` `.ipk` for that machine |
+| `@rig_apps//<machine>:executor` | per-machine `executor.yaml` (supervisor input) |
+| `@rig_apps//<machine>:components` | filegroup of every binary on that machine |
+| `@rig_apps//:executor_yaml` | combined whole-rig `executor.yaml` |
+| `@rig_apps//:machines_yaml` | GUI manifest (per-machine gRPC endpoints) |
+| `@rig_apps//:all` | builds every machine + both top-level yamls |
 
 The synthetic repo references your own `cc_binary` / `py_binary` targets
 by the `bazel_target` strings declared on each `SwComponent` in the rig
@@ -90,7 +90,7 @@ to edit the generated files.
 
 | symptom | look at |
 | --- | --- |
-| `rig-deps` fails at module-load time | `artheia rig-deps demo.manifest.rig` in isolation; it's a normal Python import error |
-| Target `@rig_demo//<m>:image` missing | machine `bazel_buildable=False` in the rig — `pkg_opkg` is skipped on purpose |
+| `rig-deps` fails at module-load time | `artheia rig-deps apps.manifest.rig` in isolation; it's a normal Python import error |
+| Target `@rig_apps//<m>:image` missing | machine `bazel_buildable=False` in the rig — `pkg_opkg` is skipped on purpose |
 | Stale FC scaffold won't compile | re-run `artheia gen-app --kind fc <fc>`; `impl/<Node>_handlers.cc` is yours, everything else is regen |
 | `.proto` change not picked up | the `.pb.*` are genrule-derived; `bazel clean --expunge` if the genrule cache lies |

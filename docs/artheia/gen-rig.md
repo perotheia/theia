@@ -130,7 +130,7 @@ platform app to it, and overlays the three demo binaries.
 ### Step 3 — verify it works
 
 ```
-artheia executor emit demo.manifest.rig_generated --out /tmp/demo_executor.yaml
+artheia executor emit apps.manifest.rig_generated --out /tmp/demo_executor.yaml
 ```
 
 Should print the output path and produce a 196-line `executor.yaml`
@@ -138,7 +138,7 @@ with the supervisor tree (root → ar_sup → core_sup → ... → app_sup
 → demo_p1/p2/p3 leaves).
 
 ```
-artheia gui emit demo.manifest.rig_generated --out /tmp/demo_machines.yaml
+artheia gui emit apps.manifest.rig_generated --out /tmp/demo_machines.yaml
 ```
 
 Should produce:
@@ -287,7 +287,7 @@ generated file's export is named something else, pass it
 explicitly:
 
 ```
-artheia executor emit demo.manifest.rig_generated --rig DemoSoftware
+artheia executor emit apps.manifest.rig_generated --rig DemoSoftware
 ```
 
 **Generated `bazel_target` is wrong**

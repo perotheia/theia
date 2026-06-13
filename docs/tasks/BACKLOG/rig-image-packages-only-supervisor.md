@@ -16,11 +16,11 @@ $ ar x central_host.ipk && tar tzf data.tar.gz
 $ bazel query 'deps(@rig_zonal//central_host:image)' | grep main:
 //platform/supervisor/main:supervisor      # only the supervisor
 
-$ bazel query 'deps(@rig_demo//demo_host:image)' | grep -E 'main:(sm|log|...)'
+$ bazel query 'deps(@rig_apps//demo_host:image)' | grep -E 'main:(sm|log|...)'
 (empty)                        # even the single-machine rig is empty
 ```
 
-Both `@rig_demo` and `@rig_zonal` are affected — it is NOT a zonal-vs-demo
+Both `@rig_apps` and `@rig_zonal` are affected — it is NOT a zonal-vs-demo
 split problem.
 
 ## Root cause (to confirm)
@@ -38,12 +38,12 @@ The likely culprit is the **in-flight structured-DSL migration** in
 shape to SoftwareSpecification … phase 4 swaps the CLI to walk
 SoftwareSpecification directly"). The host_machine binding of the FC/demo
 SwComponents isn't reaching the rig extension's per-machine component filegroup.
-`artheia rig-deps demo.manifest.zonal_rig` returns only
+`artheia rig-deps apps.manifest.zonal_rig` returns only
 `machines: ['central_host']` and no populated per-machine component list.
 
 ## What "done" looks like
 
-- `bazel query 'deps(@rig_demo//demo_host:image)'` includes
+- `bazel query 'deps(@rig_apps//demo_host:image)'` includes
   `//services/{sm,log,per,ucm,shwa}/main:*` and the demo
   `//demo/Demo3Way*/main:demo` binaries.
 - The built `.ipk`'s `data.tar.gz` drops them at the path the executor tree's

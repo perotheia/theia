@@ -17,7 +17,7 @@ directly. The probe carries com's distinct identity.
 
 Prereqs (the suite does NOT build):
   - bazel-built FC daemons + demo apps + the CMake supervisor, staged by
-    demo/stage_local.sh into install/central/.
+    apps/stage_local.sh into install/central/.
   - the CMake gRPC bridge services/com/build/services-com (needs the
     supervisor's TIPC up first, so it's started AFTER the supervisor).
 
@@ -69,7 +69,7 @@ class SmGateLib:
 
     @keyword("Stage And Start Central")
     def stage_and_start_central(self) -> None:
-        """Lay out install/central via demo/stage_local.sh, then launch
+        """Lay out install/central via apps/stage_local.sh, then launch
         the supervisor (THEIA_TRACE=1 so sm's tracer emits). The
         supervisor's T1 handshake drives sm to RUNNING."""
         if not COM_BRIDGE.exists():
@@ -83,7 +83,7 @@ class SmGateLib:
 
         env = os.environ.copy()
         env.pop("PYTHONPATH", None)
-        r = subprocess.run(["bash", "demo/stage_local.sh"], cwd=str(_WS),
+        r = subprocess.run(["bash", "apps/stage_local.sh"], cwd=str(_WS),
                            env=env, capture_output=True, text=True)
         if r.returncode != 0:
             raise AssertionError(f"stage_local.sh failed:\n{r.stdout}\n{r.stderr}")

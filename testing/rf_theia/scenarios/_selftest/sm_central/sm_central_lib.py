@@ -8,7 +8,7 @@ sm's TIPC address, and read the result back from sm's tracer (the
 supervisor inherits THEIA_TRACE=1 and setenvs it onto every child, so
 sm's TRC lines land in the supervisor's combined stdout).
 
-Prereqs (staged by demo/stage_local.sh, built beforehand):
+Prereqs (staged by apps/stage_local.sh, built beforehand):
   install/central/supervisor      — CMake-built OTP supervisor
   install/central/executor.json   — CentralRig tree (sm under core_sup)
   install/central/bin/{sm,com,per,ucm,p1,p2}
@@ -72,7 +72,7 @@ class SmCentralLib:
         if not sup.exists() or not exe.exists():
             raise AssertionError(
                 f"central not staged at {CENTRAL_DIR} — run "
-                f"`bash demo/stage_local.sh` (after building the binaries)")
+                f"`bash apps/stage_local.sh` (after building the binaries)")
         # AF_TIPC must be usable, else sm can't bind.
         try:
             socket.socket(socket.AF_TIPC, socket.SOCK_SEQPACKET).close()

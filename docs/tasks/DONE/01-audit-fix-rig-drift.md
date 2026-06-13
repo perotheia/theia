@@ -1,4 +1,4 @@
-# Fix `artheia audit-manifest` gaps in demo.manifest.rig — DONE 2026-05-23
+# Fix `artheia audit-manifest` gaps in apps.manifest.rig — DONE 2026-05-23
 
 ## Resolution
 
@@ -19,9 +19,9 @@
 ## Verification
 
 ```
-$ artheia audit-manifest platform/system/system.art demo.manifest.rig
+$ artheia audit-manifest platform/system/system.art apps.manifest.rig
 art: platform/system/system.art
-rig: demo.manifest.rig -> 'demo'
+rig: apps.manifest.rig -> 'demo'
 
 clusters: 3  compositions: 11  prototypes-with-process: 5
 rig: applications=2  sw_components=23  processes=21
@@ -41,7 +41,7 @@ primitive + Puppet provisioning fields`) surfaced 10 drift gaps
 between `platform/system/system.art` and `demo/manifest/rig.py`:
 
 ```
-artheia audit-manifest platform/system/system.art demo.manifest.rig
+artheia audit-manifest platform/system/system.art apps.manifest.rig
 ```
 
 returns exit 1 with:
@@ -109,9 +109,9 @@ SwComponent(
 
 ## Definition of done
 
-`artheia audit-manifest platform/system/system.art demo.manifest.rig`
+`artheia audit-manifest platform/system/system.art apps.manifest.rig`
 exits 0 with `✓ no gaps — rig is aligned with art`.
 
 Add a CI smoke step (in `artheia/tests/test_audit_manifest.py` or
-similar) that runs the audit against `demo.manifest.rig` and asserts
+similar) that runs the audit against `apps.manifest.rig` and asserts
 exit 0, so future .art drifts get caught early.

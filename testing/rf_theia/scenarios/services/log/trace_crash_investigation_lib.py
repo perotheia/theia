@@ -22,7 +22,7 @@ Wire:
                  still shows the entry.
 
 Reuses the same staged install/central + collector + com bridge as
-trace_egress (demo/stage_local.sh). com is the gRPC bridge; the supervisor
+trace_egress (apps/stage_local.sh). com is the gRPC bridge; the supervisor
 is the persistence authority.
 """
 from __future__ import annotations
@@ -105,7 +105,7 @@ class TraceCrashInvestigationLib:
             raise AssertionError(f"AF_TIPC unavailable ({e}); modprobe tipc")
 
         env = _stack_env()
-        r = subprocess.run(["bash", "demo/stage_local.sh"], cwd=str(_WS),
+        r = subprocess.run(["bash", "apps/stage_local.sh"], cwd=str(_WS),
                            env=env, capture_output=True, text=True)
         if r.returncode != 0:
             raise AssertionError(f"stage_local.sh failed:\n{r.stdout}\n{r.stderr}")

@@ -1,4 +1,4 @@
-# Per-machine deploy manifest set for the demo rig.
+# Per-machine deploy manifest set for the apps rig.
 #
 #   bazel build //platform/manifest:rig
 #
@@ -15,10 +15,10 @@
 
 load("//rules:manifest.bzl", "rig_manifest")
 
-# Per-machine deploy manifest set for the demo rig.
+# Per-machine deploy manifest set for the apps rig.
 #
 # Inputs (rig.py + its transitive .art imports) come in via the
-# `rig_sources` filegroup exported by //demo/manifest. Touching any
+# `rig_sources` filegroup exported by //apps/manifest. Touching any
 # of those files re-fingerprints this rule and forces a re-run.
 #
 # To depend on this from another rule:
@@ -28,13 +28,13 @@ load("//rules:manifest.bzl", "rig_manifest")
 
 rig_manifest(
     name = "rig",
-    rig_target = "demo.manifest.rig",
+    rig_target = "apps.manifest.rig",
     machines = [
         "admin_host",
         "central_host",
         "compute_host",
     ],
     srcs = [
-        "//demo/manifest:rig_sources",
+        "//apps/manifest:rig_sources",
     ],
 )

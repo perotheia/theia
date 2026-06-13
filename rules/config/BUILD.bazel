@@ -9,7 +9,7 @@
 #
 # Usage from the command line:
 #
-#   bazel build @rig_demo//compute_host:image \
+#   bazel build @rig_apps//compute_host:image \
 #       --platforms=//rules/config:rpi4
 #
 # Adding a new target (Pi Zero, Pi 5, NVIDIA Jetson…): copy the rpi4

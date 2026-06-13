@@ -47,7 +47,7 @@ alias(
 
 # theia/bin — the FC daemon binaries Bazel builds.
 # theia/bin — the supervisor + the FC daemons + demo apps it forks. Mirrors
-# what demo/stage_local.sh stages (com retired: dropped). The supervisor is
+# what apps/stage_local.sh stages (com retired: dropped). The supervisor is
 # the gen-app ara::exec binary; children are referenced by `bin/<name>` from
 # the executor.json tree.
 pkg_files(
@@ -84,21 +84,21 @@ pkg_files(
 pkg_files(
     name = "install_etc",
     srcs = [
-        "@rig_demo//:executor_json",
-        "@rig_demo//:machines_yaml",
+        "@rig_apps//:executor_json",
+        "@rig_apps//:machines_yaml",
     ],
     attributes = pkg_attributes(mode = "0644"),
     prefix = "etc/theia",
 )
 
 # Supervisor tree → install/central/. The host install bundle is
-# SINGLE-MACHINE (@rig_demo = demo.manifest.rig, central hosts everything).
+# SINGLE-MACHINE (@rig_apps = apps.manifest.rig, central hosts everything).
 # The 2-machine central+compute split is the distributed Docker/Puppet deploy
-# (@rig_zonal = demo.manifest.zonal_rig), built via `theia dist`, not bundled
+# (@rig_zonal = apps.manifest.zonal_rig), built via `theia dist`, not bundled
 # here.
 pkg_files(
     name = "install_central",
-    srcs = ["@rig_demo//:executor_json_central"],
+    srcs = ["@rig_apps//:executor_json_central"],
     attributes = pkg_attributes(mode = "0644"),
     # The genrule names the output central/executor.json; strip that
     # prefix so it lands at <prefix>/executor.json.

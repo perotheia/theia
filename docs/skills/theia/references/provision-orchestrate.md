@@ -51,10 +51,10 @@ cd platform/supervisor && cmake -S . -B build && cmake --build build -j
 cd ../..
 
 # 2. Build the per-machine .ipks + the two YAMLs.
-bazel build @rig_demo//:all
+bazel build @rig_apps//:all
 
 # 3. Stage Bazel output into deploy/.staging/ (docker-compose bind-mounts it).
-./deploy/stage.sh                       # default rig = rig_demo
+./deploy/stage.sh                       # default rig = rig_apps
 
 # 4. Build the per-host Docker images.
 docker compose -f deploy/docker-compose.yml build

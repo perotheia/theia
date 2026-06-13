@@ -15,7 +15,7 @@ keep working unchanged — edit the tree HERE.
 Children name either another :class:`SupervisorNode` or a
 :class:`Process` from the rig's execution manifests. ``app_sup`` ships
 empty in the platform base — application leaves are added by the rig
-layer (e.g. the demo rig Overrides app_sup with demo_p1/p2/p3), each
+layer (e.g. the apps rig Overrides app_sup with apps_p1/p2/p3), each
 resolving to a Process with its own ``start_cmd``, exactly like an FC
 leaf.
 
@@ -113,8 +113,8 @@ SUPERVISORS: list[SupervisorNode] = [
         strategy=RestartStrategy.ONE_FOR_ONE,
         # Application leaves. The platform base ships NONE — apps belong
         # to the rig. A rig layer Overrides app_sup's children with its
-        # own application Process names (e.g. the demo rig adds
-        # demo_p1/p2/p3), each resolving to a Process in the rig's
+        # own application Process names (e.g. the apps rig adds
+        # apps_p1/p2/p3), each resolving to a Process in the rig's
         # execution manifests. (Earlier this used an AUTO_APPS_CHILDREN
         # sentinel that auto-expanded SwComponents with a synthetic
         # vendor/apps/<name>/daemon.sh start_cmd — dropped; apps now

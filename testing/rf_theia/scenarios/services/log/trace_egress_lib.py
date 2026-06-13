@@ -21,7 +21,7 @@ Two checks:
       egress itself is already shown by T1.)
 
 Prereqs (suite stages, does NOT build):
-  - install/central staged by demo/stage_local.sh (supervisor +
+  - install/central staged by apps/stage_local.sh (supervisor +
     executor.json + bin/<child> + services-log + netgraph.json).
   - CMake services-com (started after the supervisor for the control RPC).
 """
@@ -102,14 +102,14 @@ class TraceEgressLib:
         if not COLLECTOR.exists():
             raise AssertionError(
                 f"collector not staged at {COLLECTOR} — "
-                f"cmake --build services/log/build && bash demo/stage_local.sh")
+                f"cmake --build services/log/build && bash apps/stage_local.sh")
         try:
             socket.socket(socket.AF_TIPC, socket.SOCK_DGRAM).close()
         except OSError as e:
             raise AssertionError(f"AF_TIPC unavailable ({e}); modprobe tipc")
 
         env = _stack_env()
-        r = subprocess.run(["bash", "demo/stage_local.sh"], cwd=str(_WS),
+        r = subprocess.run(["bash", "apps/stage_local.sh"], cwd=str(_WS),
                            env=env, capture_output=True, text=True)
         if r.returncode != 0:
             raise AssertionError(f"stage_local.sh failed:\n{r.stdout}\n{r.stderr}")

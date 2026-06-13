@@ -588,12 +588,115 @@ _RELEASE_BAZEL_PKGS = [
 ]
 
 
+def _build_framework_deb(out_dir: Path, version: str = "0.1.0") -> int:
+    """Build theia-framework as a real .deb (ROS2 /opt/ros/<distro> layout).
+
+    Lays out, under a staged /opt/theia:
+      lib/python3/site-packages/artheia/…   the artheia package (pip --target;
+                                            NOT system site-packages)
+      wheels/*.whl                          artheia's third-party deps, for the
+                                            postinst to pip-install OFFLINE into
+                                            the system (textX/Jinja2/click/PyYAML)
+      rules/, toolchains/                   the bazel rules a workspace needs
+                                            (@theia_framework//rules:rig.bzl)
+      bin/{artheia,theia,tdb,artheia-lsp}   console shims onto the staged lib
+      setup.{bash,zsh}                      `source` to put Theia on PATH+PYTHONPATH
+
+    The deb's postinst pip-installs the bundled dep wheels into the system. Built
+    with dpkg-deb (the framework is pure-Python — Architecture: all)."""
+    import shutil
+
+    pkg_root = WORKSPACE / "packaging" / "theia" / "framework"
+    py = "python3.10"
+    stage = out_dir / "_stage"
+    if stage.exists():
+        shutil.rmtree(stage)
+    opt = stage / "opt" / "theia"
+    site = opt / "lib" / py / "site-packages"
+    site.mkdir(parents=True, exist_ok=True)
+    (opt / "bin").mkdir(parents=True, exist_ok=True)
+    (opt / "wheels").mkdir(parents=True, exist_ok=True)
+
+    # artheia → /opt/theia/lib/.../site-packages (no deps; they go to the system).
+    if (rc := _run([sys.executable, "-m", "pip", "install", "--no-deps",
+                    "--target", str(site), str(WORKSPACE / "artheia")])) != 0:
+        return rc
+    # artheia's deps as wheels for the offline system install (postinst).
+    if (rc := _run([sys.executable, "-m", "pip", "download",
+                    "--dest", str(opt / "wheels"),
+                    "textX>=4.0", "Jinja2>=3.1", "click>=8.1", "PyYAML>=6.0"])) != 0:
+        # Non-fatal: postinst falls back to PyPI if the wheels aren't bundled.
+        print("theia release: framework dep download failed — deb postinst will "
+              "fetch from PyPI instead.", file=sys.stderr)
+
+    # bazel rules + toolchains the downstream workspace's MODULE.bazel needs.
+    for d in ("rules", "toolchains"):
+        if (WORKSPACE / d).is_dir():
+            shutil.copytree(WORKSPACE / d, opt / d, dirs_exist_ok=True)
+    # theia.py itself (the workspace lifecycle driver) + setup scripts.
+    shutil.copy2(WORKSPACE / "theia.py", opt / "theia.py")
+    for s in ("setup.bash", "setup.zsh"):
+        shutil.copy2(pkg_root / s, opt / s)
+
+    # Console shims: run the staged package with the staged site-packages on path.
+    shims = {
+        "artheia": "from artheia.cli import main",
+        "artheia-lsp": "from artheia.lsp.server import main",
+    }
+    for name, imp in shims.items():
+        shim = opt / "bin" / name
+        shim.write_text(
+            "#!/bin/sh\n"
+            'D="$(cd "$(dirname "$0")/.." && pwd)"\n'
+            f'exec python3 -c '
+            f'"import sys; sys.path.insert(0, \\"$D/lib/{py}/site-packages\\"); '
+            f'{imp}; main()" "$@"\n')
+        shim.chmod(0o755)
+    # theia + tdb shims (theia.py at /opt/theia/theia.py; tdb from runtime deb).
+    (opt / "bin" / "theia").write_text(
+        '#!/bin/sh\nexec python3 "$(dirname "$0")/../theia.py" "$@"\n')
+    (opt / "bin" / "theia").chmod(0o755)
+
+    # control + postinst.
+    ctrl = stage / "DEBIAN"
+    ctrl.mkdir(parents=True, exist_ok=True)
+    installed_kb = int(_du_kb(opt))
+    (ctrl / "control").write_text(
+        "Package: theia-framework\n"
+        f"Version: {version}\n"
+        "Architecture: all\n"
+        "Section: devel\n"
+        "Priority: optional\n"
+        "Maintainer: Theia <theia@robofortis.com>\n"
+        f"Installed-Size: {installed_kb}\n"
+        "Depends: python3, python3-pip\n"
+        "Description: Theia framework — artheia DSL/codegen + bazel rules + CLIs\n")
+    shutil.copy2(pkg_root / "postinst", ctrl / "postinst")
+    (ctrl / "postinst").chmod(0o755)
+
+    deb = out_dir / f"theia-framework_{version}_all.deb"
+    if (rc := _run(["dpkg-deb", "--build", "--root-owner-group",
+                    str(stage), str(deb)])) != 0:
+        return rc
+    shutil.rmtree(stage, ignore_errors=True)
+    print(f"theia release: framework .deb → {deb}", file=sys.stderr)
+    return 0
+
+
+def _du_kb(path: Path) -> int:
+    out = subprocess.run(["du", "-sk", str(path)], capture_output=True, text=True)
+    try:
+        return int(out.stdout.split()[0])
+    except (ValueError, IndexError):
+        return 0
+
+
 def cmd_release(args: list[str]) -> int:
     """Build the installable Theia package set → dist/debian/ + dist/ipkg/.
 
     The 4-step build (framework → runtime → services → package) that produces the
     ROS2-style independent packages:
-      theia-framework  artheia Python wheel (Architecture: all)
+      theia-framework  artheia + deps + rules → .deb (/opt/theia, setup.bash)
       theia-runtime    runtime sources + supervisor + tombstone + tdb + protos
       theia-services   com/per/sm/ucm/log/shwa binaries + services protos
       theia-rf         rf_theia harness wheel (minus scenarios/_selftest)
@@ -627,13 +730,12 @@ def cmd_release(args: list[str]) -> int:
 
     python_only = "--python-only" in args
 
-    # ── Step 1: framework — the artheia Python wheel (arch-independent). ──────
+    # ── Step 1: framework — artheia + deps + rules → a real .deb (/opt/theia,
+    #    ROS2-style setup.bash). Arch-independent (Architecture: all). ──────────
     fw_out = deb_dir / "theia-framework"
     fw_out.mkdir(parents=True, exist_ok=True)
-    if (rc := _run([sys.executable, "-m", "pip", "wheel",
-                    str(WORKSPACE / "artheia"), "--no-deps",
-                    "-w", str(fw_out)])) != 0:
-        print("theia release: framework wheel build failed.", file=sys.stderr)
+    if (rc := _build_framework_deb(fw_out)) != 0:
+        print("theia release: framework .deb build failed.", file=sys.stderr)
         return rc
 
     # ── Step 4 (python part): rf harness wheel (minus _selftest, per its

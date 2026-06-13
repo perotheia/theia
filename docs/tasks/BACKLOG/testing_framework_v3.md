@@ -24,7 +24,6 @@ Supersedes: `testing_framework_v2.md` on the **DSL surface** question.
    typed `Rig` context object in `Suite Setup`. There is no separate
    file format for the test author to learn.
 
-
 ## The five (Python, Robot) pairs
 
 Each capability Robot can't model natively becomes a Python module
@@ -32,7 +31,7 @@ paired with a small role-named keyword family. Each pair is grown
 only when a real theia test demands it.
 
 | # | Capability | Python module | Robot keyword surface | First theia test that drives it |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | 1 | Hybrid automata | `runtime/flow_engine.py` (TPT-derived) | `Start State Machine`, `Emit Event`, `Wait For State` | sm_daemon restart, 4-state FSM with timeout |
 | 2 | Temporal logic | `runtime/monitors.py` | `Assert Eventually`, `Assert Always`, `Assert Never` | broadcast resumes within 5s of restart |
 | 3 | Supervision graph | `runtime/supervision_view.py` | `Assert Healthy`, `Assert Restart Order` | rest_for_one restarts dependents in order |
@@ -41,7 +40,6 @@ only when a real theia test demands it.
 
 The order is the iteration order — pair 1 ships first against real
 theia, then pair 2 follows, etc.
-
 
 ## What Suite Setup looks like
 
@@ -71,7 +69,6 @@ The Robot author never sees the structure. The runtime sees a typed
 
 If artheia changes its output format, only `rig_schema.py` updates.
 That's the SUT/test boundary holding.
-
 
 ## The four-keyword scenario test
 
@@ -103,7 +100,6 @@ The scenario:
 - doesn't time anything by hand (`within=10s` is reactive timeout, not
   `sleep`)
 
-
 ## Iteration loop — test-first against real theia
 
 This is the DSL emergence process. For each capability:
@@ -121,7 +117,6 @@ This is the DSL emergence process. For each capability:
 After ~5 tests the surface stabilizes. After ~10 it's the DSL. No
 upfront DSL design.
 
-
 ## What happens to the v1 keyword surface
 
 As each (Python, Robot) pair lands, the v1 keywords it subsumes get
@@ -130,7 +125,7 @@ internal methods on the runtime adapters. The keyword catalog stays
 focused on the role-named surface.
 
 | v1 keyword | Hidden when… |
-|---|---|
+| --- | --- |
 | `T Sup Connect` / `Disconnect` | Pair 1 lands — `Load Rig` owns connection lifecycle |
 | `T Sup Restart Child` | Pair 1 lands — wrapped by `Emit Event crash` in the RestartChild flow |
 | `T Sup Expect Child State` | Pair 1 lands — used internally by `Wait For State` |
@@ -143,14 +138,13 @@ Phase-1 hermetic selftest stays green throughout — `Library Imports`,
 `TPT Engine Wires`, `T Wait Works` don't depend on the v1 keywords
 being public.
 
-
 ## Where Robot stops being the right surface
 
 Robot stays right as long as the scenario reads as a sequence of
 role-named keyword calls that NAME entities defined elsewhere. The
 stop conditions:
 
-1. Scenario length > ~30 keywords → split or move logic to a runtime
+1. Scenario length \> ~30 keywords → split or move logic to a runtime
    flow.
 2. Imperative branches needed → two scenarios with different tags, or
    a runtime flow.
@@ -162,7 +156,6 @@ stop conditions:
 Same runtime is reachable from pytest, MCP, and standalone Python.
 Robot is the productive default for ~90% of tests; pytest is the
 escape hatch.
-
 
 ## Phased rollout — iteration, not waterfall
 
@@ -216,7 +209,6 @@ with the SUT. Cuts when pair 3 is stable + HIL transport is wanted.
 Driven by the first scenario needing to assert "service X is reachable
 from service Y via bus Z". Lowest priority for SIL; rises for HIL.
 
-
 ## Decisions captured (v3)
 
 - **No new grammar.** Robot keywords are the DSL surface.
@@ -231,7 +223,6 @@ from service Y via bus Z". Lowest priority for SIL; rises for HIL.
   the adapter-named v1 keywords move internal. Selftest stays green.
 - **Robot has a graduation path.** When tests outgrow Robot, the same
   runtime is reachable from pytest / MCP / standalone Python.
-
 
 ## Memo
 

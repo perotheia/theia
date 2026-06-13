@@ -12,7 +12,7 @@ Documentation    SM gen_statem (the platform State Manager) — drive the
 ...              does, via the probe.
 ...
 ...              Uses the SAME generic hybrid-automata keywords as the demo FSM
-...              (demo/test/demo_fsm.robot) — only the node names + .art differ,
+...              (apps/test/demo_fsm.robot) — only the node names + .art differ,
 ...              proving the statem test harness generalizes across FCs:
 ...                rf → probe (SmTester sender) → TIPC cast → SmGate →
 ...                post_event → SmDaemon FSM → STATEM trace → observer → bus →
@@ -26,7 +26,7 @@ Documentation    SM gen_statem (the platform State Manager) — drive the
 ...              transitions.
 ...
 ...              Prereq: binaries built + staged (Start Statem Stack runs
-...              demo/stage_local.sh, which stages sm too). The suite stages +
+...              apps/stage_local.sh, which stages sm too). The suite stages +
 ...              runs the supervisor; it does NOT build. Tag 'live'.
 
 Library          rf_theia.TheiaTestLibrary

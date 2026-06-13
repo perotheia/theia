@@ -14,3 +14,11 @@ cc_library(
     includes = ["include"],
     copts = ["-std=c++17", "-Wall", "-fPIC"],
 )
+
+# Shipped as sources in the theia-runtime .deb — every generated FC main links
+# tombstone, so a downstream app workspace needs the header + .cpp.
+filegroup(
+    name = "tombstone_dist_hdrs",
+    srcs = ["include/tombstone/tombstone.h", "src/tombstone.cpp"],
+    visibility = ["//visibility:public"],
+)

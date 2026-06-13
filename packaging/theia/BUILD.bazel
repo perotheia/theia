@@ -1,0 +1,123 @@
+# packaging/theia — Theia's OWN Debian packages (the ROS2-style decomposition).
+#
+# Five independent packages over the clean dependency DAG:
+#
+#   theia-framework  artheia Python wheel + bazel rules        (built by `theia
+#                    release`, not here — pure-Python `Architecture: all`)
+#   theia-runtime    runtime SOURCES + supervisor binary +     ← pkg_deb below
+#                    tombstone + runtime protos (+ tdb python)
+#   theia-services   com/per/sm/ucm/log/shwa binaries +        ← pkg_deb below
+#                    services protos
+#   theia-tools      supervisor-GUI + rtdb (need com gRPC)     (GUI is a CMake
+#                    build, staged by `theia release`)
+#   theia-rf         rf_theia harness wheel (minus _selftest)  (built by `theia
+#                    release` — pure-Python `Architecture: all`)
+#
+# The C++ packages (runtime, services) are bazel pkg_deb targets here, built per
+# --platforms=//rules/config:{host,rpi4} for amd64/arm64. The Python packages
+# (framework, rf) wrap a `pip wheel` artifact and the GUI a CMake binary — those
+# are assembled by `theia release` (theia.py), which also emits the matching
+# .ipk under dist/ipkg/ for embedded targets.
+#
+# Layout convention: everything lands under /opt/theia (THEIA_ROOT_DIR), bin/
+# entries become 0755. Mirrors deploy/puppet theia::local_install.
+
+load("//rules:deb.bzl", "pkg_deb")
+load("//rules:opkg.bzl", "pkg_opkg")
+
+package(default_visibility = ["//visibility:public"])
+
+_VERSION = "0.1.0"
+
+# ── theia-runtime ──────────────────────────────────────────────────────────
+# The fabric a Theia app system runs under: runtime sources/headers (apps compile
+# against these), the supervisor binary + tombstone lib, and the runtime control
+# proto. tdb (python probe client) is added by `theia release` (no bazel artifact).
+pkg_deb(
+    name = "theia-runtime_deb",
+    package = "theia-runtime",
+    version = _VERSION,
+    description = "Theia runtime: gen_server/statem/runnable C++ sources, supervisor, tombstone, runtime protos",
+    section = "devel",
+    depends = "theia-framework",
+    files = {
+        "//platform/supervisor/main:supervisor": "/opt/theia/bin/supervisor",
+    },
+    data = [
+        "//platform/runtime:runtime_dist_srcs",
+        "//platform/supervisor/tombstone:tombstone_dist_hdrs",
+    ],
+    prefix = "/opt/theia/src",
+    strip_prefix = "platform",
+)
+
+# ── theia-services ─────────────────────────────────────────────────────────
+# The ARA platform services as compiled binaries + the generated services protos.
+pkg_deb(
+    name = "theia-services_deb",
+    package = "theia-services",
+    version = _VERSION,
+    description = "Theia ARA platform services: com, per, sm, ucm, log, shwa (binaries) + protos",
+    section = "misc",
+    depends = "theia-runtime",
+    files = {
+        "//services/com/main:com": "/opt/theia/bin/com",
+        "//services/per/main:per": "/opt/theia/bin/per",
+        "//services/sm/main:sm": "/opt/theia/bin/sm",
+        "//services/ucm/main:ucm": "/opt/theia/bin/ucm",
+        "//services/log/main:log": "/opt/theia/bin/log",
+        "//services/shwa/main:shwa": "/opt/theia/bin/shwa",
+    },
+    data = [
+        "//platform/proto/system/services/com:com.proto",
+        "//platform/proto/system/services/per:per.proto",
+        "//platform/proto/system/services/sm:sm.proto",
+        "//platform/proto/system/services/ucm:ucm.proto",
+        "//platform/proto/system/services/log:log.proto",
+        "//platform/proto/system/services/shwa:shwa.proto",
+    ],
+    prefix = "/opt/theia/proto",
+    strip_prefix = "platform/proto",
+)
+
+# Matching .ipk for the embedded/opkg path (dist/ipkg/). Same binary set; the
+# runtime sources aren't shipped to embedded targets (they run prebuilt binaries),
+# so the runtime ipk is binary-only (supervisor).
+pkg_opkg(
+    name = "theia-runtime_ipk",
+    package = "theia-runtime",
+    version = _VERSION,
+    arch = "x86_64",
+    description = "Theia runtime (supervisor binary) — embedded/opkg",
+    files = {
+        "//platform/supervisor/main:supervisor": "/opt/theia/bin/supervisor",
+    },
+)
+
+pkg_opkg(
+    name = "theia-services_ipk",
+    package = "theia-services",
+    version = _VERSION,
+    arch = "x86_64",
+    description = "Theia ARA platform services (binaries) — embedded/opkg",
+    depends = "theia-runtime",
+    files = {
+        "//services/com/main:com": "/opt/theia/bin/com",
+        "//services/per/main:per": "/opt/theia/bin/per",
+        "//services/sm/main:sm": "/opt/theia/bin/sm",
+        "//services/ucm/main:ucm": "/opt/theia/bin/ucm",
+        "//services/log/main:log": "/opt/theia/bin/log",
+        "//services/shwa/main:shwa": "/opt/theia/bin/shwa",
+    },
+)
+
+# Convenience: build the bazel-buildable package set in one shot.
+filegroup(
+    name = "debs",
+    srcs = [":theia-runtime_deb", ":theia-services_deb"],
+)
+
+filegroup(
+    name = "ipks",
+    srcs = [":theia-runtime_ipk", ":theia-services_ipk"],
+)

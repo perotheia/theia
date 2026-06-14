@@ -786,33 +786,28 @@ void Supervisor::start_subtree(SupervisorNode& sup) {
     }
 }
 
-void Supervisor::stop_worker(WorkerNode& w) {
+// Phase 1: SIGTERM (or SIGKILL for brutal_kill) the worker's process group and
+// mark it terminating — DO NOT WAIT. setsid() in the child means pid == pgid, so
+// killpg(pid) hits exactly the child + its own descendants, never the supervisor.
+void Supervisor::signal_worker(WorkerNode& w) {
     if (w.pid <= 0) return;
     log_info("stopping " + w.name + " (pid=" + std::to_string(w.pid) + ")");
-
-    // Mark as terminating before issuing the signal so reap() in the main
-    // loop doesn't try to apply restart strategy when our own SIGCHLD
-    // arrives — this stop is owned by the synchronous shutdown path.
+    // Mark terminating BEFORE the signal so reap() in the main loop doesn't
+    // apply a restart strategy when this child's SIGCHLD arrives — the stop is
+    // owned by the synchronous shutdown path.
     w.terminating = true;
-    pid_t pgid = w.pid;  // setsid() in child means pid == pgid
+    ::killpg(w.pid, w.shutdown.kind == Shutdown::kBrutalKill ? SIGKILL : SIGTERM);
+}
 
-    if (w.shutdown.kind == Shutdown::kBrutalKill) {
-        ::killpg(pgid, SIGKILL);
-    } else {
-        ::killpg(pgid, SIGTERM);
-    }
-
-    // Wait for the child to actually exit.
+// Phase 2: wait for the (already-signaled) worker to exit, up to `deadline`;
+// SIGKILL the straggler. kInfinity ignores the deadline (waits forever).
+void Supervisor::reap_worker(WorkerNode& w,
+                             std::chrono::steady_clock::time_point deadline) {
+    if (w.pid <= 0) return;
     int status = 0;
     if (w.shutdown.kind == Shutdown::kInfinity) {
         while (waitpid(w.pid, &status, 0) < 0 && errno == EINTR) {}
     } else {
-        // Poll with timeout.
-        const int total_ms = (w.shutdown.kind == Shutdown::kBrutalKill)
-                                 ? 2000
-                                 : w.shutdown.timeout_ms;
-        const auto deadline =
-            std::chrono::steady_clock::now() + std::chrono::milliseconds(total_ms);
         bool reaped = false;
         while (std::chrono::steady_clock::now() < deadline) {
             pid_t r = waitpid(w.pid, &status, WNOHANG);
@@ -822,8 +817,7 @@ void Supervisor::stop_worker(WorkerNode& w) {
         }
         if (!reaped) {
             log_warn("SIGTERM timed out for " + w.name + ", SIGKILLing");
-            ::killpg(pgid, SIGKILL);
-            // Final reap (no timeout — should be near-instant now).
+            ::killpg(w.pid, SIGKILL);
             while (waitpid(w.pid, &status, 0) < 0 && errno == EINTR) {}
         }
     }
@@ -831,12 +825,50 @@ void Supervisor::stop_worker(WorkerNode& w) {
     w.terminating = false;
 }
 
-void Supervisor::shutdown_subtree(SupervisorNode& sup) {
-    // Reverse declared order so dependents go down before what they depend on.
-    for (auto it = sup.children.rbegin(); it != sup.children.rend(); ++it) {
-        if ((*it)->is_worker())     stop_worker((*it)->worker);
-        else                        shutdown_subtree((*it)->sup);
+// Stop a single worker (signal → reap) — its own timeout window. Kept for the
+// one-off callers (ctl_terminate_child); group stops use stop_workers().
+void Supervisor::stop_worker(WorkerNode& w) {
+    if (w.pid <= 0) return;
+    signal_worker(w);
+    const int ms = (w.shutdown.kind == Shutdown::kBrutalKill) ? 2000
+                                                              : w.shutdown.timeout_ms;
+    reap_worker(w, std::chrono::steady_clock::now()
+                       + std::chrono::milliseconds(ms));
+}
+
+// Two-phase GROUP stop: SIGTERM all `workers` first (concurrent grace), then reap
+// them against ONE shared deadline = max child timeout. So 6 children with a 5s
+// grace take ~5s total, not 6×5s. `workers` is already in stop order (dependents
+// first) — the signal pass honours it; the children then shut down in parallel.
+void Supervisor::stop_workers(const std::vector<WorkerNode*>& workers) {
+    int max_ms = 0;
+    for (WorkerNode* w : workers) {
+        if (!w || w->pid <= 0) continue;
+        signal_worker(*w);
+        const int ms = (w->shutdown.kind == Shutdown::kBrutalKill) ? 2000
+                       : (w->shutdown.kind == Shutdown::kInfinity) ? 0
+                       : w->shutdown.timeout_ms;
+        if (ms > max_ms) max_ms = ms;
     }
+    const auto deadline = std::chrono::steady_clock::now()
+                          + std::chrono::milliseconds(max_ms);
+    for (WorkerNode* w : workers)
+        if (w) reap_worker(*w, deadline);
+}
+
+void Supervisor::shutdown_subtree(SupervisorNode& sup) {
+    // Flatten to the workers in stop order (depth-first, reverse declared order so
+    // dependents go down before what they depend on), then batch-stop: all get
+    // SIGTERM, then all are reaped against one deadline.
+    std::vector<WorkerNode*> ordered;
+    std::function<void(SupervisorNode&)> collect = [&](SupervisorNode& s) {
+        for (auto it = s.children.rbegin(); it != s.children.rend(); ++it) {
+            if ((*it)->is_worker()) ordered.push_back(&(*it)->worker);
+            else                    collect((*it)->sup);
+        }
+    };
+    collect(sup);
+    stop_workers(ordered);
 }
 
 // ---------------------------------------------------------------------------
@@ -952,8 +984,9 @@ void Supervisor::bump_restart_count_(WorkerNode& w, SupervisorNode& sup) {
 void Supervisor::restart_all(SupervisorNode& sup) {
     log_info("one_for_all: restarting all of sup=" + sup.name);
     auto workers = all_workers(sup);
-    // Stop reverse, start forward.
-    for (auto it = workers.rbegin(); it != workers.rend(); ++it) stop_worker(**it);
+    // Stop reverse (batch: SIGTERM all, reap against one deadline), start forward.
+    std::vector<WorkerNode*> rev(workers.rbegin(), workers.rend());
+    stop_workers(rev);
     for (auto* w : workers) start_worker(*w);
 }
 
@@ -994,7 +1027,8 @@ void Supervisor::restart_rest(SupervisorNode& sup, WorkerNode& failed) {
         }
     }
 
-    for (auto it = affected.rbegin(); it != affected.rend(); ++it) stop_worker(**it);
+    std::vector<WorkerNode*> rev(affected.rbegin(), affected.rend());
+    stop_workers(rev);
     for (auto* w : affected) start_worker(*w);
 }
 

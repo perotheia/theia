@@ -403,6 +403,14 @@ private:
     void start_subtree(SupervisorNode& sup);
     void stop_worker(WorkerNode& w);
     void shutdown_subtree(SupervisorNode& sup);
+    // Two-phase group stop: SIGTERM EVERY worker first (no wait), then reap them
+    // all against ONE shared deadline. Collapses an N-child shutdown from
+    // N×timeout (sequential stop_worker) to ~1×timeout. `workers` must already
+    // be in stop order (dependents first); the signal pass preserves it.
+    void signal_worker(WorkerNode& w);   // SIGTERM/SIGKILL, mark terminating, no wait
+    void reap_worker(WorkerNode& w,
+                     std::chrono::steady_clock::time_point deadline);  // wait + SIGKILL straggler
+    void stop_workers(const std::vector<WorkerNode*>& workers);
 
     // Restart strategy dispatch.
     void on_child_exit(WorkerNode& w, int return_code, pid_t old_pid);

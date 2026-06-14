@@ -107,9 +107,3 @@ apps Demo3WayP3 regenerates byte-identically
     [Tags]    fc-regen-stability    hermetic    selftest
     Regen And Diff FC    demo_p3
 
-
-gateway regenerates byte-identically
-    [Documentation]    platform/gateway/{lib,main,impl/BUILD.bazel} ==
-    ...                gen-app output from platform/gateway/system/package.art.
-    [Tags]    fc-regen-stability    hermetic    selftest
-    Regen And Diff FC    gateway

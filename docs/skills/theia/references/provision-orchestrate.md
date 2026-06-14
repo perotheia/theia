@@ -41,7 +41,7 @@ through `provisioning.pp`.
 ## The Docker compose dev rig — end to end
 
 `deploy/docker-compose.yml` brings up Theia as two containers (`central`
-+ `compute`) on a shared bridge network — matching `demo/manifest/rig.py`'s
++ `compute`) on a shared bridge network — matching `apps/manifest/rig.py`'s
 two-machine split. Quick start (from the repo root, with the workspace
 venv on PATH):
 

@@ -51,17 +51,25 @@ Jinja template) and regenerate — never edit the generated file.
 ## One node = one skeleton; multi-node FCs decompose
 
 A single FC package may declare more than one node. gen-app emits per-node
-`<Node>.hh`, `<Node>_netgraph.hh`, and `<Node>_handlers.cc`, with shared
-`<fc>_codecs.hh` + `Log.hh`. So `services/log` (two nodes) produces:
+`<Node>.hh`, `<Node>_netgraph.hh`, plus the **write-once** pair
+`impl/<Node>_handlers.cc` (handler bodies) and `impl/<Node>_state.hh` (the
+node's state struct), with shared `<fc>_codecs.hh` + `Log.hh`. So
+`services/log` (three nodes: `LogDaemon`, `TraceStreamPump`, `TraceCtl`)
+produces:
 
 ```
-lib/LogDaemon.hh   lib/LogDaemon_netgraph.hh
-lib/TraceCollector.hh   lib/TraceCollector_netgraph.hh
-lib/log_codecs.hh   lib/Log.hh
-impl/LogDaemon_handlers.cc   impl/TraceCollector_handlers.cc
+lib/LogDaemon.hh        lib/LogDaemon_netgraph.hh
+lib/TraceStreamPump.hh  lib/TraceStreamPump_netgraph.hh
+lib/TraceCtl.hh         lib/TraceCtl_netgraph.hh
+lib/log_codecs.hh       lib/Log.hh
+impl/LogDaemon_handlers.cc   impl/TraceStreamPump_handlers.cc   impl/TraceCtl_handlers.cc
+impl/LogDaemon_state.hh      impl/TraceStreamPump_state.hh      impl/TraceCtl_state.hh
 ```
 
-Regenerating one node never disturbs a sibling's hand-written handlers.
+Regenerating one node never disturbs a sibling's hand-written handlers or
+state. Both `impl/<Node>_handlers.cc` and `impl/<Node>_state.hh` are
+APP-OWNED and never overwritten unless you pass `--force` (which clobbers
+both).
 
 ## Which base class gen-app picks
 

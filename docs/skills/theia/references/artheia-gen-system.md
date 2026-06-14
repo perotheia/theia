@@ -20,7 +20,7 @@ All artheia commands assume `PATH="$PWD/.venv/bin:$PATH"`.
    │  load_platform_services(system/services)
    ▼
  manifest python layer ── services/manifest/service.py (FC catalog layer)
-   │                       demo/manifest/rig.py        (the Demo3Way Rig)
+   │                       apps/manifest/rig.py        (the demo Rig)
    │  executor emit / gui emit / generate-manifest
    ▼
  serialized JSON ── executor.json, machines.yaml, dist/manifest/<machine>/*.json
@@ -50,10 +50,11 @@ process/execution tree, and the supervisor hierarchy).
 - **`services/manifest/service.py`** — the FC-layer + the hand-authored
   supervisor tree (`ar_sup`/`core_sup`/`network_sup`/`host_svc_sup`/
   `pltf_sup`/`app_sup`), with `shwa` pinned to the compute machine.
-- **`demo/manifest/rig.py`** — the demo vehicle: composes layers into
-  `Demo3Way`, then splits onto two target machines (central runs the
-  platform services minus `shwa` + apps; compute runs `shwa` + its app).
-  `demo/manifest/applications.py` is generated (`gen-manifest-proto`).
+- **`apps/manifest/rig.py`** (+ `zonal_rig.py`) — the demo vehicle (`apps`):
+  composes layers, then splits onto two target machines (central runs the
+  platform services minus `shwa` + apps; compute runs `shwa` + p3). In a
+  CONSUMING workspace this is the user's own `apps/manifest/rig.py` scaffolded
+  by `theia init`; the FC catalog layer above is symlinked from `$THEIA_ROOT`.
 
 ## 2. Serialization to JSON
 

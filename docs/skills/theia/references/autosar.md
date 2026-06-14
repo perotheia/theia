@@ -95,5 +95,6 @@ Each is one-shot regen; commit the output. To see the full surface:
 - **Generated `.art` is read-only.** Re-run the importer; if the output
   is wrong, the bug is in the importer (or the catalog schema), not in
   the emitted file.
-- The PSP is a sibling git repo provisioned by `repo sync` — commit and
-  push its regenerated `.art` independently of pero_theia.
+- The PSP lives in its OWN repo (now the `gataway_ws` consuming workspace,
+  no longer `repo sync`'d into pero_theia) — commit and push its regenerated
+  `.art` independently of the framework.

@@ -36,10 +36,10 @@ the rig (e.g. `central_host`, `compute_host`, `demo_host`):
 
 The synthetic repo references your own `cc_binary` / `py_binary` targets
 by the `bazel_target` strings declared on each `SwComponent` in the rig
-(e.g. `//services/com/main:com`, `//demo:p1_main`) — those targets must
-exist in your `BUILD.bazel` files. `.art` edits invalidate the rig
-build because `demo/manifest:rig_sources` (in
-`demo/manifest/BUILD.bazel`) depends on `//system:art_sources` +
+(e.g. `//services/com/main:com`, `//apps/Demo3WayP1/main:apps`) — those
+targets must exist in your `BUILD.bazel` files. `.art` edits invalidate the
+rig build because `apps/manifest:rig_sources` (in
+`apps/manifest/BUILD.bazel`) depends on `//system:art_sources` +
 `//services/manifest:service_sources`.
 
 ## FC daemons and firmware

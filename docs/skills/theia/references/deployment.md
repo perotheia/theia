@@ -3,7 +3,7 @@
 Theia ships as a set of **independent Debian packages** under `/opt/theia`,
 the way ROS2 ships under `/opt/ros/<distro>`. The point is **name- and
 location-independence**: a user installs Theia on a fresh machine from
-`.deb`, sources `setup.bash`, and works in their OWN workspace — authoring
+`.deb`, sources `setup.sh`, and works in their OWN workspace — authoring
 `.art`, running the generators + Bazel build, and deploying — without
 vendoring any of Theia into their repo.
 
@@ -30,7 +30,7 @@ one. Four audiences:
 The packages and their `Depends:` DAG (clean, acyclic):
 
 ```
-theia-framework  (artheia wheel + bazel rules + setup.bash; Architecture: all)
+theia-framework  (artheia wheel + bazel rules + setup.sh; Architecture: all)
       │
       ├─► theia-runtime         supervisor binary                 ← run
       │        └─► theia-runtime-dev    runtime src/hdrs + proto + .art   ← build
@@ -65,7 +65,7 @@ theia-framework  (artheia wheel + bazel rules + setup.bash; Architecture: all)
   theia-framework`.
 - **theia-framework** — the `artheia` wheel (+ its PyPI deps as wheels for
   the postinst pip-install), the bazel `rules/`, `REPO.bazel`, and
-  `setup.bash`. `Architecture: all`. Assembled by `theia release`
+  `setup.sh`. `Architecture: all`. Assembled by `theia release`
   (`_build_framework_deb` in `theia.py`), not a bazel target.
 - **theia-rf** — the `rf_theia` harness wheel, MINUS `scenarios/_selftest`
   (excluded by `testing/pyproject.toml` `find.exclude`). `Architecture: all`.
@@ -92,7 +92,7 @@ theia release --python-only                          # just framework + rf wheel
 What it does (`cmd_release` / `_RELEASE_BAZEL_PKGS` in `theia.py`):
 
 1. **framework** — `_build_framework_deb`: pip-installs artheia + deps into
-   `/opt/theia/lib`, ships `rules/` + `setup.bash`. `Architecture: all`.
+   `/opt/theia/lib`, ships `rules/` + `setup.sh`. `Architecture: all`.
 2. **rf** — `pip wheel testing/` (the harness, sans `_selftest`).
 3. **runtime + services** — `bazel build //packaging/theia:theia-runtime_deb
    theia-runtime-dev_deb theia-services_deb theia-services-dev_deb` per
@@ -129,9 +129,11 @@ deploy target installs the machine set; pass `dev => true` to also pull the
 [provision-orchestrate.md](provision-orchestrate.md) for the remote-install
 flow.
 
-After install, `source /opt/theia/setup.bash` (or `setup.zsh`) — prepends
-`/opt/theia/bin` to PATH and the artheia install to PYTHONPATH, mirroring
-`/opt/ros/<distro>/setup.bash`.
+After install, `source /opt/theia/setup.sh` — the same `setup.sh` the source
+tree ships (bash + zsh; exports `THEIA_ROOT`, prepends the bin/venv to PATH
+and artheia to PYTHONPATH), mirroring `/opt/ros/<distro>/setup.bash`. A
+consuming workspace then runs `theia init` against it (see the theia skill's
+"Consuming workspaces" section).
 
 ## The downstream workspace
 
@@ -182,7 +184,7 @@ So Theia doesn't hardcode `apps`/`demo`:
 ## Mental model
 
 - **`/opt/theia` is the install prefix** — like `/opt/ros/<distro>`. Source
-  `setup.bash` to use it; nothing is location-bound.
+  `setup.sh` to use it; nothing is location-bound.
 - **machine package = binaries; `-dev` package = build files.** A deploy
   target never carries sources/protos.
 - **`.deb` is primary, `.ipk` is the embedded hatch** (`--ipk`). Same `ar`

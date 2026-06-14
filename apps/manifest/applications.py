@@ -48,7 +48,7 @@ APPLICATIONS_MEMBERS: list[tuple[str, str, list[str]]] = [
 ]
 APPLICATIONS_SHORTS = [m[0] for m in APPLICATIONS_MEMBERS]
 APPLICATIONS_COMPONENTS = [
-    app_component_for('apps', ident, comp)
+    app_component_for('apps', ident, comp, 'demo')
     for ident, comp, _ in APPLICATIONS_MEMBERS
 ]
 APPLICATIONS_EXECUTABLES = [_executable_for(ident) for ident, _, _ in APPLICATIONS_MEMBERS]

@@ -1056,8 +1056,13 @@ def cmd_init(args: list[str]) -> int:
     `source /path/to/theia/setup.sh`:
 
         cd ~/repo/launch-box/gataway_ws
-        source ../theia/setup.sh        # exports THEIA_ROOT
-        theia init [--name <ws>]        # scaffolds here, links to $THEIA_ROOT
+        source ../theia/setup.sh           # exports THEIA_ROOT
+        theia init [--name <ws>]           # bare workspace (supervisor + your apps)
+        theia init --with-services         # + the ARA services (com/log/per/sm/ucm/shwa)
+
+    --with-services bootstraps the workspace with the platform services: it links
+    system/services and emits a rig built on the framework's ServicesSoftware, so
+    a bare `theia start` brings the full service tree up under the supervisor.
 
     It creates, in the CWD (never overwriting an existing file):
       - system/system.art   — the workspace aggregator. Imports the Theia
@@ -1093,6 +1098,10 @@ def cmd_init(args: list[str]) -> int:
     for i, a in enumerate(args):
         if a == "--name" and i + 1 < len(args):
             name = args[i + 1]
+    # --with-services: bootstrap with the ARA platform services (com/log/per/sm/
+    # ucm/shwa). Links system/services + the rig builds on ServicesSoftware, so a
+    # bare `theia start` brings the full service tree up under the supervisor.
+    with_services = "--with-services" in args
     if theia_root == ws:
         print("theia init: refusing to init the Theia checkout itself "
               "(run from your CONSUMING workspace dir).", file=sys.stderr)
@@ -1128,6 +1137,10 @@ def cmd_init(args: list[str]) -> int:
     # platform/runtime/package.art. Link it to the sibling Theia's runtime spec.
     _link("platform/runtime/package.art",
           theia_root / "platform" / "runtime" / "system" / "runtime" / "package.art")
+    # --with-services: link the framework's ARA service FCs so `cluster Services`
+    # resolves + the rig can import services.manifest.{service,executor}.
+    if with_services:
+        _link("system/services", theia_root / "system" / "services")
     # The workspace's OWN empty app package (no compositions yet). gen-manifest
     # walks `cluster Applications` here — empty → an empty app manifest +
     # executor sidecar, which the rig imports as-is. WRITE before the symlink so
@@ -1141,20 +1154,26 @@ def cmd_init(args: list[str]) -> int:
     # still inits/builds/runs a bare supervisor.
     _link("system/apps", ws / "apps" / "system" / "apps")
 
-    _write("system/system.art", _INIT_SYSTEM_ART.replace("@NAME@", name))
+    sys_art = (_INIT_SYSTEM_ART_SERVICES if with_services else _INIT_SYSTEM_ART)
+    rig_py = (_INIT_RIG_PY_SERVICES if with_services else _INIT_RIG_PY)
+    _write("system/system.art", sys_art.replace("@NAME@", name))
     _write("manifest/__init__.py", "")
-    _write("manifest/rig.py", _INIT_RIG_PY.replace("@NAME@", name))
+    _write("manifest/rig.py", rig_py.replace("@NAME@", name))
     _write(".theia", f"THEIA_ROOT={theia_root}\nname={name}\n")
     _write("README.md", _INIT_README.replace("@NAME@", name)
                                    .replace("@THEIA_ROOT@", str(theia_root)))
 
-    print(f"\ntheia init: scaffolded '{name}' against {theia_root}", file=sys.stderr)
+    flavour = "services workspace" if with_services else "empty workspace"
+    print(f"\ntheia init: scaffolded '{name}' ({flavour}) against {theia_root}",
+          file=sys.stderr)
     for c in created:
         print(f"  + {c}", file=sys.stderr)
-    print("\nEmpty workspace ready — verify the toolchain before adding apps:\n"
+    extra = ("\n  (the ARA services com/log/per/sm/ucm/shwa come up under the "
+             "supervisor)" if with_services else "")
+    print("\nVerify the toolchain before adding apps:\n"
           "  artheia gen-manifest apps/system/apps/component.art "
           "apps/manifest/app.py\n"
-          "  theia manifest && theia install && theia start\n"
+          f"  theia manifest && theia install && theia start{extra}\n"
           "Then add a composition to apps/system/apps/component.art and "
           "`artheia gen-app` it.", file=sys.stderr)
     return 0
@@ -1291,6 +1310,121 @@ Software = SoftwareSpecification(
 )
 
 # Materialized rig (for callers that isinstance-check on Rig).
+WorkspaceRig: Rig = Software.to_rig()
+'''
+
+# --- --with-services variants ---------------------------------------------
+
+_INIT_SYSTEM_ART_SERVICES = '''\
+// @NAME@ — Theia consuming-workspace aggregator (WITH the ARA services).
+//
+// Imports the platform services (com / log / per / sm / ucm / shwa) + the
+// supervisor + THIS workspace's app package. `theia start` brings the full
+// service tree up under the supervisor; add your apps under apps/.
+
+package system
+
+import system.services.*     // the ARA platform FCs (system/services → framework)
+import system.supervisor.*   // the OTP-style supervisor (the runtime fabric)
+import system.apps.*         // THIS workspace's app package
+
+// --- forward-decl: the clusters this workspace deploys --------------------
+cluster Services     { }     // the platform FCs (materialized from the import)
+cluster Applications { }     // empty until you add a composition in apps/
+
+composition Supervisor { }
+
+// --- this workspace's deployment ------------------------------------------
+cluster Platform {
+    composition Supervisor  sup
+}
+'''
+
+_INIT_RIG_PY_SERVICES = '''\
+"""@NAME@ deploy rig — one machine: the ARA services + this workspace's apps.
+
+WITH-SERVICES rig: built on the framework's ServicesSoftware (the full FC set +
+the OTP supervisor tree from services.manifest.executor), with this workspace's
+apps Appended into app_sup. `theia install` builds the FC binaries (com/log/per/
+sm/ucm/shwa) + the supervisor; `theia start` runs the whole service tree.
+
+As you add compositions to apps/system/apps/component.art and regenerate
+(`artheia gen-manifest apps/system/apps/component.art apps/manifest/app.py`),
+the app leaves appear under app_sup automatically.
+
+See $THEIA_ROOT/docs/skills/theia/references/deployment.md.
+"""
+from __future__ import annotations
+
+import dataclasses
+from typing import cast
+
+from artheia.manifest import (
+    ApplicationManifest, MachineManifest, SwComponent, VehicleIdentity, Rig,
+)
+from artheia.manifest.rig import SoftwareSpecification, Append, SetTransformTypes
+from artheia.manifest.machine import HardwareResource, CpuResource, CpuArchitecture
+
+# The framework's ARA services: the FC components/processes + the OTP supervisor
+# tree (root → ar_sup → core_sup → … with app_sup). ServicesSoftware is a full
+# SoftwareSpecification we squash our apps onto.
+from services.manifest.service import (
+    ServicesSoftware as _ServicesSoftware,   # private alias: keep `Software` the
+    SERVICES_COMPONENTS as _FC_COMPONENTS,   # ONLY public *Software export so the
+    SERVICES_PROCESSES as _FC_PROCESSES,     # rig resolver picks it unambiguously
+    SUPERVISORS as _PLATFORM_SUPERVISORS,
+)
+
+# The supervisor binary (the runtime fabric). SERVICES_COMPONENTS is the 6 FCs
+# only; theia install also needs the supervisor SwComponent to build + stage it.
+_SUPERVISOR = SwComponent(
+    name="supervisor",
+    bazel_target="//platform/supervisor/main:supervisor",
+    owner="platform",
+    art_node="system.supervisor/Supervisor",
+    bazel_buildable=True,
+)
+
+# This workspace's generated app manifest (empty until you add apps).
+try:
+    from apps.manifest.app import (
+        APPLICATIONS_PROCESSES as _APP_PROCESSES,
+        APPLICATIONS_COMPONENTS as _APP_COMPONENTS,
+        APPLICATIONS_SHORTS as _APP_SHORTS,
+    )
+except Exception:               # not generated yet → services-only
+    _APP_PROCESSES, _APP_COMPONENTS, _APP_SHORTS = [], [], []
+
+Host = MachineManifest(
+    name="@NAME@",
+    hardware=HardwareResource(cpu=CpuResource(architecture=CpuArchitecture.X86_64)),
+)
+
+# The platform supervisor tree with app_sup carrying THIS workspace's apps.
+_supervisors = [
+    dataclasses.replace(s, children=list(_APP_SHORTS))
+    if s.name == "app_sup" else s
+    for s in _PLATFORM_SUPERVISORS
+]
+
+# Layer the workspace deltas (one machine, the FCs bound to it, the apps) onto
+# ServicesSoftware. `Software` is the only public *Software export → the rig
+# resolver picks it (the imported services spec is private as _ServicesSoftware).
+Software = _ServicesSoftware.squash(SoftwareSpecification(
+    vehicle=VehicleIdentity(name="@NAME@", make="theia", model="workspace"),
+    machines=cast(set[SetTransformTypes], {Append(Host)}),
+    applications=cast(set[SetTransformTypes], {
+        # platform_app on this host: the FC components + the supervisor binary.
+        Append(ApplicationManifest(name="platform_app", host_machine=Host.name,
+                                   components=list(_FC_COMPONENTS) + [_SUPERVISOR])),
+        Append(ApplicationManifest(name="app", host_machine=Host.name,
+                                   components=list(_APP_COMPONENTS))),
+    }),
+    execution_manifests=cast(set[SetTransformTypes],
+                             {Append(p) for p in (_FC_PROCESSES + _APP_PROCESSES)}),
+    supervisors=cast(set[SetTransformTypes], {Append(s) for s in _supervisors}),
+))
+
 WorkspaceRig: Rig = Software.to_rig()
 '''
 

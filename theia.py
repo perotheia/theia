@@ -149,10 +149,24 @@ def _bazel_root() -> Path:
     return WORKSPACE if (WORKSPACE / "MODULE.bazel").is_file() else THEIA_ROOT
 
 
+def _is_framework_target(target: str) -> bool:
+    """A bazel label OWNED by the framework (built in THEIA_ROOT), vs the
+    workspace's own app targets. //platform/... and //services/... are the
+    framework; //apps/... (and anything else) is the workspace's."""
+    pkg = target.lstrip("/").split(":", 1)[0]
+    return pkg.startswith(("platform/", "services/"))
+
+
 def _bazel_bin(target: str) -> Path:
-    """//pkg/dir:name -> <bazel-root>/bazel-bin/pkg/dir/name."""
+    """//pkg/dir:name -> <root>/bazel-bin/pkg/dir/name. Framework targets read
+    from THEIA_ROOT's bazel-bin; the workspace's own app targets from WORKSPACE's
+    (or THEIA_ROOT's when the workspace has no MODULE.bazel)."""
     pkg, name = target.lstrip("/").split(":", 1)
-    return _bazel_root() / "bazel-bin" / pkg / name
+    if _is_framework_target(target):
+        root = THEIA_ROOT
+    else:
+        root = WORKSPACE if (WORKSPACE / "MODULE.bazel").is_file() else THEIA_ROOT
+    return root / "bazel-bin" / pkg / name
 
 
 def _discover_rig_module(zonal: bool = False) -> "str | None":
@@ -536,12 +550,24 @@ def cmd_install(args: list[str]) -> int:
         print(f"theia: {e}", file=sys.stderr)
         return 1
 
-    # 2. bazel build — the supervisor + every child binary, all from the manifest.
-    #    Framework targets (//platform/...) build from THEIA_ROOT when the
-    #    workspace has no MODULE.bazel of its own (empty / pure-consumer ws).
-    targets = [supervisor_target, *binaries.values()]
-    if (rc := _run(["bazel", "build", *targets], cwd=_bazel_root())) != 0:
+    # 2. bazel build — the supervisor + every child binary, partitioned by owner:
+    #    FRAMEWORK targets (//platform/..., //services/...) build in THEIA_ROOT
+    #    (the framework module owns them); the WORKSPACE's OWN app targets
+    #    (//apps/..., everything else) build in WORKSPACE against @pero_theia (the
+    #    workspace's MODULE.bazel). If the workspace has no MODULE.bazel, app
+    #    targets fall back to THEIA_ROOT too (the framework's identical sources).
+    all_targets = [supervisor_target, *binaries.values()]
+    ws_has_module = (WORKSPACE / "MODULE.bazel").is_file()
+    fw_targets = [t for t in all_targets if _is_framework_target(t)]
+    ws_targets = [t for t in all_targets if not _is_framework_target(t)]
+    if fw_targets and (rc := _run(["bazel", "build", *fw_targets],
+                                  cwd=THEIA_ROOT)) != 0:
         return rc
+    if ws_targets:
+        ws_build_root = WORKSPACE if ws_has_module else THEIA_ROOT
+        if (rc := _run(["bazel", "build", *ws_targets],
+                       cwd=ws_build_root)) != 0:
+            return rc
 
     # 3. executor.json — the supervisor tree for this machine (same discovered
     #    rig; --rig optional → resolver auto-ranks; --machine slices this host).
@@ -1060,6 +1086,20 @@ def cmd_compdb(args: list[str]) -> int:
     return 0
 
 
+def _py_ident_safe(name: str) -> str:
+    """A bazel-module-name-safe identifier from a workspace name (lower, digits,
+    underscores; leading non-alpha gets an `m` prefix)."""
+    s = "".join(c if (c.isalnum() or c == "_") else "_" for c in name.lower())
+    return s if (s and (s[0].isalpha() or s[0] == "_")) else f"m_{s}"
+
+
+def _read_or(path: "Path", default: str) -> str:
+    try:
+        return path.read_text()
+    except OSError:
+        return default + "\n"
+
+
 def cmd_init(args: list[str]) -> int:
     """Scaffold the CURRENT directory as a Theia consuming workspace.
 
@@ -1175,6 +1215,34 @@ def cmd_init(args: list[str]) -> int:
     _write(".theia", f"THEIA_ROOT={theia_root}\nname={name}\n")
     _write("README.md", _INIT_README.replace("@NAME@", name)
                                    .replace("@THEIA_ROOT@", str(theia_root)))
+
+    # ── Bazel module: the workspace builds its OWN app C++ against the sibling
+    # Theia (the gataway_ws pattern). Its own MODULE.bazel consumes pero_theia
+    # via local_path_override; alias shims forward the framework labels gen-app
+    # emits (//platform/runtime, //platform/supervisor/tombstone) to @pero_theia.
+    # The app's OWN proto (//platform/proto:platform_protos → system/apps) builds
+    # LOCALLY so a workspace whose .art differs from the framework's gets its own
+    # wire types. Without this a pure consumer fell back to building from
+    # THEIA_ROOT (wrong source tree). ─────────────────────────────────────────
+    _mod_name = _py_ident_safe(name)
+    # local_path_override path: relative ws→theia (keeps the ws+theia pair
+    # relocatable), abs fallback if they share no useful common prefix.
+    try:
+        _theia_rel = os.path.relpath(theia_root, ws)
+    except ValueError:
+        _theia_rel = str(theia_root)
+    _write("MODULE.bazel", _INIT_MODULE_BAZEL.replace("@MODNAME@", _mod_name)
+                                             .replace("@THEIA_REL@", _theia_rel))
+    _write(".bazelrc", _INIT_BAZELRC)
+    _write(".bazelversion", _read_or(theia_root / ".bazelversion", "8.0.0"))
+    _write("platform/runtime/BUILD.bazel", _INIT_SHIM_RUNTIME)
+    _write("platform/supervisor/tombstone/BUILD.bazel", _INIT_SHIM_TOMBSTONE)
+    # The app's own proto package: gen-app writes apps.proto + apps.options under
+    # platform/proto/system/apps/; this BUILD nanopb-compiles them. platform/
+    # proto:platform_protos aggregates it (+ the runtime proto from @pero_theia)
+    # so the gen-app lib's `//platform/proto:platform_protos` dep resolves locally.
+    _write("platform/proto/BUILD.bazel", _INIT_PROTO_AGG)
+    _write("platform/proto/system/apps/BUILD.bazel", _INIT_APPS_PROTO_BUILD)
 
     flavour = "services workspace" if with_services else "empty workspace"
     print(f"\ntheia init: scaffolded '{name}' ({flavour}) against {theia_root}",
@@ -1459,6 +1527,101 @@ theia start && tdb ps
 
 When Theia ships as a deb, swap the sibling source for /opt/theia
 (THEIA_ROOT=/opt/theia) — the symlinks + rig stay the same.
+'''
+
+# ── Bazel-module scaffold (the workspace builds its OWN app C++) ────────────
+
+_INIT_MODULE_BAZEL = '''\
+# @MODNAME@ — a Theia consuming workspace's Bazel module. Builds this workspace's
+# OWN app C++ (apps/<App>/...) against the sibling Theia source tree, consumed as
+# the `pero_theia` module via local_path_override (the gataway_ws pattern). The
+# gen-app BUILD files reference //platform/runtime, //platform/proto,
+# //platform/supervisor/tombstone — resolved by the alias shims under platform/
+# that forward to @pero_theia//... (the app's OWN proto under platform/proto/
+# system/apps builds locally).
+module(name = "@MODNAME@", version = "0.1.0")
+
+bazel_dep(name = "platforms", version = "0.0.11")
+bazel_dep(name = "rules_cc", version = "0.2.17")
+bazel_dep(name = "rules_pkg", version = "1.1.0")
+bazel_dep(name = "rules_python", version = "1.7.0")
+bazel_dep(name = "nanopb", version = "0.4.9.1")
+
+# The Theia source tree — the runtime/supervisor/proto labels the apps compile
+# against. Sibling checkout ($THEIA_ROOT); swap for /opt/theia once Theia is a deb.
+bazel_dep(name = "pero_theia", version = "0.1.0")
+local_path_override(module_name = "pero_theia", path = "@THEIA_REL@")
+'''
+
+_INIT_BAZELRC = '''\
+# Consuming-workspace Bazel config (mirrors the framework, host-only).
+build --enable_bzlmod
+build --incompatible_enable_cc_toolchain_resolution
+build --action_env=PATH
+# nanopb pb.h location varies by libnanopb-dev version (flat /usr/include vs
+# /usr/include/nanopb/) — add the subdir so the generated *.pb.h #include <pb.h>
+# resolves either way (harmless when absent).
+build --copt=-I/usr/include/nanopb
+build:linux --cpu=k8
+build:linux --compiler=gcc
+build --config=linux
+'''
+
+_INIT_SHIM_RUNTIME = '''\
+# Alias → the Theia runtime in the sibling pero_theia module. gen-app's lib/main
+# BUILD files reference //platform/runtime:runtime; forward to @pero_theia.
+package(default_visibility = ["//visibility:public"])
+alias(name = "runtime", actual = "@pero_theia//platform/runtime:runtime")
+alias(name = "runtime_proto_cc", actual = "@pero_theia//platform/runtime:runtime_proto_cc")
+'''
+
+_INIT_SHIM_TOMBSTONE = '''\
+# Alias → the supervisor tombstone (crash-handler) lib in pero_theia. gen-app's
+# main BUILD references //platform/supervisor/tombstone:tombstone.
+package(default_visibility = ["//visibility:public"])
+alias(name = "tombstone", actual = "@pero_theia//platform/supervisor/tombstone:tombstone")
+'''
+
+_INIT_PROTO_AGG = '''\
+# //platform/proto:platform_protos — the nanopb wire types the gen-app lib links.
+# This workspace builds its OWN app proto (system/apps, nanopb-compiled below) +
+# pulls the runtime control proto from @pero_theia. (The framework aggregates all
+# the FC protos here; a consuming workspace only needs its own app proto + the
+# runtime one — the lib #includes "system/apps/apps.pb.h".)
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "platform_protos",
+    srcs = ["//platform/proto/system/apps:apps_pb_c"],
+    hdrs = ["//platform/proto/system/apps:apps_pb_h"],
+    includes = ["."],   # callers #include "system/apps/apps.pb.h"
+    copts = ["-fPIC"],
+    deps = ["@pero_theia//platform/runtime:runtime_proto_cc"],
+)
+'''
+
+_INIT_APPS_PROTO_BUILD = '''\
+# nanopb sources for the system.apps package. gen-app (--proto-out platform/proto)
+# writes apps.proto here; nanopb_generator auto-loads the same-basename
+# apps.options (pins string config fields to fixed char[]). Both feed this
+# genrule. .pb.{c,h} are BUILT, not committed.
+package(default_visibility = ["//visibility:public"])
+
+genrule(
+    name = "apps_pb",
+    srcs = ["apps.proto"] + glob(["apps.options"], allow_empty = True),
+    outs = ["apps.pb.c", "apps.pb.h"],
+    cmd = "set -e;"
+        + " in_dir=$$(dirname $(location apps.proto));"
+        + " out_dir=$$(dirname $(location apps.pb.c));"
+        + " nanopb_generator -I $$in_dir -D $$out_dir apps.proto;",
+    local = True,
+)
+filegroup(name = "apps_pb_c", srcs = ["apps.pb.c"])
+filegroup(name = "apps_pb_h", srcs = ["apps.pb.h"])
+filegroup(name = "apps_proto", srcs = ["apps.proto"])
 '''
 
 

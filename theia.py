@@ -310,6 +310,19 @@ def cmd_start(args: list[str]) -> int:
         "THEIA_ROOT_DIR": ".",
         "THEIA_SUPERVISOR_INSTANCE": instance,
     }
+    # Bundled shared libs the FCs link at runtime (per → libetcd-cpp-api.so). In
+    # sibling-source mode the .so lives under THEIA_ROOT (not on the loader path
+    # + the bazel binary's RPATH breaks once staged to install/bin/); in deb mode
+    # /opt/theia/lib is ldconfig'd already but adding it is harmless. Prepend so
+    # the forked children find them without a manual `export LD_LIBRARY_PATH`.
+    _libdirs = [p for p in (
+        THEIA_ROOT / "third_party" / "etcd-cpp-apiv3" / "install" / "lib",
+        Path("/opt/theia/lib"),
+    ) if p.is_dir()]
+    if _libdirs:
+        prev = env.get("LD_LIBRARY_PATH", "")
+        env["LD_LIBRARY_PATH"] = os.pathsep.join(
+            [str(p) for p in _libdirs] + ([prev] if prev else []))
     # Detach into its own session so it outlives this process; redirect output
     # to the log. start_new_session=True == setsid → the supervisor leads its
     # own session (its children already setsid per-worker).

@@ -1604,9 +1604,9 @@ cc_library(
 
 _INIT_APPS_PROTO_BUILD = '''\
 # nanopb sources for the system.apps package. gen-app (--proto-out platform/proto)
-# writes apps.proto here; nanopb_generator auto-loads the same-basename
-# apps.options (pins string config fields to fixed char[]). Both feed this
-# genrule. .pb.{c,h} are BUILT, not committed.
+# writes apps.proto AND apps.options here (it auto-pins every string/bytes field
+# to a fixed char[]; override per field with an .art `[max_size:N]`). Both feed
+# this genrule (.options auto-loaded by nanopb). .pb.{c,h} are BUILT, not committed.
 package(default_visibility = ["//visibility:public"])
 
 genrule(

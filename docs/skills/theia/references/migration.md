@@ -197,7 +197,7 @@ The whole loop, proven against a live etcd-backed per (artefacts under
 ```sh
 # 1. clean etcd + schema of the v1 shapes
 ETCDCTL_API=3 etcdctl --endpoints=127.0.0.1:2379 del --prefix /theia/config/
-artheia gen-schema demo/system/demo/component.art --out migration/schema_v1.json
+artheia gen-schema apps/system/apps/component.art --out migration/schema_v1.json
 theia install central && theia start central        # ← theia start/stop run install/
 
 # 2. seed v1 values (PutConfig), change some, snapshot
@@ -205,9 +205,9 @@ python migration/seed.py seed --schema migration/schema_v1.json
 tdb get-snapshot snap_v1 --schema migration/schema_v1.json
 theia stop central
 
-# 3. evolve the .art (+ demo.options for new string fields), regen the FC,
+# 3. evolve the .art (+ apps.options for new string fields), regen the FC,
 #    gen-schema of the v2 shapes, author migration/<node>_v1_to_v2.json
-artheia gen-schema demo/system/demo/component.art --out migration/schema_v2.json
+artheia gen-schema apps/system/apps/component.art --out migration/schema_v2.json
 theia start central
 
 # 4. OFFLINE preview (design bench)

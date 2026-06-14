@@ -1,9 +1,9 @@
-"""Adaptive Platform manifest — GENERATED from apps/system/demo/component.art.
+"""Adaptive Platform manifest — GENERATED from apps/system/apps/component.art.
 
 Do not edit by hand. Edit the ``cluster`` declarations in the source
 ``.art`` and regenerate:
 
-    artheia gen-manifest-proto apps/system/demo/component.art <this file>
+    artheia gen-manifest-proto apps/system/apps/component.art <this file>
 
 ARA manifest sections (see docs/autosar/manifest.md):
 
@@ -48,7 +48,7 @@ APPLICATIONS_MEMBERS: list[tuple[str, str, list[str]]] = [
 ]
 APPLICATIONS_SHORTS = [m[0] for m in APPLICATIONS_MEMBERS]
 APPLICATIONS_COMPONENTS = [
-    app_component_for('apps', ident, comp, 'demo')
+    app_component_for('apps', ident, comp, 'apps')
     for ident, comp, _ in APPLICATIONS_MEMBERS
 ]
 APPLICATIONS_EXECUTABLES = [_executable_for(ident) for ident, _, _ in APPLICATIONS_MEMBERS]

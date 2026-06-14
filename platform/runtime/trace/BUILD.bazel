@@ -51,7 +51,7 @@ cc_library(
         "//platform/proto/system/services/sm:sm_pb_cpp",
         # demo message set (Inc/Get/GetReply) — the records the GUI/rtdb show
         # against the running demo, so the decoder can render them too.
-        "//platform/proto/system/demo:demo_pb_cpp",
+        "//platform/proto/system/apps:apps_pb_cpp",
     ],
     alwayslink = True,
 )

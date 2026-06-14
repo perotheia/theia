@@ -1,4 +1,4 @@
-# FIRST-TIME-ONLY (regenerated with --force). source: system/demo/component.art
+# FIRST-TIME-ONLY (regenerated with --force). source: apps/system/apps/component.art
 #
 # Impl slice — handler bodies. The user owns this BUILD.bazel after
 # first emit (you may want to add per-FC test_*.cc files; gen-app
@@ -11,9 +11,9 @@ package(default_visibility = ["//visibility:public"])
 # State structs (write-once, app-owned). A leaf header-only target so
 # BOTH the lib (which #includes "impl/<Node>_state.hh" as the GenServer
 # State type) and the impl can depend on it WITHOUT a lib<->impl cycle:
-#   demo_state  ←  lib  ←  impl
+#   apps_state  ←  lib  ←  impl
 cc_library(
-    name = "demo_state",
+    name = "apps_state",
     hdrs = [
         "DemoFsmGate_state.hh",
     ],
@@ -25,7 +25,7 @@ cc_library(
 )
 
 cc_library(
-    name = "demo_impl",
+    name = "apps_impl",
     srcs = [
         "DemoFsm_handlers.cc",
         "DemoFsmGate_handlers.cc",
@@ -37,6 +37,6 @@ cc_library(
         "-fPIC",
     ],
     deps = [
-        "//apps/Demo3WayP4/lib:demo_lib",
+        "//apps/Demo3WayP4/lib:apps_lib",
     ],
 )

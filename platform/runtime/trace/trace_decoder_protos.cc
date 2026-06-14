@@ -10,7 +10,7 @@
 //
 // REGISTRATION KEY = the WIRE name the trace record carries: the
 // nanopb-flattened type name `msg_type_name<T>()` emits (it's `#T`,
-// e.g. `system_services_sm_SmStateMsg`, `system_demo_Inc`), NOT the
+// e.g. `system_services_sm_SmStateMsg`, `system_apps_Inc`), NOT the
 // short C++ class name. The decoder looks the record's msg_type up
 // verbatim, so the keys MUST match the wire names or every lookup
 // misses. (This was previously registered under short names like
@@ -19,7 +19,7 @@
 #include "trace_decoder.hh"
 
 #include "sm.pb.h"    // //platform/proto/system/services/sm:sm_pb_cpp
-#include "demo.pb.h"  // //platform/proto/system/demo:demo_pb_cpp
+#include "apps.pb.h"  // //platform/proto/system/apps:apps_pb_cpp
 
 namespace {
 
@@ -35,25 +35,25 @@ struct Registrar {
 
         // demo — the gen_server API demo's message set (Inc / Get / GetReply).
         // These are the records the GUI/rtdb show against the running demo.
-        register_global("system_demo_Inc",
-                        &system_demo::Inc::default_instance());
-        register_global("system_demo_Get",
-                        &system_demo::Get::default_instance());
-        register_global("system_demo_GetReply",
-                        &system_demo::GetReply::default_instance());
+        register_global("system_apps_Inc",
+                        &system_apps::Inc::default_instance());
+        register_global("system_apps_Get",
+                        &system_apps::Get::default_instance());
+        register_global("system_apps_GetReply",
+                        &system_apps::GetReply::default_instance());
 
         // demo CONFIG messages — the structured config stored in etcd
         // (/theia/config/<node>). Registering them lets the supervisor-gui
         // Table Viewer decode a selected config value proto→JSON instead of
         // showing a hex dump (the same TraceDecoderLib path traces use).
-        register_global("system_demo_CounterConfig",
-                        &system_demo::CounterConfig::default_instance());
-        register_global("system_demo_ObserverConfig",
-                        &system_demo::ObserverConfig::default_instance());
-        register_global("system_demo_IncrementerConfig",
-                        &system_demo::IncrementerConfig::default_instance());
-        register_global("system_demo_P4Config",
-                        &system_demo::P4Config::default_instance());
+        register_global("system_apps_CounterConfig",
+                        &system_apps::CounterConfig::default_instance());
+        register_global("system_apps_ObserverConfig",
+                        &system_apps::ObserverConfig::default_instance());
+        register_global("system_apps_IncrementerConfig",
+                        &system_apps::IncrementerConfig::default_instance());
+        register_global("system_apps_P4Config",
+                        &system_apps::P4Config::default_instance());
     }
 };
 

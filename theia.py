@@ -29,16 +29,48 @@ import subprocess
 import sys
 from pathlib import Path
 
-WORKSPACE = Path(__file__).resolve().parent
-COMPOSE = WORKSPACE / "deploy" / "docker-compose.yml"
-PUPPET = WORKSPACE / "deploy" / "puppet"
+# THEIA_ROOT — the framework checkout (where theia.py lives, or $THEIA_ROOT when
+# a consuming workspace sourced setup.sh). Framework assets (deploy/, rules/)
+# resolve against it.
+THEIA_ROOT = Path(os.environ.get("THEIA_ROOT") or Path(__file__).resolve().parent)
+
+# WORKSPACE — the directory the user RAN `theia` from. For a consuming workspace
+# (gataway_ws, test_ws) that's the workspace itself; the rig, dist/manifest, and
+# install/ live HERE, not in the framework. THEIA_INVOCATION_CWD is set by main()
+# before it chdir's; falls back to THEIA_ROOT when run inside the framework repo.
+WORKSPACE = Path(
+    os.environ.get("THEIA_INVOCATION_CWD") or os.getcwd()
+).resolve()
+# Running inside the framework checkout itself → workspace IS the framework.
+if not (WORKSPACE / "manifest").is_dir() and not (WORKSPACE / ".theia").is_file() \
+        and (THEIA_ROOT / "apps").is_dir():
+    # No consuming-workspace markers here and the framework tree is under us:
+    # treat the framework as the workspace (the in-repo dev path, unchanged).
+    if WORKSPACE == THEIA_ROOT or str(WORKSPACE).startswith(str(THEIA_ROOT)):
+        WORKSPACE = THEIA_ROOT
+
+COMPOSE = THEIA_ROOT / "deploy" / "docker-compose.yml"
+PUPPET = THEIA_ROOT / "deploy" / "puppet"
 
 
-def _run(argv: list[str]) -> int:
-    """Run a command from the workspace root, streaming output; return rc."""
+def _run(argv: list[str], cwd: "Path | None" = None) -> int:
+    """Run a command (default cwd = WORKSPACE), streaming output; return rc.
+
+    Injects WORKSPACE onto PYTHONPATH so a subprocess (`artheia
+    generate-manifest manifest.rig`) can import the workspace's own rig +
+    generated manifest modules (manifest.rig imports apps.manifest.app). Python
+    doesn't put cwd on sys.path for console-script entry points, so we do it.
+
+    `cwd` overrides the working dir — e.g. a framework bazel build runs from
+    THEIA_ROOT when the consuming workspace has no MODULE.bazel of its own."""
     print(f"$ {' '.join(argv)}", file=sys.stderr)
+    env = os.environ.copy()
+    ws = str(WORKSPACE)
+    env["PYTHONPATH"] = ws + (os.pathsep + env["PYTHONPATH"]
+                              if env.get("PYTHONPATH") else "")
     try:
-        return subprocess.call(argv)
+        return subprocess.call(argv, env=env,
+                               cwd=str(cwd) if cwd is not None else None)
     except FileNotFoundError as e:
         print(f"theia: {e}", file=sys.stderr)
         return 127
@@ -108,10 +140,19 @@ def cmd_orchestrate(args: list[str]) -> int:
     return _puppet("orchestration.pp", args)
 
 
+def _bazel_root() -> Path:
+    """The dir bazel builds run in. A consuming workspace with its OWN
+    MODULE.bazel (e.g. gataway_ws → @pero_theia) builds in place; an empty /
+    no-bazel workspace builds the framework targets (//platform/...) from
+    THEIA_ROOT (the framework module). So: WORKSPACE if it has MODULE.bazel,
+    else THEIA_ROOT."""
+    return WORKSPACE if (WORKSPACE / "MODULE.bazel").is_file() else THEIA_ROOT
+
+
 def _bazel_bin(target: str) -> Path:
-    """//pkg/dir:name -> WORKSPACE/bazel-bin/pkg/dir/name."""
+    """//pkg/dir:name -> <bazel-root>/bazel-bin/pkg/dir/name."""
     pkg, name = target.lstrip("/").split(":", 1)
-    return WORKSPACE / "bazel-bin" / pkg / name
+    return _bazel_root() / "bazel-bin" / pkg / name
 
 
 def _discover_rig_module(zonal: bool = False) -> "str | None":
@@ -207,7 +248,17 @@ def _fc_art_path(fc: str, target: str):
 
 
 def _install_dir(args: list[str]) -> Path:
-    machine = next((a for a in args if not a.startswith("-")), "central")
+    """install/<machine>/ — the machine from the arg, else $THEIA_MACHINE, else
+    the single staged machine under install/ (a single-host workspace needs no
+    name), else 'central'."""
+    machine = next((a for a in args if not a.startswith("-")), None)
+    if machine is None:
+        machine = os.environ.get("THEIA_MACHINE")
+    if machine is None:
+        root = WORKSPACE / "install"
+        staged = [d.name for d in root.iterdir()
+                  if (d / "supervisor").is_file()] if root.is_dir() else []
+        machine = staged[0] if len(staged) == 1 else "central"
     return WORKSPACE / "install" / machine
 
 
@@ -410,9 +461,10 @@ def cmd_install(args: list[str]) -> int:
     to override.
 
     (`theia stage-local` is a back-compat alias for this verb.)"""
-    machine = next((a for a in args if not a.startswith("-")), "central")
-    rig = os.environ.get("THEIA_RIG", "CentralRig")
-    dest = WORKSPACE / "install" / machine
+    machine = next((a for a in args if not a.startswith("-")), None)
+    # Rig attr: $THEIA_RIG if set, else let the resolver auto-rank (*Software /
+    # *Rig). No hardcoded "CentralRig" — a consuming workspace names its own.
+    rig = os.environ.get("THEIA_RIG")
     manifest_root = WORKSPACE / "install" / "manifest"
 
     # Name-independent rig discovery — apps.manifest.rig in the monorepo,
@@ -440,6 +492,29 @@ def cmd_install(args: list[str]) -> int:
     ])) != 0:
         return rc
 
+    # 1a. Resolve the machine to install: the arg, else $THEIA_MACHINE, else the
+    #     SINGLE target machine in machines.json (a single-host workspace needs no
+    #     name). No hardcoded "central".
+    if machine is None:
+        import json as _json
+        machine = os.environ.get("THEIA_MACHINE")
+        if machine is None:
+            try:
+                ms = _json.loads((manifest_root / "machines.json").read_text())["machines"]
+                targets_m = [m["name"] for m in ms if m.get("kind") != "host"]
+                if len(targets_m) == 1:
+                    machine = targets_m[0]
+                elif not targets_m:
+                    machine = ms[0]["name"] if ms else "central"
+                else:
+                    print(f"theia install: multiple machines {targets_m} — pass "
+                          "one (e.g. `theia install central`) or set $THEIA_MACHINE.",
+                          file=sys.stderr)
+                    return 2
+            except (FileNotFoundError, KeyError, IndexError):
+                machine = "central"
+    dest = WORKSPACE / "install" / machine
+
     # 1b. Read the buildable binary set from the manifest: {bin-name: target}
     #     plus the supervisor (split out — it lands at <dest>/supervisor).
     try:
@@ -449,16 +524,20 @@ def cmd_install(args: list[str]) -> int:
         return 1
 
     # 2. bazel build — the supervisor + every child binary, all from the manifest.
+    #    Framework targets (//platform/...) build from THEIA_ROOT when the
+    #    workspace has no MODULE.bazel of its own (empty / pure-consumer ws).
     targets = [supervisor_target, *binaries.values()]
-    if (rc := _run(["bazel", "build", *targets])) != 0:
+    if (rc := _run(["bazel", "build", *targets], cwd=_bazel_root())) != 0:
         return rc
 
-    # 3. executor.json — the supervisor tree for this machine (same discovered rig).
+    # 3. executor.json — the supervisor tree for this machine (same discovered
+    #    rig; --rig optional → resolver auto-ranks; --machine slices this host).
     dest.mkdir(parents=True, exist_ok=True)
-    if (rc := _run([
-        "artheia", "executor", "emit", rig_module,
-        "--rig", rig, "--out", str(dest / "executor.json"),
-    ])) != 0:
+    _emit = ["artheia", "executor", "emit", rig_module,
+             "--machine", machine, "--out", str(dest / "executor.json")]
+    if rig:
+        _emit += ["--rig", rig]
+    if (rc := _run(_emit)) != 0:
         return rc
 
     # 3b. Per-FC static params JSON — config/<fc>.json, one per FC that declares
@@ -556,14 +635,23 @@ def cmd_manifest(args: list[str]) -> int:
     # silently mis-wires the runtime, so fail before emitting any manifest.
     if (rc := _check_tipc_addresses()) != 0:
         return rc
-    # Discovered zonal rig (name-independent) unless one is passed explicitly.
-    default_zonal = _discover_rig_module(zonal=True) or _ZONAL_RIG_MODULE
-    module = next((a for a in args if not a.startswith("-")), default_zonal)
-    rig_attr = _ZONAL_RIG_ATTR if module == default_zonal else None
+    # Rig discovery (name-INDEPENDENT, workspace-scoped): prefer an explicit
+    # zonal_rig, else the workspace's plain manifest/rig.py, else the framework's
+    # bundled default. Only the framework default carries the fixed _ZONAL_RIG_ATTR
+    # (DemoSoftware); a discovered consuming-workspace rig lets the resolver
+    # auto-rank its *Software / *Rig export (--rig omitted).
+    discovered = _discover_rig_module(zonal=True) or _discover_rig_module()
+    default_module = discovered or _ZONAL_RIG_MODULE
+    module = next((a for a in args if not a.startswith("-")), default_module)
+    rig_arg = next((args[i + 1] for i, a in enumerate(args) if a == "--rig"), None)
     out = WORKSPACE / _MANIFEST_DIR
     cmd = ["artheia", "generate-manifest", module, "--out", str(out)]
-    if rig_attr:
-        cmd += ["--rig", rig_attr]
+    # Pin the rig attr only for the framework default (its export is named
+    # DemoSoftware); a discovered/explicit rig auto-resolves.
+    if rig_arg:
+        cmd += ["--rig", rig_arg]
+    elif module == _ZONAL_RIG_MODULE:
+        cmd += ["--rig", _ZONAL_RIG_ATTR]
     if (rc := _run(cmd)) != 0:
         return rc
     # Read back machines.json + drop the bazel glue for `theia dist`.
@@ -1034,16 +1122,27 @@ def cmd_init(args: list[str]) -> int:
 
     # system/ aggregator + the runtime link (Theia's .art import root).
     _link("system/runtime", theia_root / "system" / "runtime")
-    _link("system/services", theia_root / "system" / "services")
     _link("system/supervisor", theia_root / "system" / "supervisor")
-    # The runtime .art package: services import `platform.runtime.*` (ChildControlIf,
-    # TraceControlPush, LogLevelPush), which the resolver maps to
-    # platform/runtime/package.art. Link it to the sibling Theia's runtime spec so
-    # a linked-in per/supervisor .art resolves. Mirrors the in-repo
-    # platform/runtime/package.art → system/runtime/package.art symlink.
+    # The runtime .art package: a service/supervisor .art imports `platform.runtime.*`
+    # (ChildControlIf, TraceControlPush, LogLevelPush), which the resolver maps to
+    # platform/runtime/package.art. Link it to the sibling Theia's runtime spec.
     _link("platform/runtime/package.art",
           theia_root / "platform" / "runtime" / "system" / "runtime" / "package.art")
+    # The workspace's OWN empty app package (no compositions yet). gen-manifest
+    # walks `cluster Applications` here — empty → an empty app manifest +
+    # executor sidecar, which the rig imports as-is. WRITE before the symlink so
+    # the target dir exists.
+    _write("apps/system/apps/package.art", _INIT_APPS_PACKAGE_ART)
+    _write("apps/system/apps/component.art", _INIT_APPS_COMPONENT_ART)
+    _write("apps/__init__.py", "")
+    _write("apps/manifest/__init__.py", "")
+    # system/apps → THIS workspace's own app package (an IN-workspace target, not
+    # the framework). The user adds compositions there; until then the workspace
+    # still inits/builds/runs a bare supervisor.
+    _link("system/apps", ws / "apps" / "system" / "apps")
+
     _write("system/system.art", _INIT_SYSTEM_ART.replace("@NAME@", name))
+    _write("manifest/__init__.py", "")
     _write("manifest/rig.py", _INIT_RIG_PY.replace("@NAME@", name))
     _write(".theia", f"THEIA_ROOT={theia_root}\nname={name}\n")
     _write("README.md", _INIT_README.replace("@NAME@", name)
@@ -1052,55 +1151,147 @@ def cmd_init(args: list[str]) -> int:
     print(f"\ntheia init: scaffolded '{name}' against {theia_root}", file=sys.stderr)
     for c in created:
         print(f"  + {c}", file=sys.stderr)
-    print("\nNext: link your app/gateway .art into system/ and add its cluster to "
-          "system/system.art, then `theia manifest`.", file=sys.stderr)
+    print("\nEmpty workspace ready — verify the toolchain before adding apps:\n"
+          "  artheia gen-manifest apps/system/apps/component.art "
+          "apps/manifest/app.py\n"
+          "  theia manifest && theia install && theia start\n"
+          "Then add a composition to apps/system/apps/component.art and "
+          "`artheia gen-app` it.", file=sys.stderr)
     return 0
 
 
 _INIT_SYSTEM_ART = '''\
 // @NAME@ — Theia consuming-workspace aggregator.
 //
-// Imports the Theia platform clusters you deploy (resolved through the
-// system/ symlinks into $THEIA_ROOT) and adds THIS workspace's own
-// app/gateway clusters. `theia manifest` walks this file.
+// Imports the Theia supervisor + THIS workspace's own app package (resolved
+// through the system/ symlinks). `theia manifest` walks this file.
 //
-// To add your component:
-//   1. symlink its spec under system/  (e.g. system/gateway -> ../<sub>/system)
-//   2. `import system.<yourthing>.*` below
-//   3. add its cluster / Append its composition into cluster Platform
+// EMPTY-workspace shape: just the supervisor + an (empty) Applications cluster.
+// Add your app by declaring a `composition` in apps/system/apps/component.art
+// and `cluster Applications { composition <Yours> <id> }` — it flows here via
+// the import below, no edit needed.
 
 package system
 
-import system.services.*     // the platform FCs (com / log / per / sm / ucm / shwa)
-import system.supervisor.*   // the OTP-style supervisor
+import system.supervisor.*   // the OTP-style supervisor (the runtime fabric)
+import system.apps.*         // THIS workspace's app package (system/apps → apps/system/apps)
 
-// --- forward-decl: the Theia clusters this workspace deploys --------------
-cluster Services { }
+// --- forward-decl: the clusters this workspace deploys --------------------
+cluster Applications { }     // empty until you add a composition in apps/
 
 composition Supervisor { }
 
-// --- this workspace's deployment -----------------------------------------
+// --- this workspace's deployment ------------------------------------------
 cluster Platform {
     composition Supervisor  sup
-    // Append your app/gateway composition here once linked + imported.
 }
 '''
 
+_INIT_APPS_PACKAGE_ART = '''\
+// @NAME@ apps — message + node declarations for this workspace's applications.
+//
+// EMPTY scaffold. Declare your nodes here (messages, interfaces, `node atomic
+// <Name> { tipc ... ports { ... } }`), then prototype them in a composition in
+// the sibling component.art. Until then this package is valid-but-empty so the
+// toolchain (parse / gen-manifest / build / run a bare supervisor) works before
+// you write a single app.
+
+package system.apps
+'''
+
+_INIT_APPS_COMPONENT_ART = '''\
+// @NAME@ apps — composition + cluster wiring.
+//
+// EMPTY scaffold: `cluster Applications { }` with no members. gen-manifest
+// emits an empty app manifest + executor sidecar from this, which the rig
+// imports as-is — so `theia manifest`/`install`/`start` all run on an empty
+// workspace (bare supervisor, no app children).
+//
+// To add an app:
+//   1. declare a node in package.art
+//   2. `composition MyApp { prototype MyNode my_node }`  (here)
+//   3. `cluster Applications { composition MyApp my_app }`  (here)
+//   4. `artheia gen-app --kind fc apps/system/apps/component.art --out apps
+//       --composition MyApp` to emit the C++.
+
+package system.apps
+
+cluster Applications { }
+'''
+
 _INIT_RIG_PY = '''\
-"""@NAME@ deploy rig — one machine, the services + this workspace's app(s).
+"""@NAME@ deploy rig — one machine, a bare supervisor + this workspace's apps.
 
-Combines the Theia services manifest with this workspace's generated app
-sidecar. After `theia init` + linking your app, run `theia manifest` to emit
-dist/manifest/, then `theia install` / `theia start`.
+EMPTY-workspace rig: imports the generated (initially empty) app manifest +
+its executor sidecar and runs a one-machine supervisor. Verify the toolchain
+NOW (theia manifest / install / start) — it works with zero apps. As you add
+compositions to apps/system/apps/component.art and regenerate the manifest
+(`artheia gen-manifest apps/system/apps/component.art apps/manifest/app.py`),
+the app_sup children + processes appear here automatically.
 
-This is a STUB — wire it to your generated sidecars (gen-manifest emits an
-executor.py; gen-rig-combine merges services + apps). See
-$THEIA_ROOT/docs/skills/theia/references/deployment.md.
+See $THEIA_ROOT/docs/skills/theia/references/deployment.md.
 """
-# from services.manifest.service import ServicesSoftware, SERVICES_SUPERVISORS
-# from @NAME@.manifest.app import App_Software, APP_SHORTS
-#
-# @NAME@_Rig = ...  # combine, then .to_rig()
+from __future__ import annotations
+
+from typing import cast
+
+from artheia.manifest import (
+    ApplicationManifest, MachineManifest, SupervisorNode, SwComponent,
+    VehicleIdentity, Rig,
+)
+from artheia.manifest.rig import SoftwareSpecification, Append, SetTransformTypes
+from artheia.manifest.machine import HardwareResource, CpuResource, CpuArchitecture
+
+# The generated app manifest (empty until you add apps). gen-manifest writes
+# apps/manifest/app.py with APPLICATIONS_PROCESSES / APPLICATIONS_SHORTS +
+# an executor.py sidecar (app_sup with the app children). Both are empty for a
+# fresh workspace — import defensively so `theia init` → `theia manifest`
+# works before the first gen-manifest run.
+try:
+    from apps.manifest.app import (
+        APPLICATIONS_PROCESSES as _APP_PROCESSES,
+        APPLICATIONS_SHORTS as _APP_SHORTS,
+    )
+except Exception:               # not generated yet → empty workspace
+    _APP_PROCESSES, _APP_SHORTS = [], []
+
+Host = MachineManifest(
+    name="@NAME@",
+    hardware=HardwareResource(cpu=CpuResource(architecture=CpuArchitecture.X86_64)),
+)
+
+# The supervisor binary — the runtime fabric every machine runs. `theia install`
+# builds + stages it (as <machine>/supervisor, not bin/). The framework provides
+# the target //platform/supervisor/main:supervisor.
+_SUPERVISOR = SwComponent(
+    name="supervisor",
+    bazel_target="//platform/supervisor/main:supervisor",
+    owner="platform",
+    art_node="system.supervisor/Supervisor",
+    bazel_buildable=True,
+)
+
+# root → app_sup → <your apps> (empty list = bare supervisor, no app children).
+SUPERVISORS = [
+    SupervisorNode(name="root", children=["app_sup"]),
+    SupervisorNode(name="app_sup", children=list(_APP_SHORTS)),
+]
+
+# `*Software` is auto-ranked first by the rig resolver (--rig optional).
+Software = SoftwareSpecification(
+    vehicle=VehicleIdentity(name="@NAME@", make="theia", model="workspace"),
+    machines=cast(set[SetTransformTypes], {Append(Host)}),
+    applications=cast(set[SetTransformTypes], {
+        Append(ApplicationManifest(name="app", host_machine=Host.name,
+                                   components=[_SUPERVISOR])),
+    }),
+    execution_manifests=cast(set[SetTransformTypes],
+                             {Append(p) for p in _APP_PROCESSES}),
+    supervisors=cast(set[SetTransformTypes], {Append(s) for s in SUPERVISORS}),
+)
+
+# Materialized rig (for callers that isinstance-check on Rig).
+WorkspaceRig: Rig = Software.to_rig()
 '''
 
 _INIT_README = '''\

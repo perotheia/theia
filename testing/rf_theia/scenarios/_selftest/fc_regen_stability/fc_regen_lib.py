@@ -78,8 +78,6 @@ FC_SPECS = [
     FcSpec("demo_p1", "apps/system/apps/component.art", "demo", "apps", "Demo3WayP1"),
     FcSpec("demo_p2", "apps/system/apps/component.art", "demo", "apps", "Demo3WayP2"),
     FcSpec("demo_p3", "apps/system/apps/component.art", "demo", "apps", "Demo3WayP3"),
-    FcSpec("gateway", "platform/gateway/system/package.art",
-           "ara::gateway", "platform/gateway"),
 ]
 
 

@@ -105,7 +105,7 @@ message TraceRecord {
     string   from_state     // STATEM only: the state left (e.g. "OFF"); "" else
     string   to_state       // STATEM only: the state entered (e.g. "STARTING")
     string   data_type      // STATEM only: the flat type name of the `data`
-                            // message in payload (e.g. "system_demo_DemoFsmData"),
+                            // message in payload (e.g. "system_apps_DemoFsmData"),
                             // so the observer decodes payload → a labelled dict
 }
 

@@ -1,6 +1,6 @@
 """Demo deployment manifest — three-process layout for ``Demo3Way``.
 
-Composition reference (``demo/system/demo/package.art``):
+Composition reference (``apps/system/apps/package.art``):
 
 ==============  ======================================  ==============
 process binary  hosted prototypes (.art)                start_cmd
@@ -142,9 +142,9 @@ DemoHost = CentralHost
 # ---------------------------------------------------------------------------
 #
 # `apps/manifest/applications.py` is GENERATED from `cluster Applications`
-# in demo/system/demo/component.art by `artheia gen-manifest`. It
+# in apps/system/apps/component.art by `artheia gen-manifest`. It
 # carries one SwComponent / Executable / Process per cluster member, with
-# every path derived from the (base_dir=demo, ident) directory convention
+# every path derived from the (base_dir=apps, ident) directory convention
 # (app dir apps/<ident>, bazel //apps/<ident>:<ident>, start_cmd bin/<ident>)
 # and each Process.nodes set from the composition's hosted prototypes.
 #

@@ -19,7 +19,7 @@
 // same `<proto>.<port>` syntax in both — prototype names are globally
 // unique, so a prototype identifies the node (= one TIPC endpoint).
 
-package system.demo
+package system.apps
 
 composition Demo3WayP1 {
     prototype CounterNode     counter      on process P1

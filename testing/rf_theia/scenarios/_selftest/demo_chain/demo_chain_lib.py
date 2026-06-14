@@ -91,10 +91,10 @@ class DemoChainLib:
 
     @keyword("Stage 1 Parse Component Art")
     def stage1_parse(self) -> str:
-        """Run `artheia parse apps/system/demo/component.art` and
+        """Run `artheia parse apps/system/apps/component.art` and
         return the tree dump. Validates grammar + import resolution
         for the demo cluster + 3 compositions."""
-        r = self._artheia("parse", "apps/system/demo/component.art")
+        r = self._artheia("parse", "apps/system/apps/component.art")
         self._ok(r, "stage 1: artheia parse")
         return r.stdout
 
@@ -170,7 +170,7 @@ class DemoChainLib:
         assert self._workdir is not None
         out = self._workdir / "demo_netgraph.json"
         r = self._artheia(
-            "gen-netgraph", "apps/system/demo/component.art",
+            "gen-netgraph", "apps/system/apps/component.art",
             "--out", str(out),
         )
         self._ok(r, "stage 3: artheia gen-netgraph")
@@ -198,7 +198,7 @@ class DemoChainLib:
         out_dir = self._workdir / "routing"
         out_dir.mkdir(exist_ok=True)
         r = self._artheia(
-            "gen-routing", "apps/system/demo/component.art",
+            "gen-routing", "apps/system/apps/component.art",
             "--composition", composition,
             "--out", str(out_dir),
         )
@@ -229,7 +229,7 @@ class DemoChainLib:
         out_dir = self._workdir / f"app_{composition.lower()}"
         out_dir.mkdir(exist_ok=True)
         r = self._artheia(
-            "gen-app-composition", "apps/system/demo/component.art",
+            "gen-app-composition", "apps/system/apps/component.art",
             "--composition", composition,
             "--out", str(out_dir),
         )

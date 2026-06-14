@@ -75,9 +75,9 @@ FC_SPECS = [
     # gen-app's path-agnostic label derivation (//<out>/lib:<short>_lib).
     # The apps spec is one spec with three process-compositions; each is its
     # own app dir via --composition (appended to --out verbatim).
-    FcSpec("demo_p1", "apps/system/demo/component.art", "demo", "apps", "Demo3WayP1"),
-    FcSpec("demo_p2", "apps/system/demo/component.art", "demo", "apps", "Demo3WayP2"),
-    FcSpec("demo_p3", "apps/system/demo/component.art", "demo", "apps", "Demo3WayP3"),
+    FcSpec("demo_p1", "apps/system/apps/component.art", "demo", "apps", "Demo3WayP1"),
+    FcSpec("demo_p2", "apps/system/apps/component.art", "demo", "apps", "Demo3WayP2"),
+    FcSpec("demo_p3", "apps/system/apps/component.art", "demo", "apps", "Demo3WayP3"),
     FcSpec("gateway", "platform/gateway/system/package.art",
            "ara::gateway", "platform/gateway"),
 ]

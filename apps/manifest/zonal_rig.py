@@ -269,8 +269,8 @@ DEMO_COMPONENTS = DEMO_BINARIES + _PLATFORM_FABRIC_COMPONENTS
 _APP_SUP_CHILDREN = list(_APP_SHORTS)
 
 DemoLayer = Layer(
-    name="demo",
-    set_vehicle=VehicleIdentity(name="demo", make="theia", model="gen_server-demo"),
+    name="apps",
+    set_vehicle=VehicleIdentity(name="apps", make="theia", model="gen_server-apps"),
     add_machines=[DemoHost],
     add_components=DEMO_COMPONENTS,
     add_executions=DEMO_PROCESSES,
@@ -441,7 +441,7 @@ _ComputeApp = ApplicationManifest(
 )
 
 DemoSpecLayer = SoftwareSpecification(
-    vehicle=VehicleIdentity(name="demo", make="theia", model="gen_server-demo"),
+    vehicle=VehicleIdentity(name="apps", make="theia", model="gen_server-apps"),
     machines=cast(set[SetTransformTypes], {
         Append(CentralHost),
         Append(ComputeHost),
@@ -595,8 +595,8 @@ def _mk_app(name: str, host: str, components: list) -> ApplicationManifest:
 
 # --- CentralSoftware --------------------------------------------------------
 CentralSoftware: SoftwareSpecification = SoftwareSpecification(
-    vehicle=VehicleIdentity(name="demo", make="theia",
-                            model="gen_server-demo"),
+    vehicle=VehicleIdentity(name="apps", make="theia",
+                            model="gen_server-apps"),
     machines=cast(set[SetTransformTypes], {Append(CentralHost)}),
     applications=cast(set[SetTransformTypes], {
         Append(_mk_app("platform_app", CentralHost.name,
@@ -618,8 +618,8 @@ CentralSoftware: SoftwareSpecification = SoftwareSpecification(
 
 # --- ComputeSoftware --------------------------------------------------------
 ComputeSoftware: SoftwareSpecification = SoftwareSpecification(
-    vehicle=VehicleIdentity(name="demo", make="theia",
-                            model="gen_server-demo"),
+    vehicle=VehicleIdentity(name="apps", make="theia",
+                            model="gen_server-apps"),
     machines=cast(set[SetTransformTypes], {Append(ComputeHost)}),
     applications=cast(set[SetTransformTypes], {
         Append(_mk_app("compute_app", ComputeHost.name,
@@ -655,8 +655,8 @@ ComputeRig: Rig = ComputeSoftware.to_rig()
 # per-machine apps binds the COMPONENT correctly too.)
 # ---------------------------------------------------------------------------
 DemoSoftware: SoftwareSpecification = SoftwareSpecification(
-    vehicle=VehicleIdentity(name="demo", make="theia",
-                            model="gen_server-demo"),
+    vehicle=VehicleIdentity(name="apps", make="theia",
+                            model="gen_server-apps"),
     machines=cast(set[SetTransformTypes], {
         Append(CentralHost), Append(ComputeHost), Append(AdminHost),
     }),

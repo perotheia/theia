@@ -5,7 +5,7 @@
 //
 //   platform/system/services/<short>/  →  system.services.<short>
 //   platform/system/supervisor/         →  system.supervisor
-//   apps/system/demo/               →  system.demo
+//   apps/system/apps/               →  system.apps
 //
 // (The gateway + AUTOSAR vendor trees are NOT part of standalone theia.git;
 //  a consuming workspace adds system.gateway / system.autosar.* itself.)
@@ -29,7 +29,7 @@
 package system
 
 import system.services.*    // system/services → ../services/system/services (Services bundle)
-import system.demo.*        // system/demo     → ../apps/system/demo       (Applications)
+import system.apps.*        // system/apps     → ../apps/system/apps       (Applications)
 import system.supervisor.*  // system/supervisor → ../platform/supervisor/system
 
 // NB: the gateway is NOT part of standalone theia.git. `GatewayBridge` + the

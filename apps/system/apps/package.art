@@ -17,7 +17,7 @@
 //   * handle_info(const char*, State&) is the C-style catch-all for
 //     non-OTP messages (timer ticks, internal signals).
 
-package system.demo
+package system.apps
 
 // ---- messages -----------------------------------------------------------
 

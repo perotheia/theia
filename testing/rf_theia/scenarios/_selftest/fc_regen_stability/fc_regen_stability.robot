@@ -89,7 +89,7 @@ log regenerates byte-identically
 apps Demo3WayP1 regenerates byte-identically
     [Documentation]    apps/Demo3WayP1/{lib,main,impl/BUILD.bazel} ==
     ...                gen-app --composition Demo3WayP1 from
-    ...                apps/system/demo/component.art.
+    ...                apps/system/apps/component.art.
     [Tags]    fc-regen-stability    hermetic    selftest
     Regen And Diff FC    demo_p1
 

@@ -1,18 +1,18 @@
 # nanopb field-size constraints for the system.demo wire messages.
-# nanopb_generator auto-loads this file (same basename next to demo.proto).
+# nanopb_generator auto-loads this file (same basename next to apps.proto).
 # A string/bytes field without a max_size becomes a pb_callback_t, which a
 # migration plugin's struct-copy codegen (gen-transform) can't assign as a
 # plain char[]. Pinning CounterConfig.label to a fixed char[] makes it a plain
 # member the transform can strncpy. (Same fix as system_supervisor.*.options.)
 
-system_demo.CounterConfig.label   max_size:64
+system_apps.CounterConfig.label   max_size:64
 
 # p2/p3 node configs (migration-verification demo) — pin their string fields to
 # fixed char[] so snapshots decode + gen-transform can strncpy them.
-system_demo.ObserverConfig.tag    max_size:64
-system_demo.P4Config.label        max_size:64
+system_apps.ObserverConfig.tag    max_size:64
+system_apps.P4Config.label        max_size:64
 
 # DemoFsm's data (OTP `{State, Data}` Data term). The FSM sets `reason` in
 # on_enter; a fixed char[] makes it a plain member to strncpy (and the trace
 # encoder/decoder reads it directly). Without this it's a pb_callback_t.
-system_demo.DemoFsmData.reason    max_size:48
+system_apps.DemoFsmData.reason    max_size:48

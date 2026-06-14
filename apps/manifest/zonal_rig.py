@@ -345,9 +345,11 @@ for _sm in DemoRig.service_manifests:
 #                TARGET runs its own supervisor binary — the
 #                "supervisor" SwComponent here names the .ipk artifact
 #                only; central is the canonical host of record.
-#   gateway    — same story: .ipk lives in compute_app via
-#                DEMO_COMPONENTS, but the gateway daemon binds to
-#                central's hardware.
+#   p3         — the one demo app that runs on compute (the per-machine
+#                ComputeSoftware partitions it via _COMPUTE_APPS={"p3"};
+#                the UNIFIED DemoSoftware reaches the same split only via
+#                this PTM, so without it p3 fell through to its AA host
+#                and the compute slice was missing p3 entirely).
 #
 # PTM is **sparse-positive** — it lists only deviations from the AA
 # default. Unmapped Processes fall through to AA host_machine.
@@ -355,10 +357,14 @@ for _sm in DemoRig.service_manifests:
 
 from artheia.manifest.machine import ProcessToMachineMapping  # noqa: E402
 
+# Keep in lockstep with the per-machine partition constants below
+# (_COMPUTE_FCS={"shwa"}, _COMPUTE_APPS={"p3"}): the unified DemoSoftware
+# slicer routes by PTM, the per-machine *Software by list membership — they
+# MUST agree on what lands on compute.
 _PROCESS_HOST_OVERRIDES: dict[str, str] = {
     "shwa":       ComputeHost.name,
+    "p3":         ComputeHost.name,
     "supervisor": CentralHost.name,
-    "gateway":    CentralHost.name,
 }
 
 _PTM_ENTRIES = [
@@ -541,6 +547,17 @@ _central_supervisors = [
     for s in _PLATFORM_SUPERVISORS
 ]
 
+# The UNIFIED (DemoSoftware) tree: app_sup carries EVERY app (p1..p4). The
+# per-machine slicer drops each leaf not hosted on the target machine, so
+# p1/p2/p4 stay on central and p3 lands on compute — without it, the unified
+# tree (which used _central_supervisors) silently omitted p3 everywhere.
+_all_app_shorts = [c.name for c in DEMO_BINARIES]
+_all_apps_supervisors = [
+    dataclasses.replace(s, children=list(_all_app_shorts))
+    if s.name == "app_sup" else s
+    for s in _PLATFORM_SUPERVISORS
+]
+
 
 # --- compute supervisor tree: fresh, machine-local -------------------------
 # root → srv_sup → shwa ; root → app_sup → p3. Small and self-contained;
@@ -663,9 +680,13 @@ DemoSoftware: SoftwareSpecification = SoftwareSpecification(
         Append(_sm) for _sm in DemoRig.service_manifests
     }),
     supervisors=cast(set[SetTransformTypes], {
-        # central reuses the platform tree; compute's machine-local tree is
-        # sliced per-machine by build_supervisor_tree(machine=...).
-        Append(s) for s in _central_supervisors
+        # The UNIFIED tree carries ALL app_sup children (p1..p4); the per-machine
+        # slicer (build_supervisor_tree(machine=...)) keeps each leaf only on its
+        # host (_process_host via the PTM / AA membership) — p1/p2/p4 on central,
+        # p3 on compute. Using _central_supervisors here (app_sup=central apps
+        # only, p3 excluded) DROPPED p3 from every machine: central's tree never
+        # listed it and compute's tree wasn't represented at all.
+        Append(s) for s in _all_apps_supervisors
     }),
     # Per-machine supervisor identity (ARA Executor). Two supervisors on one host
     # TIPC namespace must bind distinct instances: central=0 (default), compute=1

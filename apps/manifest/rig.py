@@ -106,7 +106,7 @@ _PLATFORM_OPKG_ARTIFACTS = [
 ]
 
 CentralHost = MachineManifest(
-    name="central_host",
+    name="central",
     hardware=HardwareResource(
         cpu=CpuResource(architecture=CpuArchitecture.X86_64),
     ),
@@ -249,10 +249,10 @@ if DemoRig.applications:
 #
 # Pinning rule for the demo:
 #   - shwa → compute_host  (the only compute-pinned FC)
-#   - everything else → central_host  (platform + control-plane FCs)
+#   - everything else → central  (platform + control-plane FCs)
 #
 # This drives the strict-mode filter in dist_manifest, so
-# central_host/service.yaml no longer includes shwa, and
+# central/service.yaml no longer includes shwa, and
 # compute_host/service.yaml contains shwa alone.
 # ---------------------------------------------------------------------------
 
@@ -338,14 +338,14 @@ DemoRig.process_to_machine_mappings = list(
 #   platform_app on central — services (18 FCs from ServicesSoftware).
 #                              Same-identity Append merges into
 #                              ServicesSoftware's platform_app: host
-#                              binding overrides "" → central_host,
+#                              binding overrides "" → central,
 #                              components stay as the 18 FCs (the
 #                              demo binaries are routed to compute_app
 #                              via the next Append, NOT here).
 #   compute_app on compute — the three demo binaries (Demo3Way's
 #                             per-process compositions).
 #
-# This split is what makes `bazel build @rig_apps//central_host:image`
+# This split is what makes `bazel build @rig_apps//central:image`
 # and `@rig_apps//compute_host:image` produce two distinct .ipks for
 # Docker deployment under `deploy/`.
 
@@ -418,7 +418,7 @@ DemoSoftware: SoftwareSpecification = ServicesSoftware.squash(DemoSpecLayer)
 #
 # The demo deploys onto two TARGET machines with DIFFERENT software:
 #
-#   central_host — the platform services (minus shwa) + the demo apps p1/p2,
+#   central — the platform services (minus shwa) + the demo apps p1/p2,
 #                  under the standard platform supervisor tree.
 #   compute_host — shwa (the GPU/accelerator FC) + the demo app p3, under a
 #                  small machine-local tree: root → srv_sup → shwa,

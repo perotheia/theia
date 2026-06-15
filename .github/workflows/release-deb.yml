@@ -107,14 +107,17 @@ jobs:
           path: out/*.deb
 
   # theia-tools = the wxWidgets supervisor-GUI + rtdb. ISOLATED from `build`
-  # (continue-on-error) so a wx/GTK issue on one Ubuntu never fails the core
-  # framework/runtime/services release — the GUI deb just won't attach for that
-  # leg. The GUI is built by its canonical CMakeLists.txt (not bazel).
+  # (continue-on-error) so a GUI issue never fails the core framework/runtime/
+  # services release. The GUI is built by its canonical CMakeLists.txt (not
+  # bazel). 24.04 ONLY: the GUI needs wxWidgets 3.2, which is native to 24.04
+  # but absent from stock Ubuntu 22.04 (jammy ships wx 3.0; 3.2 is not in the
+  # archive/backports the runner sees). 22.04 operators run the GUI on a 24.04
+  # box or build it locally.
   build-tools:
     strategy:
       fail-fast: false
       matrix:
-        ubuntu: ["22.04", "24.04"]
+        ubuntu: ["24.04"]
     runs-on: ubuntu-${{ matrix.ubuntu }}
     continue-on-error: true
     steps:
@@ -124,13 +127,6 @@ jobs:
 
       - name: Install GUI build dependencies
         run: |
-          # The GUI needs wxWidgets 3.2. On 24.04 it's in main; on 22.04 it's
-          # only in jammy-backports (the base archive ships wx 3.0), so enable
-          # backports there before installing.
-          if [ "${{ matrix.ubuntu }}" = "22.04" ]; then
-            echo 'deb http://archive.ubuntu.com/ubuntu jammy-backports main universe' \
-              | sudo tee /etc/apt/sources.list.d/jammy-backports.list
-          fi
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential cmake pkg-config dpkg-dev \

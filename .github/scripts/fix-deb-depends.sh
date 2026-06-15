@@ -66,6 +66,10 @@ for deb in dist/debian/*/*.deb; do
   # is a bazel output (read-only, 0444) — make it writable before overwriting.
   sed -i "/^Depends:/d" "$work/DEBIAN/control"
   printf 'Depends: %s\n' "$newdeps" >> "$work/DEBIAN/control"
+  # Remove the scratch debian/ dir we created for dpkg-shlibdeps — it lives in
+  # the DATA tree and would otherwise be packed as a bogus /debian/control file
+  # (dpkg --unpack then chokes). DEBIAN/ (the real control dir) is untouched.
+  rm -rf "$work/debian"
   chmod u+w "$deb" 2>/dev/null || true
   dpkg-deb --build --root-owner-group "$work" "$deb" >/dev/null
   rm -rf "$work"

@@ -30,9 +30,12 @@ jobs:
 
       - name: Check out submodules from the GitHub mirror
         run: |
-          # artheia + etcd are needed to build; rf-theia is not (skip it).
+          # artheia + rf-theia (theia release builds both wheels for the
+          # framework deb) + etcd (the per service links it). Re-point the
+          # GitLab-origin submodules at the public GitHub mirror.
           git config submodule.artheia.url https://github.com/perotheia/artheia.git
-          git submodule update --init artheia third_party/etcd-cpp-apiv3
+          git config submodule.rf-theia.url https://github.com/perotheia/rf-theia.git
+          git submodule update --init artheia rf-theia third_party/etcd-cpp-apiv3
 
       - name: Install build dependencies
         run: |

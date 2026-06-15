@@ -278,6 +278,43 @@ service TraceStream {
 }
 
 
+// ---- Log EGRESS — served by com's LogForwarder runnable ------------------
+//
+// The LOG analogue of TraceStream: LogForwarder subscribes to log[logging]'s
+// TIPC LogDaemon hub (LogSubscribeReq at 0x80010003) and re-streams each log
+// LINE over this gRPC service to rtdb logcat. The byte-level wire mirrors the
+// .art-driven log.proto LogRecord (same field numbers) — both stacks read the
+// same bytes, re-declared here for the libprotobuf gRPC edge (log.pb.h is
+// nanopb-only). The fine <tag-glob>:<level> filter is applied client-side.
+//
+// FIELD NUMBERS MUST TRACK system.services.log.LogRecord EXACTLY.
+//   level is a plain uint32 here (the log.proto LogLevel enum varint-encodes
+//   identically) — the single source-of-truth enum lives in log.proto.
+message LogRecord {
+    string node  = 1;   // emitting FC node (= supervised worker name)
+    string tag   = 2;   // the app/syslog tag the line carries
+    uint32 level = 3;   // LogLevel value (0=VERBOSE … 5=FATAL)
+    uint64 ts_ns = 4;   // wall time the line was emitted (epoch ns)
+    string line  = 5;   // the verbatim message body (prefix already stripped)
+}
+
+// Per-stream subscribe request. Coarse filters applied stream-side; the fine
+// <tag-glob>:<level> DSL is client-side (the hose stays dumb).
+//   level_min  — drop lines below this LogLevel value (0 = keep all)
+//   tag_filter — restrict to one tag; "" = all
+message LogSubscribeRequest {
+    uint32 level_min  = 1;
+    string tag_filter = 2;
+}
+
+service LogStream {
+    // Server-streaming firehose of log lines. LogForwarder subscribes to the
+    // TIPC log hub once (spinning up the tailer) and fans every line out to all
+    // gRPC subscribers; the last detach winds the tailer down.
+    rpc Subscribe(LogSubscribeRequest) returns (stream LogRecord);
+}
+
+
 // ---- Persistency (services/per) proxy — served by ComGrpcProxy -----------
 //
 // com proxies services/per's MANAGER surface (the ops/tooling API on

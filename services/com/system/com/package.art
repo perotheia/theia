@@ -127,6 +127,22 @@ node runnable TraceForwarder {
     tag = "TRCF"
 }
 
+// ---- LogForwarder (the LOG EGRESS gRPC thread) --------------------------
+//
+// The LOG analogue of TraceForwarder: a THIRD runnable in com that forwards the
+// log firehose over gRPC. Same shape — binds its own SEQPACKET subscriber
+// socket (0x8001000B), gen_call LogSubscribeReq to log[logging]'s LogDaemon
+// (0x80010003/0) so the hub fans LogRecord casts to it (the SAME path tdb
+// logcat / artheia.observer.LogObserver uses), and re-streams each record over
+// its own gRPC LogStream service to rtdb logcat. Subscribing spins up the
+// log[] tailer; detaching winds it down — so com only tails while a remote
+// logcat is attached. reporting=false; do_* in impl/LogForwarder_handlers.cc.
+node runnable LogForwarder {
+    tipc type=0x8001000B instance=0
+    reporting = false
+    tag = "LOGF"
+}
+
 // ---- Probe (test agent) -------------------------------------------------
 //
 // A SECOND node in the com process whose job is to impersonate ANY

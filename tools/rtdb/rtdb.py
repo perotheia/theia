@@ -21,7 +21,10 @@ Verbs (identical to tdb, minus get-snapshot which is TIPC/per-only):
   trace ...                ConfigureTrace (control path: rtdb → com → supervisor)
   trace-config             stored trace config (GetTraceConfig)
   loglevel [<node> [lvl]]  read / set a node's log level
-  tracecat [--json]        follow the trace stream (collector TraceStream gRPC; alias: logcat)
+  tracecat [--json]        follow the TRACE stream (com TraceStream gRPC :7710)
+  logcat [<tag-glob>:<lvl> ...] [--json]
+                           follow the LOG stream (com LogStream gRPC :7711);
+                           filter adb-style, e.g. `logcat MyApp/counter:V *:E`
   restart / terminate      child lifecycle
   help / quit
 """
@@ -34,7 +37,7 @@ from pathlib import Path
 # rtdb_client + the shared command layer.
 sys.path.insert(0, str(Path(__file__).resolve().parent))           # rtdb_client
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tdb"))  # tdb_commands
-from rtdb_client import SupervisorClient, TraceClient, PerClient  # noqa: E402
+from rtdb_client import SupervisorClient, TraceClient, PerClient, LogClient  # noqa: E402
 from tdb_commands import _COMMANDS as _SHARED_COMMANDS, _HELP, _g  # noqa: E402
 import shlex  # noqa: E402,F811  (re-import safe; used by repl)
 
@@ -103,13 +106,21 @@ class _Session:
         return self._sup
 
     def trace_factory(self) -> TraceClient:
-        # tracecat → the collector's TraceStream gRPC (services/log egress-direct;
-        # moves into com's TraceForwarder later). Default endpoint :7710.
+        # tracecat → com's TraceForwarder TraceStream gRPC. Default :7710.
         return TraceClient.from_workspace()
+
+    def log_factory(self) -> LogClient:
+        # logcat → com's LogForwarder LogStream gRPC. Default :7711.
+        return LogClient.from_workspace()
 
     def close(self) -> None:
         if self._sup is not None:
             self._sup.stop()
+
+
+# Verbs whose handler needs the LOG firehose factory (4th positional) instead of
+# the trace one — mirrors tdb.py. Every other cmd keeps (args, sup, trace_fac).
+_LOG_VERBS = {"logcat"}
 
 
 def _dispatch(sess: _Session, verb: str, args: list[str]) -> int:
@@ -117,6 +128,8 @@ def _dispatch(sess: _Session, verb: str, args: list[str]) -> int:
     if fn is None:
         print(f"unknown command: {verb!r} (try `help`)", file=sys.stderr)
         return 2
+    if verb in _LOG_VERBS:
+        return fn(args, sess.sup, sess.log_factory)
     return fn(args, sess.sup, sess.trace_factory)
 
 

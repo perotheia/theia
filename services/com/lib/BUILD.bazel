@@ -19,6 +19,8 @@ cc_library(
         "ComGrpcProxy_netgraph.hh",
         "TraceForwarder.hh",
         "TraceForwarder_netgraph.hh",
+        "LogForwarder.hh",
+        "LogForwarder_netgraph.hh",
         "com_codecs.hh",
         "Log.hh",
     ],

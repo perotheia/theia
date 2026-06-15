@@ -39,12 +39,29 @@
   :group 'languages
   :prefix "artheia-")
 
-(defcustom artheia-lsp-server-command '("artheia-lsp")
-  "Command (program + args) that launches the artheia language server.
-Defaults to the `artheia-lsp' console script on PATH — install artheia into
-your venv so it resolves there (mirrors the VS Code `artheia.serverCommand')."
-  :type '(repeat string)
+(defcustom artheia-lsp-server-command nil
+  "Explicit command (program + args) that launches the artheia language server.
+When nil (the default), the server is resolved per-buffer by
+`artheia-lsp-resolve-command': a workspace `.venv/bin/artheia-lsp', then
+~/.local/bin, then the `artheia-lsp' console script on PATH. Set this to pin a
+specific server (mirrors the VS Code `artheia.serverCommand')."
+  :type '(choice (const :tag "Auto-resolve" nil) (repeat string))
   :group 'artheia)
+
+(defun artheia-lsp-resolve-command ()
+  "Return the command list that launches `artheia-lsp' for the current buffer.
+Honors `artheia-lsp-server-command' when set; otherwise prefers a workspace
+venv (`.venv/bin/artheia-lsp' found by walking up from the file), then
+~/.local/bin/artheia-lsp, then whatever `artheia-lsp' is on `exec-path'. This
+makes a CONSUMING workspace use ITS OWN venv's server without configuration."
+  (or artheia-lsp-server-command
+      (let* ((dir (and buffer-file-name
+                       (locate-dominating-file buffer-file-name ".venv")))
+             (venv (and dir (expand-file-name ".venv/bin/artheia-lsp" dir)))
+             (local (expand-file-name "~/.local/bin/artheia-lsp")))
+        (list (cond ((and venv (file-executable-p venv)) venv)
+                    ((file-executable-p local) local)
+                    (t (or (executable-find "artheia-lsp") "artheia-lsp")))))))
 
 (defcustom artheia-indent-offset 4
   "Number of spaces per indentation level in `artheia-mode'."
@@ -167,7 +184,7 @@ your venv so it resolves there (mirrors the VS Code `artheia.serverCommand')."
   (lsp-register-client
    (make-lsp-client
     :new-connection (lsp-stdio-connection
-                     (lambda () artheia-lsp-server-command))
+                     #'artheia-lsp-resolve-command)
     :activation-fn (lsp-activate-on "artheia")
     :major-modes '(artheia-mode)
     ;; The server eagerly parses every .art for cross-file goto-definition;

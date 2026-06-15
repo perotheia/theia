@@ -6,7 +6,7 @@
       "type": "stdio"
     },
     "rf-theia": {
-      "command": "testing/run_mcp.sh",
+      "command": "rf-theia/run_mcp.sh",
       "args": [],
       "type": "stdio"
     },

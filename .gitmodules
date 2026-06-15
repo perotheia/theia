@@ -4,3 +4,11 @@
 [submodule "third_party/etcd-cpp-apiv3"]
 	path = third_party/etcd-cpp-apiv3
 	url = https://github.com/etcd-cpp-apiv3/etcd-cpp-apiv3
+[submodule "docs"]
+	path = docs
+	url = git@cicd.skyway.porsche.com:PG50/docs.git
+	branch = main
+[submodule "rf-theia"]
+	path = rf-theia
+	url = git@cicd.skyway.porsche.com:PG50/rf-theia.git
+	branch = main

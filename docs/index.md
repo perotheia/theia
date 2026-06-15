@@ -48,8 +48,8 @@ All artheia-side docs live under [`artheia/`](artheia/):
   emits a starter `rig.py` from a top-level artheia composition.
 - [Export reference](artheia/export.md) — what the artheia codegen
   emits and how to consume it downstream.
-- [VS Code extension](artheia/vscode-extension.md) — `.art` syntax
-  + LSP integration for editor support.
+- [Editor integrations](artheia/editors.md) — `.art` syntax + LSP for
+  VS Code and Emacs (`contrib/editors/`).
 - [Shell completion](artheia/completion.md) — tab-complete for
   `artheia` and the workspace launcher `theia`.
 

@@ -9,7 +9,7 @@ Theia is a AUTOSAR-Adaptive-Platform-style
 C++ **actor runtime** ("the Theia runtime"), with the whole system modeled
 in the **artheia** `.art` DSL and built with Bazel.
 
-It's a **standalone git repo** (`pero_theia`) with `artheia/` and
+It's a **standalone git repo** (`theia`) with `artheia/` and
 `third_party/etcd-cpp-apiv3/` as **git submodules** — NOT a Google-`repo`
 monorepo any more (that split happened; some on-disk `gateway/` / `vendor/`
 dirs are gitignored legacy repo-sync leftovers, not part of the framework).
@@ -49,7 +49,7 @@ Everything in `.art` rests on three primitives. Internalize them:
 
 ## Repository map
 
-Standalone `pero_theia` git repo (+ `artheia`/`etcd` submodules). Major dirs:
+Standalone `theia` git repo (+ `artheia`/`etcd` submodules). Major dirs:
 
 - **`system/`** — the **virtual root** of the `system` package and the
   aggregation point everything resolves against. `system/system.art`
@@ -70,7 +70,7 @@ Standalone `pero_theia` git repo (+ `artheia`/`etcd` submodules). Major dirs:
   C++ at `apps/Demo3WayP{1..4}/`, and the deploy rigs `apps/manifest/{rig,zonal_rig}.py`.
 - **`artheia/`** — **submodule** (remote `theia`). The `.art` grammar,
   parser/resolver, code generators, manifest model, LSP, VS Code extension.
-  Commit/push it independently of pero_theia, then bump the submodule pin.
+  Commit/push it independently of theia, then bump the submodule pin.
 - **`tools/`** — `tdb`/`rtdb` (Python debug CLIs over the .art-driven probe),
   `supervisor-gui` (wx observer GUI).
 - **`testing/`** — `rf-theia`: Robot Framework harness; self-tests under
@@ -233,7 +233,6 @@ Do **not** commit `MODULE.bazel.lock`.
 - **Cross-repo Bazel labels are hierarchical**: `//gateway/pero_cmp_lnx/lib:…`,
   never `//pero_cmp_lnx/lib:…`.
 - **Branch convention**: the manifest pins `main` everywhere; do work on a
-  feature branch, FF-merge into `main`, then push. **GitLab**
-  (not Gerrit): `git push theia HEAD:<branch>` + MR.
+  feature branch, FF-merge into `main`, then push + open a PR.
 - **artheia is a separate (sub)repo** — commit and push it on its own, then
-  bump the submodule pin in pero_theia. Never commit `MODULE.bazel.lock`.
+  bump the submodule pin in theia. Never commit `MODULE.bazel.lock`.

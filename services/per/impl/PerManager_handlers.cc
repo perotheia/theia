@@ -24,7 +24,7 @@
 #include <cstring>
 #include <string>
 
-namespace system_services_per {
+namespace ara::per {
 
 namespace {
 
@@ -227,4 +227,4 @@ PerReply PerManager::handle_call(
 }
 
 
-}  // namespace system_services_per
+}  // namespace ara::per

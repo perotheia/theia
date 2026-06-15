@@ -11,7 +11,7 @@
 
 #include <string>
 
-namespace system_services_per {
+namespace ara::per {
 
 // Load the migration plugin at `so_path` and register its transform edges.
 // On any failure (open / missing symbol / ABI mismatch) returns false and
@@ -19,4 +19,4 @@ namespace system_services_per {
 // visible to BOTH MigrateBulk and GetConfig's lazy migration-on-read.
 bool load_migration_plugin(const std::string& so_path, std::string* err);
 
-}  // namespace system_services_per
+}  // namespace ara::per

@@ -18,7 +18,7 @@
 // Defined at global scope to match the C `struct per_migration_host`.
 struct per_migration_host {};
 
-namespace system_services_per {
+namespace ara::per {
 
 namespace {
 
@@ -103,4 +103,4 @@ bool load_migration_plugin(const std::string& so_path, std::string* err) {
     return true;
 }
 
-}  // namespace system_services_per
+}  // namespace ara::per

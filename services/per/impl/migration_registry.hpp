@@ -29,7 +29,7 @@
 #include <unordered_set>
 #include <vector>
 
-namespace system_services_per {
+namespace ara::per {
 
 // One transform step: reshape config bytes from one digest to the next.
 using Transform = std::function<std::string(const std::string& bytes)>;
@@ -107,4 +107,4 @@ struct MigrationRegistrar {
     }
 };
 
-}  // namespace system_services_per
+}  // namespace ara::per

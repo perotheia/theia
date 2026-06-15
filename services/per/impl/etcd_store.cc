@@ -11,7 +11,7 @@
 #include <memory>
 #include <string>
 
-namespace system_services_per {
+namespace ara::per {
 
 namespace {
 
@@ -144,4 +144,4 @@ std::unique_ptr<Store> make_etcd_store(const std::string& endpoint) {
     }
 }
 
-}  // namespace system_services_per
+}  // namespace ara::per

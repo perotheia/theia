@@ -21,7 +21,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace system_services_per {
+namespace ara::per {
 
 struct SchemaEntry {
     std::string config_type;
@@ -70,4 +70,4 @@ private:
     std::unordered_map<std::string, std::set<std::string>> types_;
 };
 
-}  // namespace system_services_per
+}  // namespace ara::per

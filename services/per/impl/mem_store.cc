@@ -10,7 +10,7 @@
 #include <string>
 #include <unordered_map>
 
-namespace system_services_per {
+namespace ara::per {
 
 namespace {
 
@@ -79,4 +79,4 @@ std::atomic<Store*> g_shared_store{nullptr};
 void set_shared_store(Store* s) { g_shared_store.store(s); }
 Store* shared_store() { return g_shared_store.load(); }
 
-}  // namespace system_services_per
+}  // namespace ara::per

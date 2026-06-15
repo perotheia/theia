@@ -25,7 +25,7 @@
 
 #include "impl/etcd_store.hpp"
 
-namespace system_services_per {
+namespace ara::per {
 
 namespace snapshot_detail {
 
@@ -96,4 +96,4 @@ inline long restore_config_snapshot(Store& store, const std::string& path) {
     return n;
 }
 
-}  // namespace system_services_per
+}  // namespace ara::per

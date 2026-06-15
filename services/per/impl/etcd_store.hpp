@@ -20,7 +20,7 @@
 #include <utility>
 #include <vector>
 
-namespace system_services_per {
+namespace ara::per {
 
 // One value read back from the store.
 struct StoreValue {
@@ -80,4 +80,4 @@ std::unique_ptr<Store> make_memory_store();
 void set_shared_store(Store* s);
 Store* shared_store();
 
-}  // namespace system_services_per
+}  // namespace ara::per

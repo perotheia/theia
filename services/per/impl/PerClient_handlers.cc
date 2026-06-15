@@ -29,7 +29,7 @@
 #include <string>
 #include <unordered_map>
 
-namespace system_services_per {
+namespace ara::per {
 
 namespace {
 
@@ -343,4 +343,4 @@ PerReply PerClient::handle_call(
 }
 
 
-}  // namespace system_services_per
+}  // namespace ara::per

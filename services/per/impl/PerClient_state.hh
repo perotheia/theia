@@ -15,7 +15,7 @@
 
 #include "etcd_store.hpp"   // Store / StoreValue / make_*_store
 
-namespace system_services_per {
+namespace ara::per {
 
 // A watch subscription: who to cast ConfigUpdated to (by node name → resolved
 // to a TIPC addr at push time) and which schema to deliver in.
@@ -31,4 +31,4 @@ struct PerClientState {
     std::unordered_map<std::string, std::vector<Subscription>> watches;
 };
 
-}  // namespace system_services_per
+}  // namespace ara::per

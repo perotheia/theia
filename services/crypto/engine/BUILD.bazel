@@ -1,0 +1,37 @@
+# theia_crypto_engine.so — an OpenSSL ENGINE that proxies RSA private-key ops to
+# the crypto FC over TIPC, so a TLS server's private key never enters the
+# calling process (crypto/TLS plan phase 3).
+#
+# Built as a SHARED library (linkshared) loadable by OpenSSL's dynamic engine
+# loader: a key string `engine:theia_crypto:<slot>` makes grpc's TLS layer load
+# this and route handshake signing to services/crypto.
+
+load("@rules_cc//cc:defs.bzl", "cc_binary")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_binary(
+    name = "theia_crypto_engine.so",
+    srcs = ["theia_crypto_engine.cc"],
+    linkshared = True,
+    copts = [
+        "-std=c++17",
+        "-Wall",
+        "-fPIC",
+        # OpenSSL 3.0 deprecates ENGINE + low-level RSA_METHOD but still ships
+        # them; we need them (grpc's TLS engine path uses ENGINE_load_private_key).
+        "-Wno-deprecated-declarations",
+    ],
+    linkopts = [
+        "-lssl",
+        "-lcrypto",
+    ],
+    deps = [
+        # TheiaMsgHeader.hh + RemoteCodec.hh (hash_msg_type_) + nanopb
+        # (pb_encode/decode, linked via the runtime's -l:libprotobuf-nanopb.a).
+        "//platform/runtime:runtime",
+        # The crypto FC's nanopb types (PrivOpReq/PrivOpReply) — the aggregate
+        # cc_library that carries every package's .pb (incl. crypto).
+        "//platform/proto:platform_protos",
+    ],
+)

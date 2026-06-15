@@ -221,6 +221,41 @@ public:
         return ok_(std::vector<uint8_t>(pem.begin(), pem.end()));
     }
 
+    // priv_op(slot, input) → input^d mod n — the RAW RSA private primitive (no
+    // padding). The TLS engine path hands us an already-padded block and wants
+    // raw RSA_private_encrypt back, so the handshake signing happens here and
+    // the key never leaves the FC. RSA only (the TLS slot is RSA in v1).
+    ProviderResult priv_op(const std::string& slot,
+                           const uint8_t* input, size_t len) {
+        EVP_PKEY* key = load_private_(slot);
+        if (!key) return mk_(CS_UNKNOWN_IDENTIFIER, "unknown slot / unreadable key");
+        if (EVP_PKEY_base_id(key) != EVP_PKEY_RSA)
+            return mk_(CS_INCOMPATIBLE_ARGS, "priv_op: RSA only");
+        // The raw RSA private primitive: input^d mod n on a modulus-sized,
+        // already-padded block (the TLS layer applies PKCS#1 v1.5 / PSS before
+        // handing it to the engine). RSA_private_encrypt with RSA_NO_PADDING is
+        // exactly this primitive and is unambiguous about the modulus-size
+        // contract (EVP_PKEY_sign's 3.0 sizing checks reject a raw block).
+        const RSA* rsa = EVP_PKEY_get0_RSA(key);
+        if (!rsa) return mk_(CS_BACKEND_ERROR, "no RSA key");
+        int mod = RSA_size(rsa);
+        if (static_cast<int>(len) != mod) {
+            std::string m = "priv_op: input " + std::to_string(len) +
+                            " != modulus " + std::to_string(mod);
+            return mk_(CS_BAD_INPUT, m);
+        }
+        std::vector<uint8_t> out(mod);
+        int n = RSA_private_encrypt(static_cast<int>(len), input, out.data(),
+                                    const_cast<RSA*>(rsa), RSA_NO_PADDING);
+        if (n < 0) {
+            char eb[160];
+            ERR_error_string_n(ERR_get_error(), eb, sizeof(eb));
+            return mk_(CS_BACKEND_ERROR, std::string("priv_op: ") + eb);
+        }
+        out.resize(n);
+        return ok_(std::move(out));
+    }
+
     // slot_info(slot) → {family, usage, exportable}. v1: derive the family from
     // the key, usage = sign|verify (a cert/key slot), exportable=false (the key
     // file is on disk but the API never returns it). present=false if no key.

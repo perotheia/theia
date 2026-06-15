@@ -120,5 +120,10 @@ cc_library(
         "-lgrpc",
         "-lgpr",
         "-labsl_synchronization",
+        # OpenSSL: com_tls.hpp's engine-mode TLS (phase 3) uses the ENGINE API
+        # (ENGINE_by_id / ENGINE_load_dynamic) to load the theia_crypto engine so
+        # the TLS private key never enters com. grpc's TLS here is system OpenSSL.
+        "-lssl",
+        "-lcrypto",
     ],
 )

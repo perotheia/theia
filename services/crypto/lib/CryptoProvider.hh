@@ -56,6 +56,8 @@ using VerifyReq = system_services_crypto_VerifyReq;
 using VerifyReply = system_services_crypto_VerifyReply;
 using CertReq = system_services_crypto_CertReq;
 using CertReply = system_services_crypto_CertReply;
+using PrivOpReq = system_services_crypto_PrivOpReq;
+using PrivOpReply = system_services_crypto_PrivOpReply;
 
 
 
@@ -158,6 +160,9 @@ public:
                                             CryptoProviderState& s);
 
     CertReply handle_call(const CertReq& req,
+                                            CryptoProviderState& s);
+
+    PrivOpReply handle_call(const PrivOpReq& req,
                                             CryptoProviderState& s);
 
 

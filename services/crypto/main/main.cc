@@ -154,6 +154,8 @@ int main() {
             crypto_provider_cfg, crypto_provider);
         config_mux.register_call<CertReq, CertReply>(
             crypto_provider_cfg, crypto_provider);
+        config_mux.register_call<PrivOpReq, PrivOpReply>(
+            crypto_provider_cfg, crypto_provider);
     } else {
         crypto_provider.log().warn("config service bind failed; live log-level "
                                  "push + signal inject disabled");

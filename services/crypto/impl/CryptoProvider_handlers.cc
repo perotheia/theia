@@ -188,4 +188,19 @@ CertReply CryptoProvider::handle_call(const CertReq& req,
     return rep;
 }
 
+// PrivateKeyOp(slot, input) → input^d mod n. The raw RSA private primitive the
+// TLS engine proxies its handshake signing to — the key never leaves the FC.
+PrivOpReply CryptoProvider::handle_call(const PrivOpReq& req,
+                                        CryptoProviderState& /*s*/) {
+    PrivOpReply rep = system_services_crypto_PrivOpReply_init_zero;
+    auto r = provider().priv_op(req.slot, req.input.bytes, req.input.size);
+    rep.status = static_cast<system_services_crypto_CryptoStatus>(r.status);
+    set_msg(rep, r.message);
+    if (r.status == 0 && !set_bytes(rep.output, r.bytes)) {
+        rep.status = system_services_crypto_CryptoStatus_CryptoStatus_BACKEND_ERROR;
+        set_msg(rep, "output overflow");
+    }
+    return rep;
+}
+
 }  // namespace ara::crypto

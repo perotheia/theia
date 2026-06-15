@@ -173,6 +173,23 @@ message VerifyReply {
     bool         valid
 }
 
+// PrivateKeyOp(slot, input) → output — the RAW RSA private-key primitive (the
+// modexp `input^d mod n`, no padding/hashing). This is the low-level op the
+// TLS-engine path needs: OpenSSL's RSA sign hands the engine an already-padded
+// DigestInfo block and expects raw RSA_private_encrypt back. By exposing only
+// the raw primitive (key referenced by slot, never returned), the TLS handshake
+// signing happens IN the FC — the private key never enters com. (ara::crypto
+// "private-key-op(KeySlot)".)
+message PrivOpReq {
+    string slot
+    bytes  input             // the padded block (input^d mod n)
+}
+message PrivOpReply {
+    CryptoStatus status
+    string       message
+    bytes        output      // input^d mod n (the raw RSA signature)
+}
+
 // GetCert(slot) → PEM (the X.509 provider surface, §2). Serves a slot's cert so
 // a caller (com TLS) can hand it to its TLS layer WITHOUT the key.
 message CertReq {
@@ -204,6 +221,8 @@ interface clientServer CryptoOneShotIf {
     operation Sign(in r: SignReq)     returns SignReply
     operation Verify(in r: VerifyReq) returns VerifyReply
     operation GetCert(in r: CertReq)  returns CertReply
+    // The raw RSA private-key primitive for the TLS engine (key never leaves FC).
+    operation PrivateKeyOp(in r: PrivOpReq) returns PrivOpReply
 }
 
 // ─── Nodes ─────────────────────────────────────────────────────────────────

@@ -12,9 +12,6 @@ system_services_crypto.SlotInfoReq.slot_id          max_size:64
 system_services_crypto.SlotInfoReply.message        max_size:128
 
 # ---- Context lifecycle (the streaming ara::crypto API) -------------------
-# chunk: one Update() chunk. 8192 is a comfortable streaming unit; a caller
-# feeds arbitrary-length data across many chunks. signature (Finish, VERIFIER):
-# RSA-4096 = 512, 640 headroom. output (digest or signature): max 640.
 system_services_crypto.CreateCtxReq.key_slot        max_size:64
 system_services_crypto.CreateCtxReply.message       max_size:128
 system_services_crypto.CtxAck.message               max_size:128
@@ -38,3 +35,10 @@ system_services_crypto.VerifyReply.message max_size:128
 system_services_crypto.CertReq.slot        max_size:64
 system_services_crypto.CertReply.message   max_size:128
 system_services_crypto.CertReply.pem       max_size:8192
+
+# ---- PrivateKeyOp (raw RSA private primitive for the TLS engine) ---------
+# input/output are one RSA modulus block: RSA-4096 = 512 bytes, 640 headroom.
+system_services_crypto.PrivOpReq.slot      max_size:64
+system_services_crypto.PrivOpReq.input     max_size:640
+system_services_crypto.PrivOpReply.message max_size:128
+system_services_crypto.PrivOpReply.output  max_size:640

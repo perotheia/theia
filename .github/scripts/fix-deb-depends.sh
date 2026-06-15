@@ -62,9 +62,11 @@ for deb in dist/debian/*/*.deb; do
   fi
 
   echo "[$UBUNTU] $pkg Depends: $newdeps"
-  # Rewrite the Depends line in the control file, then repack in place.
+  # Rewrite the Depends line in the control file, then repack. The original .deb
+  # is a bazel output (read-only, 0444) — make it writable before overwriting.
   sed -i "/^Depends:/d" "$work/DEBIAN/control"
   printf 'Depends: %s\n' "$newdeps" >> "$work/DEBIAN/control"
+  chmod u+w "$deb" 2>/dev/null || true
   dpkg-deb --build --root-owner-group "$work" "$deb" >/dev/null
   rm -rf "$work"
 done

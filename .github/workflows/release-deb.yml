@@ -46,7 +46,7 @@ jobs:
             libnanopb-dev \
             libboost-system-dev libboost-thread-dev libboost-random-dev \
             libssl-dev libprotobuf-dev protobuf-compiler \
-            libgrpc++-dev protobuf-compiler-grpc \
+            libgrpc++-dev protobuf-compiler-grpc libabsl-dev \
             libcpprest-dev
 
       - name: Install Bazelisk (pins Bazel via .bazelversion)

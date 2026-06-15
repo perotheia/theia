@@ -1,0 +1,44 @@
+# Generated nanopb sources for the system.services.crypto package.
+#
+# .pb.{c,h} are BUILT, not committed: the genrule below invokes
+# nanopb_generator (a system-installed tool) on the .proto. To
+# regenerate manually for inspection, run from the repo root:
+#
+#   nanopb_generator platform/proto/system/services/crypto/crypto.proto
+
+package(default_visibility = ["//visibility:public"])
+
+genrule(
+    name = "crypto_pb",
+    srcs = [
+        "crypto.proto",
+        # nanopb_generator auto-loads the same-basename .options next to the
+        # .proto (pins data/signature/pem sizes) — list it so it's in the sandbox.
+        "crypto.options",
+    ],
+    outs = [
+        "crypto.pb.c",
+        "crypto.pb.h",
+    ],
+    cmd = "set -e;"
+        + " in_dir=$$(dirname $(location crypto.proto));"
+        + " out_dir=$$(dirname $(location crypto.pb.c));"
+        + " nanopb_generator -I $$in_dir -D $$out_dir crypto.proto;",
+    tools = [],
+    local = True,
+)
+
+filegroup(
+    name = "crypto_pb_c",
+    srcs = ["crypto.pb.c"],
+)
+
+filegroup(
+    name = "crypto_pb_h",
+    srcs = ["crypto.pb.h"],
+)
+
+filegroup(
+    name = "crypto_proto",
+    srcs = ["crypto.proto"],
+)

@@ -1,0 +1,34 @@
+# nanopb field-size constraints for system.services.crypto wire messages.
+# HAND-MAINTAINED (a gen-app regen defaults every string/bytes to 64, which
+# truncates digests/signatures/certs). nanopb_generator auto-loads this file
+# (same basename next to crypto.proto).
+#
+# Grammar: "<Fully.Qualified.field>  max_size:N".
+
+# ---- Hash ----------------------------------------------------------------
+# data: the bytes to hash. v1 cap 8192 (covers a TLS handshake transcript +
+# typical payloads); larger inputs would need a streaming/update API (later).
+# digest: up to SHA-512 = 64 bytes.
+system_services_crypto.HashReq.data        max_size:8192
+system_services_crypto.HashReply.message   max_size:128
+system_services_crypto.HashReply.digest    max_size:64
+
+# ---- Sign ----------------------------------------------------------------
+# data: the bytes to digest-then-sign (a handshake hash is small; cap matches
+# Hash). signature: RSA-4096 = 512 bytes; ECDSA is smaller — 640 is headroom.
+system_services_crypto.SignReq.key_slot    max_size:64
+system_services_crypto.SignReq.data        max_size:8192
+system_services_crypto.SignReply.message   max_size:128
+system_services_crypto.SignReply.signature max_size:640
+
+# ---- Verify --------------------------------------------------------------
+system_services_crypto.VerifyReq.key_slot  max_size:64
+system_services_crypto.VerifyReq.data      max_size:8192
+system_services_crypto.VerifyReq.signature max_size:640
+system_services_crypto.VerifyReply.message max_size:128
+
+# ---- GetCert -------------------------------------------------------------
+# pem: a PEM cert (or chain). 8192 covers a server cert + a CA.
+system_services_crypto.CertReq.slot        max_size:64
+system_services_crypto.CertReply.message   max_size:128
+system_services_crypto.CertReply.pem       max_size:8192

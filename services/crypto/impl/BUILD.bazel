@@ -1,0 +1,53 @@
+# FIRST-TIME-ONLY (regenerated with --force). source: system/services/crypto/package.art
+#
+# Impl slice — handler bodies. The user owns this BUILD.bazel after
+# first emit (you may want to add per-FC test_*.cc files; gen-app
+# won't reach in and squash that).
+
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+# State structs (write-once, app-owned). A leaf header-only target so
+# BOTH the lib (which #includes "impl/<Node>_state.hh" as the GenServer
+# State type) and the impl can depend on it WITHOUT a lib<->impl cycle:
+#   crypto_state  ←  lib  ←  impl
+cc_library(
+    name = "crypto_state",
+    hdrs = [
+        "CryptoProvider_state.hh",
+    ],
+    # The lib #includes these as "impl/<Node>_state.hh", so the include
+    # root is the FC out_dir (one above impl/).
+    includes = [".."],
+    copts = ["-std=c++17", "-fPIC"],
+    deps = ["//platform/runtime:runtime"],
+)
+
+cc_library(
+    name = "crypto_impl",
+    srcs = [
+        "CryptoProvider_handlers.cc",
+    ],
+    # The OpenSSL SoftwareProvider — all OpenSSL EVP/PEM/X509 lives behind this
+    # header so the gen_server TU stays clean (mirrors per isolating etcd in
+    # etcd_store.hpp). `..` so it resolves `#include "impl/software_provider.hpp"`.
+    hdrs = ["software_provider.hpp"],
+    includes = [".."],
+    copts = [
+        "-std=c++17",
+        "-Wall",
+        "-Wextra",
+        "-fPIC",
+    ],
+    # OpenSSL is a system lib (libssl-dev present); link it via linkopts the way
+    # the gRPC edge links grpc++. A later HardwareProvider (HSM) adds its own lib
+    # here behind the same software_provider surface.
+    linkopts = [
+        "-lssl",
+        "-lcrypto",
+    ],
+    deps = [
+        "//services/crypto/lib:crypto_lib",
+    ],
+)

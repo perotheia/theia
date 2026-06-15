@@ -42,6 +42,7 @@ from artheia.manifest.utils import (
 # ---------------------------------------------------------------------------
 SERVICES_MEMBERS: list[tuple[str, str, list[str]]] = [
     ('com', 'Com', []),
+    ('crypto', 'Crypto', []),
     ('log', 'Log', []),
     ('per', 'Per', []),
     ('sm', 'Sm', []),

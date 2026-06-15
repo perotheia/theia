@@ -1,0 +1,8 @@
+package system.services.crypto
+
+
+// The Crypto FC: a single Crypto Service Manager node (CryptoProvider) backed by
+// an OpenSSL SoftwareProvider. One process, one node.
+composition Crypto {
+    prototype CryptoProvider crypto_provider
+}

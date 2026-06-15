@@ -75,6 +75,8 @@ FC_SPECS = [
     # LogDaemon (syslog sink) and TraceCollector (trace fan-out) nodes.
     FcSpec("sm",  "services/sm/system/sm/package.art",   "ara::sm",  "services/sm"),
     FcSpec("com", "services/com/system/com/package.art", "ara::com", "services/com"),
+    FcSpec("crypto", "services/crypto/system/crypto/package.art", "ara::crypto",
+           "services/crypto", hand_owned_impl_build=True),   # OpenSSL linkopts
     FcSpec("per", "services/per/system/per/package.art", "ara::per", "services/per",
            hand_owned_impl_build=True),   # per_etcd + migration_registry targets
     FcSpec("ucm", "services/ucm/system/ucm/package.art", "ara::ucm", "services/ucm"),

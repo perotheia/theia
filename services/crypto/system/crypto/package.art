@@ -1,0 +1,119 @@
+// Crypto (ara::crypto) — Adaptive Platform Functional Cluster.
+//
+// The Crypto Service Manager: a single broker node fronting one-or-more Crypto
+// Providers (Software=OpenSSL today; Hardware=HSM/TPM later). Callers issue
+// hash / sign / verify / get-cert by KEY SLOT and never see the private key —
+// the slot→material binding lives here, so a later HardwareProvider drops in
+// without touching the caller (the AUTOSAR portability point).
+//
+// Phase 2 of docs/tasks/PROGRESS/grpc-certificates.md: ONE atomic node
+// (CryptoProvider) with a minimal OpenSSL SoftwareProvider. KeySlots are a
+// file-path-behind-slot-id facade for v1 (real opaque slots later). Phase 3
+// rewires com's TLS to fetch its cert + sign the handshake through here so the
+// key never lives in com.
+
+package system.services.crypto
+
+// ─── Crypto wire types ────────────────────────────────────────────────────
+
+// Hash algorithm selector. Mirrors the OpenSSL EVP_* the provider dispatches.
+enum HashAlgo {
+    SHA256 = 0
+    SHA384 = 1
+    SHA512 = 2
+}
+
+// Generic status for crypto ops. 0=ok; non-zero carries a short diagnostic in
+// `message` (unknown slot, bad algo, OpenSSL failure, …).
+enum CryptoStatus {
+    OK            = 0
+    UNKNOWN_SLOT  = 1
+    BAD_ALGO      = 2
+    BACKEND_ERROR = 3
+    BAD_INPUT     = 4
+}
+
+// Hash(data) → digest. No key involved — pure transform.
+message HashReq {
+    HashAlgo algo
+    bytes    data
+}
+message HashReply {
+    CryptoStatus status
+    string       message
+    bytes        digest
+}
+
+// Sign(slot, data) → signature. The private key referenced by `key_slot` NEVER
+// leaves the provider; the caller gets only the signature. `algo` is the digest
+// to sign over (the provider does digest-then-sign).
+message SignReq {
+    string   key_slot
+    HashAlgo algo
+    bytes    data
+}
+message SignReply {
+    CryptoStatus status
+    string       message
+    bytes        signature
+}
+
+// Verify(slot, data, signature) → valid. Uses the slot's PUBLIC key / cert.
+message VerifyReq {
+    string   key_slot
+    HashAlgo algo
+    bytes    data
+    bytes    signature
+}
+message VerifyReply {
+    CryptoStatus status
+    string       message
+    bool         valid
+}
+
+// GetCert(slot) → PEM. Serves a slot's certificate (and, for a CA slot, the CA
+// cert) so a caller like com can hand it to its TLS layer WITHOUT the key. The
+// private key is never exposed — only Sign uses it, in-provider.
+message CertReq {
+    string slot
+}
+message CertReply {
+    CryptoStatus status
+    string       message
+    bytes        pem
+}
+
+// ─── Crypto interface ──────────────────────────────────────────────────────
+
+// The CryptoProvider surface — the minimal v1 subset (open point "interface
+// scope": minimal now, full ara::crypto context API later). Every op is
+// request/reply over TIPC; the manager routes by slot to the backing provider
+// (only SoftwareProvider/OpenSSL exists in phase 2).
+interface clientServer CryptoProviderIf {
+    operation Hash(in r: HashReq)     returns HashReply
+    operation Sign(in r: SignReq)     returns SignReply
+    operation Verify(in r: VerifyReq) returns VerifyReply
+    operation GetCert(in r: CertReq)  returns CertReply
+}
+
+// ─── Nodes ─────────────────────────────────────────────────────────────────
+
+// The Crypto Service Manager. tipc 0x80010006. An atomic gen_server: each op is
+// a handle_call dispatched on the node thread to the OpenSSL SoftwareProvider.
+// Slots map to PEM file paths in v1 (config/crypto.json params or env), loaded
+// lazily on first use; the private key stays in this process, never returned.
+node atomic CryptoProvider {
+    tipc type=0x80010006 instance=0
+    tag = "CRYP"
+    ports {
+        // The CryptoProvider surface: callers (com TLS, later diag 0x27) call
+        // Hash/Sign/Verify/GetCert here. handle_call per op on the node thread.
+        server provider provides CryptoProviderIf
+    }
+    params {
+        // Slot→PEM directory. A slot "<name>" resolves to <slot_dir>/<name>.key
+        // (private) + <slot_dir>/<name>.crt (cert). v1 facade; real opaque
+        // KeySlots later. Overridable per-deploy.
+        slot_dir : string = "/etc/theia/crypto"
+    }
+}

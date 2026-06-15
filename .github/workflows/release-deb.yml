@@ -24,8 +24,15 @@ jobs:
     runs-on: ubuntu-${{ matrix.ubuntu }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive   # artheia + etcd-cpp-apiv3 are needed to build
+        # NOT submodules:recursive — .gitmodules points artheia/rf-theia at
+        # GitLab (the origin), unreachable from GitHub CI. Re-point to the
+        # GitHub mirror + init below.
+
+      - name: Check out submodules from the GitHub mirror
+        run: |
+          # artheia + etcd are needed to build; rf-theia is not (skip it).
+          git config submodule.artheia.url https://github.com/perotheia/artheia.git
+          git submodule update --init artheia third_party/etcd-cpp-apiv3
 
       - name: Install build dependencies
         run: |

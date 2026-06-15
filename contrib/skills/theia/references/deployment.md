@@ -25,7 +25,7 @@ one. Four audiences:
 | **Run-only target** (deploy machine, docker, Pi) | `theia-runtime` [`+ theia-services`] | `supervisor` + service binaries + bundled libs. **Zero build files.** |
 | **App developer** (builds apps on Theia) | + `theia-framework` + `theia-runtime-dev` [`+ theia-services-dev`] | the above + the `artheia` CLI, runtime sources/headers, protos, `.art` tree, Python manifest |
 | **Test author** | + `theia-rf` | the `rf_theia` harness (minus `scenarios/_selftest`) |
-| **Operator** (GUI / live debug) | + `theia-tools` *(when wired)* | supervisor-GUI + rtdb (speak com's gRPC) |
+| **Operator** (GUI / live debug) | + `theia-tools` (Ubuntu 24.04) | supervisor-GUI + rtdb (speak com's gRPC) |
 
 The packages and their `Depends:` DAG (clean, acyclic):
 
@@ -38,7 +38,7 @@ theia-framework  (artheia wheel + bazel rules + setup.sh; Architecture: all)
       ├─► theia-services        com/per/sm/ucm/log/shwa + libetcd  ← run
       │        └─► theia-services-dev   service protos + .art tree + py manifest ← build
       │
-      ├─► theia-tools           GUI + rtdb (need com gRPC)         ← operate (TBD)
+      ├─► theia-tools           GUI + rtdb (need com gRPC; 24.04)  ← operate
       └─► theia-rf              rf_theia harness (Architecture: all) ← test
 ```
 

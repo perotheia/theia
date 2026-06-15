@@ -39,6 +39,15 @@ namespace ara::crypto {
 // generator prefixes types with the libc-safe proto package
 // (system_services_crypto_*); aliasing them here keeps callers'
 // signatures readable.
+using CreateCtxReq = system_services_crypto_CreateCtxReq;
+using CreateCtxReply = system_services_crypto_CreateCtxReply;
+using CtxStartReq = system_services_crypto_CtxStartReq;
+using CtxAck = system_services_crypto_CtxAck;
+using CtxUpdateReq = system_services_crypto_CtxUpdateReq;
+using CtxFinishReq = system_services_crypto_CtxFinishReq;
+using CtxFinishReply = system_services_crypto_CtxFinishReply;
+using SlotInfoReq = system_services_crypto_SlotInfoReq;
+using SlotInfoReply = system_services_crypto_SlotInfoReply;
 using HashReq = system_services_crypto_HashReq;
 using HashReply = system_services_crypto_HashReply;
 using SignReq = system_services_crypto_SignReq;
@@ -123,6 +132,21 @@ public:
     // gets emitted once. handle_call/handle_cast dispatch by
     // request type, not by port.
 
+
+    CreateCtxReply handle_call(const CreateCtxReq& req,
+                                            CryptoProviderState& s);
+
+    CtxAck handle_call(const CtxStartReq& req,
+                                            CryptoProviderState& s);
+
+    CtxAck handle_call(const CtxUpdateReq& req,
+                                            CryptoProviderState& s);
+
+    CtxFinishReply handle_call(const CtxFinishReq& req,
+                                            CryptoProviderState& s);
+
+    SlotInfoReply handle_call(const SlotInfoReq& req,
+                                            CryptoProviderState& s);
 
     HashReply handle_call(const HashReq& req,
                                             CryptoProviderState& s);

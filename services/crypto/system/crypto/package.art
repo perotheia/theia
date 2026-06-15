@@ -1,39 +1,143 @@
 // Crypto (ara::crypto) — Adaptive Platform Functional Cluster.
 //
 // The Crypto Service Manager: a single broker node fronting one-or-more Crypto
-// Providers (Software=OpenSSL today; Hardware=HSM/TPM later). Callers issue
-// hash / sign / verify / get-cert by KEY SLOT and never see the private key —
-// the slot→material binding lives here, so a later HardwareProvider drops in
-// without touching the caller (the AUTOSAR portability point).
+// Providers (Software=OpenSSL today; Hardware=HSM/TPM later). Callers reference
+// KEY SLOTS and never see raw key material — the slot→material binding lives
+// here, so a later HardwareProvider drops in without touching the caller (the
+// AUTOSAR portability point).
 //
-// Phase 2 of docs/tasks/PROGRESS/grpc-certificates.md: ONE atomic node
-// (CryptoProvider) with a minimal OpenSSL SoftwareProvider. KeySlots are a
-// file-path-behind-slot-id facade for v1 (real opaque slots later). Phase 3
-// rewires com's TLS to fetch its cert + sign the handshake through here so the
-// key never lives in com.
+// Two surfaces (docs/autosar/services/crypto.md):
+//
+//   CryptoProviderIf  — the AUTOSAR CONTEXT-based API. Create a context for an
+//     algorithm (CreateHashCtx / CreateSignerCtx / CreateVerifierCtx), then
+//     Start → Update(chunk)* → Finish. The context is a server-side handle the
+//     FC tracks; Update streams arbitrary-length data in chunks (no per-message
+//     size limit). This is the faithful ara::crypto shape — the SAME lifecycle
+//     as cryptoProvider->CreateHashFunctionCtx(...)->Start()->Update()->Finish().
+//
+//   CryptoOneShotIf — a convenience layer (Hash/Sign/Verify/GetCert in one call)
+//     for small payloads (a TLS handshake hash, a cert fetch). Same provider
+//     underneath; just the non-streaming fast path com uses in phase 3.
+//
+// KeySlots carry an AUTOSAR-style schema (algorithm family, allowed usage,
+// exportability) so the provider enforces usage (kUsageViolation) and never
+// exports a non-exportable key. v1 maps a slot to a PEM file pair; real opaque
+// HSM slots replace the file map later with no caller change.
 
 package system.services.crypto
 
-// ─── Crypto wire types ────────────────────────────────────────────────────
+// ─── Algorithm + status enums ──────────────────────────────────────────────
 
-// Hash algorithm selector. Mirrors the OpenSSL EVP_* the provider dispatches.
+// Hash algorithm selector (the SHA-2 family the SoftwareProvider dispatches to
+// OpenSSL EVP). The AUTOSAR ALG_ID equivalent for our subset.
 enum HashAlgo {
     SHA256 = 0
     SHA384 = 1
     SHA512 = 2
 }
 
-// Generic status for crypto ops. 0=ok; non-zero carries a short diagnostic in
-// `message` (unknown slot, bad algo, OpenSSL failure, …).
+// CryptoErrorDomain (docs/autosar/services/crypto.md §7). 0=ok; the rest mirror
+// the AUTOSAR error codes a caller branches on.
 enum CryptoStatus {
-    OK            = 0
-    UNKNOWN_SLOT  = 1
-    BAD_ALGO      = 2
-    BACKEND_ERROR = 3
-    BAD_INPUT     = 4
+    OK                   = 0
+    UNKNOWN_IDENTIFIER   = 1   // slot id not assigned / not found (kUnknownIdentifier)
+    INCOMPATIBLE_ARGS    = 2   // wrong key type for the ctx (kIncompatibleArguments)
+    USAGE_VIOLATION      = 3   // op not in the slot's allowed usage (kUsageViolation)
+    AUTH_TAG_FAILED      = 4   // AEAD/verify tag mismatch (kAuthTagVerificationFailed)
+    BAD_ALGO             = 5   // unsupported algorithm
+    BAD_CONTEXT          = 6   // unknown / wrong-state context handle
+    BACKEND_ERROR        = 7   // provider/OpenSSL failure
+    BAD_INPUT            = 8
 }
 
-// Hash(data) → digest. No key involved — pure transform.
+// What a context computes — selects the handle_call family the ctx ops route to.
+enum CtxKind {
+    HASH     = 0   // HashFunctionCtx   (no key)
+    SIGNER   = 1   // SignerPrivateCtx  (private key by slot)
+    VERIFIER = 2   // VerifierPublicCtx (public key / cert by slot)
+}
+
+// ─── KeySlot schema (the manifest-defined slot, §3) ─────────────────────────
+
+// Allowed-usage flags — a bitmask restricting what a slot's key may do. The
+// provider rejects an op outside the mask with USAGE_VIOLATION.
+enum KeyUsage {
+    USE_NONE    = 0
+    USE_ENCRYPT = 1
+    USE_DECRYPT = 2
+    USE_SIGN    = 4
+    USE_VERIFY  = 8
+}
+
+// One Key Slot's descriptor (read-back; the slot itself is provisioned by
+// deploy/manifest, not created over the wire in v1). algorithm_family restricts
+// the slot to a key type (e.g. "RSA-4096", "EC-P256"); exportable=false means
+// the key can never be read as raw bytes, only used via the API.
+message KeySlotInfo {
+    string slot_id
+    string algorithm_family
+    uint32 allowed_usage      // KeyUsage bitmask
+    bool   exportable
+}
+
+message SlotInfoReq   { string slot_id }
+message SlotInfoReply {
+    CryptoStatus status
+    string       message
+    KeySlotInfo  info
+}
+
+// ─── Context lifecycle protocol (the ara::crypto context API, §4) ───────────
+
+// CreateCtx(kind, algo[, key_slot]) → ctx handle. SIGNER/VERIFIER bind the slot
+// at create; HASH ignores key_slot. The handle is opaque to the caller and valid
+// until Finish (or an idle-timeout reap on the FC side).
+message CreateCtxReq {
+    CtxKind  kind
+    HashAlgo algo
+    string   key_slot        // "" for HASH
+}
+message CreateCtxReply {
+    CryptoStatus status
+    string       message
+    uint64       ctx          // the context handle (0 on error)
+}
+
+// Start(ctx) — begin/reset the operation. (ara::crypto ctx->Start()).
+message CtxStartReq {
+    uint64 ctx
+}
+message CtxAck {
+    CryptoStatus status
+    string       message
+}
+
+// Update(ctx, chunk) — feed one chunk. Call repeatedly for arbitrary-length
+// data; this is how large payloads stream without a per-message size cap.
+// VERIFIER also feeds the signature-to-check via the final Finish (below).
+message CtxUpdateReq {
+    uint64 ctx
+    bytes  chunk
+}
+
+// Finish(ctx) — complete the op and return the result + release the handle.
+//   HASH     → output = digest
+//   SIGNER   → output = signature (private key never left the provider)
+//   VERIFIER → set `signature` to the sig under test; output empty, `valid` set
+message CtxFinishReq {
+    uint64 ctx
+    bytes  signature         // VERIFIER only: the signature to check; else empty
+}
+message CtxFinishReply {
+    CryptoStatus status
+    string       message
+    bytes        output       // digest or signature; empty for VERIFIER
+    bool         valid        // VERIFIER only
+}
+
+// ─── One-shot convenience layer (small payloads) ───────────────────────────
+
+// Hash(data) → digest. No key — pure transform.
 message HashReq {
     HashAlgo algo
     bytes    data
@@ -44,9 +148,7 @@ message HashReply {
     bytes        digest
 }
 
-// Sign(slot, data) → signature. The private key referenced by `key_slot` NEVER
-// leaves the provider; the caller gets only the signature. `algo` is the digest
-// to sign over (the provider does digest-then-sign).
+// Sign(slot, data) → signature (digest-then-sign; key never leaves the FC).
 message SignReq {
     string   key_slot
     HashAlgo algo
@@ -58,7 +160,7 @@ message SignReply {
     bytes        signature
 }
 
-// Verify(slot, data, signature) → valid. Uses the slot's PUBLIC key / cert.
+// Verify(slot, data, signature) → valid (uses the slot's public key / cert).
 message VerifyReq {
     string   key_slot
     HashAlgo algo
@@ -71,9 +173,8 @@ message VerifyReply {
     bool         valid
 }
 
-// GetCert(slot) → PEM. Serves a slot's certificate (and, for a CA slot, the CA
-// cert) so a caller like com can hand it to its TLS layer WITHOUT the key. The
-// private key is never exposed — only Sign uses it, in-provider.
+// GetCert(slot) → PEM (the X.509 provider surface, §2). Serves a slot's cert so
+// a caller (com TLS) can hand it to its TLS layer WITHOUT the key.
 message CertReq {
     string slot
 }
@@ -83,13 +184,22 @@ message CertReply {
     bytes        pem
 }
 
-// ─── Crypto interface ──────────────────────────────────────────────────────
+// ─── Interfaces ─────────────────────────────────────────────────────────────
 
-// The CryptoProvider surface — the minimal v1 subset (open point "interface
-// scope": minimal now, full ara::crypto context API later). Every op is
-// request/reply over TIPC; the manager routes by slot to the backing provider
-// (only SoftwareProvider/OpenSSL exists in phase 2).
+// The faithful ara::crypto context API + slot introspection. A caller that
+// needs streaming / large data (UCM verifying a software-cluster signature, a
+// big SecOC payload) uses Create → Start → Update* → Finish.
 interface clientServer CryptoProviderIf {
+    operation CreateCtx(in r: CreateCtxReq)   returns CreateCtxReply
+    operation CtxStart(in r: CtxStartReq)     returns CtxAck
+    operation CtxUpdate(in r: CtxUpdateReq)   returns CtxAck
+    operation CtxFinish(in r: CtxFinishReq)   returns CtxFinishReply
+    operation SlotInfo(in r: SlotInfoReq)     returns SlotInfoReply
+}
+
+// The one-shot convenience surface (small payloads, e.g. com's TLS handshake
+// hash + cert fetch in phase 3). Same provider; the non-streaming fast path.
+interface clientServer CryptoOneShotIf {
     operation Hash(in r: HashReq)     returns HashReply
     operation Sign(in r: SignReq)     returns SignReply
     operation Verify(in r: VerifyReq) returns VerifyReply
@@ -99,21 +209,25 @@ interface clientServer CryptoProviderIf {
 // ─── Nodes ─────────────────────────────────────────────────────────────────
 
 // The Crypto Service Manager. tipc 0x80010006. An atomic gen_server: each op is
-// a handle_call dispatched on the node thread to the OpenSSL SoftwareProvider.
-// Slots map to PEM file paths in v1 (config/crypto.json params or env), loaded
-// lazily on first use; the private key stays in this process, never returned.
+// a handle_call on the node thread, routed to the OpenSSL SoftwareProvider. The
+// node holds the live context registry (handle → in-progress EVP op) in its
+// State. Slots map to PEM file pairs in v1; the private key stays in this
+// process, never returned.
 node atomic CryptoProvider {
     tipc type=0x80010006 instance=0
     tag = "CRYP"
     ports {
-        // The CryptoProvider surface: callers (com TLS, later diag 0x27) call
-        // Hash/Sign/Verify/GetCert here. handle_call per op on the node thread.
+        // Both surfaces land on this node (one gen_server, two interfaces).
         server provider provides CryptoProviderIf
+        server oneshot  provides CryptoOneShotIf
     }
     params {
         // Slot→PEM directory. A slot "<name>" resolves to <slot_dir>/<name>.key
         // (private) + <slot_dir>/<name>.crt (cert). v1 facade; real opaque
-        // KeySlots later. Overridable per-deploy.
+        // HSM-backed KeySlots later. Overridable per-deploy.
         slot_dir : string = "/etc/theia/crypto"
+        // Idle contexts are reaped after this many ms (a caller that creates a
+        // ctx then dies shouldn't leak it). 0 = never reap.
+        ctx_idle_ms : uint32 = 30000
     }
 }

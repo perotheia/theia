@@ -136,6 +136,16 @@ int main() {
         // types so a real peer — or a robot-test inject via services/com
         // — lands on the same handle_call / handle_cast path. clientServer
         // ops → register_call; senderReceiver `in` data → register_cast.
+        config_mux.register_call<CreateCtxReq, CreateCtxReply>(
+            crypto_provider_cfg, crypto_provider);
+        config_mux.register_call<CtxStartReq, CtxAck>(
+            crypto_provider_cfg, crypto_provider);
+        config_mux.register_call<CtxUpdateReq, CtxAck>(
+            crypto_provider_cfg, crypto_provider);
+        config_mux.register_call<CtxFinishReq, CtxFinishReply>(
+            crypto_provider_cfg, crypto_provider);
+        config_mux.register_call<SlotInfoReq, SlotInfoReply>(
+            crypto_provider_cfg, crypto_provider);
         config_mux.register_call<HashReq, HashReply>(
             crypto_provider_cfg, crypto_provider);
         config_mux.register_call<SignReq, SignReply>(

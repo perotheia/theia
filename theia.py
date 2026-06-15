@@ -888,7 +888,7 @@ def _build_framework_deb(out_dir: Path, version: str = "0.1.0") -> int:
     wheels.mkdir(parents=True, exist_ok=True)
 
     # artheia + rf-theia WHEELS (the user pip-installs these into their venv).
-    for src in (WORKSPACE / "artheia", WORKSPACE / "testing"):
+    for src in (WORKSPACE / "artheia", WORKSPACE / "rf-theia"):
         if (src / "pyproject.toml").is_file():
             if (rc := _run([sys.executable, "-m", "pip", "wheel", "--no-deps",
                             "-w", str(wheels), str(src)])) != 0:
@@ -899,7 +899,7 @@ def _build_framework_deb(out_dir: Path, version: str = "0.1.0") -> int:
     # rather than hand-listing — picks up artheia's (textX/Jinja2/click/PyYAML/
     # fastmcp) AND rf-theia's (robotframework/grpcio/numpy/pandas/asteval/…).
     # nanopb is added explicitly (its generator CLI is used at build time).
-    dep_srcs = [str(WORKSPACE / d) for d in ("artheia", "testing")
+    dep_srcs = [str(WORKSPACE / d) for d in ("artheia", "rf-theia")
                 if (WORKSPACE / d / "pyproject.toml").is_file()]
     if (rc := _run([sys.executable, "-m", "pip", "download",
                     "--dest", str(wheels), "nanopb>=0.4.9", *dep_srcs])) != 0:
@@ -1045,7 +1045,7 @@ def cmd_release(args: list[str]) -> int:
     rf_out = deb_dir / "theia-rf"
     rf_out.mkdir(parents=True, exist_ok=True)
     if (rc := _run([sys.executable, "-m", "pip", "wheel",
-                    str(WORKSPACE / "testing"), "--no-deps",
+                    str(WORKSPACE / "rf-theia"), "--no-deps",
                     "-w", str(rf_out)])) != 0:
         print("theia release: rf wheel build failed.", file=sys.stderr)
         return rc

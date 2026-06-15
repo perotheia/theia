@@ -1,0 +1,113 @@
+name: build & release .deb
+
+# Build the Theia .deb set on Ubuntu 22.04 + 24.04. Every push/PR is a
+# build-check (no upload); a vX.Y.Z tag additionally attaches the .debs to a
+# GitHub Release. Runtime-library Depends are computed PER-RELEASE with
+# dpkg-shlibdeps (no hardcoded sonames — they differ across Ubuntu releases).
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed to create/attach a GitHub Release on a tag
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        ubuntu: ["22.04", "24.04"]
+    runs-on: ubuntu-${{ matrix.ubuntu }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive   # artheia + etcd-cpp-apiv3 are needed to build
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake pkg-config dpkg-dev \
+            python3 python3-venv python3-pip \
+            libnanopb-dev \
+            libboost-system-dev libboost-thread-dev libboost-random-dev \
+            libssl-dev libprotobuf-dev protobuf-compiler \
+            libgrpc++-dev protobuf-compiler-grpc \
+            libcpprest-dev
+
+      - name: Install Bazelisk (pins Bazel via .bazelversion)
+        run: |
+          sudo curl -fsSL -o /usr/local/bin/bazel \
+            https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64
+          sudo chmod +x /usr/local/bin/bazel
+          bazel version
+
+      - name: Cache etcd-cpp-apiv3 build (by submodule SHA + ubuntu)
+        id: etcd-cache
+        uses: actions/cache@v4
+        with:
+          path: third_party/etcd-cpp-apiv3/install
+          key: etcd-${{ matrix.ubuntu }}-${{ hashFiles('.gitmodules') }}-${{ hashFiles('third_party/etcd-cpp-apiv3/CMakeLists.txt') }}
+
+      - name: Build etcd-cpp-apiv3 (CMake, out-of-Bazel)
+        if: steps.etcd-cache.outputs.cache-hit != 'true'
+        run: |
+          cmake -S third_party/etcd-cpp-apiv3 \
+                -B third_party/etcd-cpp-apiv3/build \
+                -DCMAKE_INSTALL_PREFIX="$PWD/third_party/etcd-cpp-apiv3/install" \
+                -DBUILD_ETCD_TESTS=OFF -DETCD_W_STRICT=OFF
+          cmake --build third_party/etcd-cpp-apiv3/build -j"$(nproc)"
+          cmake --install third_party/etcd-cpp-apiv3/build
+
+      - name: Set up Python venv (artheia generators run during the build)
+        run: |
+          python3 -m venv .venv
+          ./.venv/bin/pip install --upgrade pip build
+          ./.venv/bin/pip install -e artheia/
+
+      - name: Build the .deb set (theia release)
+        run: |
+          export PATH="$PWD/.venv/bin:$PATH"
+          python3 theia.py release --arch host
+
+      - name: Fix per-release runtime Depends (dpkg-shlibdeps)
+        run: |
+          ./.github/scripts/fix-deb-depends.sh "${{ matrix.ubuntu }}"
+
+      - name: Stamp .deb filenames with the Ubuntu release
+        id: stamp
+        run: |
+          mkdir -p out
+          for f in dist/debian/*/*.deb; do
+            base="$(basename "$f" .deb)"        # theia-services_0.1.0_amd64
+            cp "$f" "out/${base%_*}_ubuntu${{ matrix.ubuntu }}_${base##*_}.deb"
+          done
+          ls -la out/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: theia-deb-ubuntu${{ matrix.ubuntu }}
+          path: out/*.deb
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: theia-deb-ubuntu*
+          path: artifacts
+          merge-multiple: true
+      - name: Attach .debs to the GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*.deb
+          fail_on_unmatched_files: true
+          generate_release_notes: true

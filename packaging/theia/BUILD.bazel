@@ -50,25 +50,42 @@ pkg_deb(
 )
 
 # ── theia-runtime-dev (build) ────────────────────────────────────────────────
-# The runtime SOURCES a workspace compiles its apps against: gen_server/statem/
-# runnable headers + .cc, tombstone, the runtime control proto (.proto + the
-# BUILT .pb.{c,h}; the workspace links them without re-running nanopb), the
-# runtime .art (defines ChildControlIf etc.).
+# Ships the runtime + tombstone as a CONSUMABLE BAZEL MODULE tree under
+# /opt/theia/platform/... (NOT the legacy /opt/theia/src). With the module root
+# (/opt/theia/MODULE.bazel = `pero_theia`, from theia-framework), a consuming
+# workspace's `@pero_theia//platform/runtime:runtime`, `:runtime_proto_cc`, and
+# `@pero_theia//platform/supervisor/tombstone:tombstone` resolve EXACTLY as in
+# the repo — same labels, same workspace-relative paths. The trimmed module
+# BUILD files (no test suite / dist filegroups) ship via `files`; the sources
+# via `data` (short_path `platform/...` → /opt/theia/platform/...).
 pkg_deb(
     name = "theia-runtime-dev_deb",
     package = "theia-runtime-dev",
     version = _VERSION,
-    description = "Theia runtime development files: gen_server/statem/runnable sources + headers, tombstone, runtime proto + .art",
+    description = "Theia runtime dev: the pero_theia bazel module (runtime + tombstone sources + BUILD) + runtime .art",
     section = "devel",
     # libnanopb-dev: pb.h + libprotobuf-nanopb.a the runtime sources compile/link
     # against. build-essential: gcc/g++ for the workspace bazel build.
     depends = "theia-runtime, theia-framework, libnanopb-dev, build-essential",
+    files = {
+        # Trimmed module BUILD files at their real package paths.
+        "//packaging/theia/module:runtime.BUILD.bazel":
+            "/opt/theia/platform/runtime/BUILD.bazel",
+        "//packaging/theia/module:tombstone.BUILD.bazel":
+            "/opt/theia/platform/supervisor/tombstone/BUILD.bazel",
+    },
     data = [
+        # Runtime + tombstone SOURCES — short_path platform/... → /opt/theia/
+        # platform/... (drops the old `src/` so the module paths match the repo).
         "//platform/runtime:runtime_dist_srcs",
         "//platform/supervisor/tombstone:tombstone_dist_hdrs",
+        # The supervisor .art (system.supervisor package) — a consuming ws's
+        # system.art imports it (`import system.supervisor.*`) to deploy the
+        # fabric; ships so the resolver reaches it from /opt/theia.
+        "//platform/supervisor/system:supervisor_art_srcs",
     ],
-    prefix = "/opt/theia/src",
-    strip_prefix = "platform",
+    prefix = "/opt/theia",
+    strip_prefix = "",
 )
 
 # ── theia-services (machine) ─────────────────────────────────────────────────

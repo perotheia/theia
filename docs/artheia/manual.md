@@ -740,9 +740,10 @@ Exit code 0 on success, 1 on errors. Errors are written to stderr.
 
 ## 14. Editor support
 
-The VS Code extension lives at `vscode-extension/`. It bundles a
-TextMate grammar (instant highlighting, works offline) and an LSP client
-that spawns `artheia-lsp` over stdio.
+Editor integrations live in the umbrella repo at `contrib/editors/`
+(`vscode/` and `emacs/`). Both drive the same `artheia-lsp` language server
+over stdio and bundle a grammar for instant offline highlighting. See
+[editors.md](editors.md) for the full per-editor setup.
 
 What the LSP provides:
 
@@ -759,17 +760,20 @@ generator reads, so the catalog written by `artheia import-dbc` /
 `artheia import-fibex` does double duty: it routes the netgraph and it
 powers editor completion for those signal names.
 
-Install:
+Install (VS Code):
 
 ```sh
 pip install -e .            # gives you artheia + artheia-lsp on PATH
-cd vscode-extension
+cd contrib/editors/vscode
 npm install && npm run compile
 npx vsce package --no-dependencies
 code --install-extension artheia-0.0.1.vsix
 ```
 
-Settings (in VS Code):
+Emacs (`lsp-mode`): put `contrib/editors/emacs/` on the `load-path`, then
+`(require 'artheia-mode)` and `(add-hook 'artheia-mode-hook #'lsp)`.
+
+Settings (VS Code):
 
 | Key | Default | What |
 |---|---|---|

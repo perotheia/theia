@@ -274,6 +274,6 @@ Resolves imports recursively and prints the merged tree, or exits non-zero
 on the first error. Common errors: an `import` placed after a declaration;
 a non-`extern` `node` missing its `tipc`; a non-empty `extern` body; `→`
 typed as `->`; a `provides`/`requires` pointing at the wrong interface
-flavor. The LSP (`artheia-lsp --stdio`, VS Code extension under
-`artheia/vscode-extension/`) gives the same diagnostics live, plus
+flavor. The LSP (`artheia-lsp --stdio`; editor clients under
+`contrib/editors/{vscode,emacs}/`) gives the same diagnostics live, plus
 go-to-definition across the forward-decl boundary.

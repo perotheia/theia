@@ -111,9 +111,14 @@ cc_library(
     # grpc++ + its deps from the host toolchain (not in bzlmod). protobuf is
     # already pulled transitively by supervisor_pb_cpp → //third_party:
     # system_protobuf, but grpc needs -lgrpc++ -lgrpc -lgpr explicitly.
+    # On Ubuntu 24.04 gRPC's headers reference absl::Mutex but -lgrpc++ no longer
+    # pulls abseil, so the bridge fails to link (undefined absl::*::Mutex::Lock).
+    # -labsl_synchronization (DT_NEEDED-pulls its own absl deps) resolves it;
+    # it's present + harmless on 22.04 too (needs libabsl-dev for the .so).
     linkopts = [
         "-lgrpc++",
         "-lgrpc",
         "-lgpr",
+        "-labsl_synchronization",
     ],
 )

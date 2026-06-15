@@ -40,6 +40,24 @@ public:
 
     const char* name() const override { return "OpenSSL software"; }
 
+    // Cert rotation: drop cached keys/certs so the next op re-reads the slot's
+    // (possibly rotated) PEM. Cheap; the cache rebuilds lazily.
+    void reload() override {
+        std::lock_guard<std::mutex> lk(keymu_);
+        priv_.clear();
+        pub_.clear();
+    }
+
+    // Re-point the slot dir (drops the cache so subsequent opens use the new
+    // dir). A real HSM treats this as RESTART_REQUIRED; the file backend honors
+    // it live.
+    void set_slot_dir(const std::string& dir) override {
+        std::lock_guard<std::mutex> lk(keymu_);
+        slot_dir_ = dir;
+        priv_.clear();
+        pub_.clear();
+    }
+
     // ====================================================================
     // Context lifecycle — the streaming ara::crypto API
     // ====================================================================

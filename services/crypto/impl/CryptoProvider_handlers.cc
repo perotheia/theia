@@ -19,6 +19,8 @@
 
 #include "impl/provider_manager.hpp"
 
+#include <pb_decode.h>
+
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -74,6 +76,27 @@ void CryptoProvider::init(CryptoProviderState& /*s*/) {
 }
 
 void CryptoProvider::handle_info(const char* /*info*/, CryptoProviderState& /*s*/) {
+}
+
+// on_config_update — services/per casts ConfigUpdated when the etcd-backed
+// CryptoConfig changes (the THIRD framework config-service cast). We decode the
+// new config and apply it LIVE to the Crypto Service Manager: re-route slots,
+// re-point slot_dir / HSM, and on a cert_generation bump reload cached keys —
+// cert ROTATION + provider re-routing without a restart (phase 5). The base
+// already logged the digest + changed mask; this adds the typed apply.
+void CryptoProvider::on_config_update(
+        const platform_runtime_ConfigUpdated& push,
+        CryptoProviderState& /*s*/) {
+    system_services_crypto_CryptoConfig cfg =
+        system_services_crypto_CryptoConfig_init_zero;
+    pb_istream_t is = pb_istream_from_buffer(push.config.bytes, push.config.size);
+    if (!pb_decode(&is, system_services_crypto_CryptoConfig_fields, &cfg)) {
+        log().warn("on_config_update: CryptoConfig decode failed — not applied");
+        return;
+    }
+    std::string summary = manager().apply_config(
+        cfg.slot_providers, cfg.slot_dir, cfg.hsm_device, cfg.cert_generation);
+    log().info(std::string("crypto config applied: ") + summary);
 }
 
 // ==== context lifecycle (CryptoProviderIf) ================================

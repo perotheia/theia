@@ -35,4 +35,14 @@ void IncrementerNode::handle_info(const char* info, IncrementerNodeState& s) {
                               "tick");
 }
 
+
+// ---- config update — services/per casts ConfigUpdated when this node's
+//      etcd-backed config changes; the GenServer base decoded + logged. This
+//      demo node reads its config at boot (get_config()), so the live hook is
+//      an empty default (the declaration shadows the base no-op).
+void IncrementerNode::on_config_update(
+        const platform_runtime_ConfigUpdated& /*cfg*/,
+        IncrementerNodeState& /*s*/) {
+}
+
 }  // namespace demo

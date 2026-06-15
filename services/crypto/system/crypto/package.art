@@ -57,6 +57,39 @@ enum CtxKind {
     VERIFIER = 2   // VerifierPublicCtx (public key / cert by slot)
 }
 
+// ─── Runtime config (etcd-backed via services/per) ─────────────────────────
+//
+// The Crypto Service Manager's runtime config — `config CryptoConfig` on the
+// CryptoProvider node binds it as the node's structured config. gen-schema
+// registers it (digest + shape), services/per stores it in etcd as
+// digest-versioned binary, and a change arrives as a platform.runtime.
+// ConfigUpdated cast → the node's on_config_update. THIS is the etcd interface:
+// no env vars — the slot→provider routing, the HSM device, and PKI/rotation are
+// all observable + hot-reloadable config (phase 4 routing + phase 5 PKI).
+//
+// Per-field reload class (services/per honors these via the FieldMask the node
+// inspects in on_config_update):
+//   slot_providers   HOT_RELOAD       — re-route slots live (no restart)
+//   hsm_device       HOT_RELOAD       — re-point the HardwareProvider
+//   cert_generation  HOT_RELOAD       — bump triggers a cert reload (rotation)
+//   slot_dir         RESTART_REQUIRED — providers cache opened keys from it
+//   ca_subject /     STATIC/HOT       — PKI knobs for CSR generation (phase 5)
+//   cert_ttl_days
+message CryptoConfig {
+    // Slot → backend routing: "slotA=hw,slotB=sw" (unlisted = software).
+    string slot_providers = ""
+    // PEM slot directory: slot "<n>" → <slot_dir>/<n>.{key,crt}.
+    string slot_dir       = "/etc/theia/crypto"
+    // HSM/TPM device id (PKCS#11 URI / TA path) for the HardwareProvider.
+    string hsm_device     = ""
+    // PKI: CSR subject base (e.g. "/O=Theia/CN=") + cert validity (rotation).
+    string ca_subject     = "/O=Theia/CN="
+    uint32 cert_ttl_days  = 825
+    // Rotation signal: bump to make the manager reload a slot's cert/key
+    // (a new cert was provisioned to the slot dir / HSM) without a restart.
+    uint64 cert_generation = 0
+}
+
 // ─── KeySlot schema (the manifest-defined slot, §3) ─────────────────────────
 
 // Allowed-usage flags — a bitmask restricting what a slot's key may do. The
@@ -235,18 +268,20 @@ interface clientServer CryptoOneShotIf {
 node atomic CryptoProvider {
     tipc type=0x80010006 instance=0
     tag = "CRYP"
+    // Structured, etcd-backed config (services/per): the slot→provider routing,
+    // HSM device, and PKI/rotation knobs. `config` binds it; gen-schema +
+    // services/per make it the etcd interface; changes arrive as ConfigUpdated →
+    // on_config_update (live re-route + cert rotation, no restart).
+    config CryptoConfig
     ports {
         // Both surfaces land on this node (one gen_server, two interfaces).
         server provider provides CryptoProviderIf
         server oneshot  provides CryptoOneShotIf
     }
     params {
-        // Slot→PEM directory. A slot "<name>" resolves to <slot_dir>/<name>.key
-        // (private) + <slot_dir>/<name>.crt (cert). v1 facade; real opaque
-        // HSM-backed KeySlots later. Overridable per-deploy.
-        slot_dir : string = "/etc/theia/crypto"
         // Idle contexts are reaped after this many ms (a caller that creates a
-        // ctx then dies shouldn't leak it). 0 = never reap.
+        // ctx then dies shouldn't leak it). 0 = never reap. Static deploy knob
+        // (lifecycle: param, not runtime-observable config).
         ctx_idle_ms : uint32 = 30000
     }
 }

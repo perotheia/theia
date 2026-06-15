@@ -44,6 +44,41 @@ public:
     // The default backend (for slot-less ops like hash).
     ICryptoProvider& default_provider() { return sw_; }
 
+    // ---- hot config apply (on_config_update / cert rotation) --------------
+    //
+    // Re-apply the etcd-backed CryptoConfig live: re-route slots, re-point the
+    // slot dir + HSM device, and on a cert_generation BUMP drop cached keys so
+    // the next op picks up a rotated cert/key — no restart. Returns a short
+    // summary for the log. Thread-safe vs. the ctx map / route map.
+    std::string apply_config(const std::string& routing,
+                             const std::string& slot_dir,
+                             const std::string& hsm_device,
+                             uint64_t cert_generation) {
+        std::string summary;
+        {
+            std::lock_guard<std::mutex> lk(mu_);
+            route_.clear();
+            parse_routing_(routing);
+            summary = "routes=" + std::to_string(route_.size());
+        }
+        if (!slot_dir.empty()) {
+            sw_.set_slot_dir(slot_dir);
+            hw_.set_slot_dir(slot_dir);
+            summary += " slot_dir=" + slot_dir;
+        }
+        if (!hsm_device.empty()) {
+            hw_.set_device(hsm_device);
+            summary += " hsm=" + hsm_device;
+        }
+        if (cert_generation != cert_gen_) {
+            cert_gen_ = cert_generation;
+            sw_.reload();
+            hw_.reload();
+            summary += " cert_reload(gen=" + std::to_string(cert_generation) + ")";
+        }
+        return summary;
+    }
+
     // ---- context routing (handles are provider-local) ---------------------
     // create() on the slot's provider, then tag the handle so later ctx ops
     // route back. We keep a small handle→provider map (the .art ctx handle is
@@ -104,6 +139,7 @@ private:
     std::map<std::string, bool> route_;     // slot → is-hardware
     std::mutex mu_;
     std::map<uint64_t, ICryptoProvider*> ctx_owner_;
+    uint64_t cert_gen_ = 0;                  // last applied cert_generation
 };
 
 }  // namespace ara::crypto

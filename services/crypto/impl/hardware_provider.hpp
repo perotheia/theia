@@ -70,6 +70,12 @@ public:
         return false;
     }
 
+    // No cache / no slot dir — a real HSM would re-handshake the device here.
+    void reload() override { sw_.reload(); }
+    void set_slot_dir(const std::string& dir) override { sw_.set_slot_dir(dir); }
+    // Re-point the HSM device (a real driver reconnects).
+    void set_device(const std::string& dev) { device_ = dev; }
+
 private:
     ProviderResult not_present_(const char* op) {
         ProviderResult r;

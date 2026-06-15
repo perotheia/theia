@@ -74,6 +74,14 @@ public:
     virtual bool slot_info(const std::string& slot, std::string& family,
                            uint32_t& usage, bool& exportable) = 0;
 
+    // Drop cached key material (cert rotation: a new cert/key was provisioned
+    // to the slot; the next op re-reads it). A backend with no cache is a no-op.
+    virtual void reload() = 0;
+
+    // Re-point the slot directory (RESTART_REQUIRED in practice, but the
+    // SoftwareProvider can honor it live by also dropping its cache).
+    virtual void set_slot_dir(const std::string& dir) = 0;
+
     // A short label for logs ("OpenSSL software", "HSM stub").
     virtual const char* name() const = 0;
 };

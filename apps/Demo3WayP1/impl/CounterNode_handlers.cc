@@ -36,4 +36,14 @@ GetReply CounterNode::handle_call(const Get& /*req*/, CounterNodeState& s) {
     return reply;
 }
 
+
+// ---- config update — services/per casts ConfigUpdated when this node's
+//      etcd-backed config changes; the GenServer base decoded + logged. This
+//      demo node reads its config at boot (get_config()), so the live hook is
+//      an empty default (the declaration shadows the base no-op).
+void CounterNode::on_config_update(
+        const platform_runtime_ConfigUpdated& /*cfg*/,
+        CounterNodeState& /*s*/) {
+}
+
 }  // namespace demo

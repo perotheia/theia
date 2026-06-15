@@ -5,6 +5,13 @@
 #
 # Grammar: "<Fully.Qualified.field>  max_size:N".
 
+# ---- CryptoConfig (etcd-backed runtime config via services/per) ----------
+# slot_providers can list several slots → 256 covers a realistic map.
+system_services_crypto.CryptoConfig.slot_providers max_size:256
+system_services_crypto.CryptoConfig.slot_dir       max_size:256
+system_services_crypto.CryptoConfig.hsm_device     max_size:128
+system_services_crypto.CryptoConfig.ca_subject     max_size:128
+
 # ---- KeySlot schema ------------------------------------------------------
 system_services_crypto.KeySlotInfo.slot_id          max_size:64
 system_services_crypto.KeySlotInfo.algorithm_family max_size:32
@@ -37,7 +44,6 @@ system_services_crypto.CertReply.message   max_size:128
 system_services_crypto.CertReply.pem       max_size:8192
 
 # ---- PrivateKeyOp (raw RSA private primitive for the TLS engine) ---------
-# input/output are one RSA modulus block: RSA-4096 = 512 bytes, 640 headroom.
 system_services_crypto.PrivOpReq.slot      max_size:64
 system_services_crypto.PrivOpReq.input     max_size:640
 system_services_crypto.PrivOpReply.message max_size:128

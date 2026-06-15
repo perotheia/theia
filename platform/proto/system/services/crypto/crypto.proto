@@ -28,6 +28,15 @@ enum CtxKind {
     CtxKind_VERIFIER = 2;
 }
 
+message CryptoConfig {
+    string slot_providers = 1;
+    string slot_dir = 2;
+    string hsm_device = 3;
+    string ca_subject = 4;
+    uint32 cert_ttl_days = 5;
+    uint64 cert_generation = 6;
+}
+
 message KeySlotInfo {
     string slot_id = 1;
     string algorithm_family = 2;

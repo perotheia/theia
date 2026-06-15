@@ -141,6 +141,17 @@ public:
     // Declared so a node can override the GenServer base no-op in its impl.
     void handle_info(const char* info, CounterNodeState& s);
 
+    // ---- config update — body in impl (CounterNode_handlers.cc) -------
+    //
+    // This node binds `config CounterConfig`. services/per casts a
+    // platform.runtime.ConfigUpdated when the etcd-backed config changes; the
+    // GenServer base decodes the envelope + logs, then calls this hook. Declared
+    // (shadowing the base no-op) so the node can apply its typed config LIVE —
+    // ParseFromString cfg.config into CounterConfig and honor the changed mask.
+    // A node that only reads config at boot leaves the impl body empty.
+    void on_config_update(const platform_runtime_ConfigUpdated& cfg,
+                          CounterNodeState& s);
+
     // ---- send helpers — bodies in impl (the broadcast fan-out)
 
 

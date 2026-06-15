@@ -119,3 +119,7 @@ core.*
 #     services/log/proto/trace_stream.proto stay tracked.)
 /demo/manifest/executor.json
 /services/*/proto/system/
+
+# docs is a SEPARATE repo (PG50/docs), cloned here as a plain working copy
+# (NOT a submodule, NOT mirrored to GitHub). Owned by its own git.
+/docs/

@@ -73,11 +73,14 @@ jobs:
           cmake --build third_party/etcd-cpp-apiv3/build -j"$(nproc)"
           cmake --install third_party/etcd-cpp-apiv3/build
 
-      - name: Set up Python venv (artheia generators run during the build)
+      - name: Set up Python venv (artheia + nanopb generators run during the build)
         run: |
           python3 -m venv .venv
           ./.venv/bin/pip install --upgrade pip build
           ./.venv/bin/pip install -e artheia/
+          # The proto genrules shell out to `nanopb_generator` (NOT an artheia
+          # dep); install it into the venv so it's on PATH for the bazel build.
+          ./.venv/bin/pip install nanopb
 
       - name: Build the .deb set (theia release)
         run: |

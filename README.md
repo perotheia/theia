@@ -1,26 +1,24 @@
-# Theia (`pero_theia`)
+# Theia
 
 An AUTOSAR-Adaptive-Platform-style framework: **Functional Clusters (FCs)**
 running as supervised processes on a custom C++ **actor runtime** ("the Theia
 runtime"), with the whole system modeled in the **artheia** `.art` DSL and built
 with Bazel.
 
-It's a **standalone git repo** (departed Google-`repo`) with a small set of
-git submodules. You author your apps in a SEPARATE **consuming workspace**
-scaffolded by `theia init`; the in-repo `apps/` is Theia's own demo, exercising
-the framework in CI.
+It's a **standalone git repo** with a small set of git submodules. You author
+your apps in a SEPARATE **consuming workspace** scaffolded by `theia init`; the
+in-repo `apps/` is Theia's own demo, exercising the framework in CI.
 
 ## Repositories
 
-| Repo | GitLab (origin) | GitHub mirror | Role |
-| --- | --- | --- | --- |
-| **pero_theia** | `PG50/pero_theia` | `perotheia/theia` | this repo — runtime, supervisor, services, build/packaging |
-| **artheia** | `PG50/artheia` | `perotheia/artheia` | submodule — the `.art` DSL, generators, LSP |
-| **rf-theia** | `PG50/rf-theia` | `perotheia/rf-theia` | submodule — the Robot Framework testing harness (library only) |
-| **docs** | `PG50/docs` | *(GitLab only)* | a plain clone at `docs/` (gitignored here, not mirrored) |
+| Repo | Role |
+| --- | --- |
+| **[theia](https://github.com/perotheia/theia)** | this repo — runtime, supervisor, services, build/packaging |
+| **[artheia](https://github.com/perotheia/artheia)** | submodule — the `.art` DSL, generators, LSP |
+| **[rf-theia](https://github.com/perotheia/rf-theia)** | submodule — the Robot Framework testing harness (library only) |
+| **docs** | a plain clone at `docs/` (gitignored here, not part of the framework tree) |
 
-Submodules also include `third_party/etcd-cpp-apiv3`. Each repo has a `github`
-remote alongside `origin`; push to both to keep the mirror current.
+Submodules also include `third_party/etcd-cpp-apiv3`.
 
 ## Layout
 
@@ -54,8 +52,8 @@ The three primitives everything in `.art` rests on:
 ## Quick start (developing in this repo)
 
 ```sh
-git clone --recurse-submodules ssh://git@cicd.skyway.porsche.com/PG50/pero_theia
-cd pero_theia
+git clone --recurse-submodules https://github.com/perotheia/theia
+cd theia
 python3 -m venv .venv && . .venv/bin/activate
 pip install -e artheia/ -e . -e 'rf-theia/[mcp]'   # artheia + the workspace + harness
 
@@ -102,5 +100,5 @@ import the harness as `rf_theia.TheiaTestLibrary`. Run via `robot` or the
 `theia release` builds the installable `.deb` set (framework / runtime / -dev /
 services / -dev) under `dist/debian/`. The framework deb ships artheia + rf-theia
 as **wheels** under `/opt/theia/wheels` (the user installs them into their own
-venv) and makes `/opt/theia` a consumable `pero_theia` Bazel module. See
+venv) and makes `/opt/theia` a consumable Bazel module (`@pero_theia`). See
 [`docs/`](docs/) → deployment for the full split.

@@ -14,6 +14,7 @@
 #include "lib/TraceForwarder.hh"
 
 #include "impl/trace_link.hpp"   // TraceLink: TIPC subscriber → raw-bytes sink
+#include "impl/com_tls.hpp"      // shared TLS-or-insecure ServerCredentials
 
 #include "supervisor_bridge.grpc.pb.h"
 
@@ -148,7 +149,7 @@ void TraceForwarder::do_start() {
     g_svc = std::make_unique<TraceStreamImpl>();
     const std::string listen = trace_listen_addr();
     grpc::ServerBuilder b;
-    b.AddListeningPort(listen, grpc::InsecureServerCredentials());
+    b.AddListeningPort(listen, services_com::make_server_creds(kNodeName));
     b.RegisterService(g_svc.get());
     g_server = b.BuildAndStart();
     if (!g_server) {

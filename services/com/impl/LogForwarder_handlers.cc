@@ -14,6 +14,7 @@
 #include "lib/LogForwarder.hh"
 
 #include "impl/log_link.hpp"   // LogLink: TIPC subscriber → raw-bytes sink
+#include "impl/com_tls.hpp"    // shared TLS-or-insecure ServerCredentials
 
 #include "supervisor_bridge.grpc.pb.h"
 
@@ -146,7 +147,7 @@ void LogForwarder::do_start() {
     g_svc = std::make_unique<LogStreamImpl>();
     const std::string listen = log_listen_addr();
     grpc::ServerBuilder b;
-    b.AddListeningPort(listen, grpc::InsecureServerCredentials());
+    b.AddListeningPort(listen, services_com::make_server_creds(kNodeName));
     b.RegisterService(g_svc.get());
     g_server = b.BuildAndStart();
     if (!g_server) {

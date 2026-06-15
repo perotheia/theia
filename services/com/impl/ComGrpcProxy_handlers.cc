@@ -40,6 +40,7 @@
 
 #include "impl/sup_link.hpp"      // #418 control path over the standard transport
 #include "impl/per_link.hpp"      // per (persistency) proxy — ListSchemas/Snapshot
+#include "impl/com_tls.hpp"       // shared TLS-or-insecure ServerCredentials
 
 #include "supervisor_bridge.grpc.pb.h"
 
@@ -402,7 +403,7 @@ void ComGrpcProxy::do_start() {
 
     const std::string listen = listen_addr();
     grpc::ServerBuilder b;
-    b.AddListeningPort(listen, grpc::InsecureServerCredentials());
+    b.AddListeningPort(listen, services_com::make_server_creds(kNodeName));
     b.RegisterService(g_sup_svc.get());
     b.RegisterService(g_per_svc.get());
     g_server = b.BuildAndStart();

@@ -15,11 +15,39 @@ so the shared cmd_tracecat renders identically.
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 from typing import Any, Iterator
 
 import grpc
+
+
+def _make_channel(target: str) -> "grpc.Channel":
+    """gRPC channel to com, TLS or insecure (matches com's opt-in TLS).
+
+    TLS is OPT-IN, the same way com flips it: when THEIA_COM_TLS_CA is set
+    (the dev CA from tools/gen_dev_certs.sh, or the deploy CA), connect with
+    SSL channel creds that trust that CA; otherwise stay insecure (local-dev
+    default). THEIA_COM_TLS_CLIENT_CERT/_KEY add a client cert for mTLS (com's
+    v1 policy is REQUEST_BUT_DONT_VERIFY, so a client cert is optional)."""
+    ca_path = os.environ.get("THEIA_COM_TLS_CA", "")
+    if not ca_path:
+        return grpc.insecure_channel(target)
+    with open(ca_path, "rb") as f:
+        ca = f.read()
+    client_cert = client_key = None
+    cc = os.environ.get("THEIA_COM_TLS_CLIENT_CERT", "")
+    ck = os.environ.get("THEIA_COM_TLS_CLIENT_KEY", "")
+    if cc and ck:
+        with open(cc, "rb") as f:
+            client_cert = f.read()
+        with open(ck, "rb") as f:
+            client_key = f.read()
+    creds = grpc.ssl_channel_credentials(
+        root_certificates=ca,
+        private_key=client_key, certificate_chain=client_cert)
+    return grpc.secure_channel(target, creds)
 
 # The grpc_tools-generated stubs use flat-style imports (import Foo_pb2), so
 # their dir must be on sys.path before we import them. Regenerate with
@@ -56,7 +84,7 @@ class SupervisorClient:
 
     def __init__(self, target: str = _DEFAULT_TARGET) -> None:
         self._target = target
-        self._channel = grpc.insecure_channel(target)
+        self._channel = _make_channel(target)
         self._stub = _brg.SupervisorViewStub(self._channel)
 
     # tdb_client parity: from_workspace(repo, instance). rtdb is transport-only
@@ -132,7 +160,7 @@ class PerClient:
     On the SAME :7700 endpoint as SupervisorView."""
 
     def __init__(self, target: str = _DEFAULT_TARGET) -> None:
-        self._channel = grpc.insecure_channel(target)
+        self._channel = _make_channel(target)
         self._stub = _brg.PerViewStub(self._channel)
 
     def list_schemas(self, config_type: str = "", timeout: float = 3.0):
@@ -205,7 +233,7 @@ class TraceClient:
     def __init__(self, target: str = _DEFAULT_COLLECTOR, *, kind: int = 0,
                  node: str = "", decode: bool = True) -> None:
         # TraceStream lives in supervisor_bridge (com's TraceForwarder).
-        self._channel = grpc.insecure_channel(target)
+        self._channel = _make_channel(target)
         self._stub = _brg.TraceStreamStub(self._channel)
         self._kind = kind
         self._node = node
@@ -294,7 +322,7 @@ class LogClient:
     def __init__(self, target: str = _DEFAULT_LOG_COLLECTOR, *,
                  level_min: int = 0, tag: str = "") -> None:
         # LogStream lives in supervisor_bridge (com's LogForwarder runnable).
-        self._channel = grpc.insecure_channel(target)
+        self._channel = _make_channel(target)
         self._stub = _brg.LogStreamStub(self._channel)
         self._level_min = level_min
         self._tag = tag

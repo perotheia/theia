@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# tools/gen_dev_certs.sh — generate a self-signed dev CA + a com server cert for
+# local TLS testing of com's gRPC endpoints (crypto/TLS plan phase 1).
+#
+# These are DEV-ONLY certs (self-signed, no real PKI). Point com at them with:
+#   THEIA_COM_TLS_CERT=<out>/server.crt
+#   THEIA_COM_TLS_KEY=<out>/server.key
+#   THEIA_COM_TLS_CA=<out>/ca.crt        # optional (client-cert verification)
+# and rtdb/GUI at:
+#   THEIA_COM_TLS_CA=<out>/ca.crt        # so the client trusts the dev CA
+#
+# Usage: tools/gen_dev_certs.sh [out_dir] [server_cn]
+#   out_dir    default ./dev-certs
+#   server_cn  default localhost  (must match the host clients dial)
+set -euo pipefail
+
+OUT="${1:-dev-certs}"
+CN="${2:-localhost}"
+DAYS=825   # < 825 keeps macOS/modern clients happy; dev anyway
+
+mkdir -p "$OUT"
+cd "$OUT"
+
+echo "[gen_dev_certs] writing dev CA + com server cert to $(pwd) (CN=$CN)"
+
+# --- CA -------------------------------------------------------------------
+openssl genrsa -out ca.key 4096 2>/dev/null
+openssl req -x509 -new -nodes -key ca.key -sha256 -days "$DAYS" \
+    -subj "/O=Theia Dev/CN=Theia Dev CA" -out ca.crt 2>/dev/null
+
+# --- com server cert (signed by the dev CA) -------------------------------
+# SAN must carry the CN + 127.0.0.1 so gRPC's hostname check passes on a
+# 127.0.0.1 dial (rtdb's default target).
+openssl genrsa -out server.key 4096 2>/dev/null
+openssl req -new -key server.key -subj "/O=Theia Dev/CN=$CN" -out server.csr 2>/dev/null
+
+cat > server.ext <<EXT
+subjectAltName = DNS:$CN, DNS:localhost, IP:127.0.0.1
+extendedKeyUsage = serverAuth
+EXT
+
+openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
+    -days "$DAYS" -sha256 -extfile server.ext -out server.crt 2>/dev/null
+
+rm -f server.csr server.ext ca.srl
+
+echo "[gen_dev_certs] done:"
+echo "  CA cert:     $(pwd)/ca.crt"
+echo "  server cert: $(pwd)/server.crt"
+echo "  server key:  $(pwd)/server.key"
+echo
+echo "Run com with TLS:"
+echo "  THEIA_COM_TLS_CERT=$(pwd)/server.crt \\"
+echo "  THEIA_COM_TLS_KEY=$(pwd)/server.key \\"
+echo "  THEIA_COM_TLS_CA=$(pwd)/ca.crt ./supervisor ..."
+echo "Point rtdb/GUI at the CA:"
+echo "  THEIA_COM_TLS_CA=$(pwd)/ca.crt rtdb ps"

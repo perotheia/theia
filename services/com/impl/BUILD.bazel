@@ -171,6 +171,9 @@ cc_library(
         "LogForwarder_handlers.cc",
         # ProbeDaemon_handlers.cc parked (services/com/backup/, see .art BACKUP).
     ],
+    # com_tls.hpp: the shared TLS-or-insecure ServerCredentials builder, included
+    # by all three gRPC-server handlers (ComGrpcProxy/TraceForwarder/LogForwarder).
+    hdrs = ["com_tls.hpp"],
     # `..` so ComGrpcProxy_handlers.cc resolves `#include "lib/ComGrpcProxy.hh"`
     # and `#include "impl/sup_link.hpp"` from the services/com/ root.
     includes = [".."],

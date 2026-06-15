@@ -51,6 +51,15 @@ if [[ -f "$_exec_json" ]]; then
              | sed 's/.*:[[:space:]]*//')"
     export THEIA_SUPERVISOR_INSTANCE="${_inst:-0}"
     log "supervisor TIPC instance=${THEIA_SUPERVISOR_INSTANCE} (from manifest)"
+
+    # This machine's logger SINK policy (un-expanded THEIA_LOGGER, e.g.
+    # "file:/var/log/theia" or "syslog"). The supervisor serves it back to
+    # log[logging] via GetLoggerPolicy so the hose knows what to tail. Default
+    # file:/tmp/theia matches build_supervisor_tree's fallback.
+    _logpol="$(grep -o '"logger_policy"[[:space:]]*:[[:space:]]*"[^"]*"' "$_exec_json" \
+               | sed 's/.*:[[:space:]]*"\(.*\)"/\1/')"
+    export THEIA_LOGGER_POLICY="${_logpol:-file:/tmp/theia}"
+    log "logger policy=${THEIA_LOGGER_POLICY} (from manifest)"
 fi
 
 puppet_apply() {  # $1 = site manifest (provisioning.pp / orchestration.pp)

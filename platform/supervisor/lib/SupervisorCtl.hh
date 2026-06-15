@@ -60,6 +60,8 @@ using GetLogLevelConfigRequest = system_supervisor_GetLogLevelConfigRequest;
 using LogLevelConfigList = system_supervisor_LogLevelConfigList;
 using GetTombstoneRequest = system_supervisor_GetTombstoneRequest;
 using GetTombstoneReply = system_supervisor_GetTombstoneReply;
+using GetLoggerPolicyRequest = system_supervisor_GetLoggerPolicyRequest;
+using LoggerPolicy = system_supervisor_LoggerPolicy;
 using SupervisionEvent = system_supervisor_SupervisionEvent;
 using SnapshotBegin = system_supervisor_SnapshotBegin;
 using NodeEdge = system_supervisor_NodeEdge;
@@ -251,6 +253,9 @@ public:
                                             SupervisorCtlState& s);
 
     GetTombstoneReply handle_call(const GetTombstoneRequest& req,
+                                            SupervisorCtlState& s);
+
+    LoggerPolicy handle_call(const GetLoggerPolicyRequest& req,
                                             SupervisorCtlState& s);
 
 

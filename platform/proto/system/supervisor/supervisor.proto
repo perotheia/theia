@@ -223,6 +223,27 @@ message LogLevelConfigList {
     repeated LogLevelStatus configs = 1;
 }
 
+// HAND-ADDED additively (NOT via full regen — a regen reorders ChildState
+// tags 20-23 + GetHealthRequest, which is wire-breaking for the com gRPC
+// bridge; see the supervisor-proto-regen-hazard note). Source of truth is
+// system/supervisor/package.art (LoggerEntry / GetLoggerPolicyRequest /
+// LoggerPolicy + SupervisorControlIf.GetLoggerPolicy).
+message LoggerEntry {
+    string node = 1;
+    string sink = 2;
+    string path = 3;
+    string tag = 4;
+}
+
+message GetLoggerPolicyRequest {
+    // empty body
+}
+
+message LoggerPolicy {
+    string machine_sink = 1;
+    repeated LoggerEntry entries = 2;
+}
+
 message ControlReply {
     uint32 status = 1;
     string message = 2;

@@ -31,6 +31,16 @@ system_supervisor.LogLevelConfig.target_node      max_size:64
 system_supervisor.LogLevelStatus.target_node      max_size:64
 system_supervisor.LogLevelConfigList.configs      max_count:64
 
+# ---- logger policy (GetLoggerPolicy — the log[] hose's "what to tail") ----
+# One entry per supervised node; the demo has ~15, so 64 is comfortable. path
+# holds <dir>/<node>.log (256 covers /var/log/theia/<node>.log + headroom).
+system_supervisor.LoggerEntry.node                max_size:64
+system_supervisor.LoggerEntry.sink                max_size:16
+system_supervisor.LoggerEntry.path                max_size:256
+system_supervisor.LoggerEntry.tag                 max_size:64
+system_supervisor.LoggerPolicy.machine_sink       max_size:64
+system_supervisor.LoggerPolicy.entries            max_count:64
+
 # ---- tombstone fetch (GetTombstone) --------------------------------------
 # content is capped UNDER the ~48KB TIPC gen_server reply limit; a longer
 # tombstone is truncated (the reply's `truncated` flag + `path` cover it).

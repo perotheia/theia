@@ -128,6 +128,22 @@ struct LogLevelRow {
     uint32_t    boot_level{0};   // manifest THEIA_LOG_LEVEL ordinal
 };
 
+// One supervised worker's EXACT log sink for GetLoggerPolicy — the log[]
+// hose's "where do I tail this node?". Derived from the worker's THEIA_LOGGER
+// spawn env (the value build_supervisor_tree authored, e.g. "file:/var/log/
+// theia/sm.log" or "syslog"). The supervisor parses it ONCE here so the hose
+// gets the exact path/tag and never guesses.
+//   node — the supervised worker name (= the child name).
+//   sink — the scheme: "file" | "syslog" | "stdio" | "null".
+//   path — for file: the exact log file. Empty otherwise.
+//   tag  — for syslog: the ident the node logs under (= the node name today).
+struct LoggerEntryRow {
+    std::string node;
+    std::string sink;
+    std::string path;
+    std::string tag;
+};
+
 // One thread's snapshot in a TreeRow (mirrors the ThreadSample wire message),
 // so GetTree carries the same per-thread breakdown the firehose does.
 struct TreeThreadRow {
@@ -203,6 +219,9 @@ struct ExecReply {
     std::vector<TreeRow>        tree;        // GetTree
     std::vector<TraceConfigRow> trace_cfg;   // GetTraceConfig
     std::vector<LogLevelRow>    log_cfg;     // GetLogLevelConfig
+    std::vector<LoggerEntryRow> logger_cfg;  // GetLoggerPolicy (per-node sinks)
+    std::string                 logger_machine_sink;  // GetLoggerPolicy (the
+                                             // un-expanded machine THEIA_LOGGER_POLICY)
     SystemInfoData              sysinfo;     // GetSystemInfo
     // GetTombstone — the crashed child's tombstone text (capped) + metadata.
     bool                        tomb_found{false};
@@ -218,7 +237,7 @@ struct ExecCommand {
         StartChild, DeleteChild, RestartChild, SuspendChild, ResumeChild,
         TerminateChild, OnHeartbeat, OnSendTimeout, ConfigureTrace,
         ConfigureLogLevel, GetTree, GetSystemInfo, GetTraceConfig,
-        GetLogLevelConfig, GetTombstone, GetHealth, Shutdown,
+        GetLogLevelConfig, GetLoggerPolicy, GetTombstone, GetHealth, Shutdown,
     };
     Op op;
 
@@ -364,6 +383,13 @@ public:
     // level — boot (the worker's THEIA_LOG_LEVEL spawn env) ⊕ override (the
     // log_levels_ map). For tdb loglevel (no args).
     std::vector<LogLevelRow> ctl_get_log_level();
+
+    // GetLoggerPolicy read-back: EVERY supervised worker with its EXACT log
+    // sink, parsed from the worker's THEIA_LOGGER spawn env. The log[logging]
+    // hose calls this at init to learn what to tail (the precise <dir>/<node>
+    // .log files) or which journald tags to follow — no path guessing. `sink`
+    // out-param receives the un-expanded machine THEIA_LOGGER_POLICY.
+    std::vector<LoggerEntryRow> ctl_get_logger_policy(std::string& machine_sink);
 
     // GetTombstone: read a crashed child's tombstone text (capped) into rep.
     // Matches by NAME (newest tombstone, any pid — the child may have restarted

@@ -448,6 +448,38 @@ message LogLevelConfigList {
     repeated LogLevelStatus configs
 }
 
+// ---- logger policy (the log[] hose's "what do I tail?" query) -------------
+
+// One supervised node's EXACT log sink, as the supervisor set it via
+// THEIA_LOGGER before execvp. The log[logging] hose can't reverse a single
+// node's path from the machine policy (file:<dir> → <dir>/<node>.log is a
+// guess that breaks under per-process overrides), so the supervisor — which
+// authored every child's THEIA_LOGGER — serves the EXACT answer:
+//   node      — the supervised child name ("sm", "counter", ...).
+//   sink      — the un-expanded scheme: "file" | "syslog" | "stdio" | "null".
+//   path      — for file: the exact log file (<dir>/<node>.log). Empty otherwise.
+//   tag       — for syslog: the ident the node logs under (= kNodeName). Empty
+//               otherwise. (file: lines carry the tag inline; syslog indexes on it.)
+message LoggerEntry {
+    string node
+    string sink
+    string path
+    string tag
+}
+
+message GetLoggerPolicyRequest {
+}
+
+// The machine's logger policy: the un-expanded machine sink + the per-node
+// exact sinks. `machine_sink` is what build_supervisor_tree resolved as the
+// THEIA_LOGGER_POLICY ("file:/var/log/theia" | "syslog" | ...). `entries`
+// enumerates every supervised node so the hose tails the right files / binds
+// the right journald filter without guessing.
+message LoggerPolicy {
+    string             machine_sink
+    repeated LoggerEntry entries
+}
+
 // Generic ack/error payload for action RPCs.
 //   status: 0=ok, 1=not_found, 2=already_running,
 //           3=already_stopped, 4=invalid_request,
@@ -549,6 +581,12 @@ interface clientServer SupervisorControlIf {
     operation GetLogLevelConfig(in req: GetLogLevelConfigRequest) returns LogLevelConfigList
     // Fetch a crashed child's tombstone text (GUI "Download tombstone").
     operation GetTombstone(in req: GetTombstoneRequest) returns GetTombstoneReply
+    // The machine's logger policy + every supervised node's EXACT log sink
+    // (file path or syslog tag), as the supervisor authored THEIA_LOGGER per
+    // child. The log[logging] hose calls this at init so it tails the right
+    // files / binds the right journald filter — no path guessing. (S1 of the
+    // tdb/rtdb logcat feature; docs/tasks/TODO/log-logcat.md.)
+    operation GetLoggerPolicy(in req: GetLoggerPolicyRequest) returns LoggerPolicy
 }
 
 interface senderReceiver SupervisorEventIf {

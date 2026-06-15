@@ -611,5 +611,40 @@ LogLevelConfigList SupervisorCtl::handle_call(
     return list;
 }
 
+LoggerPolicy SupervisorCtl::handle_call(
+        const GetLoggerPolicyRequest& /*req*/,
+        SupervisorCtlState& /*s*/) {
+    // The log[logging] hose's "what do I tail?" query — every supervised
+    // worker's EXACT sink (file path / syslog tag) + the machine-level policy.
+    // The engine reads each worker's THEIA_LOGGER spawn env (the value it
+    // authored before execvp), so the answer is exact, not a guess.
+    using Op = ::supervisor::ExecCommand::Op;
+    auto* eng = engine();
+    std::string machine_sink;
+    std::vector<::supervisor::LoggerEntryRow> rows;
+    if (eng) {
+        auto rep = eng->call(exec_cmd(Op::GetLoggerPolicy));
+        rows = std::move(rep.logger_cfg);
+        machine_sink = std::move(rep.logger_machine_sink);
+    }
+    LoggerPolicy pol{};
+    std::snprintf(pol.machine_sink, sizeof(pol.machine_sink), "%s",
+                  machine_sink.c_str());
+    pol.entries_count = 0;
+    for (const auto& r : rows) {
+        if (pol.entries_count >=
+            static_cast<pb_size_t>(sizeof(pol.entries) / sizeof(pol.entries[0]))) {
+            break;  // fixed array full; truncate
+        }
+        auto& e = pol.entries[pol.entries_count++];
+        e = system_supervisor_LoggerEntry{};
+        std::snprintf(e.node, sizeof(e.node), "%s", r.node.c_str());
+        std::snprintf(e.sink, sizeof(e.sink), "%s", r.sink.c_str());
+        std::snprintf(e.path, sizeof(e.path), "%s", r.path.c_str());
+        std::snprintf(e.tag,  sizeof(e.tag),  "%s", r.tag.c_str());
+    }
+    return pol;
+}
+
 
 }  // namespace ara::exec

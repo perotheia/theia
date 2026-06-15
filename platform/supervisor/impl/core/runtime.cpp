@@ -328,6 +328,61 @@ std::vector<LogLevelRow> Supervisor::ctl_get_log_level() {
     return out;
 }
 
+std::vector<LoggerEntryRow> Supervisor::ctl_get_logger_policy(
+        std::string& machine_sink) {
+    // The machine-level policy: the un-expanded THEIA_LOGGER_POLICY this
+    // supervisor inherited (run-supervisor.sh exports it from execution.json).
+    // build_supervisor_tree's fallback matches the default here.
+    if (const char* p = std::getenv("THEIA_LOGGER_POLICY"); p && *p) {
+        machine_sink = p;
+    } else {
+        machine_sink = "file:/tmp/theia";
+    }
+
+    // One EXACT sink per supervised worker, parsed from its THEIA_LOGGER spawn
+    // env (the value build_supervisor_tree authored — already node-expanded, so
+    // "file:<dir>/<node>.log"). MakeLogger($THEIA_LOGGER, kNodeName) at the
+    // child's boot parses the same string; we mirror its scheme split here so
+    // the hose gets path/tag without re-deriving from the machine policy.
+    std::vector<LoggerEntryRow> out;
+    for (WorkerNode* w : all_workers(*root_)) {
+        LoggerEntryRow r;
+        r.node = w->name;
+        auto it = w->env.find("THEIA_LOGGER");
+        // No per-worker THEIA_LOGGER → it inherits the machine policy. Expand
+        // file:<dir> to <dir>/<node>.log so the entry is still exact.
+        std::string spec = (it != w->env.end() && !it->second.empty())
+                               ? it->second
+                               : machine_sink;
+        // Scheme split: "file:<path>" | "syslog" | "stdio" | "null".
+        if (spec.rfind("file:", 0) == 0) {
+            r.sink = "file";
+            std::string path = spec.substr(5);
+            // A bare directory (no ".log" leaf) expands per-node, matching
+            // _logger_for_process in the manifest pipeline.
+            if (path.size() < 4 || path.compare(path.size() - 4, 4, ".log") != 0) {
+                if (!path.empty() && path.back() != '/') path += '/';
+                path += w->name + ".log";
+            }
+            r.path = path;
+        } else if (spec == "syslog" || spec.rfind("syslog:", 0) == 0) {
+            r.sink = "syslog";
+            // SyslogLogger uses kNodeName as the ident; today that's the node
+            // name (= the supervised worker name for single-node FCs).
+            r.tag = w->name;
+        } else if (spec == "stdio") {
+            r.sink = "stdio";
+        } else if (spec == "null") {
+            r.sink = "null";
+        } else {
+            // Unknown scheme: surface it verbatim so the hose can log + skip.
+            r.sink = spec;
+        }
+        out.push_back(std::move(r));
+    }
+    return out;
+}
+
 void Supervisor::ctl_get_tombstone(const std::string& child_name,
                                    ExecReply& rep) {
     rep.tomb_found = false;
@@ -1146,6 +1201,9 @@ void Supervisor::dispatch(ExecCommand& cmd) {
             break;
         case Op::GetLogLevelConfig:
             rep.log_cfg = ctl_get_log_level();
+            break;
+        case Op::GetLoggerPolicy:
+            rep.logger_cfg = ctl_get_logger_policy(rep.logger_machine_sink);
             break;
         case Op::GetTombstone:
             ctl_get_tombstone(cmd.name, rep);

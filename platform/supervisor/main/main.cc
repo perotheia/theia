@@ -163,6 +163,8 @@ int main() {
             supervisor_ctl_cfg, supervisor_ctl);
         config_mux.register_call<GetTombstoneRequest, GetTombstoneReply>(
             supervisor_ctl_cfg, supervisor_ctl);
+        config_mux.register_call<GetLoggerPolicyRequest, LoggerPolicy>(
+            supervisor_ctl_cfg, supervisor_ctl);
         config_mux.register_cast<HeartbeatReport>(supervisor_ctl_cfg, supervisor_ctl);
         config_mux.register_cast<SendTimeoutReport>(supervisor_ctl_cfg, supervisor_ctl);
     } else {

@@ -106,8 +106,71 @@ jobs:
           name: theia-deb-ubuntu${{ matrix.ubuntu }}
           path: out/*.deb
 
+  # theia-tools = the wxWidgets supervisor-GUI + rtdb. ISOLATED from `build`
+  # (continue-on-error) so a wx/GTK issue on one Ubuntu never fails the core
+  # framework/runtime/services release — the GUI deb just won't attach for that
+  # leg. The GUI is built by its canonical CMakeLists.txt (not bazel).
+  build-tools:
+    strategy:
+      fail-fast: false
+      matrix:
+        ubuntu: ["22.04", "24.04"]
+    runs-on: ubuntu-${{ matrix.ubuntu }}
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check out etcd submodule from the GitHub mirror
+        run: git submodule update --init third_party/etcd-cpp-apiv3
+
+      - name: Install GUI build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake pkg-config dpkg-dev \
+            libprotobuf-dev protobuf-compiler \
+            libgrpc++-dev protobuf-compiler-grpc \
+            libwxgtk3.2-dev \
+            libboost-system-dev libboost-thread-dev libboost-random-dev \
+            libssl-dev libcpprest-dev
+
+      - name: Cache etcd-cpp-apiv3 build (by submodule SHA + ubuntu)
+        id: etcd-cache
+        uses: actions/cache@v4
+        with:
+          path: third_party/etcd-cpp-apiv3/install
+          key: etcd-${{ matrix.ubuntu }}-${{ hashFiles('.gitmodules') }}-${{ hashFiles('third_party/etcd-cpp-apiv3/CMakeLists.txt') }}
+
+      - name: Build etcd-cpp-apiv3 (CMake) if not cached
+        if: steps.etcd-cache.outputs.cache-hit != 'true'
+        run: |
+          cmake -S third_party/etcd-cpp-apiv3 \
+                -B third_party/etcd-cpp-apiv3/build \
+                -DCMAKE_INSTALL_PREFIX="$PWD/third_party/etcd-cpp-apiv3/install" \
+                -DBUILD_ETCD_TESTS=OFF -DETCD_W_STRICT=OFF
+          cmake --build third_party/etcd-cpp-apiv3/build -j"$(nproc)"
+          cmake --install third_party/etcd-cpp-apiv3/build
+
+      - name: Build + package theia-tools (supervisor-GUI + rtdb)
+        run: ./.github/scripts/build-tools-deb.sh "${{ matrix.ubuntu }}"
+
+      - name: Fix per-release runtime Depends (dpkg-shlibdeps)
+        run: ./.github/scripts/fix-deb-depends.sh "${{ matrix.ubuntu }}"
+
+      - name: Stamp the .deb filename with the Ubuntu release
+        run: |
+          mkdir -p out
+          f="$(ls dist/debian/theia-tools/*.deb)"
+          base="$(basename "$f" .deb)"
+          cp "$f" "out/${base%_*}_ubuntu${{ matrix.ubuntu }}_${base##*_}.deb"
+          ls -la out/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: theia-tools-deb-ubuntu${{ matrix.ubuntu }}
+          path: out/*.deb
+
   release:
-    needs: build
+    needs: [build, build-tools]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -115,7 +178,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: theia-deb-ubuntu*
+          pattern: theia-*deb-ubuntu*
           path: artifacts
           merge-multiple: true
       - name: Attach .debs to the GitHub Release

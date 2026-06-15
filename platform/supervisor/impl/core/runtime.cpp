@@ -366,10 +366,25 @@ std::vector<LoggerEntryRow> Supervisor::ctl_get_logger_policy(
             }
             r.path = path;
         } else if (spec == "syslog" || spec.rfind("syslog:", 0) == 0) {
+            // SyslogLogger uses kNodeName (the per-NODE name) as the journald
+            // ident, and a process hosts SEVERAL nodes — so emit ONE syslog
+            // entry per node (tag = node name), not one per worker. journald
+            // indexes on SYSLOG_IDENTIFIER, so the hose's `journalctl -t <tag>`
+            // must use the node-level ident. (file: mode stays per-process: one
+            // file per worker.) Fall back to a single worker-tagged entry if the
+            // worker exposes no node metadata.
+            if (!w->nodes.empty()) {
+                for (const NodeInfo& ni : w->nodes) {
+                    LoggerEntryRow nr;
+                    nr.node = ni.name;
+                    nr.sink = "syslog";
+                    nr.tag  = ni.name;   // = kNodeName = journald ident
+                    out.push_back(std::move(nr));
+                }
+                continue;   // r (the per-worker row) is superseded by per-node
+            }
             r.sink = "syslog";
-            // SyslogLogger uses kNodeName as the ident; today that's the node
-            // name (= the supervised worker name for single-node FCs).
-            r.tag = w->name;
+            r.tag  = w->name;
         } else if (spec == "stdio") {
             r.sink = "stdio";
         } else if (spec == "null") {

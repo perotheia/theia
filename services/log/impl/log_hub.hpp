@@ -26,9 +26,11 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <deque>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -133,21 +135,31 @@ public:
     // while there are subscribers; returns when the last one leaves (so the
     // runnable's loop idles). Re-entrant across start/stop cycles.
     void tail_loop() {
-        // Fetch the per-node sinks once per tailer activation.
+        // Fetch the per-node sinks once per tailer activation. Populates `files`
+        // (file: sinks) and journal_tags_ (syslog sinks).
         std::vector<TailFile> files = fetch_and_open_();
-        if (files.empty()) {
+        // v2: if any node logs to syslog, follow journald for its tags. One
+        // `journalctl -f -o json -t <tag>...` subprocess, remixed by journald.
+        FILE* journal = journal_tags_.empty() ? nullptr : open_journal_();
+        std::string jbuf;   // partial JSON line carry across reads
+        int jfd = journal ? ::fileno(journal) : -1;
+        if (jfd >= 0) ::fcntl(jfd, F_SETFL, O_NONBLOCK);
+
+        if (files.empty() && !journal) {
             std::fprintf(stderr,
-                "[log_hub] tailer: no file: sinks to tail (policy empty or "
-                "syslog-only) — idle\n");
+                "[log_hub] tailer: no file:/syslog sinks to follow — idle\n");
         }
         while (run_tailer_.load() && have_subs_()) {
             bool any = false;
             for (TailFile& f : files) any |= drain_file_(f);
+            if (jfd >= 0) any |= drain_journal_(jfd, jbuf);
             if (!any) std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
         for (TailFile& f : files) if (f.fd >= 0) ::close(f.fd);
-        std::fprintf(stderr, "[log_hub] tailer: stopped (%zu files closed)\n",
-                     files.size());
+        if (journal) ::pclose(journal);
+        std::fprintf(stderr,
+            "[log_hub] tailer: stopped (%zu files, %zu syslog tags closed)\n",
+            files.size(), journal_tags_.size());
     }
 
     // Whether the runnable's loop should keep calling tail_loop (i.e. there's
@@ -231,26 +243,36 @@ private:
             std::fprintf(stderr, "[log_hub] tailer: decode LoggerPolicy failed\n");
             return out;
         }
-        // Open each file: sink. (syslog entries are skipped in v1 — journald
-        // ingest is the deferred v2 mode.)
+        // Split the entries by sink: file: sinks are tailed directly; syslog
+        // sinks are followed via journald (v2). A machine can mix both (a
+        // per-process override), so we handle each entry by its own sink.
+        journal_tags_.clear();
+        journal_node_by_tag_.clear();
         for (pb_size_t i = 0; i < pol.entries_count; ++i) {
             const auto& e = pol.entries[i];
-            if (std::strcmp(e.sink, "file") != 0) continue;
-            TailFile f;
-            f.node = e.node;
-            f.tag  = e.tag[0] ? e.tag : e.node;
-            f.path = e.path;
-            // Open + seek to END (follow new lines only; the ring has backlog).
-            f.fd = ::open(f.path.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
-            if (f.fd >= 0) ::lseek(f.fd, 0, SEEK_END);
-            else std::fprintf(stderr,
-                     "[log_hub] tailer: cannot open %s (skipping)\n",
-                     f.path.c_str());
-            out.push_back(std::move(f));
+            const std::string tag = e.tag[0] ? e.tag : e.node;
+            if (std::strcmp(e.sink, "file") == 0) {
+                TailFile f;
+                f.node = e.node;
+                f.tag  = tag;
+                f.path = e.path;
+                // Open + seek to END (follow new lines; the ring has backlog).
+                f.fd = ::open(f.path.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+                if (f.fd >= 0) ::lseek(f.fd, 0, SEEK_END);
+                else std::fprintf(stderr,
+                         "[log_hub] tailer: cannot open %s (skipping)\n",
+                         f.path.c_str());
+                out.push_back(std::move(f));
+            } else if (std::strcmp(e.sink, "syslog") == 0) {
+                journal_tags_.push_back(tag);
+                journal_node_by_tag_[tag] = e.node;
+            }
+            // stdio/null sinks have no tailable stream — skipped.
         }
         std::fprintf(stderr,
-            "[log_hub] tailer: policy machine_sink=%s, tailing %zu file sinks\n",
-            pol.machine_sink, out.size());
+            "[log_hub] tailer: policy machine_sink=%s, %zu file sinks + "
+            "%zu syslog tags\n",
+            pol.machine_sink, out.size(), journal_tags_.size());
         return out;
     }
 
@@ -295,7 +317,13 @@ private:
         // otherwise double-print them (FileLogger's own "<ts> [LEVEL] msg").
         const std::string msg = strip_log_prefix_(line);
         std::snprintf(rec.line, sizeof(rec.line), "%s", msg.c_str());
+        encode_and_fanout_(rec);
+    }
 
+    // Encode a LogRecord → ring + fan out to every live subscriber (pruning the
+    // dead). Shared by the file: tailer (emit_line_) and the syslog/journald
+    // tailer (emit_journal_entry_).
+    void encode_and_fanout_(const system_services_log_LogRecord& rec) {
         uint8_t wire[BUFSIZ + 256];
         pb_ostream_t os = pb_ostream_from_buffer(wire, sizeof(wire));
         if (!pb_encode(&os, system_services_log_LogRecord_fields, &rec)) return;
@@ -377,6 +405,119 @@ private:
         return ns;
     }
 
+    // ---- syslog (journald) ingest — v2 -------------------------------------
+    //
+    // When a node logs to syslog, SyslogLogger uses kNodeName as the ident, so
+    // journald indexes its lines under SYSLOG_IDENTIFIER=<tag>. We follow them
+    // with `journalctl -f -o json -t <tag>...` — journald is already remixed
+    // across nodes, so we just re-frame each JSON entry into a LogRecord.
+    FILE* open_journal_() {
+        // Build: journalctl -f -n 0 -o json -t <tag1> -t <tag2> ...
+        // -n 0 = no history (the ring already holds backlog from file: peers;
+        // for a pure-syslog machine the consumer starts live, like adb -f).
+        std::string cmd = "journalctl -f -n 0 -o json --no-pager";
+        for (const std::string& tag : journal_tags_) {
+            cmd += " -t '";
+            // Escape any single-quote in the tag (defensive; tags are node
+            // names, but never trust a string in a shell command).
+            for (char c : tag) { if (c == '\'') cmd += "'\\''"; else cmd += c; }
+            cmd += '\'';
+        }
+        cmd += " 2>/dev/null";
+        FILE* p = ::popen(cmd.c_str(), "r");
+        if (!p) {
+            std::fprintf(stderr,
+                "[log_hub] tailer: cannot spawn journalctl (syslog ingest off)\n");
+            return nullptr;
+        }
+        std::fprintf(stderr,
+            "[log_hub] tailer: following journald for %zu syslog tag(s)\n",
+            journal_tags_.size());
+        return p;
+    }
+
+    // Read available bytes from the journalctl pipe (non-blocking), split on
+    // '\n', parse each JSON entry → LogRecord. Returns true if any was read.
+    bool drain_journal_(int jfd, std::string& carry) {
+        char buf[BUFSIZ];
+        bool any = false;
+        for (;;) {
+            ssize_t n = ::read(jfd, buf, sizeof(buf));
+            if (n <= 0) break;          // EAGAIN (no data) or EOF — done for now
+            any = true;
+            carry.append(buf, static_cast<size_t>(n));
+            size_t nl;
+            while ((nl = carry.find('\n')) != std::string::npos) {
+                std::string jline = carry.substr(0, nl);
+                carry.erase(0, nl + 1);
+                emit_journal_entry_(jline);
+            }
+            if (carry.size() > 4 * BUFSIZ) carry.clear();   // runaway guard
+        }
+        return any;
+    }
+
+    // Parse one journald JSON entry {SYSLOG_IDENTIFIER, MESSAGE, PRIORITY,
+    // __REALTIME_TIMESTAMP} into a LogRecord and fan it out. Minimal JSON field
+    // extraction (no JSON lib dep) — the keys are fixed and journald's -o json
+    // emits flat string values.
+    void emit_journal_entry_(const std::string& jline) {
+        const std::string tag = json_str_(jline, "SYSLOG_IDENTIFIER");
+        const std::string msg = json_str_(jline, "MESSAGE");
+        if (msg.empty() && tag.empty()) return;
+        // node: map the tag back to the supervised node name (GetLoggerPolicy
+        // gave us tag→node); fall back to the tag itself.
+        auto it = journal_node_by_tag_.find(tag);
+        const std::string node = it != journal_node_by_tag_.end() ? it->second : tag;
+
+        system_services_log_LogRecord rec = system_services_log_LogRecord_init_zero;
+        std::snprintf(rec.node, sizeof(rec.node), "%s", node.c_str());
+        std::snprintf(rec.tag,  sizeof(rec.tag),  "%s", tag.c_str());
+        rec.level = syslog_prio_to_level_(json_str_(jline, "PRIORITY"));
+        // __REALTIME_TIMESTAMP is epoch MICROSECONDS.
+        const std::string us = json_str_(jline, "__REALTIME_TIMESTAMP");
+        rec.ts_ns = us.empty() ? 0
+                  : static_cast<uint64_t>(std::strtoull(us.c_str(), nullptr, 10))
+                        * 1000ull;
+        std::snprintf(rec.line, sizeof(rec.line), "%s", msg.c_str());
+        encode_and_fanout_(rec);
+    }
+
+    // Extract a flat string value for `key` from a journald JSON object. journald
+    // -o json escapes only \" and \\ in MESSAGE; good enough for our fixed keys.
+    static std::string json_str_(const std::string& obj, const char* key) {
+        std::string needle = std::string("\"") + key + "\":";
+        auto k = obj.find(needle);
+        if (k == std::string::npos) return "";
+        auto v = obj.find_first_not_of(' ', k + needle.size());
+        if (v == std::string::npos) return "";
+        if (obj[v] != '"') {            // unquoted (number/null) — read to , or }
+            auto e = obj.find_first_of(",}", v);
+            return obj.substr(v, e == std::string::npos ? std::string::npos : e - v);
+        }
+        // Quoted string — unescape \" and \\.
+        std::string out;
+        for (size_t i = v + 1; i < obj.size(); ++i) {
+            char c = obj[i];
+            if (c == '\\' && i + 1 < obj.size()) { out += obj[++i]; continue; }
+            if (c == '"') break;
+            out += c;
+        }
+        return out;
+    }
+
+    // syslog PRIORITY (0=emerg … 7=debug) → LogLevel. Maps the 8 syslog levels
+    // onto our 6 (emerg/alert/crit → FATAL; err → ERROR; warning → WARNING;
+    // notice/info → INFO; debug → DEBUG).
+    static system_services_log_LogLevel syslog_prio_to_level_(const std::string& p) {
+        int pr = p.empty() ? 6 : std::atoi(p.c_str());
+        if (pr <= 2) return system_services_log_LogLevel_LogLevel_FATAL;
+        if (pr == 3) return system_services_log_LogLevel_LogLevel_ERROR;
+        if (pr == 4) return system_services_log_LogLevel_LogLevel_WARNING;
+        if (pr <= 6) return system_services_log_LogLevel_LogLevel_INFO;
+        return system_services_log_LogLevel_LogLevel_DEBUG;
+    }
+
     // Frame raw record bytes as a GEN_CAST and send to one subscriber.
     // Caller holds mu_.
     bool send_locked(LogSub& sub, const std::string& wire) {
@@ -398,6 +539,12 @@ private:
     std::size_t capacity_ = 4096;
     std::vector<LogSub> subs_;
     std::atomic<bool> run_tailer_{false};
+
+    // syslog-mode state, (re)populated by fetch_and_open_ each tailer
+    // activation: the SYSLOG_IDENTIFIER tags to follow via journald + their
+    // tag→node mapping (only touched on the single tailer thread).
+    std::vector<std::string>                     journal_tags_;
+    std::map<std::string, std::string>           journal_node_by_tag_;
 };
 
 }  // namespace ara::log

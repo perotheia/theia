@@ -1,5 +1,10 @@
 {
   "mcpServers": {
+    "artheia": {
+      "command": "artheia/run_mcp.sh",
+      "args": [],
+      "type": "stdio"
+    },
     "rf-theia": {
       "command": "testing/run_mcp.sh",
       "args": [],

@@ -1,0 +1,16 @@
+# The supervisor's .art spec (system.supervisor package): the OTP-style fabric
+# nodes a consuming workspace's `system.art` imports (`import system.supervisor.*`)
+# when it deploys the supervisor. Shipped as sources in theia-runtime-dev so the
+# artheia resolver can reach `composition Supervisor` from an installed prefix.
+
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "supervisor_art_srcs",
+    srcs = [
+        "package.art",
+        "component.art",
+        "supervisor.options",
+    ],
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,20 @@
+# /opt/theia/MODULE.bazel — makes the INSTALLED prefix a Bazel module named
+# `pero_theia`, IDENTICAL in name+version to the repo's root module. A consuming
+# workspace's MODULE.bazel does:
+#
+#   bazel_dep(name = "pero_theia", version = "0.1.0")
+#   local_path_override(module_name = "pero_theia", path = ".../opt/theia")
+#
+# so `@pero_theia//platform/runtime:runtime`, `:runtime_proto_cc`, and
+# `@pero_theia//platform/supervisor/tombstone:tombstone` resolve against the
+# shipped source tree EXACTLY as they do in the repo (the deb drops the legacy
+# `src/` prefix so the workspace-relative paths match). The runtime/tombstone
+# sources + their trimmed BUILD files ship via theia-runtime-dev under
+# /opt/theia/platform/...; this module root ships via theia-framework.
+module(
+    name = "pero_theia",
+    version = "0.1.0",
+)
+
+bazel_dep(name = "platforms", version = "0.0.11")
+bazel_dep(name = "rules_cc", version = "0.2.17")

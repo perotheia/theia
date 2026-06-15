@@ -1,0 +1,13 @@
+# The /opt/theia bazel-module artifacts (the installed `pero_theia` module):
+# the module root MODULE.bazel + the TRIMMED per-package BUILD files for the
+# runtime + tombstone. Exposed as plain files so the pkg_deb `files` map can
+# place them at their real /opt/theia/... destinations. See //packaging/theia
+# (theia-runtime-dev ships runtime/tombstone BUILD; theia-framework ships
+# MODULE.bazel).
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "MODULE.bazel",
+    "runtime.BUILD.bazel",
+    "tombstone.BUILD.bazel",
+])

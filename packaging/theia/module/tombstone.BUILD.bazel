@@ -1,0 +1,15 @@
+# @pero_theia//platform/supervisor/tombstone — the BUILD shipped into
+# /opt/theia. Just the `:tombstone` cc_library a consuming workspace's gen-app
+# main links (crash-handler). Keep IN SYNC with the repo's tombstone/BUILD.bazel
+# :tombstone target.
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "tombstone",
+    srcs = ["src/tombstone.cpp"],
+    hdrs = ["include/tombstone/tombstone.h"],
+    includes = ["include"],
+    copts = ["-std=c++17", "-Wall", "-fPIC"],
+)

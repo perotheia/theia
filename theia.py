@@ -25,6 +25,7 @@ Extra args after the verb pass through (e.g. `theia rig up central`,
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -167,6 +168,22 @@ def _bazel_bin(target: str) -> Path:
     else:
         root = WORKSPACE if (WORKSPACE / "MODULE.bazel").is_file() else THEIA_ROOT
     return root / "bazel-bin" / pkg / name
+
+
+def _deb_mode() -> bool:
+    """True when THEIA_ROOT is an INSTALLED prefix (the debs), not a source
+    checkout — detected by the prebuilt supervisor under THEIA_ROOT/bin. In deb
+    mode the framework binaries are already built (no bazel for //platform,
+    //services); only the workspace's OWN app C++ is bazel-built."""
+    return (THEIA_ROOT / "bin" / "supervisor").is_file()
+
+
+def _prebuilt_bin(name: str) -> "Path | None":
+    """The prebuilt framework binary <name> under the installed prefix
+    (THEIA_ROOT/bin/<name>), or None if absent. The deb-mode source for the
+    supervisor + the ARA service FCs (com/per/sm/ucm/log/shwa)."""
+    p = THEIA_ROOT / "bin" / name
+    return p if p.is_file() else None
 
 
 def _discover_rig_module(zonal: bool = False) -> "str | None":
@@ -556,9 +573,26 @@ def cmd_install(args: list[str]) -> int:
     #    (//apps/..., everything else) build in WORKSPACE against @pero_theia (the
     #    workspace's MODULE.bazel). If the workspace has no MODULE.bazel, app
     #    targets fall back to THEIA_ROOT too (the framework's identical sources).
+    #    In DEB mode the framework binaries (supervisor + ARA FCs) are PREBUILT
+    #    under /opt/theia/bin — staged directly, never bazel-built — so only the
+    #    workspace's OWN app C++ goes through bazel.
     all_targets = [supervisor_target, *binaries.values()]
     ws_has_module = (WORKSPACE / "MODULE.bazel").is_file()
-    fw_targets = [t for t in all_targets if _is_framework_target(t)]
+    deb = _deb_mode()
+    # name → prebuilt path for framework binaries we can stage as-is (deb mode).
+    name_for = {supervisor_target: "supervisor", **{t: n for n, t in binaries.items()}}
+    prebuilt = {}
+    if deb:
+        for t in all_targets:
+            if _is_framework_target(t):
+                pb = _prebuilt_bin(name_for[t])
+                if pb is not None:
+                    prebuilt[t] = pb
+        if prebuilt:
+            print(f"theia install: deb mode — staging {len(prebuilt)} prebuilt "
+                  f"framework binaries from {THEIA_ROOT / 'bin'}", file=sys.stderr)
+    fw_targets = [t for t in all_targets
+                  if _is_framework_target(t) and t not in prebuilt]
     ws_targets = [t for t in all_targets if not _is_framework_target(t)]
     if fw_targets and (rc := _run(["bazel", "build", *fw_targets],
                                   cwd=THEIA_ROOT)) != 0:
@@ -597,14 +631,26 @@ def cmd_install(args: list[str]) -> int:
             return rc
     print(f"staged {cfg_dir}/<fc>.json (static params)")
 
-    # 4. puppet apply theia::local_install — copy binaries + setcap. The binary
-    #    map is passed as a Puppet hash literal via -e.
-    bins = {n: str(_bazel_bin(t)) for n, t in binaries.items()}
+    # 4. Stage binaries + setcap. A binary's source is its prebuilt path (deb
+    #    mode) when we have one, else its bazel-bin output.
+    def _src(name: str, target: str) -> str:
+        pb = prebuilt.get(target)
+        return str(pb if pb is not None else _bazel_bin(target))
+    bins = {n: _src(n, t) for n, t in binaries.items()}
+    sup_src = _src("supervisor", supervisor_target)
+
+    # Puppet owns the copy+setcap on a provisioned host (the SAME cap contract a
+    # real deploy uses). But a deb-installed CONSUMING workspace need not carry
+    # Puppet just to stage a local tree — when `puppet` is absent, do the
+    # identical copy + setcap directly in Python.
+    if shutil.which("puppet") is None:
+        return _stage_local_no_puppet(dest, sup_src, bins)
+
     bins_pp = ", ".join(f"'{n}' => '{p}'" for n, p in bins.items())
     manifest = (
         "class { 'theia::local_install': "
         f"dest => '{dest}', "
-        f"supervisor_src => '{_bazel_bin(supervisor_target)}', "
+        f"supervisor_src => '{sup_src}', "
         f"binaries => {{ {bins_pp} }}, "
         "}"
     )
@@ -615,6 +661,48 @@ def cmd_install(args: list[str]) -> int:
         "-e", manifest,
         *[a for a in args if a.startswith("-")],
     ])
+
+
+def _stage_local_no_puppet(dest: Path, supervisor_src: str,
+                           binaries: dict[str, str]) -> int:
+    """Copy the supervisor + child binaries into install/<machine>/ and setcap
+    the supervisor — the Puppet-free equivalent of theia::local_install, for a
+    deb-installed workspace with no Puppet. Mirrors local_install.pp exactly:
+    supervisor at <dest>/supervisor, children at <dest>/bin/<name>, all 0755,
+    then `setcap cap_sys_nice+eip` on the supervisor (bazel-out copies are
+    read-only and a fresh copy clears caps, so setcap runs AFTER)."""
+    import shutil as _sh
+    dest.mkdir(parents=True, exist_ok=True)
+    (dest / "bin").mkdir(exist_ok=True)
+
+    def _copy(src: str, dst: Path) -> None:
+        if dst.exists():
+            dst.chmod(0o755)        # bazel-out staged read-only; allow overwrite
+            dst.unlink()
+        _sh.copy2(src, dst)
+        dst.chmod(0o755)
+        print(f"  staged {dst}", file=sys.stderr)
+
+    try:
+        _copy(supervisor_src, dest / "supervisor")
+        for name, src in binaries.items():
+            _copy(src, dest / "bin" / name)
+    except OSError as e:
+        print(f"theia install: staging failed — {e}", file=sys.stderr)
+        return 1
+
+    # cap_sys_nice for the supervisor (realtime sched + affinity on FC threads).
+    # Needs root; skip gracefully if setcap/sudo unavailable (start still works,
+    # just without RT priority).
+    setcap = shutil.which("setcap") or "/usr/sbin/setcap"
+    sup = dest / "supervisor"
+    rc = _run(["sudo", setcap, "cap_sys_nice+eip", str(sup)])
+    if rc != 0:
+        print("theia install: setcap cap_sys_nice failed (need root / "
+              "libcap2-bin?) — supervisor will run without realtime priority.",
+              file=sys.stderr)
+    print(f"theia install: staged {dest} (puppet-free)", file=sys.stderr)
+    return 0
 
 
 # The distributed rig: one module + the full-vehicle SoftwareSpecification
@@ -745,6 +833,7 @@ def cmd_dist(args: list[str]) -> int:
     return rc_final
 
 
+
 # ── theia release — build the installable package set (.deb + .ipk) ──────────
 _DIST_DEBIAN = "dist/debian"
 _DIST_IPKG = "dist/ipkg"
@@ -770,84 +859,105 @@ _RELEASE_BAZEL_PKGS = [
 
 
 def _build_framework_deb(out_dir: Path, version: str = "0.1.0") -> int:
-    """Build theia-framework as a real .deb (ROS2 /opt/ros/<distro> layout).
+    """Build theia-framework as a real .deb — WHEELS-AS-DATA, no system Python.
 
-    Lays out, under a staged /opt/theia:
-      lib/python3/site-packages/artheia/…   the artheia package (pip --target;
-                                            NOT system site-packages)
-      wheels/*.whl                          artheia's third-party deps, for the
-                                            postinst to pip-install OFFLINE into
-                                            the system (textX/Jinja2/click/PyYAML)
-      rules/, toolchains/                   the bazel rules a workspace needs
-                                            (@theia_framework//rules:rig.bzl)
-      bin/{artheia,theia,tdb,artheia-lsp}   console shims onto the staged lib
-      setup.{bash,zsh}                      `source` to put Theia on PATH+PYTHONPATH
+    Theia does NOT own the user's Python. The deb ships only:
+      wheels/*.whl    artheia + rf-theia + their deps, as WHEELS. The USER drops
+                      them into THEIR OWN venv:
+                        python3 -m venv .venv && . .venv/bin/activate
+                        pip install --find-links /opt/theia/wheels artheia rf-theia
+                      (or from a pip server). No postinst, no /opt/theia/lib/python,
+                      no writes to system site-packages.
+      rules/, toolchains/   the bazel rules a workspace's MODULE.bazel needs.
+      bin/{theia,artheia,artheia-lsp,artheia-mcp}   shims — `theia` is pure
+                      stdlib (works before any venv, for init/manifest/install);
+                      the artheia ones exec the artheia from the user's ACTIVE
+                      venv (PATH), erroring with the pip line if absent.
+      setup.{bash,zsh}      `source` to put /opt/theia/bin on PATH + THEIA_ROOT.
 
-    The deb's postinst pip-installs the bundled dep wheels into the system. Built
-    with dpkg-deb (the framework is pure-Python — Architecture: all)."""
+    Architecture: all (pure data + shell shims). Built with dpkg-deb."""
     import shutil
 
     pkg_root = WORKSPACE / "packaging" / "theia" / "framework"
-    py = "python3.10"
     stage = out_dir / "_stage"
     if stage.exists():
         shutil.rmtree(stage)
     opt = stage / "opt" / "theia"
-    site = opt / "lib" / py / "site-packages"
-    site.mkdir(parents=True, exist_ok=True)
     (opt / "bin").mkdir(parents=True, exist_ok=True)
-    (opt / "wheels").mkdir(parents=True, exist_ok=True)
+    wheels = opt / "wheels"
+    wheels.mkdir(parents=True, exist_ok=True)
 
-    # artheia → /opt/theia/lib/.../site-packages (no deps; they go to the system).
-    if (rc := _run([sys.executable, "-m", "pip", "install", "--no-deps",
-                    "--target", str(site), str(WORKSPACE / "artheia")])) != 0:
-        return rc
-    # artheia's deps as wheels for the offline system install (postinst).
+    # artheia + rf-theia WHEELS (the user pip-installs these into their venv).
+    for src in (WORKSPACE / "artheia", WORKSPACE / "testing"):
+        if (src / "pyproject.toml").is_file():
+            if (rc := _run([sys.executable, "-m", "pip", "wheel", "--no-deps",
+                            "-w", str(wheels), str(src)])) != 0:
+                return rc
+    # Their third-party deps as wheels too, so the user's `pip install
+    # --find-links /opt/theia/wheels artheia rf-theia` resolves fully OFFLINE.
+    # Derive the dep set from the packages' OWN metadata (pip download <src>/)
+    # rather than hand-listing — picks up artheia's (textX/Jinja2/click/PyYAML/
+    # fastmcp) AND rf-theia's (robotframework/grpcio/numpy/pandas/asteval/…).
+    # nanopb is added explicitly (its generator CLI is used at build time).
+    dep_srcs = [str(WORKSPACE / d) for d in ("artheia", "testing")
+                if (WORKSPACE / d / "pyproject.toml").is_file()]
     if (rc := _run([sys.executable, "-m", "pip", "download",
-                    "--dest", str(opt / "wheels"),
-                    "textX>=4.0", "Jinja2>=3.1", "click>=8.1", "PyYAML>=6.0",
-                    "nanopb>=0.4.9"])) != 0:
-        # Non-fatal: postinst falls back to PyPI if the wheels aren't bundled.
-        print("theia release: framework dep download failed — deb postinst will "
-              "fetch from PyPI instead.", file=sys.stderr)
+                    "--dest", str(wheels), "nanopb>=0.4.9", *dep_srcs])) != 0:
+        print("theia release: dep wheel download failed — the user will need "
+              "PyPI reachable when they pip-install artheia/rf-theia.",
+              file=sys.stderr)
 
     # bazel rules + toolchains the downstream workspace's MODULE.bazel needs.
     for d in ("rules", "toolchains"):
         if (WORKSPACE / d).is_dir():
             shutil.copytree(WORKSPACE / d, opt / d, dirs_exist_ok=True)
-    # Make /opt/theia a valid Bazel repo so a workspace can
-    # `local_repository(name="theia_framework", path="/opt/theia")` and load
-    # @theia_framework//rules:rig.bzl. A bare REPO.bazel + a root BUILD is enough.
-    (opt / "REPO.bazel").write_text('repo(name = "theia_framework")\n')
+    # Make /opt/theia the `pero_theia` BAZEL MODULE root (same name+version as the
+    # repo). A consuming ws does bazel_dep(pero_theia)+local_path_override(/opt/
+    # theia), and @pero_theia//platform/runtime|supervisor/tombstone resolve
+    # against the tree theia-runtime-dev ships at /opt/theia/platform/... The root
+    # BUILD makes the module dir a valid package.
+    shutil.copy2(WORKSPACE / "packaging" / "theia" / "module" / "MODULE.bazel",
+                 opt / "MODULE.bazel")
     if not (opt / "BUILD.bazel").exists():
         (opt / "BUILD.bazel").write_text(
-            '# theia_framework repo root.\n'
+            '# pero_theia module root (the installed /opt/theia).\n'
             'package(default_visibility = ["//visibility:public"])\n')
     # theia.py itself (the workspace lifecycle driver) + setup scripts.
     shutil.copy2(WORKSPACE / "theia.py", opt / "theia.py")
     for s in ("setup.bash", "setup.zsh"):
         shutil.copy2(pkg_root / s, opt / s)
 
-    # Console shims: run the staged package with the staged site-packages on path.
-    shims = {
-        "artheia": "from artheia.cli import main",
-        "artheia-lsp": "from artheia.lsp.server import main",
-    }
-    for name, imp in shims.items():
-        shim = opt / "bin" / name
-        shim.write_text(
-            "#!/bin/sh\n"
-            'D="$(cd "$(dirname "$0")/.." && pwd)"\n'
-            f'exec python3 -c '
-            f'"import sys; sys.path.insert(0, \\"$D/lib/{py}/site-packages\\"); '
-            f'{imp}; main()" "$@"\n')
-        shim.chmod(0o755)
-    # theia + tdb shims (theia.py at /opt/theia/theia.py; tdb from runtime deb).
+    # `theia` launcher — PURE STDLIB (theia.py imports nothing from artheia), so
+    # `theia init/manifest/install/start` work before the user has a venv.
     (opt / "bin" / "theia").write_text(
         '#!/bin/sh\nexec python3 "$(dirname "$0")/../theia.py" "$@"\n')
     (opt / "bin" / "theia").chmod(0o755)
+    # artheia / -lsp / -mcp shims — exec the artheia from the user's ACTIVE venv
+    # (resolved on PATH, skipping THIS shim dir to avoid recursion). The Python
+    # layer lives in the user's venv, NOT under /opt/theia. If artheia isn't
+    # importable, print the one-line pip install and exit non-zero.
+    _PIP_HINT = ("artheia is not installed in your active Python. Create/activate "
+                 "a venv and install it:\\n"
+                 "  python3 -m venv .venv && . .venv/bin/activate\\n"
+                 "  pip install --find-links /opt/theia/wheels artheia rf-theia")
+    for name, mod in (("artheia", "artheia.cli"),
+                      ("artheia-lsp", "artheia.lsp.server"),
+                      ("artheia-mcp", "artheia.adapters.mcp_server")):
+        shim = opt / "bin" / name
+        # Find <name> on PATH excluding our own bin dir, else fall back to the
+        # current python -m if artheia imports, else print the hint.
+        shim.write_text(
+            "#!/bin/sh\n"
+            'D="$(cd "$(dirname "$0")" && pwd)"\n'
+            f'real=$(PATH=$(echo "$PATH" | tr ":" "\\n" | grep -v "^$D$" '
+            f'| paste -sd:) command -v {name} 2>/dev/null)\n'
+            f'[ -n "$real" ] && exec "$real" "$@"\n'
+            f'python3 -c "import {mod}" 2>/dev/null && '
+            f'exec python3 -m {mod} "$@"\n'
+            f'printf "%b\\n" "{_PIP_HINT}" >&2\nexit 127\n')
+        shim.chmod(0o755)
 
-    # control + postinst.
+    # control — pure data + shims; depends only on python3 (no pip, no postinst).
     ctrl = stage / "DEBIAN"
     ctrl.mkdir(parents=True, exist_ok=True)
     installed_kb = int(_du_kb(opt))
@@ -859,10 +969,8 @@ def _build_framework_deb(out_dir: Path, version: str = "0.1.0") -> int:
         "Priority: optional\n"
         "Maintainer: Theia <theia@robofortis.com>\n"
         f"Installed-Size: {installed_kb}\n"
-        "Depends: python3, python3-pip\n"
-        "Description: Theia framework — artheia DSL/codegen + bazel rules + CLIs\n")
-    shutil.copy2(pkg_root / "postinst", ctrl / "postinst")
-    (ctrl / "postinst").chmod(0o755)
+        "Depends: python3\n"
+        "Description: Theia framework — artheia/rf-theia wheels + bazel rules + CLIs\n")
 
     deb = out_dir / f"theia-framework_{version}_all.deb"
     if (rc := _run(["dpkg-deb", "--build", "--root-owner-group",
@@ -1139,9 +1247,37 @@ def cmd_init(args: list[str]) -> int:
               file=sys.stderr)
         return 2
     theia_root = Path(theia_root).resolve()
-    if not (theia_root / "system" / "system.art").is_file():
+    # THEIA_ROOT is either a SOURCE checkout (system/system.art present) or an
+    # INSTALLED prefix (/opt/theia from the debs, a different on-disk layout).
+    # Resolve each framework .art root for whichever this is, so the symlinks we
+    # plant in the workspace point at real files the artheia resolver can reach.
+    src = (theia_root / "system" / "system.art").is_file()
+    if src:
+        runtime_pkg = theia_root / "system" / "runtime"
+        runtime_art = (theia_root / "platform" / "runtime"
+                       / "system" / "runtime" / "package.art")
+        supervisor_pkg = theia_root / "system" / "supervisor"
+        services_pkg = theia_root / "system" / "services"
+    else:
+        # Installed deb layout (theia-runtime-dev + theia-services-dev):
+        #   runtime spec → src/runtime/system/runtime/{package.art}
+        #   services tree → services/{cluster.art, <fc>/...}
+        # (no separate supervisor .art ships; the supervisor binary is prebuilt
+        # in the runtime deb, and the engine spec isn't needed to RESOLVE a
+        # consuming app — only to rebuild the supervisor itself.)
+        # The pero_theia module tree ships at /opt/theia/platform/... (no `src/`),
+        # so the runtime + supervisor .art resolve at the SAME relative paths as
+        # the repo.
+        runtime_pkg = theia_root / "platform" / "runtime" / "system" / "runtime"
+        runtime_art = runtime_pkg / "package.art"
+        supervisor_pkg = theia_root / "platform" / "supervisor" / "system"
+        services_pkg = theia_root / "services"
+    if not runtime_art.is_file():
         print(f"theia init: THEIA_ROOT={theia_root} doesn't look like a Theia "
-              "checkout (no system/system.art).", file=sys.stderr)
+              "source checkout OR an installed /opt/theia prefix "
+              f"(no runtime package.art at {runtime_art}). Install the "
+              "theia-runtime-dev deb, or source a source checkout's setup.sh.",
+              file=sys.stderr)
         return 2
 
     # The workspace to scaffold is the CALLER's cwd (main() chdir'd to the Theia
@@ -1183,17 +1319,19 @@ def cmd_init(args: list[str]) -> int:
         created.append(f"{rel} -> {rel_target}")
 
     # system/ aggregator + the runtime link (Theia's .art import root).
-    _link("system/runtime", theia_root / "system" / "runtime")
-    _link("system/supervisor", theia_root / "system" / "supervisor")
+    _link("system/runtime", runtime_pkg)
+    # The supervisor .art only exists in a source checkout; the installed deb
+    # ships the supervisor binary prebuilt, so skip the link when absent.
+    if supervisor_pkg.exists():
+        _link("system/supervisor", supervisor_pkg)
     # The runtime .art package: a service/supervisor .art imports `platform.runtime.*`
     # (ChildControlIf, TraceControlPush, LogLevelPush), which the resolver maps to
-    # platform/runtime/package.art. Link it to the sibling Theia's runtime spec.
-    _link("platform/runtime/package.art",
-          theia_root / "platform" / "runtime" / "system" / "runtime" / "package.art")
+    # platform/runtime/package.art. Link it to the resolved runtime spec.
+    _link("platform/runtime/package.art", runtime_art)
     # --with-services: link the framework's ARA service FCs so `cluster Services`
     # resolves + the rig can import services.manifest.{service,executor}.
     if with_services:
-        _link("system/services", theia_root / "system" / "services")
+        _link("system/services", services_pkg)
     # The workspace's OWN empty app package (no compositions yet). gen-manifest
     # walks `cluster Applications` here — empty → an empty app manifest +
     # executor sidecar, which the rig imports as-is. WRITE before the symlink so
@@ -1255,8 +1393,12 @@ def cmd_init(args: list[str]) -> int:
           "  artheia gen-manifest apps/system/apps/component.art "
           "apps/manifest/app.py\n"
           f"  theia manifest && theia install && theia start{extra}\n"
-          "Then add a composition to apps/system/apps/component.art and "
-          "`artheia gen-app` it.", file=sys.stderr)
+          "\nThen add a composition to apps/system/apps/component.art and "
+          "generate + build its C++:\n"
+          "  artheia gen-app --kind fc apps/system/apps/component.art "
+          "--out apps --proto-out platform/proto\n"
+          "  bazel build //apps/...        # compiles against @pero_theia",
+          file=sys.stderr)
     return 0
 
 
@@ -1312,7 +1454,9 @@ _INIT_APPS_COMPONENT_ART = '''\
 //   2. `composition MyApp { prototype MyNode my_node }`  (here)
 //   3. `cluster Applications { composition MyApp my_app }`  (here)
 //   4. `artheia gen-app --kind fc apps/system/apps/component.art --out apps
-//       --composition MyApp` to emit the C++.
+//       --proto-out platform/proto [--composition MyApp]` to emit the C++
+//       (--proto-out lands apps.proto where platform/proto's BUILD expects it),
+//       then `bazel build //apps/...` (compiles against @pero_theia).
 
 package system.apps
 
@@ -1626,7 +1770,7 @@ filegroup(name = "apps_proto", srcs = ["apps.proto"])
 
 
 COMMANDS = {
-    "init":        (cmd_init,        "scaffold the CWD as a Theia consuming workspace (sibling-source)"),
+    "init":        (cmd_init,        "scaffold the CWD as a Theia consuming workspace (source or /opt/theia)"),
     "rig":         (cmd_rig,         "docker compose {up|down} the deploy stack"),
     "provision":   (cmd_provision,   "puppet apply — Phase 1 (os pkgs + .ipk)"),
     "orchestrate": (cmd_orchestrate, "puppet apply — Phase 2 remote (app rollout)"),

@@ -100,13 +100,32 @@ sudo cp /usr/bin/qemu-aarch64-static "$TARGET/usr/bin/"
 echo "==> second stage: chroot debootstrap --second-stage"
 sudo chroot "$TARGET" /debootstrap/debootstrap --second-stage
 
+# --- nanopb (not reliably in the Debian arm64 archive) --------------
+# The Theia runtime/protos #include <pb.h> and link libprotobuf-nanopb.a.
+# nanopb is 3 tiny .c files — cross-compile them into the sysroot's lib +
+# stage the headers, so the aarch64 cc_toolchain finds them.
+echo "==> staging nanopb (cross-compile pb_*.c → aarch64)"
+NANOPB_VER="${NANOPB_VER:-0.4.7}"
+np="$(mktemp -d)"
+curl -fsSL "https://github.com/nanopb/nanopb/archive/refs/tags/${NANOPB_VER}.tar.gz" \
+    | tar xz -C "$np"
+nps="$np/nanopb-${NANOPB_VER}"
+( cd "$nps" && for c in pb_common pb_encode pb_decode; do
+      aarch64-linux-gnu-gcc -c -O2 -fPIC -I. "$c.c" -o "$c.o"
+  done
+  aarch64-linux-gnu-ar rcs libprotobuf-nanopb.a pb_common.o pb_encode.o pb_decode.o )
+sudo cp "$nps"/pb.h "$nps"/pb_common.h "$nps"/pb_encode.h "$nps"/pb_decode.h \
+    "$TARGET/usr/include/"
+sudo cp "$nps/libprotobuf-nanopb.a" "$TARGET/usr/lib/aarch64-linux-gnu/"
+rm -rf "$np"
+
 # --- sanity check ---------------------------------------------------
 
 echo
 echo "==> sysroot ready at $TARGET ($(sudo du -sh "$TARGET" | cut -f1))"
 
 missing=()
-for lib in libyaml-cpp.so.0.7 libprotobuf.so libgrpc++.so libabsl_strings.so; do
+for lib in libyaml-cpp.so.0.7 libprotobuf.so libgrpc++.so libabsl_strings.so libprotobuf-nanopb.a; do
     if ! sudo find "$TARGET/usr/lib/aarch64-linux-gnu" -name "${lib}*" \
         -quit -print 2>/dev/null | grep -q .; then
         missing+=("$lib")

@@ -13,12 +13,20 @@ build --action_env=PATH
 # doesn't cleanly expose a cc_library here). libnanopb-dev installs it either
 # flat (/usr/include/pb.h — older) or under /usr/include/nanopb/ (0.4.8+).
 # Add the subdir to the include path so both layouts resolve; harmless when the
-# dir is absent (-I to a missing dir is ignored).
-build --copt=-I/usr/include/nanopb
+# dir is absent (-I to a missing dir is ignored). HOST-ONLY: a cross-build
+# (rpi4) gets nanopb's pb.h from its own sysroot, not a host path.
+build:linux --copt=-I/usr/include/nanopb
 
 # ── Host (Linux x86_64) ───────────────────────────────────────────────────
 build:linux --cpu=k8
 build:linux --compiler=gcc
+
+# ── Raspberry Pi 4 (aarch64, Debian bookworm) — cross-compile ────────────
+# Needs gcc-aarch64-linux-gnu + the sysroot at third_party/sysroot/rpi4
+# (setup_rpi4.sh). The sysroot is host data outside the sandbox, so the cross
+# actions run un-sandboxed (local) and read it via an absolute --sysroot.
+build:rpi4 --platforms=//rules/config:rpi4
+build:rpi4 --strategy=CppCompile=local --strategy=CppLink=local
 
 # ── TI ARM CGT 18.1.1.LTS — original CCS 8 compiler (armcl) ─────────────
 # Requires /opt/ti/cgt_arm_18.1.1.LTS/ installed.

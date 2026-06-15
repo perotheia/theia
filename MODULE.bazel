@@ -48,6 +48,14 @@ register_toolchains("//toolchains/arm_gcc_7_2017q4:cc_suite")
 # TI ARM CGT 18.1.1.LTS (original CCS 8 proprietary compiler)
 register_toolchains("//toolchains/ti_arm_cgt_18:cc_suite")
 
+# aarch64-linux-gnu — cross-compile to Raspberry Pi 4 (aarch64, Debian bookworm)
+# for //rules/config:rpi4. Host gcc-aarch64-linux-gnu + the bookworm sysroot.
+# The sysroot's absolute path is captured by the @rpi4_sysroot repo rule (the
+# sysroot is gitignored host data; the cross-toolchain needs an absolute path).
+rpi4_sysroot_ext = use_extension("//toolchains/aarch64_linux_gnu:extension.bzl", "rpi4_sysroot_ext")
+use_repo(rpi4_sysroot_ext, "rpi4_sysroot")
+register_toolchains("//toolchains/aarch64_linux_gnu:cc_suite")
+
 # ── Rig module extension ──────────────────────────────────────────────────
 # Materialize synthetic Bazel repos from artheia rig.py modules at
 # MODULE-resolution time. Each `rig_ext.declare(...)` line below

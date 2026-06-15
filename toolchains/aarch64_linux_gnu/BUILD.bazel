@@ -1,0 +1,53 @@
+"""aarch64-linux-gnu cc_toolchain for the rpi4 platform (//rules/config:rpi4).
+
+Cross-compiles to Raspberry Pi 4 (aarch64, Debian bookworm) with the host's
+gcc-aarch64-linux-gnu + the bookworm sysroot at third_party/sysroot/rpi4/
+(bootstrap it with third_party/sysroot/setup_rpi4.sh; the sysroot is gitignored).
+Registered in MODULE.bazel; selected by `bazel build --platforms=//rules/config:rpi4`.
+"""
+load("@rules_cc//cc:defs.bzl", "cc_toolchain")
+load(":cc_toolchain_config.bzl", "cc_toolchain_config")
+
+package(default_visibility = ["//visibility:public"])
+
+# The sysroot is gitignored HOST data outside bazel's sandbox. The compile/link
+# read it via an ABSOLUTE path (a relative one resolves to the empty execroot);
+# the rpi4 actions run un-sandboxed (.bazelrc `build:rpi4`) so the host sysroot
+# is reachable. The absolute path is captured by the `rpi4_sysroot` repository
+# rule (@rpi4_sysroot//:path.bzl) at the workspace root, so it tracks wherever
+# the repo lives (dev host or /opt in CI).
+load("@rpi4_sysroot//:path.bzl", "RPI4_SYSROOT")
+
+cc_toolchain_config(
+    name = "aarch64_config",
+    sysroot = RPI4_SYSROOT,
+)
+
+filegroup(name = "empty", srcs = [])
+
+cc_toolchain(
+    name = "aarch64_toolchain",
+    toolchain_identifier = "aarch64-linux-gnu",
+    toolchain_config = ":aarch64_config",
+    all_files = ":empty",
+    ar_files = ":empty",
+    compiler_files = ":empty",
+    dwp_files = ":empty",
+    linker_files = ":empty",
+    objcopy_files = ":empty",
+    strip_files = ":empty",
+)
+
+toolchain(
+    name = "cc_suite",
+    exec_compatible_with = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+    ],
+    target_compatible_with = [
+        "@platforms//os:linux",
+        "@platforms//cpu:aarch64",
+    ],
+    toolchain = ":aarch64_toolchain",
+    toolchain_type = "@bazel_tools//tools/cpp:toolchain_type",
+)

@@ -28,36 +28,17 @@
 #include <openssl/x509.h>
 #include <openssl/err.h>
 
+#include "impl/crypto_provider.hpp"   // ICryptoProvider + ProviderResult + enums
+
 namespace ara::crypto {
 
-// CryptoStatus ordinals (must match the .art enum order).
-enum CStatus : uint32_t {
-    CS_OK = 0,
-    CS_UNKNOWN_IDENTIFIER = 1,
-    CS_INCOMPATIBLE_ARGS  = 2,
-    CS_USAGE_VIOLATION    = 3,
-    CS_AUTH_TAG_FAILED    = 4,
-    CS_BAD_ALGO           = 5,
-    CS_BAD_CONTEXT        = 6,
-    CS_BACKEND_ERROR      = 7,
-    CS_BAD_INPUT          = 8,
-};
-
-// CtxKind ordinals (must match the .art enum order).
-enum CKind : int { CK_HASH = 0, CK_SIGNER = 1, CK_VERIFIER = 2 };
-
-// Result of a provider op: status + (on success) output bytes / valid.
-struct ProviderResult {
-    uint32_t    status = CS_OK;
-    std::string message;
-    std::vector<uint8_t> bytes;   // digest / signature / pem / cert
-    bool        valid = false;    // verify result
-};
-
-class SoftwareProvider {
+// The OpenSSL-backed Crypto Provider (the AUTOSAR Software Crypto Provider).
+class SoftwareProvider : public ICryptoProvider {
 public:
     explicit SoftwareProvider(std::string slot_dir)
         : slot_dir_(std::move(slot_dir)) {}
+
+    const char* name() const override { return "OpenSSL software"; }
 
     // ====================================================================
     // Context lifecycle — the streaming ara::crypto API
@@ -66,7 +47,7 @@ public:
     // create(kind, algo, key_slot) → handle (0 on error). SIGNER/VERIFIER bind
     // the slot now; HASH ignores it. The EVP_MD_CTX is built at Start().
     uint64_t create(int kind, int algo, const std::string& key_slot,
-                    ProviderResult& err) {
+                    ProviderResult& err) override {
         if (!md_for_(algo)) { err = mk_(CS_BAD_ALGO, "bad algo"); return 0; }
         if (kind != CK_HASH && kind != CK_SIGNER && kind != CK_VERIFIER) {
             err = mk_(CS_BAD_INPUT, "bad ctx kind"); return 0;
@@ -89,7 +70,7 @@ public:
     }
 
     // start(ctx) — (re)initialize the EVP op. ara::crypto ctx->Start().
-    ProviderResult start(uint64_t ctx) {
+    ProviderResult start(uint64_t ctx) override {
         std::lock_guard<std::mutex> lk(mu_);
         auto* c = find_(ctx);
         if (!c) return mk_(CS_BAD_CONTEXT, "unknown context");
@@ -111,7 +92,7 @@ public:
     }
 
     // update(ctx, chunk) — feed one chunk. Call repeatedly for large data.
-    ProviderResult update(uint64_t ctx, const uint8_t* data, size_t len) {
+    ProviderResult update(uint64_t ctx, const uint8_t* data, size_t len) override {
         std::lock_guard<std::mutex> lk(mu_);
         auto* c = find_(ctx);
         if (!c) return mk_(CS_BAD_CONTEXT, "unknown context");
@@ -127,7 +108,7 @@ public:
 
     // finish(ctx, sig) — complete + RELEASE the handle. HASH→digest;
     // SIGNER→signature; VERIFIER→valid (sig = the signature to check).
-    ProviderResult finish(uint64_t ctx, const uint8_t* sig, size_t siglen) {
+    ProviderResult finish(uint64_t ctx, const uint8_t* sig, size_t siglen) override {
         std::lock_guard<std::mutex> lk(mu_);
         auto* c = find_(ctx);
         if (!c) return mk_(CS_BAD_CONTEXT, "unknown context");
@@ -164,7 +145,7 @@ public:
     // One-shot convenience (small payloads)
     // ====================================================================
 
-    ProviderResult hash(int algo, const uint8_t* data, size_t len) {
+    ProviderResult hash(int algo, const uint8_t* data, size_t len) override {
         const EVP_MD* md = md_for_(algo);
         if (!md) return mk_(CS_BAD_ALGO, "bad algo");
         MdCtx ctx(EVP_MD_CTX_new(), EVP_MD_CTX_free);
@@ -179,7 +160,7 @@ public:
     }
 
     ProviderResult sign(const std::string& slot, int algo,
-                        const uint8_t* data, size_t len) {
+                        const uint8_t* data, size_t len) override {
         const EVP_MD* md = md_for_(algo);
         if (!md) return mk_(CS_BAD_ALGO, "bad algo");
         EVP_PKEY* key = load_private_(slot);
@@ -199,7 +180,7 @@ public:
 
     ProviderResult verify(const std::string& slot, int algo,
                           const uint8_t* data, size_t len,
-                          const uint8_t* sig, size_t siglen) {
+                          const uint8_t* sig, size_t siglen) override {
         const EVP_MD* md = md_for_(algo);
         if (!md) return mk_(CS_BAD_ALGO, "bad algo");
         EVP_PKEY* key = load_public_(slot);
@@ -215,7 +196,7 @@ public:
         return r;
     }
 
-    ProviderResult get_cert(const std::string& slot) {
+    ProviderResult get_cert(const std::string& slot) override {
         std::string pem = read_file_(cert_path_(slot));
         if (pem.empty()) return mk_(CS_UNKNOWN_IDENTIFIER, "unknown slot / unreadable cert");
         return ok_(std::vector<uint8_t>(pem.begin(), pem.end()));
@@ -226,7 +207,7 @@ public:
     // raw RSA_private_encrypt back, so the handshake signing happens here and
     // the key never leaves the FC. RSA only (the TLS slot is RSA in v1).
     ProviderResult priv_op(const std::string& slot,
-                           const uint8_t* input, size_t len) {
+                           const uint8_t* input, size_t len) override {
         EVP_PKEY* key = load_private_(slot);
         if (!key) return mk_(CS_UNKNOWN_IDENTIFIER, "unknown slot / unreadable key");
         if (EVP_PKEY_base_id(key) != EVP_PKEY_RSA)
@@ -260,7 +241,7 @@ public:
     // the key, usage = sign|verify (a cert/key slot), exportable=false (the key
     // file is on disk but the API never returns it). present=false if no key.
     bool slot_info(const std::string& slot, std::string& family,
-                   uint32_t& usage, bool& exportable) {
+                   uint32_t& usage, bool& exportable) override {
         EVP_PKEY* k = load_private_(slot);
         if (!k) k = load_public_(slot);
         if (!k) return false;

@@ -29,10 +29,19 @@ cc_library(
     srcs = [
         "CryptoProvider_handlers.cc",
     ],
-    # The OpenSSL SoftwareProvider — all OpenSSL EVP/PEM/X509 lives behind this
-    # header so the gen_server TU stays clean (mirrors per isolating etcd in
-    # etcd_store.hpp). `..` so it resolves `#include "impl/software_provider.hpp"`.
-    hdrs = ["software_provider.hpp"],
+    # The Crypto Service Manager + its providers, all behind these headers so the
+    # gen_server TU stays clean (mirrors per isolating etcd). `..` so they resolve
+    # `#include "impl/<x>.hpp"` from the services/crypto/ root.
+    #   crypto_provider.hpp  — the abstract ICryptoProvider + result/enums
+    #   software_provider.hpp — OpenSSL backend (EVP/PEM/X509)
+    #   hardware_provider.hpp — HSM/TPM stub (proves the seam)
+    #   provider_manager.hpp  — routes a request to a backend by slot (phase 4)
+    hdrs = [
+        "crypto_provider.hpp",
+        "software_provider.hpp",
+        "hardware_provider.hpp",
+        "provider_manager.hpp",
+    ],
     includes = [".."],
     copts = [
         "-std=c++17",

@@ -41,7 +41,7 @@ Force Tags       selftest    live    two-supervisor
 
 
 *** Variables ***
-${WORKSPACE}     ${CURDIR}/../../../../..
+${WORKSPACE}     ${CURDIR}/../../../..
 
 
 *** Test Cases ***

@@ -1,0 +1,63 @@
+name: rf-theia selftests (hermetic)
+
+# Run the HERMETIC rf-theia selftests on every push/PR — the offline,
+# pure-Python assertion suites that need no live supervisor/etcd and no C++
+# build (just artheia + the rf-theia harness installed). Catches regressions in
+# the testkit + the rig/topology/temporal/component keyword surfaces early.
+#
+# The LIVE suites (supervision/trace/sm — need a running stack) and the
+# generator-regression suites (need bazel-built protos / the trace-decoder .so)
+# are NOT run here; they stay dev-/release-gated. See
+# docs/tasks/BACKLOG/rf-theia-testing-framework.md.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  hermetic:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check out artheia + rf-theia from the GitHub mirror
+        run: |
+          git config submodule.artheia.url https://github.com/perotheia/artheia.git
+          git config submodule.rf-theia.url https://github.com/perotheia/rf-theia.git
+          git submodule update --init artheia rf-theia
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install artheia + rf-theia
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e artheia/
+          pip install -e rf-theia/
+
+      - name: Run the hermetic selftests
+        env:
+          RF_THEIA_WORKSPACE: ${{ github.workspace }}
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          # The offline, pure-Python suites: rig/topology, temporal monitors,
+          # distributed-actor components, and the keyword-load smoke. No live
+          # stack, no C++ build.
+          python -m robot \
+            --include hermetic --exclude live \
+            --outputdir out \
+            testing/scenarios/_selftest/components/ \
+            testing/scenarios/_selftest/keywords_load/ \
+            testing/scenarios/_selftest/topology/ \
+            testing/scenarios/_selftest/temporal_logic/
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: selftest-report
+          path: out/

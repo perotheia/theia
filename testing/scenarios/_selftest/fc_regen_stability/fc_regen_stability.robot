@@ -30,7 +30,7 @@ Suite Setup      Anchor At Workspace
 
 
 *** Variables ***
-${WORKSPACE}     ${CURDIR}/../../../../..
+${WORKSPACE}     ${CURDIR}/../../../..
 
 
 *** Keywords ***

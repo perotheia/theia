@@ -36,7 +36,7 @@ Suite Teardown   Tear Down Synthetic FC
 
 
 *** Variables ***
-${WORKSPACE}     ${CURDIR}/../../../../..
+${WORKSPACE}     ${CURDIR}/../../../..
 
 
 *** Keywords ***

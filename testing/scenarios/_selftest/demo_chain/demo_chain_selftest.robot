@@ -44,7 +44,7 @@ ${WORKDIR}       ${TMPDIR}/demo_chain_selftest
 # Workspace root — when run from `testing/` with PYTHONPATH=. (the
 # canonical TESTING.md command), CURDIR resolves under testing/.
 # We need the pero_theia checkout one level up.
-${WORKSPACE}     ${CURDIR}/../../../../..
+${WORKSPACE}     ${CURDIR}/../../../..
 
 
 *** Keywords ***

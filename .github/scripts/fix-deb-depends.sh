@@ -13,9 +13,10 @@ shopt -s nullglob
 
 for deb in dist/debian/*/*.deb; do
   pkg="$(dpkg-deb -f "$deb" Package)"
-  # Only the binary-bearing packages have shared-lib deps worth resolving.
+  # Only the binary-bearing packages have shared-lib deps worth resolving
+  # (theia-tools = the wxWidgets supervisor-gui).
   case "$pkg" in
-    theia-services|theia-runtime) ;;
+    theia-services|theia-runtime|theia-tools) ;;
     *) echo "skip $pkg (no compiled binaries)"; continue ;;
   esac
 

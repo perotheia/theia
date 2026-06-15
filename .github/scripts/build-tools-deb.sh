@@ -57,6 +57,7 @@ Depends: theia-services, python3
 Description: Theia operator tools — the supervisor GUI (wxWidgets) + rtdb.
  The supervisor-gui and rtdb speak the com Functional Cluster's gRPC surface
  (SupervisorView / TraceStream on :7700) to observe and drive a running stack.
+ The GUI links wxWidgets 3.2 (native to Ubuntu 24.04+).
 EOF
 
 # 4. Build into the standard dist layout so the release steps pick it up.

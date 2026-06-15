@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cerrno>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -74,11 +75,20 @@ std::shared_ptr<Logger> MakeConsoleLogger() noexcept {
 namespace {
 
 std::string iso8601_now() {
-    std::time_t t = std::time(nullptr);
+    // Millisecond-resolution UTC: "2026-06-15T17:26:13.968Z". The .mmm matters
+    // for the logcat hose — log[] parses this stamp into LogRecord.ts_ns, and a
+    // whole-second stamp would render every line as ".000" (the trace path
+    // already carries ns). system_clock so it's the SAME wall clock the trace
+    // ts uses, for a consistent timeline across tracecat/logcat.
+    auto now = std::chrono::system_clock::now();
+    std::time_t t = std::chrono::system_clock::to_time_t(now);
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                  now.time_since_epoch()).count() % 1000;
     std::tm tm{};
     ::gmtime_r(&t, &tm);
-    char buf[32];
-    std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &tm);
+    char buf[40];
+    std::size_t n = std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", &tm);
+    std::snprintf(buf + n, sizeof(buf) - n, ".%03ldZ", static_cast<long>(ms));
     return buf;
 }
 

@@ -484,7 +484,11 @@ def cmd_tracecat(args, _sup, trace_factory) -> int:
             # base64 payload in the envelope JSON. content is None when the
             # record has no payload (e.g. Dispatch) or the type didn't resolve.
             body = _fmt_content(rec.content) if rec.content else ""
+            # Strip the proto enum's "TraceKind_" prefix (gen-proto names enum
+            # members <Enum>_<NAME> for nanopb compat) — show just CALL_OUT.
             kind = getattr(rec, "kind", "") or "?"
+            if kind.startswith("TraceKind_"):
+                kind = kind[len("TraceKind_"):]
             # STATEM rows carry the transition in from_state/to_state — show it
             # as `from→to` (the event is in msg_type). e.g. OFF→STARTING.
             frm = getattr(rec, "from_state", "") or ""
@@ -496,12 +500,62 @@ def cmd_tracecat(args, _sup, trace_factory) -> int:
                 data_str = f" data={_fmt_content(data)}" if data else ""
                 body = (f"{frm}→{to}{data_str}"
                         + (f" {body}" if body else "")).strip()
-            print(f"{rec.ts_ns:>16} {rec.src:>16} {kind:<9} {rec.msg_type:<22} "
-                  f"corr={rec.corr_id}{(' ' + body) if body else ''}")
+            # ts_ns is system_clock epoch ns (Tracer.hh) — the SAME clock logcat
+            # uses, so format it the same way (DD/MM/YY HH:MM:SS.mmm) for a
+            # consistent timeline across both firehoses.
+            ts = _fmt_epoch_ns(rec.ts_ns)
+            print(f"{ts} {rec.src} {kind} {rec.msg_type} "
+                  f"corr={rec.corr_id}{(' ' + body) if body else ''}",
+                  flush=True)
     except KeyboardInterrupt:
         pass
     finally:
         trace.stop()
+    return 0
+
+
+def cmd_logcat(args, _sup, log_factory) -> int:
+    # Follows the LOG firehose — the node log LINES (Logger.hh output), NOT the
+    # trace records (that's `tracecat`). Subscribes to log[logging], which spins
+    # up the tailer on this first subscriber; each line is decoded + printed
+    # adb-style. Subscriber-side <tag-glob>:<level> filter (the hose is dumb).
+    #
+    #   tdb logcat                     follow everything
+    #   tdb logcat *:E                 errors only, every tag
+    #   tdb logcat MyApp/counter:V *:E verbose for MyApp's counter, errors else
+    #   tdb logcat --json              one JSON object per line (NDJSON)
+    from artheia.observer.logcat_filter import LogcatFilter
+
+    as_json = "--json" in args
+    specs = [a for a in args if a != "--json"]
+    try:
+        filt = LogcatFilter.parse(specs)
+    except ValueError as e:
+        print(f"logcat: {e}", file=sys.stderr)
+        return 2
+
+    log = log_factory()
+    if not as_json:
+        print("logcat: following log firehose (Ctrl-C to stop) ...")
+    try:
+        for rec in log.records(timeout=600.0):
+            if not filt.keep(tag=rec.tag, node=rec.node, level_ord=rec.level_ord):
+                continue
+            if as_json:
+                ts = _fmt_epoch_ns(rec.ts_ns)
+                print(json.dumps(rec.to_dict(ts=ts), separators=(",", ":")),
+                      flush=True)
+                continue
+            # adb-style: "<ts> <LEVEL> <tag>/<node> <msg>". rec.line is just the
+            # message body (the hub strips the file line's own ts+[LEVEL] prefix
+            # into ts_ns/level), so tdb renders ts + level once from the fields.
+            ts = _fmt_epoch_ns(rec.ts_ns)
+            print(f"{ts:<21} {rec.level_code} {rec.tag}/{rec.node} {rec.line}",
+                  flush=True)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        log.stop()
     return 0
 
 
@@ -516,7 +570,7 @@ _COMMANDS = {
     "restart": cmd_restart,
     "terminate": cmd_terminate,
     "tracecat": cmd_tracecat,
-    "logcat": cmd_tracecat,   # back-compat alias (the firehose is TRACES, not logs)
+    "logcat": cmd_logcat,     # the LOG firehose (node log lines); tracecat = TRACES
 }
 
 _HELP = """tdb — Theia Debug Bridge. commands:
@@ -531,7 +585,10 @@ _HELP = """tdb — Theia Debug Bridge. commands:
   trace <node> <KIND> off  remove just that KIND; `trace <node> off` stops all
   trace-config             show stored trace config
   loglevel [<node> [lvl]]  show all/one node's log level; with lvl, SET it live
-  tracecat [--json]        follow the trace firehose (--json = NDJSON; alias: logcat)
+  tracecat [--json]        follow the TRACE firehose (--json = NDJSON)
+  logcat [<tag-glob>:<lvl> ...] [--json]
+                           follow the LOG firehose (node log lines); filter
+                           adb-style, e.g. `logcat MyApp/counter:V *:E`
   restart <name>           restart a child
   terminate <name>         stop-and-hold a child
   help                     this help

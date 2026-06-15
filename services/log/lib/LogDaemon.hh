@@ -39,6 +39,8 @@ namespace ara::log {
 // generator prefixes types with the libc-safe proto package
 // (system_services_log_*); aliasing them here keeps callers'
 // signatures readable.
+using LogSubscribeReq = system_services_log_LogSubscribeReq;
+using LogEmpty = system_services_log_LogEmpty;
 
 
 
@@ -115,6 +117,9 @@ public:
     // gets emitted once. handle_call/handle_cast dispatch by
     // request type, not by port.
 
+
+    LogEmpty handle_call(const LogSubscribeReq& req,
+                                            LogDaemonState& s);
 
 
     // ---- OTP init/1 — body in impl (LogDaemon_handlers.cc) ----------

@@ -10,7 +10,13 @@ package(default_visibility = ["//visibility:public"])
 
 genrule(
     name = "log_pb",
-    srcs = ["log.proto"],
+    srcs = [
+        "log.proto",
+        # nanopb_generator auto-loads the same-basename .options next to
+        # the .proto (pins LogRecord.line to BUFSIZ etc.) — list it so it's
+        # present in the sandbox.
+        "log.options",
+    ],
     outs = [
         "log.pb.c",
         "log.pb.h",

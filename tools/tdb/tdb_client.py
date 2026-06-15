@@ -263,3 +263,33 @@ class TraceClient:
 
     def stop(self) -> None:
         self.obs.stop()
+
+
+class LogClient:
+    """Subscribes to log[logging] and yields decoded log lines.
+
+    The LOG analogue of TraceClient — thin wrapper over
+    artheia.observer.LogObserver. Subscribing spins up the log[] tailer; stop()
+    unsubscribes (winding it down). `tdb logcat` is the one entry point.
+    """
+
+    def __init__(self, observer) -> None:
+        self.obs = observer
+
+    @classmethod
+    def from_workspace(cls, repo: str | Path) -> "LogClient":
+        import sys
+        repo = Path(repo)
+        sys.path.insert(0, str(repo / "artheia"))
+        from artheia.observer.log_observer import LogObserver
+        obs = LogObserver.from_log_art(
+            str(repo / "system/services/log/component.art"),
+            proto_root=str(repo / _PROTO))
+        obs.start()
+        return cls(obs)
+
+    def records(self, timeout: float = 5.0) -> Iterator:
+        yield from self.obs.records(timeout=timeout)
+
+    def stop(self) -> None:
+        self.obs.stop()

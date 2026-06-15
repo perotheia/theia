@@ -36,7 +36,7 @@ from pathlib import Path
 
 # tdb_client + the shared command layer live next to this file.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from tdb_client import SupervisorClient, TraceClient  # noqa: E402
+from tdb_client import SupervisorClient, TraceClient, LogClient  # noqa: E402
 import tdb_commands as _cmds  # noqa: E402
 from tdb_commands import _g, _COMMANDS as _SHARED_COMMANDS, _HELP  # noqa: E402,F401
 
@@ -125,10 +125,17 @@ class _Session:
     def trace_factory(self) -> TraceClient:
         return TraceClient.from_workspace(REPO)
 
+    def log_factory(self) -> LogClient:
+        return LogClient.from_workspace(REPO)
+
     def close(self) -> None:
         if self._sup is not None:
             self._sup.stop()
 
+
+# Verbs whose handler needs the LOG firehose factory (4th positional) instead of
+# the trace one. Every other cmd keeps the (args, sup, trace_factory) shape.
+_LOG_VERBS = {"logcat"}
 
 
 def _dispatch(sess: _Session, verb: str, args: list[str]) -> int:
@@ -136,6 +143,8 @@ def _dispatch(sess: _Session, verb: str, args: list[str]) -> int:
     if fn is None:
         print(f"unknown command: {verb!r} (try `help`)", file=sys.stderr)
         return 2
+    if verb in _LOG_VERBS:
+        return fn(args, sess.sup, sess.log_factory)
     return fn(args, sess.sup, sess.trace_factory)
 
 

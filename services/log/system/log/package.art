@@ -179,12 +179,109 @@ interface clientServer TraceStreamSub {
 }
 
 
+// ─── Log stream (logcat) wire types ──────────────────────────────────
+//
+// The LOG firehose — the log analogue of the trace firehose above. Where
+// the trace path carries dispatcher EXECUTION records, this carries the
+// node LOG LINES (Logger.hh output). The log[] FC tails every node's log
+// sink (file:<dir>/<node>.log, or journald) and re-hoses each line so
+// `tdb logcat` / `rtdb logcat` can follow it with an adb-style filter.
+// See docs/tasks/TODO/log-logcat.md.
+
+// Log severity, mirroring platform.runtime LogLevel (Logger.hh). Ordered
+// verbose→fatal so a subscriber's `level_min` filter is a simple `>=`.
+enum LogLevel {
+    VERBOSE = 0
+    DEBUG   = 1
+    INFO    = 2
+    WARNING = 3
+    ERROR   = 4
+    FATAL   = 5
+}
+
+// One log line, re-hosed from a node's sink. `line` is the raw message text
+// (BUFSIZ-capped per <stdio.h>); tag/node/level/ts are parsed from the sink
+// line so a subscriber filters without re-parsing. The hose never rewrites
+// `line` — it's the verbatim text the node logged.
+//   node  — the emitting FC node (= the supervised worker name).
+//   tag   — the app/syslog tag the line carries (Logger.hh tag; node name today).
+//   level — parsed LogLevel; defaults INFO when the line has no level marker.
+//   ts_ns — wall time the line was emitted (epoch ns); 0 if unparseable.
+//   line  — the verbatim log text (no trailing newline).
+message LogRecord {
+    string   node
+    string   tag
+    LogLevel level
+    uint64   ts_ns
+    string   line
+}
+
+// Subscribe request — a consumer (tdb/rtdb) registering for the log firehose.
+// Mirrors SubscribeReq on the trace side. The coarse server-side filters
+// (level_min / tag_filter) are best-effort; the fine <tag-glob>:<level> DSL
+// is applied subscriber-side (the hose stays dumb, like the trace pump).
+//   level_min   — drop lines below this LogLevel (0 = VERBOSE = keep all).
+//   tag_filter  — keep only this tag; "" = all tags.
+message LogSubscribeReq {
+    uint32   sub_type
+    uint32   sub_instance
+    LogLevel level_min
+    string   tag_filter
+}
+
+message LogEmpty { }
+
+// ─── Log stream interfaces ────────────────────────────────────────────
+
+// The log firehose — broadcast pub/sub, the SENDER is the log[] hose, the
+// RECEIVERS are tdb/rtdb subscribers. Mirrors TraceRecordStream.
+interface senderReceiver LogRecordStream {
+    data LogRecord rec
+}
+
+// Observer subscription control. A consumer calls Subscribe with its own
+// (type,instance); LogDaemon registers it, spills the ring backlog, then fans
+// live lines to it. The FIRST subscriber spins up the tailer (LogStreamPump);
+// the LAST unsubscribe (connection close) tears it down — no file I/O when
+// nobody's watching. Mirrors TraceStreamSub.
+interface clientServer LogStreamSub {
+    operation Subscribe(in r:LogSubscribeReq) returns LogEmpty
+}
+
+
 // ─── Nodes ─────────────────────────────────────────────────────────────
 
-// The syslog sink. tipc 0x80010003. No ports — logging is direct-to-sink
-// (THEIA_LOGGER), not a TIPC ingest. Holds the slot + node identity.
+// The log sink + log firehose CONTROL plane. tipc 0x80010003. Owns the
+// LogStreamSub subscribe surface: on the first subscriber it queries the
+// supervisor (GetLoggerPolicy) for every node's exact log sink and starts the
+// tailer; on the last unsubscribe it stops it. Shares a process-global LogHub
+// with LogStreamPump (ring + subscriber registry), the way TraceCtl shares
+// TraceHub with TraceStreamPump.
 node atomic LogDaemon {
     tipc type=0x80010003 instance=0
+    tag = "LOG"
+    ports {
+        server ctl_sub provides LogStreamSub
+    }
+}
+
+// The log tailer — the hot path. tipc 0x80010023. A runnable owning its own
+// thread: while there's ≥1 subscriber it tails every node's log file (the
+// exact paths the supervisor's GetLoggerPolicy returned), parses each new line
+// into a LogRecord, and hands it to the shared LogHub for ring + fan-out. Idle
+// (no thread work) when there are no subscribers. Mirrors TraceStreamPump.
+// Never filters — subscribers do (the hose stays dumb).
+node runnable LogStreamPump {
+    tipc type=0x80010023 instance=0
+    tag = "LOG"
+    ports {
+        sender stream_out provides LogRecordStream
+    }
+    // Always-on circular log buffer (logcat-style ring) — a late subscriber
+    // gets backlog on Subscribe.
+    params {
+        log_ring_records : uint32 = 4096
+    }
 }
 
 // The trace fan-out. tipc 0x80010013.

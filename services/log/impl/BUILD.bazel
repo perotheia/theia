@@ -17,7 +17,10 @@ cc_library(
     hdrs = [
         "LogDaemon_state.hh",
         "TraceCtl_state.hh",
-        # TraceStreamPump is a GenRunnable — no State struct/header.
+        "LogStreamPump_state.hh",
+        # TraceStreamPump / LogStreamPump are GenRunnables — the LogStreamPump
+        # State header is a write-once stub (runnable has no real state) but the
+        # lib #includes it, so it lives in the state target.
     ],
     # The lib #includes these as "impl/<Node>_state.hh", so the include
     # root is the FC out_dir (one above impl/).
@@ -30,13 +33,20 @@ cc_library(
     name = "log_impl",
     srcs = [
         "LogDaemon_handlers.cc",
+        "LogStreamPump_handlers.cc",
         "TraceStreamPump_handlers.cc",
         "TraceCtl_handlers.cc",
     ],
-    # The two trace nodes share the process-global TraceHub (ring +
-    # subscriber registry). `..` so they resolve `#include "impl/trace_hub.hpp"`
-    # from the services/log/ root.
-    hdrs = ["trace_hub.hpp"],
+    # Each pair of nodes shares a process-global hub (ring + subscriber
+    # registry). `..` so they resolve `#include "impl/<hub>.hpp"` from the
+    # services/log/ root.
+    #   trace_hub.hpp  — TraceStreamPump + TraceCtl
+    #   log_hub.hpp    — LogStreamPump + LogDaemon (also calls the supervisor's
+    #                    GetLoggerPolicy, so it pulls the supervisor proto).
+    hdrs = [
+        "trace_hub.hpp",
+        "log_hub.hpp",
+    ],
     includes = [".."],
     copts = [
         "-std=c++17",
@@ -46,5 +56,8 @@ cc_library(
     ],
     deps = [
         "//services/log/lib:log_lib",
+        # log_hub.hpp decodes the supervisor's LoggerPolicy reply (+ encodes the
+        # LogRecord it fans out) — both nanopb types live in platform_protos.
+        "//platform/proto:platform_protos",
     ],
 )

@@ -6,6 +6,7 @@
 // impl/<Node>_handlers.cc (one per node).
 
 #include "lib/LogDaemon.hh"
+#include "lib/LogStreamPump.hh"
 #include "lib/TraceStreamPump.hh"
 #include "lib/TraceCtl.hh"
 
@@ -138,6 +139,8 @@ int main() {
         // types so a real peer — or a robot-test inject via services/com
         // — lands on the same handle_call / handle_cast path. clientServer
         // ops → register_call; senderReceiver `in` data → register_cast.
+        config_mux.register_call<LogSubscribeReq, LogEmpty>(
+            log_daemon_cfg, log_daemon);
     } else {
         log_daemon.log().warn("config service bind failed; live log-level "
                                  "push + signal inject disabled");
@@ -157,6 +160,66 @@ int main() {
             heartbeats.push_back(std::move(log_daemon_hb));
         } else {
             log_daemon.log().warn("heartbeat publisher open failed; "
+                                     "supervisor watchdog will not see beats");
+        }
+    }
+
+
+    LogStreamPump log_pump;
+    // Per-node logger: tagged [#log_pump] (kNodeName, matches `tdb ps`),
+    // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so do_start/init
+    // log through it. The FIRST node's logger also backs process_logger() — the
+    // ConfigureLogLevel-push fallback target + any process_logger() caller.
+    {
+        auto log_pump_log = MakeContextLogger(LogStreamPump::kNodeName);
+        log_pump_log->set_level(boot_level);
+        log_pump.set_logger(std::move(log_pump_log));
+    }
+    log_pump.start();
+    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (the supervisor
+    // sets it from the rig's NodeToCPUMapping). No-op when unset / no entry for
+    // this node; soft-fails (logs) on EPERM. Applied AFTER start() — the thread
+    // exists now.
+    ::theia::runtime::apply_node_affinity(log_pump.native_handle(),
+        LogStreamPump::kNodeName, std::getenv("THEIA_NODE_CFG"));
+    {
+        char _tipc[64];
+        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
+                      LogStreamPump::kTipcType, LogStreamPump::kTipcInstance);
+        log_pump.log().info(_tipc);
+    }
+
+
+    // GenRunnable has no mailbox, so it can't take the supervisor's control
+    // pushes via the GenServer handle_cast/mailbox path. Bind a listener and
+    // register the LogLevelPush / TraceControlPush INLINE — the mux dispatch
+    // thread applies them directly (on_log_level_push / on_trace_control_push,
+    // touching only atomics). This is what makes a runnable's log level + trace
+    // live-controllable (`tdb loglevel`/`trace <node>`), same as a gen_server.
+    if (auto* log_pump_cfg = config_mux.bind_listener(
+            LogStreamPump::kTipcType, LogStreamPump::kTipcInstance)) {
+        config_mux.register_cast_inline<platform_runtime_LogLevelPush>(
+            log_pump_cfg, log_pump, &LogStreamPump::on_log_level_push);
+        config_mux.register_cast_inline<platform_runtime_TraceControlPush>(
+            log_pump_cfg, log_pump, &LogStreamPump::on_trace_control_push);
+    } else {
+        log_pump.log().warn("config service bind failed; live log-level "
+                                 "push disabled");
+    }
+
+
+    // Liveness beat to the supervisor watchdog (#PHM). A reporting node — of
+    // EITHER base — must beat or the watchdog SIGTERMs it after K missed
+    // deadlines. One publisher per node, own timer thread; period TODO from the
+    // manifest (1s default matches the supervisor's check cadence).
+    {
+        auto log_pump_hb = std::make_unique<
+            ::theia::runtime::HeartbeatPublisher>(LogStreamPump::kNodeName);
+        if (log_pump_hb->open()) {
+            log_pump_hb->start(/*period_ms=*/1000);
+            heartbeats.push_back(std::move(log_pump_hb));
+        } else {
+            log_pump.log().warn("heartbeat publisher open failed; "
                                      "supervisor watchdog will not see beats");
         }
     }
@@ -303,6 +366,8 @@ int main() {
 
 
     log_daemon.stop("signal");
+
+    log_pump.stop("signal");
 
     trace_pump.stop("signal");
 

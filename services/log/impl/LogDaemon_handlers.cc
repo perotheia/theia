@@ -13,6 +13,8 @@
 
 #include <cstdio>
 
+#include "impl/log_hub.hpp"   // process-global LogHub (shared with LogStreamPump)
+
 namespace ara::log {
 
 
@@ -27,9 +29,22 @@ void LogDaemon::init(LogDaemonState& /*s*/) {
 void LogDaemon::handle_info(const char* /*info*/, LogDaemonState& /*s*/) {
 }
 
-// (No log-ingest handler: logging is direct-to-sink, not a TIPC LogStream.
-// LogDaemon has no ports — the old handle_cast(LogRecord) was removed with the
-// phantom LogStream interface.)
+// ctl_sub: a consumer (tdb/rtdb logcat) registers for the LOG firehose. Hand it
+// to the shared LogHub, which connects back to (sub_type,sub_instance), spills
+// the ring backlog, then fans live lines to it. The FIRST subscriber flips the
+// hub's run flag so LogStreamPump starts tailing the node log files (the exact
+// paths the supervisor's GetLoggerPolicy returns); the LAST unsubscribe (a
+// failed fan-out send => prune) winds the tailer back down. tag_filter is a
+// fixed char[] in the pinned proto, so it's readable here; we pass it (and
+// level_min) as the hub's coarse best-effort filter — the fine
+// <tag-glob>:<level> DSL is applied subscriber-side.
+LogEmpty LogDaemon::handle_call(const LogSubscribeReq& req,
+                                LogDaemonState& /*s*/) {
+    LogHub::instance().subscribe(req.sub_type, req.sub_instance,
+                                 static_cast<uint32_t>(req.level_min),
+                                 req.tag_filter);
+    return LogEmpty{};
+}
 
 
 }  // namespace ara::log

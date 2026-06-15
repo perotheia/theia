@@ -29,6 +29,9 @@
 
 
 
+THEIA_DECLARE_REMOTE_CODEC(system_services_log_LogSubscribeReq)
+THEIA_DECLARE_REMOTE_CODEC(system_services_log_LogEmpty)
+THEIA_DECLARE_REMOTE_CODEC(system_services_log_LogRecord)
 THEIA_DECLARE_REMOTE_CODEC(system_services_log_TraceRecord)
 THEIA_DECLARE_REMOTE_CODEC(system_services_log_SubscribeReq)
 THEIA_DECLARE_REMOTE_CODEC(system_services_log_TraceEmpty)

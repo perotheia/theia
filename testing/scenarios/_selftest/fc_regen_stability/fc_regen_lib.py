@@ -53,6 +53,13 @@ class FcSpec:
     ns: str
     out: str
     composition: Optional[str] = None
+    # impl/BUILD.bazel is normally regen-stable + checked. A few FCs HAND-OWN
+    # it because they add real cc_library targets gen-app can't emit (e.g. per's
+    # per_etcd / migration_registry isolation, log's shared trace_hub). For
+    # those, impl/BUILD.bazel is user-owned business architecture — exclude it
+    # from the regen diff (lib/ + main/ are still checked). The header on those
+    # files already says "the user owns this BUILD.bazel."
+    hand_owned_impl_build: bool = False
 
     @property
     def in_tree(self) -> str:
@@ -68,9 +75,11 @@ FC_SPECS = [
     # LogDaemon (syslog sink) and TraceCollector (trace fan-out) nodes.
     FcSpec("sm",  "services/sm/system/sm/package.art",   "ara::sm",  "services/sm"),
     FcSpec("com", "services/com/system/com/package.art", "ara::com", "services/com"),
-    FcSpec("per", "services/per/system/per/package.art", "ara::per", "services/per"),
+    FcSpec("per", "services/per/system/per/package.art", "ara::per", "services/per",
+           hand_owned_impl_build=True),   # per_etcd + migration_registry targets
     FcSpec("ucm", "services/ucm/system/ucm/package.art", "ara::ucm", "services/ucm"),
-    FcSpec("log", "services/log/system/log/package.art", "ara::log", "services/log"),
+    FcSpec("log", "services/log/system/log/package.art", "ara::log", "services/log",
+           hand_owned_impl_build=True),   # shared trace_hub cc_library
     # Non-services FCs — same generator, different homes. These prove
     # gen-app's path-agnostic label derivation (//<out>/lib:<short>_lib).
     # The apps spec is one spec with three process-compositions; each is its
@@ -153,8 +162,11 @@ class FcRegenLib:
         regenerable = [
             ("lib", None),                            # all files
             ("main", None),                           # all files
-            ("impl", "BUILD.bazel"),                  # only BUILD
         ]
+        # impl/BUILD.bazel is checked unless this FC hand-owns it (real
+        # cc_library targets gen-app can't reproduce — see FcSpec).
+        if not fc.hand_owned_impl_build:
+            regenerable.append(("impl", "BUILD.bazel"))
         for slice_, filter_ in regenerable:
             tmp_slice = regen_dir / slice_
             in_tree_slice = in_tree / slice_

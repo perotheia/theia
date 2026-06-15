@@ -16,7 +16,7 @@
 // derived from the .art), so the struct lives in a WRITE-ONCE impl header
 // (seeded empty, never clobbered without --force) that the user fills in.
 // Included at GLOBAL scope (the header opens its own `namespace
-// system_services_per`) so it isn't nested under this file's
+// ara::per`) so it isn't nested under this file's
 // namespace block — bound as the GenServer State type below.
 #include "impl/PerClient_state.hh"
 
@@ -30,7 +30,7 @@
 #include <utility>
 #include <vector>
 
-namespace system_services_per {
+namespace ara::per {
 
 
 // ---- PerClient ----------------------------------------------------------
@@ -310,6 +310,6 @@ inline void PerClient::broadcast_config_out_config_push(const ConfigUpdated& msg
 
 
 
-}  // namespace system_services_per
+}  // namespace ara::per
 
 

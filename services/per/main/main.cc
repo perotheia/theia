@@ -54,7 +54,7 @@ int main() {
         if (td[0]) tombstone::install_handlers("per", td);
     }
 
-    using namespace system_services_per;
+    using namespace ara::per;
 
     // Boot log level — THEIA_LOG_LEVEL from the env (supervisor sets it from
     // executor.json's per-child env map, sourced from Process.log_level on the

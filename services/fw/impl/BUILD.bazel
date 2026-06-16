@@ -1,0 +1,47 @@
+# HAND-OWNED. source: system/services/fw/package.art
+#
+# Impl slice — handler bodies. The user owns this BUILD.bazel: it adds
+# fw_backend.hpp (the nftables generate/merge/apply controller) to the state +
+# impl targets. gen-app can't derive this from the .art — excluded from the
+# regen-stability diff (see fc_regen_lib.py hand_owned_impl_build).
+
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+# State structs (write-once, app-owned). A leaf header-only target so
+# BOTH the lib (which #includes "impl/<Node>_state.hh" as the GenServer
+# State type) and the impl can depend on it WITHOUT a lib<->impl cycle:
+#   fw_state  ←  lib  ←  impl
+# FwDaemon_state.hh #includes fw_backend.hpp (the FState ordinals), so it rides
+# along here.
+cc_library(
+    name = "fw_state",
+    hdrs = [
+        "FwDaemon_state.hh",
+        "fw_backend.hpp",
+    ],
+    # The lib #includes these as "impl/<Node>_state.hh" / "impl/fw_backend.hpp",
+    # so the include root is the FC out_dir (one above impl/).
+    includes = [".."],
+    copts = ["-std=c++17", "-fPIC"],
+    deps = ["//platform/runtime:runtime"],
+)
+
+cc_library(
+    name = "fw_impl",
+    srcs = [
+        "FwDaemon_handlers.cc",
+    ],
+    hdrs = ["fw_backend.hpp"],
+    includes = [".."],
+    copts = [
+        "-std=c++17",
+        "-Wall",
+        "-Wextra",
+        "-fPIC",
+    ],
+    deps = [
+        "//services/fw/lib:fw_lib",
+    ],
+)

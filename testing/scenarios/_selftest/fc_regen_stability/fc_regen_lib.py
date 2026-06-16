@@ -88,6 +88,8 @@ FC_SPECS = [
            hand_owned_impl_build=True),   # nm_backend.hpp hdr (the `ip` observer)
     FcSpec("osi", "services/osi/system/osi/package.art", "ara::osi", "services/osi",
            hand_owned_impl_build=True),   # osi_backend.hpp hdr (cgroup/power)
+    FcSpec("fw", "services/fw/system/fw/package.art", "ara::fw", "services/fw",
+           hand_owned_impl_build=True),   # fw_backend.hpp hdr (nftables gen/apply)
     # Non-services FCs — same generator, different homes. These prove
     # gen-app's path-agnostic label derivation (//<out>/lib:<short>_lib).
     # The apps spec is one spec with three process-compositions; each is its

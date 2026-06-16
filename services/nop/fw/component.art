@@ -1,7 +1,0 @@
-package system.services.fw
-
-
-composition Fw {
-    prototype FwDaemon fw_daemon
-}
-

@@ -27,6 +27,7 @@ import system.supervisor.*
 import system.services.log.*
 import system.services.per.*
 import system.services.osi.*
+import system.services.fw.*
 
 // ---- extern peers (materialized from the imports) ------------------------
 //
@@ -48,6 +49,10 @@ extern node atomic PerClient { }
 // osi's resource+power control node (tipc 0x8001000C) — system.services.osi.
 // GetResourceStatus (per-FC CPU%/RSS + power mode) / SetResourceLimit.
 extern node atomic OsiCtl { }
+
+// fw's firewall control node (tipc 0x80010011) — system.services.fw.
+// GetFirewallStatus (nft apply state / rule count) / ReloadRules.
+extern node atomic FwDaemon { }
 
 // ---- tdb client nodes ----------------------------------------------------
 //
@@ -94,6 +99,15 @@ node atomic TdbOsi {
     tipc type=0x80020104 instance=0
     ports {
         client osi_ctl  requires system.services.osi.OsiCtlIf
+    }
+}
+
+// fw client: drives FwCtlIf (GetFirewallStatus / ReloadRules) — used by the fw
+// smoke test (and a future `tdb firewall` / GUI security panel).
+node atomic TdbFw {
+    tipc type=0x80020105 instance=0
+    ports {
+        client fw_ctl  requires system.services.fw.FwCtlIf
     }
 }
 

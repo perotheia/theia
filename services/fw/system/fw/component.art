@@ -1,0 +1,8 @@
+package system.services.fw
+
+
+// The Firewall FC: a single FwDaemon node generating + applying the nftables
+// baseline (DMZ allow-list) merged with config/fw.d overrides.
+composition Fw {
+    prototype FwDaemon fw_daemon
+}

@@ -1,0 +1,96 @@
+// Firewall (ara::fw / FWX) — Adaptive Platform Functional Cluster.
+//
+// A THIN control plane over nftables: FwDaemon GENERATES a baseline ruleset for
+// the IP boundary (default-drop inbound, allow-list the known DMZ surface),
+// MERGES hand-authored overrides from config/fw.d/*.nft, and APPLIES it via
+// `nft -f`. The kernel enforces; no packet ever touches the FC. This is the
+// HYBRID model (resolved decision): a generated comm-matrix baseline + manifest
+// add-ons.
+//
+// SCOPE NOTE: the inter-FC transport is AF_TIPC, which nft's ip/inet tables
+// CANNOT filter — so the firewall governs the IP DMZ only: com's gRPC servers
+// (:7700 SupervisorView / :7710 TraceForwarder / :7711 LogForwarder) + etcd
+// (:2379) + loopback + established/related. The TIPC mesh is isolated by the
+// transport itself, not by nft. See docs/tasks/PROGRESS/AUTOSAR-LINUX-mapping.md.
+//
+// Supersedes the old config-only `services/nop/fw` stub (which had no daemon).
+
+package system.services.fw
+
+// ─── Apply state ────────────────────────────────────────────────────────────
+
+enum FwState {
+    FW_UNKNOWN   = 0   // not yet applied (or nft absent)
+    FW_APPLIED   = 1   // the generated+merged ruleset is live
+    FW_DEGRADED  = 2   // apply failed — the host ruleset is NOT what we intend
+    FW_DISABLED  = 3   // config disabled the firewall (pass-through)
+}
+
+// ─── Runtime config (etcd-backed via services/per) ─────────────────────────
+
+message FwConfig {
+    // Master switch. false → FwDaemon flushes its table + reports FW_DISABLED
+    // (dev convenience; production leaves it true).
+    bool   enabled        = true
+    // The directory of hand-authored override fragments (*.nft), merged into the
+    // generated baseline. Absent dir = baseline only.
+    string fw_d_dir       = "config/fw.d"
+    // The DMZ allow-list (TCP dports). Defaults to com's gRPC servers + etcd; a
+    // deployment narrows/widens it here. Comma-separated.
+    string dmz_tcp_ports  = "7700,7710,7711,2379"
+    // The default inbound policy for the generated chain. "drop" (deny-by-default,
+    // the secure default) or "accept" (audit/permissive mode).
+    string default_policy = "drop"
+    // Re-apply cadence (ms) — FwDaemon re-asserts its table on a tick so a
+    // foreign flush (another tool clobbering nft) self-heals. 0 = apply once.
+    uint32 reassert_ms    = 0
+}
+
+// ─── Status wire types ──────────────────────────────────────────────────────
+
+message FwStatusMsg {
+    FwState state
+    uint32  rule_count       // rules in the live theia_fw table (0 if not applied)
+    uint32  override_count   // config/fw.d/*.nft fragments merged
+    string  message          // human detail (last apply result / error)
+    uint64  ts_ns
+}
+
+message FwStatusReq { }
+message ReloadReq   { }   // force a regenerate + re-apply now
+
+message ReloadReply {
+    bool   applied = 1
+    string message = 2
+}
+
+// ─── Interfaces ─────────────────────────────────────────────────────────────
+
+// Apply-status broadcast — senderReceiver pub/sub (→ firehose / PHM: an apply
+// failure is a health event).
+interface senderReceiver FwStatusStream {
+    data FwStatusMsg status
+}
+
+// Control — query status + force a reload.
+interface clientServer FwCtlIf {
+    operation GetFirewallStatus(in r: FwStatusReq) returns FwStatusMsg
+    operation ReloadRules(in r: ReloadReq)         returns ReloadReply
+}
+
+// ─── Node ─────────────────────────────────────────────────────────────────
+
+// The firewall control node. tipc 0x80010011 (reuses the old fw stub slot). An
+// atomic node that generates the baseline ruleset + merges config/fw.d, applies
+// via `nft -f`, caches + broadcasts FwStatusMsg, and (when reassert_ms>0)
+// re-asserts on a tick. Never sits in the data path — nft enforces.
+node atomic FwDaemon {
+    tipc type=0x80010011 instance=0
+    requires_timers
+    tag = "FWX"
+    config FwConfig
+    ports {
+        sender broadcast provides FwStatusStream
+        server ctl       provides FwCtlIf
+    }
+}

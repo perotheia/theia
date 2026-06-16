@@ -1,9 +1,0 @@
-// Fw (FW) — Adaptive Platform Functional Cluster.
-//
-// CONFIG-ONLY (iptables rules.conf, applied by Puppet). See README.md.
-
-package system.services.fw
-
-node atomic FwDaemon {
-    tipc type=0x80010011 instance=0
-}

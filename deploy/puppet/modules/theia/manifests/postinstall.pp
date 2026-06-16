@@ -11,6 +11,10 @@
 #     CAP_SYS_NICE into the ambient set so its forked children inherit it.
 #   - gateway: cap_net_raw + cap_net_admin — open AF_PACKET / raw CAN+UDP
 #     sockets + tweak link state for the ASAM-CMP bus capture.
+#   - bin/fw: cap_net_admin — load the generated nftables ruleset (the FwDaemon
+#     FC runs unprivileged but needs NET_ADMIN to `nft -f` the IP-DMZ firewall).
+#     Without it the FC graceful-degrades to FW_DEGRADED (ruleset generated, not
+#     installed) — so the cap is what flips it to FW_APPLIED.
 #
 # +eip = Effective + Inheritable + Permitted (active on exec, inheritable by
 # children). Idempotent: re-applied every run; a binary copy/upgrade clears caps
@@ -27,6 +31,7 @@ class theia::postinstall (
     Hash   $caps = {
         'supervisor' => 'cap_sys_nice',
         'gateway'    => 'cap_net_raw,cap_net_admin',
+        'bin/fw'     => 'cap_net_admin',
     },
 ) {
     $caps.each |$bin, $capspec| {

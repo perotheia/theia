@@ -1,0 +1,38 @@
+# Generated nanopb sources for the system.services.fw package.
+#
+# .pb.{c,h} are BUILT, not committed: the genrule invokes nanopb_generator.
+
+package(default_visibility = ["//visibility:public"])
+
+genrule(
+    name = "fw_pb",
+    srcs = [
+        "fw.proto",
+        "fw.options",
+    ],
+    outs = [
+        "fw.pb.c",
+        "fw.pb.h",
+    ],
+    cmd = "set -e;"
+        + " in_dir=$$(dirname $(location fw.proto));"
+        + " out_dir=$$(dirname $(location fw.pb.c));"
+        + " nanopb_generator -I $$in_dir -D $$out_dir fw.proto;",
+    tools = [],
+    local = True,
+)
+
+filegroup(
+    name = "fw_pb_c",
+    srcs = ["fw.pb.c"],
+)
+
+filegroup(
+    name = "fw_pb_h",
+    srcs = ["fw.pb.h"],
+)
+
+filegroup(
+    name = "fw_proto",
+    srcs = ["fw.proto"],
+)

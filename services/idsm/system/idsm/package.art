@@ -13,6 +13,14 @@
 // bpffs / CAP_BPF, so v1 builds the ingest pipeline against a graceful-degrade
 // backend (IDS_UNAVAILABLE + a mock event source) and the real eBPF reader slots
 // in on a capable host (Orin), exactly like tsync degrades without linuxptp.
+//
+// RULE CATALOG: the eBPF hooks + per-rule detection logic + the IDSM_* signatures
+// each Detection carries are specified in docs/autosar/services/idsm.md
+// (Categories A/B/C/D/H/I, each cross-referenced to its Falco default-rule
+// analog). A Detection's `signature` field IS the catalog rule id, e.g.
+// IDSM_UNEXPECTED_SERVICE_ENDPOINT / IDSM_GRPC_UNAUTHORIZED_SERVER /
+// IDSM_APPLICATION_INTEGRITY_FAILURE / IDSM_RESOURCE_ABUSE. Allow-lists are
+// manifest-derived + config/idsm.d/ overrides (the fw hybrid posture).
 
 package system.services.idsm
 

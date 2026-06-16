@@ -1,0 +1,20 @@
+# HAND-OWNED. com tests.
+#
+# Live check of the com/crypto certificate agreement (com_tls.hpp). Needs the
+# stack up with crypto listening; the test itself skips cleanly when crypto is
+# unreachable (a bare unit run), so it's safe in any lane.
+
+load("@rules_cc//cc:defs.bzl", "cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_test(
+    name = "test_cert_agreement",
+    srcs = ["test_cert_agreement.cc"],
+    copts = ["-std=c++17", "-fPIC"],
+    deps = [
+        # com_impl carries com_tls.hpp (hdrs) + includes=[".."] + the grpc /
+        # openssl-engine / crypto-proto / runtime-header deps com_tls.hpp needs.
+        "//services/com/impl:com_impl",
+    ],
+)

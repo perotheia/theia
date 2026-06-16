@@ -233,15 +233,36 @@
   "moduleExtensions": {
     "//rules:rig.bzl%rig_ext": {
       "general": {
-        "bzlTransitiveDigest": "ktmolTIKGHNbz/i8IgUqvUfVIzh0OcusOg3U0iCPHl4=",
-        "usagesDigest": "WWpPn2mFihcFPKNcM0h9+rzvIHcecHNptTWDJdZw8pk=",
+        "bzlTransitiveDigest": "FJsxdGt+RulOJ6meGrT4NdC6V2RUzoCIe2oBEBm9wVo=",
+        "usagesDigest": "n+891YmC8Zq//f3iD7w5qArFy5SFWaaTCFDAG9FT1pI=",
         "recordedInputs": [],
         "generatedRepoSpecs": {
           "rig_demo": {
             "repoRuleId": "@@//rules:rig.bzl%rig_repo",
             "attributes": {
-              "rig_module": "demo.manifest.rig"
+              "rig_module": "demo.manifest.rig",
+              "rig_attr": ""
             }
+          },
+          "rig_zonal": {
+            "repoRuleId": "@@//rules:rig.bzl%rig_repo",
+            "attributes": {
+              "rig_module": "demo.manifest.zonal_rig",
+              "rig_attr": "DemoSoftware"
+            }
+          }
+        }
+      }
+    },
+    "//toolchains/aarch64_linux_gnu:extension.bzl%rpi4_sysroot_ext": {
+      "general": {
+        "bzlTransitiveDigest": "vPUOmvA7iFkV4KbfvtSwGe1trJdoyY79zj1T836g6PI=",
+        "usagesDigest": "c+Lo7liiauQ4krlH2fF8DhK0jNk1+DX5Oily/hOWTAs=",
+        "recordedInputs": [],
+        "generatedRepoSpecs": {
+          "rpi4_sysroot": {
+            "repoRuleId": "@@//toolchains/aarch64_linux_gnu:rpi4_sysroot.bzl%rpi4_sysroot",
+            "attributes": {}
           }
         }
       }

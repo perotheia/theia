@@ -8,24 +8,28 @@
 #
 # Instead we expose specific artifacts via filegroup labels here.
 
-load("@rules_cc//cc:defs.bzl", "cc_import", "cc_library")
+load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@rules_foreign_cc//foreign_cc:defs.bzl", "cmake")
 
 package(default_visibility = ["//visibility:public"])
 
-# etcd-cpp-apiv3 — vendored at v0.2.14, built+installed by an
-# out-of-Bazel cmake invocation into third_party/etcd-cpp-apiv3/install/.
-# Consumers (supervisor-gui, platform/supervisor) feed this filegroup
-# to rules_foreign_cc's cmake() rule via `data = [...]` so the install
-# tree is materialized inside the sandbox.
+# etcd-cpp-apiv3 — vendored at v0.2.14 as a git SUBMODULE (see .gitmodules).
+# It is now built HERMETICALLY by Bazel via rules_foreign_cc's cmake() rule
+# (no committed install/ tree, no prebuilt .so). The cmake() runs the vendored
+# CMakeLists OUT-OF-SOURCE inside bazel-out/, producing a STATIC archive that
+# links straight into services/per. Nothing under etcd-cpp-apiv3/{build,install}
+# is committed or required for the Bazel build.
 #
-# Bootstrap if missing:
-#   repo sync etcd-cpp-apiv3/etcd-cpp-apiv3
-#   cmake -S third_party/etcd-cpp-apiv3 \
-#         -B third_party/etcd-cpp-apiv3/build \
-#         -DCMAKE_INSTALL_PREFIX=third_party/etcd-cpp-apiv3/install \
+# A direct (out-of-Bazel) dev build still works the old way if you want one:
+#   cmake -S third_party/etcd-cpp-apiv3 -B third_party/etcd-cpp-apiv3/build \
 #         -DBUILD_ETCD_TESTS=OFF -DETCD_W_STRICT=OFF
 #   cmake --build third_party/etcd-cpp-apiv3/build -j
-#   cmake --install third_party/etcd-cpp-apiv3/build
+# but Bazel no longer reads that tree.
+
+# Legacy install-tree filegroup + alias, kept ONLY so out-of-gate consumers that
+# still reference these labels (tools/supervisor-gui's cmake() data=) keep
+# loading. The committed install/ tree is gone — these glob empty. supervisor-gui
+# has its own etcd modernization pending; per (the gate) no longer uses these.
 filegroup(
     name = "etcd-cpp-apiv3-install",
     srcs = glob(
@@ -34,57 +38,101 @@ filegroup(
     ),
 )
 
-# Just the one .so the per binary links at runtime, as a FILE (cc_import's
-# :etcd_cpp_so doesn't expose it via DefaultInfo). dist_ipk bundles this into
-# /opt/theia/lib/ so per resolves it under LD_LIBRARY_PATH on the target.
-filegroup(
-    name = "etcd_cpp_so_file",
-    srcs = ["etcd-cpp-apiv3/install/lib/libetcd-cpp-api.so"],
-    visibility = ["//visibility:public"],
-)
-
-# Alias under the dir name so consumers can write
-# //third_party/etcd-cpp-apiv3:install and read intent at the
-# call site.
 alias(
     name = "etcd-cpp-apiv3",
     actual = ":etcd-cpp-apiv3-install",
 )
 
-# Pure-Bazel cc_library for a normal cc_library/cc_binary consumer (e.g.
-# services/per's etcd_store) — exposes the etcd-cpp-apiv3 install headers +
-# links the prebuilt shared lib. The .so's transitive deps (grpc++, libprotobuf,
-# cpprest, ssl) are host system libs that resolve at load time. The RPATH below
-# lets the per binary find libetcd-cpp-api*.so at run time from the source tree.
-# Link ONLY libetcd-cpp-api.so. It is self-contained (the SyncClient/Watcher
-# symbols + the etcd/gogoproto descriptors), and does NOT depend on
-# libetcd-cpp-api-core.so at runtime. The -core .so embeds the SAME gogoproto
-# extension descriptors (gogoproto.goproto_enum_prefix, field 62001); linking
-# BOTH registers that extension TWICE → a fatal libprotobuf "Multiple extension
-# registrations" abort at startup. One .so = one registration.
-cc_import(
-    name = "etcd_cpp_so",
-    shared_library = "etcd-cpp-apiv3/install/lib/libetcd-cpp-api.so",
+# The submodule SOURCE tree fed to cmake(). cmake() copies lib_source into the
+# sandbox before configuring, so we exclude the out-of-source build/install dirs
+# (they must not exist) to keep the copy clean + reproducible. allow_empty keeps
+# the package loadable on a fresh clone where the submodule isn't checked out
+# yet (per's etcd_store is the only consumer and builds this on demand).
+filegroup(
+    name = "etcd-cpp-apiv3-srcs",
+    srcs = glob(
+        ["etcd-cpp-apiv3/**"],
+        exclude = [
+            "etcd-cpp-apiv3/build/**",
+            "etcd-cpp-apiv3/install/**",
+        ],
+        allow_empty = True,
+    ),
 )
 
+# Hermetic from-scratch CMake build of the vendored etcd client, STATIC.
+#
+# out_static_libs: we emit ONLY libetcd-cpp-api-core.a. The vendored CMake builds
+# the core objects (KeepAlive/Response/SyncClient/Value/Watcher + all generated
+# protobuf/grpc .pb.cc) ONCE as an OBJECT library, then links them into BOTH
+# `etcd-cpp-api-core` (SyncClient/Watcher) AND `etcd-cpp-api` (adds the async
+# Client.cpp, which needs cpprest's pplx). services/per's etcd_store.cc uses ONLY
+# etcd::SyncClient + etcd::Watcher, so -core is the complete, minimal archive —
+# and it pulls in NO cpprest.
+#
+# *** gogoproto double-registration hazard ***
+# Both -core.a and the non-core etcd-cpp-api.a carry the SAME compiled
+# gogoproto/etcd protobuf descriptors (the gogoproto.goproto_enum_prefix
+# extension, field 62001) because they share that one object library. Linking
+# BOTH into a single binary registers that extension TWICE → a fatal libprotobuf
+# "Multiple extension registrations" abort at static-init. We therefore build +
+# list EXACTLY ONE archive (-core) and never the other. One archive = one
+# registration.
+cmake(
+    name = "etcd_cpp",
+    lib_source = ":etcd-cpp-apiv3-srcs",
+    cache_entries = {
+        # Static libs (.a), PIC so they slot into our PIC binaries; tests off so
+        # we don't compile/run the etcd test suite; -Werror off so a newer host
+        # compiler doesn't fail the vendored code on a new warning.
+        "BUILD_SHARED_LIBS": "OFF",
+        "CMAKE_POSITION_INDEPENDENT_CODE": "ON",
+        "BUILD_ETCD_TESTS": "OFF",
+        "ETCD_W_STRICT": "OFF",
+        # The client API is C++17 in our tree (matches services/per copts).
+        "ETCD_CMAKE_CXX_STANDARD": "17",
+    },
+    # Build BOTH archives the vendored install(TARGETS ...) rule references
+    # (etcd-cpp-api-core AND etcd-cpp-api), so `cmake --install` finds them — but
+    # we EXPORT only -core via out_static_libs below. Building the async
+    # etcd-cpp-api.a here is harmless (it's just an archive on disk); the
+    # double-registration hazard is at the FINAL per-binary link, and per links
+    # ONLY -core. (cpprest is a host apt dep, so the async archive still links.)
+    targets = ["etcd-cpp-api-core", "etcd-cpp-api"],
+    out_static_libs = ["libetcd-cpp-api-core.a"],
+    # The vendored CMakeLists auto-enables ccache if it finds it on PATH, but
+    # ccache's temp dir (/run/user/.../ccache-tmp) is read-only in the Bazel
+    # sandbox → "Failed to create temporary file ... Read-only file system".
+    # Disable ccache for this hermetic build (Bazel already caches the action).
+    env = {"CCACHE_DISABLE": "1"},
+    # Headers install under include/ (out_include_dir defaults to "include").
+    visibility = ["//visibility:public"],
+)
+
+# Pure-Bazel cc_library a normal cc_binary consumer (services/per's etcd_store)
+# depends on. It re-exports the cmake() static archive + headers and supplies the
+# TRANSITIVE system libs the static etcd.a does NOT carry (a static archive
+# records no link deps of its own). These are all host-apt .so's: grpc++/grpc/gpr,
+# the reflection-capable libprotobuf, OpenSSL, Boost system/thread/random, plus
+# pthread/dl. With static linking there is NO runtime libetcd .so to find, so the
+# old RPATH lines are gone.
 cc_library(
     name = "etcd_cc",
-    # allow_empty: etcd-cpp-apiv3/install/ is a BUILD output (the submodule's
-    # source has no install/ until it's compiled). On a fresh clone that dir is
-    # absent — without allow_empty the glob aborts and the WHOLE third_party
-    # package fails to load, cascading to unrelated targets (nlohmann_json, the
-    # supervisor build). per's etcd_store is the only consumer; it builds this
-    # after building etcd. allow_empty keeps the package loadable meanwhile.
-    hdrs = glob(["etcd-cpp-apiv3/install/include/**/*.hpp"], allow_empty = True),
-    includes = ["etcd-cpp-apiv3/install/include"],
     deps = [
-        ":etcd_cpp_so",
+        ":etcd_cpp",
     ],
-    # Find the .so's at run time relative to the binary (bazel-bin) and from an
-    # installed tree; the absolute source path is the dev-run fallback.
     linkopts = [
-        "-Wl,-rpath,$$ORIGIN/../../../third_party/etcd-cpp-apiv3/install/lib",
-        "-Wl,-rpath,/home/axadmin/repo/theia/third_party/etcd-cpp-apiv3/install/lib",
+        "-lgrpc++",
+        "-lgrpc",
+        "-lgpr",
+        "-lprotobuf",
+        "-lssl",
+        "-lcrypto",
+        "-lboost_system",
+        "-lboost_thread",
+        "-lboost_random",
+        "-lpthread",
+        "-ldl",
     ],
     visibility = ["//visibility:public"],
 )

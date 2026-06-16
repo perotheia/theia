@@ -46,12 +46,10 @@ ALL_BINARIES = [
 ]
 
 # Shared libs bundled at /opt/theia/lib/<basename> for every host (harmless if a
-# host's binaries don't need them). per links libetcd-cpp-api.so at runtime;
-# run-supervisor.sh adds /opt/theia/lib to LD_LIBRARY_PATH so the children find
-# them.
-DEFAULT_LIBS = [
-    "//third_party:etcd_cpp_so_file",
-]
+# host's binaries don't need them). Empty since per now STATICALLY links the etcd
+# client (//third_party:etcd_cc → cmake() libetcd-cpp-api-core.a) — there is no
+# runtime libetcd-cpp-api.so to bundle anymore.
+DEFAULT_LIBS = []
 
 
 def _dist_pkg_impl(ctx):

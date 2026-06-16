@@ -1,36 +1,122 @@
 // Shwa (SHWA) — Safe Hardware Accelerator.
 //
-// Implementation:
-//   On a compute node, ShwaDaemon polls `nvidia-smi` (or the device's
-//   equivalent) and forwards GPU/accelerator telemetry. Records are
-//   PERSISTED via per (history) and published as log records.
+// The hardware-telemetry + power plane for the compute node (Orin) AND the
+// central host: ShwaDaemon polls a backend on a tick and broadcasts a rich
+// AccelTelemetry sample (CPU / GPU / memory / engines / fan / temp / power),
+// derived the way jetson-stats (jtop) does. It ALSO owns the platform POWER MODE
+// (NVIDIA Orin nvpmodel + jetson_clocks) — moved here from osi, where it was
+// misplaced; all Jetson/accelerator knowledge lives in one FC. osi is back to
+// pure cgroup/resource. See docs/autosar/services/shwa.md +
+// docs/tasks/DONE/Safe-Hardware-Accelerator.md.
 //
-// Communication shape:
-//   `AccelTelemetry` is a senderReceiver fan-out: ShwaDaemon is the
-//   SENDER, the GUI (via services/com) or any other observer
-//   subscribes.
+// Backend SEAM (module inclusion, NOT #ifdef): one shwa_backend.hpp interface,
+// two impls swapped by a bazel select — shwa_host.cc (default: /proc/stat,
+// /proc/meminfo, /sys/class/thermal, nvidia-smi, hwmon fan — so SHWA on central
+// reports real host numbers) and shwa_jetson.cc (--define jetson=on: the Orin
+// /sys SoC nodes jtop reads). On a host without a device tree the host backend
+// "makes the adaptation" the ticket asks for.
 
 package system.services.shwa
-interface clientServer   PersistencyIf { }  // from system.services.per
 
-message GpuSample {
-    string device
-    uint32 util_pct
-    uint32 mem_used_mb
-    uint32 mem_total_mb
-    uint32 temp_c
-    uint32 power_w
-    uint64 ts_ns
+import system.services.per.*   // PersistencyIf (the per config-store client)
+
+// ─── Power mode (NVIDIA Orin) — relocated from osi ──────────────────────────
+
+// The platform power profile. On Orin these map to nvpmodel profile IDs; on a
+// non-Jetson host the source is UNAVAILABLE and the FC reports MODE_UNKNOWN.
+enum PowerMode {
+    MODE_UNKNOWN  = 0   // no Jetson tooling — power plane unmanaged
+    MODE_MAXN     = 1   // nvpmodel 0 — max performance, all cores, max clocks
+    MODE_BALANCED = 2   // a mid nvpmodel profile (power-capped)
+    MODE_LOW      = 3   // a low-power nvpmodel profile (reduced cores/clocks)
 }
 
+// ─── Runtime config (etcd-backed via services/per) ─────────────────────────
+
+message ShwaConfig {
+    // Poll cadence (ms) — how often ShwaDaemon samples the backend.
+    uint32    poll_ms      = 2000
+    // Desired platform power mode (applied on Orin via nvpmodel; ignored where
+    // the tooling is absent). MODE_UNKNOWN = leave the platform default.
+    PowerMode power_mode   = 0
+    // Apply jetson_clocks (pin clocks to max for the active power mode) on Orin.
+    bool      jetson_clocks = false
+    // Persist each sample to per (history) — off by default (telemetry is high
+    // rate; the firehose/GUI is the live path).
+    bool      persist      = false
+}
+
+// ─── Telemetry sample (the rich jtop-style record) ──────────────────────────
+
+message AccelSample {
+    // Identity + source.
+    string   board          // SoC / board ("AGX Orin", "x86_64", …)
+    bool     on_jetson      // true if a Jetson SoC backend is active
+    PowerMode power_mode    // the active power profile (UNKNOWN off-Jetson)
+
+    // CPU (aggregate across cores).
+    uint32   cpu_util_pct
+    uint32   cpu_count
+    uint32   cpu_freq_mhz   // current avg core frequency
+
+    // GPU / accelerator.
+    uint32   gpu_util_pct
+    uint32   gpu_freq_mhz
+
+    // Memory (whole-system).
+    uint32   mem_used_mb
+    uint32   mem_total_mb
+
+    // Thermals + power + fan.
+    uint32   temp_c         // hottest zone
+    uint32   power_mw       // instantaneous board power (0 if unknown)
+    uint32   fan_rpm        // 0 if no fan / unknown
+
+    uint64   ts_ns
+}
+
+message AccelStatusReq { }
+
+message PowerModeReq {
+    PowerMode mode
+    bool      jetson_clocks
+}
+message PowerModeReply {
+    bool   applied
+    string message
+}
+
+// ─── Interfaces ─────────────────────────────────────────────────────────────
+
+// Telemetry fan-out — senderReceiver pub/sub. ShwaDaemon is the SENDER; the GUI
+// (via services/com), tdb, or any observer subscribes.
 interface senderReceiver AccelTelemetry {
-    data GpuSample sample
+    data AccelSample sample
 }
 
+// Control — query the latest sample + set the Orin power mode.
+interface clientServer ShwaCtlIf {
+    operation GetAccelStatus(in r: AccelStatusReq) returns AccelSample
+    operation SetPowerMode(in r: PowerModeReq)     returns PowerModeReply
+}
+
+// per config-store client (forward-decl via import; the per FC provides it).
+interface clientServer PersistencyIf { }
+
+// ─── Node ─────────────────────────────────────────────────────────────────
+
+// The Safe-Hardware-Accelerator node. tipc 0x80010012. An atomic node that on a
+// timer tick samples the (host or jetson) backend, broadcasts AccelTelemetry,
+// reconciles the Orin power mode, and serves GetAccelStatus / SetPowerMode.
+// Never in a data path — read-only telemetry + the power knob.
 node atomic ShwaDaemon {
     tipc type=0x80010012 instance=0
+    requires_timers
+    tag = "SHWA"
+    config ShwaConfig
     ports {
-        sender telemetry provides AccelTelemetry
+        sender broadcast provides AccelTelemetry
+        server ctl       provides ShwaCtlIf
         client to_per    requires PersistencyIf
     }
 }

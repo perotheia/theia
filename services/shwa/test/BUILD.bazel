@@ -1,0 +1,13 @@
+# HAND-OWNED. shwa tests.
+load("@rules_cc//cc:defs.bzl", "cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+# The host backend (default) — pins the telemetry shape on this x86 host.
+# Compiles shwa_host.cc directly (a leaf module, no deps beyond the header).
+cc_test(
+    name = "test_host_backend",
+    srcs = ["test_host_backend.cc"],
+    copts = ["-std=c++17", "-fPIC"],
+    deps = ["//services/shwa/impl:shwa_host_lib"],
+)

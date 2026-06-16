@@ -21,19 +21,16 @@ from artheia.gen_server.probe import ArtheiaContext  # noqa: E402
 ART = REPO / "system/tools/tdb/tdb.art"
 PROTO = REPO / "platform/proto"
 
-_POWER = {0: "UNKNOWN", 1: "MAXN", 2: "BALANCED", 3: "LOW"}
-
 
 def main() -> int:
     ctx = ArtheiaContext(str(ART), proto_root=str(PROTO))
     probe = ctx.probe("TdbOsi").start()
     try:
+        # (power mode moved to services/shwa; osi is pure cgroup/resource now.)
         print("== GetResourceStatus ==")
         rep = probe.call("OsiCtl", "GetResourceStatus")
-        pm = rep.get("power_mode", 0)
         fcs = rep.get("fcs", []) or []
-        print(f"  power_mode={_POWER.get(pm, pm)} on_jetson={rep.get('on_jetson')} "
-              f"fc_count={rep.get('fc_count')}")
+        print(f"  fc_count={rep.get('fc_count')}")
         # fcs entries are protobuf FcResource messages (attribute access).
         for r in fcs[:20]:
             print(f"    {r.fc:<8} pid={r.pid:<7} "

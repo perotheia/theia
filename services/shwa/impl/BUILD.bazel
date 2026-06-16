@@ -1,34 +1,50 @@
-# FIRST-TIME-ONLY (regenerated with --force). source: system/services/shwa/component.art
+# HAND-OWNED. source: system/services/shwa/component.art
 #
-# Impl slice — handler bodies. The user owns this BUILD.bazel after
-# first emit (you may want to add per-FC test_*.cc files; gen-app
-# won't reach in and squash that).
+# Impl slice. The backend SEAM is a bazel select() over two .cc modules (NOT an
+# #ifdef): shwa_host.cc (default) vs shwa_jetson.cc (--define jetson=on). Both
+# share shwa_backend.hpp. Excluded from the regen-stability impl-BUILD diff (see
+# fc_regen_lib.py hand_owned_impl_build).
 
 load("@rules_cc//cc:defs.bzl", "cc_library")
 
 package(default_visibility = ["//visibility:public"])
 
-# State structs (write-once, app-owned). A leaf header-only target so
-# BOTH the lib (which #includes "impl/<Node>_state.hh" as the GenServer
-# State type) and the impl can depend on it WITHOUT a lib<->impl cycle:
-#   shwa_state  ←  lib  ←  impl
+# State structs (write-once, app-owned). Includes shwa_backend.hpp (AccelReading)
+# so the lib + impl both see it without a cycle: shwa_state ← lib ← impl.
 cc_library(
     name = "shwa_state",
     hdrs = [
         "ShwaDaemon_state.hh",
+        "shwa_backend.hpp",
     ],
-    # The lib #includes these as "impl/<Node>_state.hh", so the include
-    # root is the FC out_dir (one above impl/).
     includes = [".."],
     copts = ["-std=c++17", "-fPIC"],
     deps = ["//platform/runtime:runtime"],
+)
+
+# The host backend as a standalone lib, for the unit test (which pins the host
+# telemetry shape directly, independent of the build select).
+cc_library(
+    name = "shwa_host_lib",
+    srcs = ["shwa_host.cc"],
+    hdrs = ["shwa_backend.hpp"],
+    includes = [".."],
+    copts = ["-std=c++17", "-fPIC"],
 )
 
 cc_library(
     name = "shwa_impl",
     srcs = [
         "ShwaDaemon_handlers.cc",
-    ],
+        # The telemetry backend — exactly ONE module compiled in (module
+        # inclusion, not #ifdef): the Jetson SoC backend when --define jetson=on,
+        # else the host backend (/proc + thermal + nvidia-smi, the central node).
+    ] + select({
+        "//rules/config:jetson_on": ["shwa_jetson.cc"],
+        "//conditions:default": ["shwa_host.cc"],
+    }),
+    hdrs = ["shwa_backend.hpp"],
+    includes = [".."],
     copts = [
         "-std=c++17",
         "-Wall",

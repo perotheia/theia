@@ -5,32 +5,20 @@
 // is ALREADY implicit: platform/runtime owns threading / TIPC transport /
 // timerfd, and the supervisor (Execution Management) owns process lifecycle +
 // per-process CPU affinity + RLIMIT_AS memory caps. So this FC does NOT
-// re-implement any of that. It owns the TWO resource-plane pieces the
+// re-implement any of that. It owns the ONE resource-plane piece the
 // runtime+supervisor don't:
 //
-//   1. cgroup v2 RESOURCE PARTITIONING — a hard CPU-bandwidth cap (cpu.max) and
-//      memory ceiling (memory.high) per FC, plus per-FC CPU%/RSS accounting that
-//      affinity + RLIMIT_AS can't express. The kernel enforces; OSI only writes
-//      the cgroup knobs + reads the stats (it never forks the children — the
-//      supervisor does; OSI manages the slices they run in).
-//   2. PLATFORM POWER MODE — on NVIDIA Orin, the nvpmodel power profile +
-//      jetson_clocks. Graceful-degrades to a no-op on a host without the Jetson
-//      tooling (the x86 dev host), exactly like tsync degrades without linuxptp.
+//   cgroup v2 RESOURCE PARTITIONING — a hard CPU-bandwidth cap (cpu.max) and
+//   memory ceiling (memory.high) per FC, plus per-FC CPU%/RSS accounting that
+//   affinity + RLIMIT_AS can't express. The kernel enforces; OSI only writes
+//   the cgroup knobs + reads the stats (it never forks the children — the
+//   supervisor does; OSI manages the slices they run in).
 //
-// See docs/tasks/PROGRESS/AUTOSAR-LINUX-mapping.md (OSI step).
+// (The NVIDIA Orin POWER MODE — nvpmodel/jetson_clocks — was MOVED to
+// services/shwa, where all the Jetson/accelerator knowledge lives; it was
+// misplaced here.) See docs/tasks/DONE/AUTOSAR-LINUX-mapping.md (OSI step).
 
 package system.services.osi
-
-// ─── Power mode (NVIDIA Orin) ───────────────────────────────────────────────
-
-// The platform power profile. On Orin these map to nvpmodel profile IDs; on a
-// non-Jetson host the source is UNAVAILABLE and the FC reports MODE_UNKNOWN.
-enum PowerMode {
-    MODE_UNKNOWN  = 0   // no Jetson tooling — power plane unmanaged
-    MODE_MAXN     = 1   // nvpmodel 0 — max performance, all cores, max clocks
-    MODE_BALANCED = 2   // a mid nvpmodel profile (power-capped)
-    MODE_LOW      = 3   // a low-power nvpmodel profile (reduced cores/clocks)
-}
 
 // ─── Runtime config (etcd-backed via services/per) ─────────────────────────
 
@@ -41,11 +29,6 @@ message OsiConfig {
     string   slice_name   = "theia.slice"
     // Poll cadence (ms) — how often OsiCtl re-reads per-FC cpu/mem accounting.
     uint32   poll_ms      = 2000
-    // Desired platform power mode (applied on Orin via nvpmodel; ignored where
-    // the tooling is absent). MODE_UNKNOWN = leave the platform default.
-    PowerMode power_mode  = 0
-    // Apply jetson_clocks (pin clocks to max for the active power mode) on Orin.
-    bool      jetson_clocks = false
 }
 
 // ─── Per-FC resource limit (a SetResourceLimit request) ─────────────────────
@@ -75,8 +58,6 @@ message FcResource {
 
 // The platform-wide snapshot OsiCtl broadcasts + serves.
 message ResourceStatus {
-    PowerMode    power_mode = 1
-    bool         on_jetson  = 2     // true if nvpmodel tooling is present
     uint32       fc_count   = 3
     repeated FcResource fcs = 4
     uint64       ts_ns      = 5

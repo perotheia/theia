@@ -72,7 +72,10 @@ int main() {
     ::theia::runtime::init_config("shwa");
 
     ::theia::runtime::TimerService timers;
-    (void)timers;  // no node requires_timers
+    // Publish the process TimerService so a `requires_timers` node's
+    // handlers / init() reach it via process_timers() — mirrors
+    // set_process_logger above. Set once, before any node starts.
+    ::theia::runtime::set_process_timers(&timers);
 
     // Config-service receiver (#386). A reporting node binds its TIPC name
     // and registers the supervisor's control pushes. A GenServer node's cast
@@ -136,6 +139,10 @@ int main() {
         // types so a real peer — or a robot-test inject via services/com
         // — lands on the same handle_call / handle_cast path. clientServer
         // ops → register_call; senderReceiver `in` data → register_cast.
+        config_mux.register_call<AccelStatusReq, AccelSample>(
+            shwa_daemon_cfg, shwa_daemon);
+        config_mux.register_call<PowerModeReq, PowerModeReply>(
+            shwa_daemon_cfg, shwa_daemon);
     } else {
         shwa_daemon.log().warn("config service bind failed; live log-level "
                                  "push + signal inject disabled");

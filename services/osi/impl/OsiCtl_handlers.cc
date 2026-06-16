@@ -49,26 +49,23 @@ const std::vector<std::string> kKnownFcs = {
 
 }  // namespace
 
-// init: discover the supervisor (our parent), probe the power plane once, and
-// kick off the poll loop. requires_timers gives us send_after.
+// init: discover the supervisor (our parent) + kick off the poll loop.
+// requires_timers gives us send_after. (The Orin power plane moved to shwa.)
 void OsiCtl::init(OsiCtlState& s) {
     s.supervisor_pid = ::getppid();
-    s.on_jetson = on_jetson();
-    s.power_mode = read_power_mode();   // initial read (UNKNOWN off-Jetson)
     // Create the Theia slice + delegate cpu/memory controllers. Best-effort:
     // succeeds when OSI runs as a root child of the root supervisor (the real
     // stack); on an unprivileged dev-host run it fails cleanly and only the
     // limit-WRITING path is unavailable — /proc accounting still works.
     s.slice_ready = ensure_slice(s.cgroup_root, s.slice_name);
-    log().info(std::string("osi up — cgroup v2 resource plane + power mode "
+    log().info(std::string("osi up — cgroup v2 resource plane "
         "(supervisor pid=") + std::to_string(s.supervisor_pid) +
-        ", slice=" + (s.slice_ready ? "ready" : "unavailable") +
-        ", on_jetson=" + (s.on_jetson ? "yes" : "no") + ")");
+        ", slice=" + (s.slice_ready ? "ready" : "unavailable") + ")");
     ::theia::runtime::post_info(*this, "poll");
 }
 
 // handle_info "poll": sample every FC, compute CPU% via jiffies-delta, broadcast
-// the snapshot, reconcile power mode, then reschedule at the config cadence.
+// the snapshot, then reschedule at the config cadence.
 void OsiCtl::handle_info(const char* info, OsiCtlState& s) {
     if (!info || std::strcmp(info, "poll") != 0) return;
 
@@ -80,8 +77,6 @@ void OsiCtl::handle_info(const char* info, OsiCtlState& s) {
 
     system_services_osi_ResourceStatus snap =
         system_services_osi_ResourceStatus_init_zero;
-    snap.power_mode = static_cast<system_services_osi_PowerMode>(s.power_mode);
-    snap.on_jetson  = s.on_jetson;
     snap.ts_ns      = now;
 
     std::map<std::string, uint64_t> fresh_jiffies;
@@ -127,26 +122,13 @@ void OsiCtl::handle_info(const char* info, OsiCtlState& s) {
 
     broadcast_broadcast_status(snap);
 
-    // Reconcile power mode on Orin: push the desired mode on an edge.
-    if (s.on_jetson && s.power_mode != s.applied_power_mode &&
-        s.power_mode != P_UNKNOWN) {
-        std::string err;
-        if (apply_power_mode(s.power_mode, s.jetson_clocks, err)) {
-            s.applied_power_mode = s.power_mode;
-            log().info("power mode → " + std::to_string(s.power_mode) +
-                       (s.jetson_clocks ? " (+jetson_clocks)" : ""));
-        } else {
-            log().warn("power mode apply failed: " + err);
-        }
-    }
-
     uint32_t ms = s.poll_ms ? s.poll_ms : 2000;
     ::theia::runtime::send_after(::theia::runtime::process_timers(), ms,
                                  *this, "poll");
 }
 
-// on_config_update: apply OsiConfig live (cgroup root/slice, poll cadence,
-// desired power mode, jetson_clocks). The next tick uses it; no restart.
+// on_config_update: apply OsiConfig live (cgroup root/slice, poll cadence).
+// The next tick uses it; no restart.
 void OsiCtl::on_config_update(
         const platform_runtime_ConfigUpdated& cfg,
         OsiCtlState& s) {
@@ -160,12 +142,8 @@ void OsiCtl::on_config_update(
     if (c.cgroup_root[0]) s.cgroup_root = c.cgroup_root;
     if (c.slice_name[0])  s.slice_name  = c.slice_name;
     s.poll_ms       = c.poll_ms ? c.poll_ms : 2000;
-    s.power_mode    = static_cast<int>(c.power_mode);
-    s.jetson_clocks = c.jetson_clocks;
     log().info(std::string("config: slice=") + s.cgroup_root + "/" + s.slice_name +
-        " poll_ms=" + std::to_string(s.poll_ms) +
-        " power_mode=" + std::to_string(s.power_mode) +
-        " jetson_clocks=" + (s.jetson_clocks ? "true" : "false"));
+        " poll_ms=" + std::to_string(s.poll_ms));
 }
 
 // GetResourceStatus — serve the cached snapshot (refreshed each tick).

@@ -30,8 +30,6 @@ struct OsiCtlState {
     std::string cgroup_root = "/sys/fs/cgroup";
     std::string slice_name  = "theia.slice";
     uint32_t    poll_ms     = 2000;
-    int         power_mode  = 0;      // PowerMode ordinal (.art)
-    bool        jetson_clocks = false;
 
     // ---- CPU-delta baseline: last poll's jiffies per FC + the wall clock ----
     std::map<std::string, uint64_t> last_jiffies;
@@ -48,10 +46,7 @@ struct OsiCtlState {
     //      polls since cgroup reads can race a just-restarted child) ----
     struct Limit { uint32_t cpu_max_pct = 0; uint64_t mem_high = 0; };
     std::map<std::string, Limit> limits;
-
-    // ---- platform power plane ----
-    bool        on_jetson = false;
-    int         applied_power_mode = -1;   // last mode we pushed (edge detect)
+    // (The Orin power plane moved to services/shwa.)
 };
 
 }  // namespace ara::osi

@@ -86,6 +86,8 @@ FC_SPECS = [
            "services/tsync", hand_owned_impl_build=True),   # ptp_backend.hpp hdr
     FcSpec("nm", "services/nm/system/nm/package.art", "ara::nm", "services/nm",
            hand_owned_impl_build=True),   # nm_backend.hpp hdr (the `ip` observer)
+    FcSpec("shwa", "services/shwa/system/shwa/package.art", "ara::shwa",
+           "services/shwa", hand_owned_impl_build=True),   # host/jetson backend select
     FcSpec("osi", "services/osi/system/osi/package.art", "ara::osi", "services/osi",
            hand_owned_impl_build=True),   # osi_backend.hpp hdr (cgroup/power)
     FcSpec("fw", "services/fw/system/fw/package.art", "ara::fw", "services/fw",

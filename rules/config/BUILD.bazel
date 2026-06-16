@@ -72,3 +72,12 @@ config_setting(
     name = "ebpf_on",
     values = {"define": "theia_ebpf=on"},
 )
+
+# Jetson (Orin) build selector for services/shwa: picks the SoC-sysfs +
+# nvpmodel backend (shwa_jetson.cc) instead of the default host backend
+# (shwa_host.cc — /proc + thermal + nvidia-smi). OFF by default so the central
+# x86 build uses the host backend. Enable with `--define jetson=on`.
+config_setting(
+    name = "jetson_on",
+    values = {"define": "jetson=on"},
+)

@@ -1,29 +1,20 @@
-// osi_backend — the OS-resource + power plane behind OsiCtl.
+// osi_backend — the cgroup v2 + /proc resource plane behind OsiCtl.
 //
-// APP-OWNED. Two concerns, both THIN control planes over the kernel:
+// APP-OWNED. A THIN control plane over the kernel:
+//   - discover_fcs(): the FC processes = children of the supervisor (PPID
+//     match), comm read from /proc/<pid>/comm.
+//   - sample_proc(): /proc/<pid>/stat utime+stime jiffies (Δ over the poll
+//     interval ÷ wall Δ ÷ clock-tick → cpu%) + /proc/<pid>/status VmRSS.
+//   - read/write cgroup v2: <root>/<slice>/<fc>/{cpu.max,memory.high}. The
+//     supervisor places children into the slice; OSI owns the knobs. Reads
+//     degrade to "unlimited" where the cgroup file is absent/unreadable;
+//     writes report failure rather than throwing.
 //
-//   A. cgroup v2 + /proc resource accounting/limiting:
-//      - discover_fcs(): the FC processes = children of the supervisor (PPID
-//        match), comm read from /proc/<pid>/comm.
-//      - sample_proc(): /proc/<pid>/stat utime+stime jiffies (Δ over the poll
-//        interval ÷ wall Δ ÷ clock-tick → cpu%) + /proc/<pid>/status VmRSS.
-//      - read/write cgroup v2: <root>/<slice>/<fc>/{cpu.max,memory.high}. The
-//        supervisor places children into the slice; OSI owns the knobs. Reads
-//        degrade to "unlimited" where the cgroup file is absent/unreadable;
-//        writes report failure rather than throwing.
-//
-//   B. NVIDIA Orin power mode:
-//      - read_power_mode(): `nvpmodel -q` → active profile id → PowerMode.
-//      - apply_power_mode(): `nvpmodel -m <id>` (+ optional `jetson_clocks`).
-//      Graceful-degrades to MODE_UNKNOWN / on_jetson=false where the Jetson
-//      tooling is absent (the x86 dev host), exactly like tsync without linuxptp.
-//
-// The FC NEVER forks a child (the supervisor / EM owns lifecycle) and NEVER sits
-// in any data path — it writes kernel knobs + reads kernel counters.
+// (The NVIDIA Orin power mode moved to services/shwa.) The FC NEVER forks a
+// child (the supervisor / EM owns lifecycle) and NEVER sits in any data path.
 
 #pragma once
 
-#include <cctype>
 #include <cerrno>
 #include <cstdint>
 #include <cstdio>
@@ -36,9 +27,6 @@
 #include <vector>
 
 namespace ara::osi {
-
-// PowerMode ordinals (.art): 0=UNKNOWN 1=MAXN 2=BALANCED 3=LOW.
-enum PMode : int { P_UNKNOWN = 0, P_MAXN = 1, P_BALANCED = 2, P_LOW = 3 };
 
 struct ProcSample {
     std::string fc;            // FC short name (= comm = cgroup sub-dir)
@@ -67,16 +55,6 @@ inline bool write_(const std::string& path, const std::string& val) {
     bool ok = (n == val.size());
     ok = (::fclose(f) == 0) && ok;
     return ok;
-}
-
-inline std::string run_(const std::string& cmd) {
-    std::string out;
-    FILE* p = ::popen((cmd + " 2>/dev/null").c_str(), "r");
-    if (!p) return out;
-    char buf[256];
-    while (std::fgets(buf, sizeof(buf), p)) out += buf;
-    ::pclose(p);
-    return out;
 }
 
 // /proc/<pid>/comm, trimmed of the trailing newline.
@@ -244,51 +222,7 @@ inline bool apply_limit(const std::string& cg_dir, uint32_t cpu_max_pct,
     return true;
 }
 
-// ---- B. Orin power mode ----------------------------------------------------
-
-// Is the Jetson power tooling present?
-inline bool on_jetson() {
-    using namespace osi_detail;
-    return !run_("command -v nvpmodel").empty();
-}
-
-// Active nvpmodel profile → PowerMode. The profile→mode mapping is the common
-// Orin layout (0=MAXN, higher ids = more power-capped); unknown ids fold to LOW.
-inline int read_power_mode() {
-    using namespace osi_detail;
-    std::string q = run_("nvpmodel -q");   // "...NV Power Mode: MAXN\n0\n"
-    if (q.empty()) return P_UNKNOWN;
-    // The active profile id is the LAST integer in `nvpmodel -q` output.
-    int id = -1;
-    for (size_t i = 0; i < q.size(); ++i) {
-        if (std::isdigit(static_cast<unsigned char>(q[i]))) {
-            id = std::atoi(q.c_str() + i);
-            // keep scanning to the LAST run of digits
-            while (i < q.size() && std::isdigit(static_cast<unsigned char>(q[i]))) ++i;
-        }
-    }
-    switch (id) {
-    case 0:  return P_MAXN;
-    case 1:  return P_BALANCED;
-    default: return (id < 0) ? P_UNKNOWN : P_LOW;
-    }
-}
-
-// Apply a PowerMode on Orin: map back to an nvpmodel profile id and set it,
-// optionally pinning clocks. No-op (returns false) where the tooling is absent.
-inline bool apply_power_mode(int mode, bool jetson_clocks, std::string& err) {
-    using namespace osi_detail;
-    if (!on_jetson()) { err = "no nvpmodel (not a Jetson host)"; return false; }
-    int id;
-    switch (mode) {
-    case P_MAXN:     id = 0; break;
-    case P_BALANCED: id = 1; break;
-    case P_LOW:      id = 2; break;
-    default:         err = "MODE_UNKNOWN — leaving platform default"; return false;
-    }
-    run_("nvpmodel -m " + std::to_string(id));
-    if (jetson_clocks) run_("jetson_clocks");
-    return true;
-}
+// (The Orin power-mode functions — on_jetson / read_power_mode /
+// apply_power_mode — moved to services/shwa with the rest of the Jetson plane.)
 
 }  // namespace ara::osi

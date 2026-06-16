@@ -26,7 +26,6 @@ dist/
 /gateway/
 /platform/gateway/
 /vendor/
-/third_party/etcd-cpp-apiv3/
 # pip editable-install build metadata.
 *.egg-info/
 
@@ -93,11 +92,9 @@ deploy/logs/
 !/third_party/sysroot/setup_*.sh
 !/third_party/sysroot/README.md
 
-# Vendored third-party source pulled by `repo sync` from the manifest's
-# `github` remote — the source itself is tracked in its own git repo,
-# not in pero_theia. We only ship build artifacts (install/) and our
-# own integration glue.
-/third_party/etcd-cpp-apiv3/
+# (etcd-cpp-apiv3 is a tracked git SUBMODULE — see .gitmodules + the note at the
+# top of this file — so it is NOT ignored. The old `repo sync` ignore lines were
+# removed when theia.git went standalone.)
 core.*
 .gdb_history
 

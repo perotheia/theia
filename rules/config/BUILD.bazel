@@ -63,3 +63,12 @@ config_setting(
     name = "is_arm64",
     constraint_values = ["@platforms//cpu:aarch64"],
 )
+
+# Opt-in eBPF backend for services/idsm (the connect() ringbuf, Cat B v2). OFF by
+# default — the default build is exec-free + portable (no libbpf / CAP_BPF / BPF
+# compile needed). Enable with `bazel build --define theia_ebpf=on ...` on a host
+# with libbpf-dev + a BPF-capable clang. See services/idsm/bpf/.
+config_setting(
+    name = "ebpf_on",
+    values = {"define": "theia_ebpf=on"},
+)

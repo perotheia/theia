@@ -123,3 +123,4 @@ core.*
 # docs is a SEPARATE repo (PG50/docs), cloned here as a plain working copy
 # (NOT a submodule, NOT mirrored to GitHub). Owned by its own git.
 /docs/
+services/idsm/bpf/vmlinux.h

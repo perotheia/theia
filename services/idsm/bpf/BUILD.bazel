@@ -1,0 +1,40 @@
+# The idsm eBPF CO-RE program (connect() ringbuf, Cat B v2).
+#
+# idsm_connect.bpf.c is compiled to a BPF ELF with the SYSTEM clang (the one with
+# the bpf target — the swiftly clang on PATH lacks it). vmlinux.h is committed
+# (bpftool-dumped BTF) so the build is hermetic. The .bpf.o is loaded at runtime
+# by services/idsm/impl/ebpf_loader.hpp via libbpf. Only built when
+# --define theia_ebpf=on (the default build doesn't need a BPF toolchain).
+
+package(default_visibility = ["//visibility:public"])
+
+# vmlinux.h (CO-RE type definitions) — GENERATED from the running kernel's BTF,
+# not committed (it's a ~3 MB, host-kernel-specific dump). bpftool reads
+# /sys/kernel/btf/vmlinux.
+genrule(
+    name = "vmlinux_h",
+    outs = ["vmlinux.h"],
+    cmd = "bpftool btf dump file /sys/kernel/btf/vmlinux format c > $@",
+    local = True,
+)
+
+genrule(
+    name = "idsm_connect_bpf",
+    srcs = [
+        "idsm_connect.bpf.c",
+        ":vmlinux_h",
+    ],
+    outs = ["idsm_connect.bpf.o"],
+    # Use the system clang (has the bpf target); -I the genfiles dir for vmlinux.h.
+    cmd = "set -e;"
+        + " src=$(location idsm_connect.bpf.c);"
+        + " vmh=$(location :vmlinux_h);"
+        + " /usr/bin/clang -target bpf -D__TARGET_ARCH_x86 -O2 -g"
+        + " -I $$(dirname $$src) -I $$(dirname $$vmh) -c $$src -o $@",
+    local = True,   # needs the host clang-bpf + bpftool, not a sandboxed toolchain
+)
+
+filegroup(
+    name = "bpf_object",
+    srcs = ["idsm_connect.bpf.o"],
+)

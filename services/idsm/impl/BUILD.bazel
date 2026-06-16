@@ -46,6 +46,7 @@ cc_library(
         "proc_detector.hpp",
         "netlink_diag.hpp",
         "sha256.hpp",
+        "ebpf_loader.hpp",
     ],
     includes = [".."],
     copts = [
@@ -53,8 +54,16 @@ cc_library(
         "-Wall",
         "-Wextra",
         "-fPIC",
-    ],
-    linkopts = ["-lnftables"],   # proc_detector's in-process nft counter read
+    ] + select({
+        # Opt-in eBPF connect() ringbuf (Cat B v2). Default OFF → exec-free
+        # userspace-only build, no libbpf needed.
+        "//rules/config:ebpf_on": ["-DTHEIA_HAVE_LIBBPF"],
+        "//conditions:default": [],
+    }),
+    linkopts = ["-lnftables"] + select({
+        "//rules/config:ebpf_on": ["-lbpf"],
+        "//conditions:default": [],
+    }),
     deps = [
         "//services/idsm/lib:idsm_lib",
         # The handler submits a system_services_log_TraceRecord to the firehose

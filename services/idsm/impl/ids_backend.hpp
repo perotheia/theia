@@ -29,6 +29,11 @@
 #include <string>
 #include <vector>
 
+#ifdef THEIA_HAVE_LIBBPF
+#include <arpa/inet.h>        // inet_ntop for the dst-IP string
+#include "ebpf_loader.hpp"    // EbpfConnect — the connect() ringbuf
+#endif
+
 namespace ara::idsm {
 
 // IdsState ordinals (.art): 0=UNAVAILABLE 1=LOADED 2=DEGRADED.
@@ -147,8 +152,30 @@ private:
     }
 
 #ifdef THEIA_HAVE_LIBBPF
-    bool open_ebpf_(const std::string& obj);     // defined in the Orin build
-    void drain_ebpf_(std::vector<DetectionEv>&); //  ”
+    EbpfConnect ebpf_;
+
+    // Load + attach the connect() ringbuf program (config.bpf_object_path).
+    bool open_ebpf_(const std::string& obj) { return ebpf_.open(obj); }
+
+    // Drain the ring → a DetectionEv per connect(). The userspace correlates the
+    // dst against the egress allow-list; here we emit a low-sev "observed dial"
+    // (Cat B candidate) carrying the FC + dst, deduped/judged by the FC layer.
+    // This is the EDGE signal a poll can't see — the value of the eBPF path.
+    void drain_ebpf_(std::vector<DetectionEv>& out) {
+        for (const auto& e : ebpf_.drain()) {
+            char dst[64] = "?";
+            if (e.family == 2 /*AF_INET*/) {
+                struct in_addr a; a.s_addr = e.daddr4;
+                ::inet_ntop(AF_INET, &a, dst, sizeof(dst));
+            }
+            DetectionEv ev;
+            ev.severity  = 2;   // an observed dial; the egress policy decides if it's a violation
+            ev.signature = "IDSM_OUTBOUND_DIAL";   // Cat B (edge) — connect() seen
+            ev.src       = std::string(e.comm) + "/" + std::to_string(e.pid);
+            ev.dst       = std::string(dst) + ":" + std::to_string(e.dport);
+            out.push_back(std::move(ev));
+        }
+    }
 #endif
 };
 

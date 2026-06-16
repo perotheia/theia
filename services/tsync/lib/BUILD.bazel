@@ -17,6 +17,8 @@ cc_library(
         "Ptp4lProvider_netgraph.hh",
         "Phc2sysProvider.hh",
         "Phc2sysProvider_netgraph.hh",
+        "ChronyProvider.hh",
+        "ChronyProvider_netgraph.hh",
         "TsyncCtl.hh",
         "TsyncCtl_netgraph.hh",
         "tsync_codecs.hh",

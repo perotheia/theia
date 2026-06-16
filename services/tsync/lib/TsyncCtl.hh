@@ -41,6 +41,14 @@ namespace ara::tsync {
 // signatures readable.
 using SyncStatusReq = system_services_tsync_SyncStatusReq;
 using SyncStatus = system_services_tsync_SyncStatus;
+using TimeSourceReq = system_services_tsync_TimeSourceReq;
+using TimeSourceReply = system_services_tsync_TimeSourceReply;
+using SyncStateReq = system_services_tsync_SyncStateReq;
+using SyncStateReply = system_services_tsync_SyncStateReply;
+using OffsetReq = system_services_tsync_OffsetReq;
+using OffsetReply = system_services_tsync_OffsetReply;
+using GmInfoReq = system_services_tsync_GmInfoReq;
+using GrandmasterReply = system_services_tsync_GrandmasterReply;
 
 
 
@@ -119,6 +127,18 @@ public:
 
 
     SyncStatus handle_call(const SyncStatusReq& req,
+                                            TsyncCtlState& s);
+
+    TimeSourceReply handle_call(const TimeSourceReq& req,
+                                            TsyncCtlState& s);
+
+    SyncStateReply handle_call(const SyncStateReq& req,
+                                            TsyncCtlState& s);
+
+    OffsetReply handle_call(const OffsetReq& req,
+                                            TsyncCtlState& s);
+
+    GrandmasterReply handle_call(const GmInfoReq& req,
                                             TsyncCtlState& s);
 
 

@@ -39,3 +39,37 @@ message SyncStatus {
     string message = 7;
 }
 
+message TimeSourceReq {
+    // empty body
+}
+
+message SyncStateReq {
+    // empty body
+}
+
+message OffsetReq {
+    // empty body
+}
+
+message GmInfoReq {
+    // empty body
+}
+
+message TimeSourceReply {
+    TimeSource source = 1;
+}
+
+message SyncStateReply {
+    SyncState state = 1;
+}
+
+message OffsetReply {
+    sint64 offset_ns = 1;
+    bool valid = 2;
+}
+
+message GrandmasterReply {
+    string grandmaster = 1;
+    string interface = 2;
+}
+

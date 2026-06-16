@@ -7,7 +7,8 @@ package system.services.tsync
 // in ONE process (one composition = one executable; no `on process` split) — the
 // time providers share the tsync process, threads under one supervised child.
 composition Tsync {
-    prototype Ptp4lProvider   ptp4l
-    prototype Phc2sysProvider phc2sys
-    prototype TsyncCtl         tsync_ctl
+    prototype Ptp4lProvider   ptp4l       // PTP — linuxptp grandmaster sync
+    prototype Phc2sysProvider phc2sys     // PTP — slew system clock to the PHC
+    prototype ChronyProvider  chrony      // NTP — the fallback time source
+    prototype TsyncCtl         tsync_ctl  // the ara::tsync wrapper API
 }

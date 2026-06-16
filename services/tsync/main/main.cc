@@ -7,6 +7,7 @@
 
 #include "lib/Ptp4lProvider.hh"
 #include "lib/Phc2sysProvider.hh"
+#include "lib/ChronyProvider.hh"
 #include "lib/TsyncCtl.hh"
 
 #include "lib/Log.hh"    // per-node MakeContextLogger(tag) — tagged + $THEIA_LOGGER sink
@@ -153,6 +154,33 @@ int main() {
 
 
 
+    ChronyProvider chrony;
+    // Per-node logger: tagged [#chrony] (kNodeName, matches `tdb ps`),
+    // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so do_start/init
+    // log through it. The FIRST node's logger also backs process_logger() — the
+    // ConfigureLogLevel-push fallback target + any process_logger() caller.
+    {
+        auto chrony_log = MakeContextLogger(ChronyProvider::kNodeName);
+        chrony_log->set_level(boot_level);
+        chrony.set_logger(std::move(chrony_log));
+    }
+    chrony.start();
+    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (the supervisor
+    // sets it from the rig's NodeToCPUMapping). No-op when unset / no entry for
+    // this node; soft-fails (logs) on EPERM. Applied AFTER start() — the thread
+    // exists now.
+    ::theia::runtime::apply_node_affinity(chrony.native_handle(),
+        ChronyProvider::kNodeName, std::getenv("THEIA_NODE_CFG"));
+    {
+        char _tipc[64];
+        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
+                      ChronyProvider::kTipcType, ChronyProvider::kTipcInstance);
+        chrony.log().info(_tipc);
+    }
+
+
+
+
     TsyncCtl tsync_ctl;
     // Per-node logger: tagged [#tsync_ctl] (kNodeName, matches `tdb ps`),
     // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so do_start/init
@@ -197,6 +225,14 @@ int main() {
         // ops → register_call; senderReceiver `in` data → register_cast.
         config_mux.register_call<SyncStatusReq, SyncStatus>(
             tsync_ctl_cfg, tsync_ctl);
+        config_mux.register_call<TimeSourceReq, TimeSourceReply>(
+            tsync_ctl_cfg, tsync_ctl);
+        config_mux.register_call<SyncStateReq, SyncStateReply>(
+            tsync_ctl_cfg, tsync_ctl);
+        config_mux.register_call<OffsetReq, OffsetReply>(
+            tsync_ctl_cfg, tsync_ctl);
+        config_mux.register_call<GmInfoReq, GrandmasterReply>(
+            tsync_ctl_cfg, tsync_ctl);
     } else {
         tsync_ctl.log().warn("config service bind failed; live log-level "
                                  "push + signal inject disabled");
@@ -236,6 +272,8 @@ int main() {
     ptp4l.stop("signal");
 
     phc2sys.stop("signal");
+
+    chrony.stop("signal");
 
     tsync_ctl.stop("signal");
 

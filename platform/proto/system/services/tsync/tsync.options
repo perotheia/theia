@@ -7,3 +7,6 @@ system_services_tsync.TsyncConfig.source        max_size:16
 system_services_tsync.SyncStatus.grandmaster    max_size:32
 system_services_tsync.SyncStatus.interface      max_size:32
 system_services_tsync.SyncStatus.message        max_size:128
+# GetGrandmasterInfo reply — same sizes as the SyncStatus fields it mirrors.
+system_services_tsync.GrandmasterReply.grandmaster  max_size:32
+system_services_tsync.GrandmasterReply.interface    max_size:32

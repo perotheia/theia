@@ -106,4 +106,47 @@ SyncStatus TsyncCtl::handle_call(const SyncStatusReq& /*req*/,
     return rep;
 }
 
+// ─── AUTOSAR ara::tsync getters ─────────────────────────────────────────────
+//
+// Thin per-facet wrappers over the SAME cached State that GetSyncStatus reads —
+// no extra polling. A client that wants just one value (e.g. "am I LOCKED?")
+// uses these instead of unpacking the whole snapshot.
+
+// GetCurrentTimeSource → SYSTEM | PTP | NTP (which source backs the reference).
+TimeSourceReply TsyncCtl::handle_call(const TimeSourceReq& /*req*/,
+                                      TsyncCtlState& s) {
+    TimeSourceReply rep = system_services_tsync_TimeSourceReply_init_zero;
+    rep.source = static_cast<system_services_tsync_TimeSource>(s.source);
+    return rep;
+}
+
+// GetSynchronizationState → UNAVAILABLE | UNLOCKED | HOLDOVER | LOCKED.
+SyncStateReply TsyncCtl::handle_call(const SyncStateReq& /*req*/,
+                                     TsyncCtlState& s) {
+    SyncStateReply rep = system_services_tsync_SyncStateReply_init_zero;
+    rep.state = static_cast<system_services_tsync_SyncState>(s.state);
+    return rep;
+}
+
+// GetOffset → signed offset (ns) from the master. `valid` is false in
+// UNAVAILABLE (no master to offset from) so a caller doesn't trust a 0 that
+// means "no data" as a real 0ns lock.
+OffsetReply TsyncCtl::handle_call(const OffsetReq& /*req*/,
+                                  TsyncCtlState& s) {
+    OffsetReply rep = system_services_tsync_OffsetReply_init_zero;
+    rep.offset_ns = s.offset_ns;
+    rep.valid = (s.state != 0 /*UNAVAILABLE*/);
+    return rep;
+}
+
+// GetGrandmasterInfo → the GM clock identity + the disciplined NIC (both "" when
+// there is no grandmaster — SYSTEM/NTP or no daemon).
+GrandmasterReply TsyncCtl::handle_call(const GmInfoReq& /*req*/,
+                                       TsyncCtlState& s) {
+    GrandmasterReply rep = system_services_tsync_GrandmasterReply_init_zero;
+    std::snprintf(rep.grandmaster, sizeof(rep.grandmaster), "%s", s.grandmaster.c_str());
+    std::snprintf(rep.interface, sizeof(rep.interface), "%s", s.interface.c_str());
+    return rep;
+}
+
 }  // namespace ara::tsync

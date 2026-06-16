@@ -67,12 +67,48 @@ message SyncStatus {
     string     message        // human note (e.g. "ptp4l not installed")
 }
 
+// ─── AUTOSAR ara::tsync getter wire types ───────────────────────────────────
+//
+// The four discrete ara::tsync accessors below each return ONE facet of the same
+// cached SyncStatus — the AUTOSAR-shaped API for a client that wants a single
+// value without unpacking the whole snapshot. GetSyncStatus stays the canonical
+// one-read; these are thin wrappers over the SAME State (no extra polling).
+//
+// Each op gets its OWN (empty) request type — the runtime dispatches handle_call
+// by REQUEST message type (and C++ can't overload on return type alone), so a
+// shared empty request would collide. Distinct paramless requests keep one
+// handle_call overload per getter.
+message TimeSourceReq { }
+message SyncStateReq  { }
+message OffsetReq     { }
+message GmInfoReq     { }
+
+// GetCurrentTimeSource → which source backs the global reference right now.
+message TimeSourceReply { TimeSource source }
+
+// GetSynchronizationState → the discipline state (sensor fusion gates on LOCKED).
+message SyncStateReply { SyncState state }
+
+// GetOffset → current signed offset (ns) from the master; valid_ when LOCKED/
+// HOLDOVER (false when UNAVAILABLE — there is no master to offset from).
+message OffsetReply { sint64 offset_ns    bool valid }
+
+// GetGrandmasterInfo → the grandmaster clock identity + the disciplined NIC.
+// Empty strings when there is no GM (SYSTEM/NTP, or no daemon).
+message GrandmasterReply { string grandmaster    string interface }
+
 // ─── Interface ─────────────────────────────────────────────────────────────
 
 // The TSYNC status surface. Read-only in v1 (the daemons own the discipline;
-// the FC reports). A later op could force a source / re-sync.
+// the FC reports). GetSyncStatus is the canonical one-read snapshot; the four
+// AUTOSAR ara::tsync getters are thin per-facet wrappers over the same cache.
 interface clientServer TsyncCtlIf {
     operation GetSyncStatus(in r: SyncStatusReq) returns SyncStatus
+    // AUTOSAR ara::tsync accessors (one facet each, same cached snapshot):
+    operation GetCurrentTimeSource(in r: TimeSourceReq)    returns TimeSourceReply
+    operation GetSynchronizationState(in r: SyncStateReq)  returns SyncStateReply
+    operation GetOffset(in r: OffsetReq)                   returns OffsetReply
+    operation GetGrandmasterInfo(in r: GmInfoReq)          returns GrandmasterReply
 }
 
 // ─── Nodes ─────────────────────────────────────────────────────────────────
@@ -113,6 +149,23 @@ node prebuilt Phc2sysProvider {
     reporting = false
     params {
         args : string = "-a -r -m -q"
+    }
+}
+
+// chronyd — the NTP source (TimeSource.NTP), the fallback when there's no PTP
+// grandmaster / NIC hardware timestamping. Same supervisor-owned prebuilt
+// treatment as the linuxptp pair, so all three time sources are managed
+// uniformly (no systemd split). -d = run in the foreground (don't daemonize —
+// the supervisor owns the lifetime), -s = set the system clock from the RTC at
+// start, -m = log to stdout (drained to our node log). A deployment runs EITHER
+// the PTP pair OR chronyd (per TsyncConfig.source); the unused one's binary may
+// be absent → execvp fails → graceful-degrade, same as the PTP path.
+node prebuilt ChronyProvider {
+    tipc type=0x80010055 instance=0
+    path = "/usr/sbin/chronyd"
+    reporting = false
+    params {
+        args : string = "-d -s -m"
     }
 }
 

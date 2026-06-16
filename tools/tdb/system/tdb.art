@@ -26,6 +26,7 @@ package system.tools.tdb
 import system.supervisor.*
 import system.services.log.*
 import system.services.per.*
+import system.services.osi.*
 
 // ---- extern peers (materialized from the imports) ------------------------
 //
@@ -43,6 +44,10 @@ extern node atomic TraceCtl { }
 // for Snapshot/schema/migrate; PerClient (0x80010007) for Get/Put/Watch config.
 extern node atomic PerManager { }
 extern node atomic PerClient { }
+
+// osi's resource+power control node (tipc 0x8001000C) — system.services.osi.
+// GetResourceStatus (per-FC CPU%/RSS + power mode) / SetResourceLimit.
+extern node atomic OsiCtl { }
 
 // ---- tdb client nodes ----------------------------------------------------
 //
@@ -80,6 +85,15 @@ node atomic TdbPer {
     ports {
         client per_client  requires system.services.per.PerClientIf
         client per_mgr     requires system.services.per.PerManagerIf
+    }
+}
+
+// osi client: drives OsiCtlIf (GetResourceStatus / SetResourceLimit) — used by
+// the osi smoke test (and a future `tdb resources` / GUI resource panel).
+node atomic TdbOsi {
+    tipc type=0x80020104 instance=0
+    ports {
+        client osi_ctl  requires system.services.osi.OsiCtlIf
     }
 }
 

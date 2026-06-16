@@ -1,0 +1,52 @@
+# HAND-OWNED. source: system/services/osi/package.art
+#
+# Impl slice — handler bodies. The user owns this BUILD.bazel: it adds
+# osi_backend.hpp (the cgroup v2 + /proc + Orin-power observer/controller) to the
+# state + impl targets, and gives osi_state the osi proto dep (its cached
+# snapshot field is the raw pb type). gen-app can't derive these from the .art —
+# excluded from the regen-stability diff (see fc_regen_lib.py hand_owned_impl_build).
+
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+# State structs (write-once, app-owned). A leaf header-only target so
+# BOTH the lib (which #includes "impl/<Node>_state.hh" as the GenServer
+# State type) and the impl can depend on it WITHOUT a lib<->impl cycle:
+#   osi_state  ←  lib  ←  impl
+# OsiCtl_state.hh #includes osi_backend.hpp (accounting types) + the osi proto
+# (its last_snapshot field is system_services_osi_ResourceStatus), so both ride
+# along here.
+cc_library(
+    name = "osi_state",
+    hdrs = [
+        "OsiCtl_state.hh",
+        "osi_backend.hpp",
+    ],
+    # The lib #includes these as "impl/<Node>_state.hh" / "impl/osi_backend.hpp",
+    # so the include root is the FC out_dir (one above impl/).
+    includes = [".."],
+    copts = ["-std=c++17", "-fPIC"],
+    deps = [
+        "//platform/runtime:runtime",
+        "//platform/proto:platform_protos",   # system/services/osi/osi.pb.h
+    ],
+)
+
+cc_library(
+    name = "osi_impl",
+    srcs = [
+        "OsiCtl_handlers.cc",
+    ],
+    hdrs = ["osi_backend.hpp"],
+    includes = [".."],
+    copts = [
+        "-std=c++17",
+        "-Wall",
+        "-Wextra",
+        "-fPIC",
+    ],
+    deps = [
+        "//services/osi/lib:osi_lib",
+    ],
+)

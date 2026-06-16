@@ -1,0 +1,38 @@
+# Generated nanopb sources for the system.services.osi package.
+#
+# .pb.{c,h} are BUILT, not committed: the genrule invokes nanopb_generator.
+
+package(default_visibility = ["//visibility:public"])
+
+genrule(
+    name = "osi_pb",
+    srcs = [
+        "osi.proto",
+        "osi.options",
+    ],
+    outs = [
+        "osi.pb.c",
+        "osi.pb.h",
+    ],
+    cmd = "set -e;"
+        + " in_dir=$$(dirname $(location osi.proto));"
+        + " out_dir=$$(dirname $(location osi.pb.c));"
+        + " nanopb_generator -I $$in_dir -D $$out_dir osi.proto;",
+    tools = [],
+    local = True,
+)
+
+filegroup(
+    name = "osi_pb_c",
+    srcs = ["osi.pb.c"],
+)
+
+filegroup(
+    name = "osi_pb_h",
+    srcs = ["osi.pb.h"],
+)
+
+filegroup(
+    name = "osi_proto",
+    srcs = ["osi.proto"],
+)

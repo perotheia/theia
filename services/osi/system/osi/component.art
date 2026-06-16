@@ -1,0 +1,8 @@
+package system.services.osi
+
+
+// The OS-Interface FC: a single OsiCtl node owning cgroup v2 resource
+// partitioning + per-FC accounting + Orin power-mode reconciliation.
+composition Osi {
+    prototype OsiCtl osi_ctl
+}

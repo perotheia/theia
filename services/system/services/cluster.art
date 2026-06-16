@@ -37,6 +37,7 @@ import system.services.com.*
 import system.services.crypto.*
 import system.services.log.*
 import system.services.nm.*
+import system.services.osi.*
 import system.services.per.*
 import system.services.sm.*
 import system.services.tsync.*
@@ -52,13 +53,14 @@ import system.services.shwa.*
 // are NOT declared: they have no composition, aren't imported, and
 // aren't packaged. They live in the source tree only as TIPC-slot
 // placeholders; add a forward-decl + import here when one grows a daemon.
-// crypto + tsync + nm grew daemons (Crypto Service Manager; Time-Sync
-// control; Network-readiness FSM + poller).
+// crypto + tsync + nm + osi grew daemons (Crypto Service Manager; Time-Sync
+// control; Network-readiness FSM + poller; OS-Interface cgroup/power control).
 
 composition Com      { }
 composition Crypto   { }
 composition Log      { }
 composition Nm       { }
+composition Osi      { }
 composition Per      { }
 composition Sm       { }
 composition Tsync    { }
@@ -74,6 +76,7 @@ cluster Services {
     composition Crypto crypto
     composition Log    log
     composition Nm     nm
+    composition Osi    osi
     composition Per    per
     composition Sm     sm
     composition Tsync  tsync

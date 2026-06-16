@@ -1,0 +1,118 @@
+// OS Interface (ara::osi / OSI) — Adaptive Platform Functional Cluster.
+//
+// AUTOSAR OSI is the POSIX/systemd/libc PORTABILITY ABSTRACTION between the
+// stack and the OS — NOT the OSI network model. In Theia the portability layer
+// is ALREADY implicit: platform/runtime owns threading / TIPC transport /
+// timerfd, and the supervisor (Execution Management) owns process lifecycle +
+// per-process CPU affinity + RLIMIT_AS memory caps. So this FC does NOT
+// re-implement any of that. It owns the TWO resource-plane pieces the
+// runtime+supervisor don't:
+//
+//   1. cgroup v2 RESOURCE PARTITIONING — a hard CPU-bandwidth cap (cpu.max) and
+//      memory ceiling (memory.high) per FC, plus per-FC CPU%/RSS accounting that
+//      affinity + RLIMIT_AS can't express. The kernel enforces; OSI only writes
+//      the cgroup knobs + reads the stats (it never forks the children — the
+//      supervisor does; OSI manages the slices they run in).
+//   2. PLATFORM POWER MODE — on NVIDIA Orin, the nvpmodel power profile +
+//      jetson_clocks. Graceful-degrades to a no-op on a host without the Jetson
+//      tooling (the x86 dev host), exactly like tsync degrades without linuxptp.
+//
+// See docs/tasks/PROGRESS/AUTOSAR-LINUX-mapping.md (OSI step).
+
+package system.services.osi
+
+// ─── Power mode (NVIDIA Orin) ───────────────────────────────────────────────
+
+// The platform power profile. On Orin these map to nvpmodel profile IDs; on a
+// non-Jetson host the source is UNAVAILABLE and the FC reports MODE_UNKNOWN.
+enum PowerMode {
+    MODE_UNKNOWN  = 0   // no Jetson tooling — power plane unmanaged
+    MODE_MAXN     = 1   // nvpmodel 0 — max performance, all cores, max clocks
+    MODE_BALANCED = 2   // a mid nvpmodel profile (power-capped)
+    MODE_LOW      = 3   // a low-power nvpmodel profile (reduced cores/clocks)
+}
+
+// ─── Runtime config (etcd-backed via services/per) ─────────────────────────
+
+message OsiConfig {
+    // cgroup v2 mount root (default /sys/fs/cgroup) + the Theia slice name under
+    // it that per-FC sub-cgroups live in.
+    string   cgroup_root  = "/sys/fs/cgroup"
+    string   slice_name   = "theia.slice"
+    // Poll cadence (ms) — how often OsiCtl re-reads per-FC cpu/mem accounting.
+    uint32   poll_ms      = 2000
+    // Desired platform power mode (applied on Orin via nvpmodel; ignored where
+    // the tooling is absent). MODE_UNKNOWN = leave the platform default.
+    PowerMode power_mode  = 0
+    // Apply jetson_clocks (pin clocks to max for the active power mode) on Orin.
+    bool      jetson_clocks = false
+}
+
+// ─── Per-FC resource limit (a SetResourceLimit request) ─────────────────────
+
+message ResourceLimitReq {
+    string fc          = ""     // the FC short name (= cgroup sub-dir under the slice)
+    uint32 cpu_max_pct = 0      // hard CPU-bandwidth cap, % of ONE core (0 = unlimited; 200 = 2 cores)
+    uint64 mem_high    = 0      // memory.high soft ceiling, bytes (0 = unlimited)
+}
+
+message ResourceLimitReply {
+    bool   applied = 1
+    string message = 2
+}
+
+// ─── Status wire types ──────────────────────────────────────────────────────
+
+// One FC's live resource accounting (read from its cgroup / /proc).
+message FcResource {
+    string fc          = 1
+    uint32 pid         = 2
+    double cpu_pct     = 3      // CPU% over the last poll interval (across the process)
+    uint64 rss_bytes   = 4      // resident memory
+    uint32 cpu_max_pct = 5      // the applied cpu.max cap (0 = unlimited)
+    uint64 mem_high    = 6      // the applied memory.high ceiling (0 = unlimited)
+}
+
+// The platform-wide snapshot OsiCtl broadcasts + serves.
+message ResourceStatus {
+    PowerMode    power_mode = 1
+    bool         on_jetson  = 2     // true if nvpmodel tooling is present
+    uint32       fc_count   = 3
+    repeated FcResource fcs = 4
+    uint64       ts_ns      = 5
+}
+
+message ResourceStatusReq { }
+
+// ─── Interfaces ─────────────────────────────────────────────────────────────
+
+// Resource snapshot broadcast — senderReceiver pub/sub (→ firehose / PHM /
+// anyone watching per-FC pressure).
+interface senderReceiver OsiStatusStream {
+    data ResourceStatus status
+}
+
+// Resource control — query the snapshot + set a per-FC cgroup limit.
+interface clientServer OsiCtlIf {
+    operation GetResourceStatus(in r: ResourceStatusReq) returns ResourceStatus
+    operation SetResourceLimit(in r: ResourceLimitReq)   returns ResourceLimitReply
+}
+
+// ─── Node ─────────────────────────────────────────────────────────────────
+
+// The OS-interface resource + power control node. tipc 0x8001000C. An atomic
+// node that on a timer tick (a) discovers the running FC processes (children of
+// the supervisor), (b) reads their cgroup/proc CPU%/RSS accounting, (c) caches +
+// broadcasts ResourceStatus, and (d) reconciles the desired power mode on Orin.
+// SetResourceLimit writes the FC's cgroup v2 cpu.max / memory.high. Never forks
+// a child — the supervisor (EM) owns lifecycle; OSI owns the slices.
+node atomic OsiCtl {
+    tipc type=0x8001000C instance=0
+    requires_timers
+    tag = "OSI"
+    config OsiConfig
+    ports {
+        sender broadcast provides OsiStatusStream
+        server ctl       provides OsiCtlIf
+    }
+}

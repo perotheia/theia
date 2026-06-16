@@ -20,7 +20,9 @@ cc_library(
     hdrs = [
         "FwDaemon_state.hh",
         "fw_backend.hpp",
+        "nft_lib.hpp",
     ],
+    linkopts = ["-lnftables"],   # fw_backend.hpp → nft_lib.hpp → libnftables
     # The lib #includes these as "impl/<Node>_state.hh" / "impl/fw_backend.hpp",
     # so the include root is the FC out_dir (one above impl/).
     includes = [".."],
@@ -33,7 +35,10 @@ cc_library(
     srcs = [
         "FwDaemon_handlers.cc",
     ],
-    hdrs = ["fw_backend.hpp"],
+    hdrs = [
+        "fw_backend.hpp",
+        "nft_lib.hpp",
+    ],
     includes = [".."],
     copts = [
         "-std=c++17",
@@ -41,6 +46,9 @@ cc_library(
         "-Wextra",
         "-fPIC",
     ],
+    # libnftables (system lib, libnftables-dev present) — in-process nftables, the
+    # engine the `nft` CLI wraps; replaces the `nft -f`/`list`/`delete` execs.
+    linkopts = ["-lnftables"],
     deps = [
         "//services/fw/lib:fw_lib",
     ],

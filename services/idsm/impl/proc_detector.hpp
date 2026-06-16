@@ -37,6 +37,8 @@
 #include <string>
 #include <vector>
 
+#include <nftables/libnftables.h>   // in-process nft counter read (no exec)
+
 #include "ids_backend.hpp"     // DetectionEv
 #include "netlink_diag.hpp"    // netlink_listeners — sock_diag, no `ss` exec
 #include "sha256.hpp"          // in-process SHA-256, no `sha256sum` exec
@@ -45,15 +47,8 @@ namespace ara::idsm {
 
 namespace proc_detail {
 
-inline std::string run_(const std::string& cmd) {
-    std::string out;
-    FILE* p = ::popen((cmd + " 2>/dev/null").c_str(), "r");
-    if (!p) return out;
-    char buf[512];
-    while (std::fgets(buf, sizeof(buf), p)) out += buf;
-    ::pclose(p);
-    return out;
-}
+// (run_ removed — idsm has NO popen now: ss→netlink, sha256sum→in-process,
+// nft→libnftables.)
 
 // Split "a:1,b:2" → [("a","1"),("b","2")]. Tolerates spaces.
 inline std::vector<std::pair<std::string, std::string>>
@@ -127,13 +122,27 @@ parse_nft_counters_(const std::string& j) {
     return out;
 }
 
-// Read fw's per-FC egress-drop counters (Cat B): runs `nft -j list counters
-// table inet theia_fw` and parses it. fw declares idsm_b_<fc> before its
-// `socket cgroupv2 … drop` rules, so a nonzero packet count means that FC tried
-// a denied egress. Empty if nft/the table is absent (no enforcement → no Cat B).
+// Read fw's per-FC egress-drop counters (Cat B) IN-PROCESS via libnftables (no
+// `nft` exec): `list counters table inet theia_fw` in JSON. fw declares
+// idsm_b_<fc> before its `socket cgroupv2 … drop` rules, so a nonzero packet
+// count means that FC tried a denied egress. Empty if the table is absent.
+inline std::string nft_counters_json_() {
+    struct nft_ctx* ctx = nft_ctx_new(NFT_CTX_DEFAULT);
+    if (!ctx) return "";
+    nft_ctx_output_set_flags(ctx, NFT_CTX_OUTPUT_JSON);
+    nft_ctx_buffer_output(ctx);
+    nft_ctx_buffer_error(ctx);
+    std::string out;
+    if (nft_run_cmd_from_buffer(ctx, "list counters table inet theia_fw") == 0) {
+        const char* o = nft_ctx_get_output_buffer(ctx);
+        if (o) out = o;
+    }
+    nft_ctx_free(ctx);
+    return out;
+}
+
 inline std::vector<std::pair<std::string, uint64_t>> nft_egress_drops() {
-    return parse_nft_counters_(
-        run_("nft -j list counters table inet theia_fw"));
+    return parse_nft_counters_(nft_counters_json_());
 }
 
 }  // namespace proc_detail

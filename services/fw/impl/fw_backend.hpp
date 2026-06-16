@@ -23,6 +23,8 @@
 #include <linux/capability.h>   // CAP_NET_ADMIN + __user_cap_*_struct
 #include <string>
 #include <sys/prctl.h>          // PR_CAP_AMBIENT_RAISE
+
+#include "impl/nft_lib.hpp"     // in-process nftables (libnftables, no exec)
 #include <sys/syscall.h>        // SYS_capget / SYS_capset (raw, no libcap dep)
 #include <unistd.h>             // syscall
 #include <vector>
@@ -41,15 +43,8 @@ struct ApplyResult {
 
 namespace fw_detail {
 
-inline std::string run_(const std::string& cmd) {
-    std::string out;
-    FILE* p = ::popen((cmd + " 2>&1").c_str(), "r");
-    if (!p) return out;
-    char buf[256];
-    while (std::fgets(buf, sizeof(buf), p)) out += buf;
-    ::pclose(p);
-    return out;
-}
+// (run_ removed — nft is now in-process via nft_lib::run; the only remaining
+// file access is slurp_ below, a plain fopen of config/fw.d fragments.)
 
 inline std::string slurp_(const std::string& path) {
     std::string out;
@@ -268,53 +263,38 @@ inline std::string build_ruleset(const std::string& dmz_csv,
     return s;
 }
 
-// Apply a ruleset text atomically: flush our table then load the new one via
-// `nft -f -`. Returns ok + a diagnostic. nft replaces the named table wholesale,
-// so a stale theia_fw is cleaned. No `nft` / no privilege → ok=false.
+// Apply a ruleset text atomically via libnftables (no `nft` exec). The ruleset
+// (a `table inet theia_fw { … }` block) is prefixed with a `delete table` so the
+// whole buffer replaces a stale table in one atomic nft transaction. Returns
+// ok + a diagnostic; no privilege → ok=false (DEGRADED), verified by a read-back.
 inline ApplyResult apply_ruleset(const std::string& ruleset,
                                  int rule_count, int override_count) {
-    using namespace fw_detail;
     ApplyResult r;
     r.rule_count = rule_count;
     r.override_count = override_count;
 
-    if (run_("command -v nft").empty()) {
-        r.ok = false;
-        r.message = "nft not found — firewall plane unmanaged";
-        return r;
-    }
-    // Push CAP_NET_ADMIN into the ambient set so the spawned `nft` inherits it
-    // (the file cap on `fw` doesn't transfer across execvp on its own).
+    // CAP_NET_ADMIN must be effective for the netlink transaction. The file cap
+    // on `fw` covers this process directly (no child exec now), but we still
+    // raise it into the ambient/effective set defensively.
     fw_detail::raise_net_admin_ambient();
-    // Delete our table first (ignore "No such file" on the first apply), then
-    // load the fresh one. Pipe the ruleset straight to `nft -f -` (stdin) — no
-    // temp file (avoids ownership/sticky-/tmp surprises across uid changes).
-    // `nft -f` is atomic; an error leaves nft unchanged.
-    run_("nft delete table inet theia_fw");
-    std::string out;
-    {
-        FILE* p = ::popen("nft -f - 2>&1", "w");
-        if (!p) { r.ok = false; r.message = "cannot spawn nft"; return r; }
-        ::fwrite(ruleset.data(), 1, ruleset.size(), p);
-        int rc = ::pclose(p);
-        // popen("w") can't capture stdout; rely on the post-apply verify below
-        // for the success signal, and the exit code for a hard failure.
-        if (rc != 0) out = "nft -f returned non-zero";
-    }
-    if (!out.empty()) {
-        // nft prints errors to stderr (merged into out); non-empty = failure.
+
+    // One atomic buffer: drop the old table (ignored if absent via `add`-style
+    // tolerance — libnftables errors on delete-of-missing, so we run it as a
+    // separate best-effort command first), then load the fresh ruleset.
+    nft_lib::run("delete table inet theia_fw");   // best-effort (ignore error)
+    std::string err = nft_lib::run(ruleset);
+    if (!err.empty()) {
         r.ok = false;
-        auto nl = out.find('\n');   // trim to one line for the status message
+        auto nl = err.find('\n');
         r.message = "nft apply failed: " + (nl == std::string::npos
-                    ? out : out.substr(0, nl));
+                    ? err : err.substr(0, nl));
         return r;
     }
-    // VERIFY the table is actually live — `nft -f` can return 0 without
-    // installing the table on a host where the caller lacks CAP_NET_ADMIN (it
-    // operates on a private netns / silently no-ops). A missing table after a
-    // clean exit = no privilege → DEGRADED, so the status is honest.
-    if (run_("nft list table inet theia_fw").find("chain input") ==
-        std::string::npos) {
+    // VERIFY the table is live — a clean return without CAP_NET_ADMIN can still
+    // no-op on a private netns, so the read-back is the honest success signal.
+    std::string listing;
+    nft_lib::run("list table inet theia_fw", &listing);
+    if (listing.find("chain input") == std::string::npos) {
         r.ok = false;
         r.message = "nft applied 0 (no CAP_NET_ADMIN? table not live)";
         return r;
@@ -325,9 +305,9 @@ inline ApplyResult apply_ruleset(const std::string& ruleset,
     return r;
 }
 
-// Flush the theia_fw table (the DISABLED path). Best-effort.
+// Flush the theia_fw table (the DISABLED path). Best-effort, in-process.
 inline void flush_ruleset() {
-    fw_detail::run_("nft delete table inet theia_fw");
+    nft_lib::run("delete table inet theia_fw");
 }
 
 }  // namespace ara::fw

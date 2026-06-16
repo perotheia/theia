@@ -30,6 +30,9 @@ cc_library(
     # so the include root is the FC out_dir (one above impl/).
     includes = [".."],
     copts = ["-std=c++17", "-fPIC"],
+    # libnftables (system) — proc_detector reads fw's Cat-B drop counters
+    # in-process. NETLINK_SOCK_DIAG (listeners) + in-proc SHA-256 need no lib.
+    linkopts = ["-lnftables"],
     deps = ["//platform/runtime:runtime"],
 )
 
@@ -51,6 +54,7 @@ cc_library(
         "-Wextra",
         "-fPIC",
     ],
+    linkopts = ["-lnftables"],   # proc_detector's in-process nft counter read
     deps = [
         "//services/idsm/lib:idsm_lib",
         # The handler submits a system_services_log_TraceRecord to the firehose

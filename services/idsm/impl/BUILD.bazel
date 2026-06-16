@@ -1,0 +1,52 @@
+# HAND-OWNED. source: system/services/idsm/package.art
+#
+# Impl slice — handler bodies. The user owns this BUILD.bazel: it adds
+# ids_backend.hpp (the eBPF/mock event source) to the state + impl targets, and
+# gives idsm_impl the log proto dep (the handler submits a
+# system_services_log_TraceRecord to the firehose). gen-app can't derive these
+# from the .art — excluded from the regen-stability diff (see fc_regen_lib.py
+# hand_owned_impl_build).
+
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+# State structs (write-once, app-owned). A leaf header-only target so
+# BOTH the lib (which #includes "impl/<Node>_state.hh" as the GenServer
+# State type) and the impl can depend on it WITHOUT a lib<->impl cycle:
+#   idsm_state  ←  lib  ←  impl
+# IdsmDaemon_state.hh #includes ids_backend.hpp (the IdsBackend type), so it
+# rides along here.
+cc_library(
+    name = "idsm_state",
+    hdrs = [
+        "IdsmDaemon_state.hh",
+        "ids_backend.hpp",
+    ],
+    # The lib #includes these as "impl/<Node>_state.hh" / "impl/ids_backend.hpp",
+    # so the include root is the FC out_dir (one above impl/).
+    includes = [".."],
+    copts = ["-std=c++17", "-fPIC"],
+    deps = ["//platform/runtime:runtime"],
+)
+
+cc_library(
+    name = "idsm_impl",
+    srcs = [
+        "IdsmDaemon_handlers.cc",
+    ],
+    hdrs = ["ids_backend.hpp"],
+    includes = [".."],
+    copts = [
+        "-std=c++17",
+        "-Wall",
+        "-Wextra",
+        "-fPIC",
+    ],
+    deps = [
+        "//services/idsm/lib:idsm_lib",
+        # The handler submits a system_services_log_TraceRecord to the firehose
+        # (TraceSubmitter) — needs log.pb.h.
+        "//platform/proto:platform_protos",
+    ],
+)

@@ -28,6 +28,7 @@ import system.services.log.*
 import system.services.per.*
 import system.services.osi.*
 import system.services.fw.*
+import system.services.idsm.*
 
 // ---- extern peers (materialized from the imports) ------------------------
 //
@@ -53,6 +54,10 @@ extern node atomic OsiCtl { }
 // fw's firewall control node (tipc 0x80010011) — system.services.fw.
 // GetFirewallStatus (nft apply state / rule count) / ReloadRules.
 extern node atomic FwDaemon { }
+
+// idsm's IDS-manager node (tipc 0x8001000F) — system.services.idsm.
+// GetIdsStatus (detector state / event + escalation counters).
+extern node atomic IdsmDaemon { }
 
 // ---- tdb client nodes ----------------------------------------------------
 //
@@ -108,6 +113,15 @@ node atomic TdbFw {
     tipc type=0x80020105 instance=0
     ports {
         client fw_ctl  requires system.services.fw.FwCtlIf
+    }
+}
+
+// idsm client: drives IdsmCtlIf (GetIdsStatus) — used by the idsm smoke test
+// (and a future `tdb ids` / GUI security panel).
+node atomic TdbIdsm {
+    tipc type=0x80020106 instance=0
+    ports {
+        client idsm_ctl  requires system.services.idsm.IdsmCtlIf
     }
 }
 

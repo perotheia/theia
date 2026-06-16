@@ -11,6 +11,7 @@ enum TraceKind {
     TraceKind_CALL_OUT = 3;
     TraceKind_CALL_IN = 4;
     TraceKind_STATEM = 5;
+    TraceKind_SECURITY = 6;
 }
 
 enum LogLevel {

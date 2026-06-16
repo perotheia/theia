@@ -36,6 +36,7 @@ package system.services
 import system.services.com.*
 import system.services.crypto.*
 import system.services.fw.*
+import system.services.idsm.*
 import system.services.log.*
 import system.services.nm.*
 import system.services.osi.*
@@ -54,13 +55,15 @@ import system.services.shwa.*
 // are NOT declared: they have no composition, aren't imported, and
 // aren't packaged. They live in the source tree only as TIPC-slot
 // placeholders; add a forward-decl + import here when one grows a daemon.
-// crypto + tsync + nm + osi + fw grew daemons (Crypto Service Manager; Time-Sync
-// control; Network-readiness FSM + poller; OS-Interface cgroup/power control;
-// Firewall nftables generator/applier — supersedes the old config-only nop/fw).
+// crypto + tsync + nm + osi + fw + idsm grew daemons (Crypto Service Manager;
+// Time-Sync control; Network-readiness FSM + poller; OS-Interface cgroup/power;
+// Firewall nftables generator/applier — supersedes the old config-only nop/fw;
+// IDS Manager — eBPF detection ingest → SECURITY firehose).
 
 composition Com      { }
 composition Crypto   { }
 composition Fw       { }
+composition Idsm     { }
 composition Log      { }
 composition Nm       { }
 composition Osi      { }
@@ -78,6 +81,7 @@ cluster Services {
     composition Com    com
     composition Crypto crypto
     composition Fw     fw
+    composition Idsm   idsm
     composition Log    log
     composition Nm     nm
     composition Osi    osi

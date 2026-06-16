@@ -1,0 +1,100 @@
+// Intrusion Detection System Manager (ara::idsm / IDS) — Adaptive Platform FC.
+//
+// A THIN control plane over a Linux IDS engine: IdsmDaemon MANAGES the detector
+// (v1: an eBPF socket/syscall→network-correlation program), INGESTS its events
+// (the eBPF ring buffer), NORMALIZES each into a TraceRecord (kind=SECURITY),
+// and SPILLS it into the trace firehose — so `tdb tracecat` / artheia.observer /
+// the GUI see intrusion events inline with dispatcher traces. Critical
+// detections ESCALATE to PHM/SM (a future hook). The detection runs in the
+// kernel/backend; the FC is the manager + ingest + escalation point — never the
+// packet path. See docs/tasks/PROGRESS/AUTOSAR-LINUX-mapping.md (IDSM step).
+//
+// BACKEND (resolved decision): eBPF ring-buffer. The dev host has no libbpf /
+// bpffs / CAP_BPF, so v1 builds the ingest pipeline against a graceful-degrade
+// backend (IDS_UNAVAILABLE + a mock event source) and the real eBPF reader slots
+// in on a capable host (Orin), exactly like tsync degrades without linuxptp.
+
+package system.services.idsm
+
+// The firehose record type lives in log[trace]; IDSM is a PRODUCER on it.
+import system.services.log.*
+
+// ─── Detector state ─────────────────────────────────────────────────────────
+
+enum IdsState {
+    IDS_UNAVAILABLE = 0   // no eBPF backend (no libbpf/bpffs/CAP_BPF) — degraded
+    IDS_LOADED      = 1   // the eBPF program is attached; ring buffer open
+    IDS_DEGRADED    = 2   // backend was up, then failed (recoverable)
+}
+
+// ─── Runtime config (etcd-backed via services/per) ─────────────────────────
+
+message IdsmConfig {
+    // Path to the compiled eBPF object the backend loads (.bpf.o). Absent →
+    // IDS_UNAVAILABLE. On the dev host this is unset (mock backend).
+    string bpf_object_path = ""
+    // The bpffs-pinned ring-buffer map name the program publishes events on.
+    string ringbuf_map     = "ids_events"
+    // Poll cadence (ms) — how often IdsmDaemon drains the ring buffer.
+    uint32 poll_ms         = 500
+    // Minimum severity (1=low … 5=critical) to ESCALATE to PHM/SM. Events below
+    // still hit the firehose; at/above also raise a health event. 0 = never.
+    uint32 escalate_severity = 4
+    // Test/degrade seam: a newline-JSON file the mock backend tails when no eBPF
+    // object is loaded (lets the ingest→firehose→escalate pipeline run on a host
+    // without eBPF). Empty = no mock source.
+    string mock_event_path = ""
+}
+
+// ─── Detection ──────────────────────────────────────────────────────────────
+
+// One normalized intrusion detection (from the eBPF ring buffer / mock source).
+message Detection {
+    uint32 severity     // 1=low … 5=critical
+    string signature    // rule/heuristic name ("port-scan", "spoofed-src", …)
+    string src          // source identifier (ip:port / pid / comm)
+    string dst          // destination identifier
+    uint64 ts_ns
+}
+
+// ─── Status wire types ──────────────────────────────────────────────────────
+
+message IdsStatusMsg {
+    IdsState state
+    bool     on_ebpf          // true if a real eBPF backend is attached
+    uint64   events_total     // detections ingested since boot
+    uint64   escalated_total  // detections escalated to PHM/SM
+    string   last_signature   // most recent detection's signature ("" if none)
+    uint64   ts_ns
+}
+
+message IdsStatusReq { }
+
+// ─── Interfaces ─────────────────────────────────────────────────────────────
+
+// Status broadcast — senderReceiver pub/sub (→ firehose / PHM).
+interface senderReceiver IdsStatusStream {
+    data IdsStatusMsg status
+}
+
+// Control — query status.
+interface clientServer IdsmCtlIf {
+    operation GetIdsStatus(in r: IdsStatusReq) returns IdsStatusMsg
+}
+
+// ─── Node ─────────────────────────────────────────────────────────────────
+
+// The IDS manager node. tipc 0x8001000F. An atomic node that on a tick drains
+// the eBPF ring buffer (or the mock source), normalizes each detection into a
+// TraceRecord (kind=SECURITY) submitted to the firehose, escalates severe ones,
+// and caches+broadcasts IdsStatusMsg. Never in the packet path.
+node atomic IdsmDaemon {
+    tipc type=0x8001000F instance=0
+    requires_timers
+    tag = "IDS"
+    config IdsmConfig
+    ports {
+        sender broadcast provides IdsStatusStream
+        server ctl       provides IdsmCtlIf
+    }
+}

@@ -1,0 +1,19 @@
+# HAND-OWNED. IDSM tests.
+#
+# A unit check for the ingest → SECURITY-firehose pipeline: drives the mock
+# IdsBackend + the TraceSubmitter test_sink seam (no TIPC, runs in the sandbox).
+
+load("@rules_cc//cc:defs.bzl", "cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_test(
+    name = "test_ingest",
+    srcs = ["test_ingest.cc"],
+    copts = ["-std=c++17", "-fPIC"],
+    deps = [
+        "//services/idsm/impl:idsm_state",
+        "//platform/runtime:runtime",
+        "//platform/proto:platform_protos",
+    ],
+)

@@ -90,6 +90,9 @@ FC_SPECS = [
            hand_owned_impl_build=True),   # osi_backend.hpp hdr (cgroup/power)
     FcSpec("fw", "services/fw/system/fw/package.art", "ara::fw", "services/fw",
            hand_owned_impl_build=True),   # fw_backend.hpp hdr (nftables gen/apply)
+    FcSpec("idsm", "services/idsm/system/idsm/package.art", "ara::idsm",
+           "services/idsm", hand_owned_impl_build=True),   # ids_backend.hpp + log dep
+    # log carries the SECURITY TraceKind IDSM produces; keep it regen-checked.
     # Non-services FCs — same generator, different homes. These prove
     # gen-app's path-agnostic label derivation (//<out>/lib:<short>_lib).
     # The apps spec is one spec with three process-compositions; each is its

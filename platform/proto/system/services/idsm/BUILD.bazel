@@ -1,0 +1,38 @@
+# Generated nanopb sources for the system.services.idsm package.
+#
+# .pb.{c,h} are BUILT, not committed: the genrule invokes nanopb_generator.
+
+package(default_visibility = ["//visibility:public"])
+
+genrule(
+    name = "idsm_pb",
+    srcs = [
+        "idsm.proto",
+        "idsm.options",
+    ],
+    outs = [
+        "idsm.pb.c",
+        "idsm.pb.h",
+    ],
+    cmd = "set -e;"
+        + " in_dir=$$(dirname $(location idsm.proto));"
+        + " out_dir=$$(dirname $(location idsm.pb.c));"
+        + " nanopb_generator -I $$in_dir -D $$out_dir idsm.proto;",
+    tools = [],
+    local = True,
+)
+
+filegroup(
+    name = "idsm_pb_c",
+    srcs = ["idsm.pb.c"],
+)
+
+filegroup(
+    name = "idsm_pb_h",
+    srcs = ["idsm.pb.h"],
+)
+
+filegroup(
+    name = "idsm_proto",
+    srcs = ["idsm.proto"],
+)

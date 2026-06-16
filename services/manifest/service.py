@@ -44,6 +44,7 @@ SERVICES_MEMBERS: list[tuple[str, str, list[str]]] = [
     ('com', 'Com', []),
     ('crypto', 'Crypto', []),
     ('fw', 'Fw', []),
+    ('idsm', 'Idsm', []),
     ('log', 'Log', []),
     ('nm', 'Nm', []),
     ('osi', 'Osi', []),

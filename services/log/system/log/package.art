@@ -75,6 +75,10 @@ enum TraceKind {
     CALL_OUT  = 3
     CALL_IN   = 4
     STATEM    = 5
+    SECURITY  = 6   // an IDSM intrusion detection (services/idsm) — NOT a
+                    // dispatcher record: node_name="idsm", msg_type=<signature>,
+                    // payload=<normalized detection>. Rides the same firehose so
+                    // tdb/observer/GUI see security events inline with traces.
 }
 
 // One trace record. Wraps the original dispatched message verbatim in

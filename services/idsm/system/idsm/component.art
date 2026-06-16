@@ -1,0 +1,8 @@
+package system.services.idsm
+
+
+// The IDS-Manager FC: a single IdsmDaemon node managing the eBPF detector,
+// ingesting its events, and spilling normalized detections into the firehose.
+composition Idsm {
+    prototype IdsmDaemon idsm_daemon
+}

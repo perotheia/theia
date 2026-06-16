@@ -95,10 +95,14 @@ SUPERVISORS: list[SupervisorNode] = [
         # "com" = the services/com FC (ComDaemon + the ComGrpcProxy gRPC
         # bridge). It's a real packaged FC in `cluster Services` and the GUI /
         # rtdb / rf trace surface — it MUST be forked by the supervisor so the
-        # stack comes up complete without launching com by hand. (Replaces
-        # "rds", a daemon-less conceptual FC with no composition — it had no
-        # binary to start, so the supervisor child was a phantom.)
-        children=["log", "per", "com"],
+        # stack comes up complete without launching com by hand.
+        #
+        # "roudi" = the iceoryx broker (services/rds) — a NATIVE prebuilt binary
+        # (iox-roudi, not a Theia FC) that owns the shared-memory pools the
+        # requires_rds FCs publish/subscribe through. FIRST in the list so it's
+        # up before any RDS producer/consumer registers with it. (This is the
+        # real "rds" — the old daemon-less rds phantom is finally a thing.)
+        children=["roudi", "log", "per", "com"],
     ),
     SupervisorNode(
         name="pltf_sup",

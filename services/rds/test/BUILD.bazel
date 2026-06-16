@@ -1,0 +1,16 @@
+# HAND-OWNED. rds tests.
+#
+# Live zero-copy roundtrip over RouDi (the iceoryx broker must be running). A
+# cc_binary (not a sandboxed cc_test — it needs the live RouDi + shared memory);
+# the robot suite runs it, skipping cleanly if RouDi is down.
+
+load("@rules_cc//cc:defs.bzl", "cc_binary")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_binary(
+    name = "rds_roundtrip",
+    srcs = ["rds_roundtrip.cc"],
+    copts = ["-std=c++17", "-fPIC"],
+    deps = ["//services/rds/lib:rds"],
+)

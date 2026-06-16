@@ -1,0 +1,6 @@
+package system.services.rdsdemo
+
+// Two compositions = two processes (a producer process, a consumer process),
+// each registering with RouDi under its own runtime name.
+composition RdsProducer { prototype FrameProducer frame_producer }
+composition RdsConsumer { prototype FrameConsumer frame_consumer }

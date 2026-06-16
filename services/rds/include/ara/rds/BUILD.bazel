@@ -1,0 +1,11 @@
+# HAND-OWNED. The ara::rds public headers (exported to the lib + consumers).
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "headers",
+    srcs = [
+        "raw_data_stream.h",
+        "transport_if.h",
+        "stream.h",
+    ],
+)

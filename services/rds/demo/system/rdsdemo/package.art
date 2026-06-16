@@ -1,0 +1,24 @@
+// rdsdemo — a minimal Raw Data Stream demo: a producer node writes frames into
+// a zero-copy stream, a consumer node reads them. Proves the requires_rds +
+// rds_stream codegen + the ara::rds handles end-to-end.
+package system.services.rdsdemo
+
+node atomic FrameProducer {
+    tipc type=0x80010040 instance=0
+    requires_timers
+    requires_rds
+    tag = "RDP"
+    rds {
+        stream frames { role=writer chunk_size=1048576 history=4 }
+    }
+}
+
+node atomic FrameConsumer {
+    tipc type=0x80010041 instance=0
+    requires_timers
+    requires_rds
+    tag = "RDC"
+    rds {
+        stream frames { role=reader chunk_size=1048576 history=4 }
+    }
+}

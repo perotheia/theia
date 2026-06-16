@@ -1,0 +1,10 @@
+package(default_visibility = ["//visibility:public"])
+genrule(
+    name = "rdsdemo_pb",
+    srcs = ["rdsdemo.proto", "rdsdemo.options"],
+    outs = ["rdsdemo.pb.c", "rdsdemo.pb.h"],
+    cmd = "set -e; in_dir=$$(dirname $(location rdsdemo.proto)); out_dir=$$(dirname $(location rdsdemo.pb.c)); nanopb_generator -I $$in_dir -D $$out_dir rdsdemo.proto;",
+    local = True,
+)
+filegroup(name = "rdsdemo_pb_c", srcs = ["rdsdemo.pb.c"])
+filegroup(name = "rdsdemo_pb_h", srcs = ["rdsdemo.pb.h"])

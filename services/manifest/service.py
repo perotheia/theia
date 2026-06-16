@@ -66,6 +66,46 @@ SERVICES_PROCESSES = [
 ]
 
 # ---------------------------------------------------------------------------
+# Native infrastructure daemons (NOT Theia FCs — no .art / component / gen-app).
+# RouDi is the iceoryx broker (services/rds) — a prebuilt system binary that
+# owns the shared-memory pools the requires_rds FCs publish into. It runs as a
+# SUPERVISED child (like com), started before any RDS FC. start_cmd is the
+# on-PATH `iox-roudi`; nodes=[] (it has no Theia nodes). See
+# docs/autosar/services/rds.md.
+# ---------------------------------------------------------------------------
+from artheia.manifest.execution import (   # noqa: E402
+    Process,
+    SchedulingPolicy,
+    StartupConfig,
+    StateDependentStartupConfig,
+    TerminationBehaviorEnum,
+)
+
+ROUDI_PROCESS = Process(
+    name="roudi",
+    executable="roudi",
+    function_cluster_affiliation="",
+    # The system iceoryx broker. ABSOLUTE path — the supervisor execs relative
+    # to the run dir (./<cmd>), so a bare name on PATH won't resolve.
+    start_cmd=["/usr/bin/iox-roudi"],
+    nodes=[],
+    state_dependent_startup_config=[
+        StateDependentStartupConfig(
+            function_group_state=["Default.Running"],
+            startup_config=StartupConfig(
+                name="roudi_startup",
+                scheduling_policy=SchedulingPolicy.SCHED_OTHER,
+                scheduling_priority=0,
+                termination_behavior=(
+                    TerminationBehaviorEnum.PROCESS_IS_NOT_SELF_TERMINATING
+                ),
+            ),
+        ),
+    ],
+)
+SERVICES_PROCESSES = SERVICES_PROCESSES + [ROUDI_PROCESS]
+
+# ---------------------------------------------------------------------------
 # Aggregate across all clusters (every component / process).
 # ---------------------------------------------------------------------------
 COMPONENTS = SERVICES_COMPONENTS

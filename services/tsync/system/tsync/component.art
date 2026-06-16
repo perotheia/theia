@@ -1,8 +1,13 @@
 package system.services.tsync
 
 
-// The Time-Sync FC: a single control node managing linuxptp / chrony and
-// exposing the platform's global time-sync status. One process, one node.
+// The Time-Sync FC, standard {Provider; Controller} shape (same as composition
+// Rds): the linuxptp daemons run as supervisor-owned `node prebuilt` children +
+// the atomic TsyncCtl wraps them with the service API. All three prototypes land
+// in ONE process (one composition = one executable; no `on process` split) — the
+// time providers share the tsync process, threads under one supervised child.
 composition Tsync {
-    prototype TsyncCtl tsync_ctl
+    prototype Ptp4lProvider   ptp4l
+    prototype Phc2sysProvider phc2sys
+    prototype TsyncCtl         tsync_ctl
 }

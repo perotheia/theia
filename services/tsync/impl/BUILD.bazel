@@ -28,6 +28,10 @@ cc_library(
     name = "tsync_impl",
     srcs = [
         "TsyncCtl_handlers.cc",
+        # Provider daemons (node prebuilt) — fully-generated fork/drain/reap of
+        # ptp4l + phc2sys. No _state.hh (prebuilt nodes carry no user state).
+        "Ptp4lProvider_handlers.cc",
+        "Phc2sysProvider_handlers.cc",
     ],
     # The Linux time-sync poller (ptp4l/chrony CLI queries) isolated behind one
     # header so the gen_server TU stays clean. `..` so it resolves

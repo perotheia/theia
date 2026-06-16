@@ -5,6 +5,8 @@
 // Regenerated on every gen-app run. User code lives in
 // impl/<Node>_handlers.cc (one per node).
 
+#include "lib/Ptp4lProvider.hh"
+#include "lib/Phc2sysProvider.hh"
 #include "lib/TsyncCtl.hh"
 
 #include "lib/Log.hh"    // per-node MakeContextLogger(tag) — tagged + $THEIA_LOGGER sink
@@ -96,6 +98,61 @@ int main() {
     std::vector<std::unique_ptr<::theia::runtime::HeartbeatPublisher>> heartbeats;
 
 
+    Ptp4lProvider ptp4l;
+    // Per-node logger: tagged [#ptp4l] (kNodeName, matches `tdb ps`),
+    // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so do_start/init
+    // log through it. The FIRST node's logger also backs process_logger() — the
+    // ConfigureLogLevel-push fallback target + any process_logger() caller.
+    {
+        auto ptp4l_log = MakeContextLogger(Ptp4lProvider::kNodeName);
+        ptp4l_log->set_level(boot_level);
+        ::theia::runtime::set_process_logger(ptp4l_log);
+        ptp4l.set_logger(std::move(ptp4l_log));
+    }
+    ptp4l.start();
+    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (the supervisor
+    // sets it from the rig's NodeToCPUMapping). No-op when unset / no entry for
+    // this node; soft-fails (logs) on EPERM. Applied AFTER start() — the thread
+    // exists now.
+    ::theia::runtime::apply_node_affinity(ptp4l.native_handle(),
+        Ptp4lProvider::kNodeName, std::getenv("THEIA_NODE_CFG"));
+    {
+        char _tipc[64];
+        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
+                      Ptp4lProvider::kTipcType, Ptp4lProvider::kTipcInstance);
+        ptp4l.log().info(_tipc);
+    }
+
+
+
+
+    Phc2sysProvider phc2sys;
+    // Per-node logger: tagged [#phc2sys] (kNodeName, matches `tdb ps`),
+    // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so do_start/init
+    // log through it. The FIRST node's logger also backs process_logger() — the
+    // ConfigureLogLevel-push fallback target + any process_logger() caller.
+    {
+        auto phc2sys_log = MakeContextLogger(Phc2sysProvider::kNodeName);
+        phc2sys_log->set_level(boot_level);
+        phc2sys.set_logger(std::move(phc2sys_log));
+    }
+    phc2sys.start();
+    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (the supervisor
+    // sets it from the rig's NodeToCPUMapping). No-op when unset / no entry for
+    // this node; soft-fails (logs) on EPERM. Applied AFTER start() — the thread
+    // exists now.
+    ::theia::runtime::apply_node_affinity(phc2sys.native_handle(),
+        Phc2sysProvider::kNodeName, std::getenv("THEIA_NODE_CFG"));
+    {
+        char _tipc[64];
+        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
+                      Phc2sysProvider::kTipcType, Phc2sysProvider::kTipcInstance);
+        phc2sys.log().info(_tipc);
+    }
+
+
+
+
     TsyncCtl tsync_ctl;
     // Per-node logger: tagged [#tsync_ctl] (kNodeName, matches `tdb ps`),
     // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so do_start/init
@@ -104,7 +161,6 @@ int main() {
     {
         auto tsync_ctl_log = MakeContextLogger(TsyncCtl::kNodeName);
         tsync_ctl_log->set_level(boot_level);
-        ::theia::runtime::set_process_logger(tsync_ctl_log);
         tsync_ctl.set_logger(std::move(tsync_ctl_log));
     }
     tsync_ctl.start();
@@ -176,6 +232,10 @@ int main() {
 
     config_mux.stop();
 
+
+    ptp4l.stop("signal");
+
+    phc2sys.stop("signal");
 
     tsync_ctl.stop("signal");
 

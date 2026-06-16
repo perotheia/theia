@@ -13,6 +13,10 @@ package(default_visibility = ["//visibility:public"])
 cc_library(
     name = "tsync_lib",
     hdrs = [
+        "Ptp4lProvider.hh",
+        "Ptp4lProvider_netgraph.hh",
+        "Phc2sysProvider.hh",
+        "Phc2sysProvider_netgraph.hh",
         "TsyncCtl.hh",
         "TsyncCtl_netgraph.hh",
         "tsync_codecs.hh",

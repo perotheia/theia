@@ -76,11 +76,53 @@ interface clientServer TsyncCtlIf {
 }
 
 // ─── Nodes ─────────────────────────────────────────────────────────────────
+//
+// The {Provider; Controller} standard shape (same as composition Rds): the
+// linuxptp DAEMONS run as supervisor-owned `node prebuilt` children — Theia's EM
+// (the supervisor) is the single lifecycle authority, NOT systemd — and the
+// `node atomic` TsyncCtl reads their status + serves the service API. Apps never
+// touch ptp4l/phc2sys; they call ara::tsync GetSyncStatus. We run, not reimplement,
+// the proven Linux daemons (run-and-wrap, never embed their source).
+
+// ptp4l — the IEEE-1588 PTP engine: disciplines the NIC's PHC (hardware clock)
+// to the grandmaster. A supervisor-managed daemon (reporting=false: a 3rd-party
+// binary sends no Theia heartbeat, so the watchdog leaves it alone — the
+// supervisor forks/reaps/restarts it). The `-i ptpIf0` is a LOGICAL interface
+// alias: Puppet resolves ptpIf0 → the box's real PHC-capable NIC at stage time
+// (deploy-layer substitution — bazel builds, puppet orchestrates), so the .art
+// stays box-agnostic. -s = slave-only, -m = log to stdout (drained to our log),
+// -q = don't use syslog. Absent binary (dev host) → execvp fails, supervisor
+// restarts; TsyncCtl reports UNAVAILABLE — the documented graceful-degrade.
+node prebuilt Ptp4lProvider {
+    tipc type=0x80010035 instance=0
+    path = "/usr/sbin/ptp4l"
+    reporting = false
+    params {
+        args : string = "-i ptpIf0 -s -m -q"
+    }
+}
+
+// phc2sys — slews the SYSTEM clock (CLOCK_REALTIME) to the PHC ptp4l disciplines,
+// so the platform wall clock (the trace/log ts_ns) tracks PTP time. The second
+// half of the PTP pair; same supervisor-managed prebuilt treatment. -a = auto
+// (read the sync direction from ptp4l), -r = also sync the realtime clock,
+// -m = log to stdout, -q = no syslog.
+node prebuilt Phc2sysProvider {
+    tipc type=0x80010045 instance=0
+    path = "/usr/sbin/phc2sys"
+    reporting = false
+    params {
+        args : string = "-a -r -m -q"
+    }
+}
 
 // The Time-Sync control node. tipc 0x80010005. An atomic gen_server: polls the
 // PTP/chrony backend on a self-scheduled tick (handle_info), holds the latest
 // SyncStatus in State, serves GetSyncStatus, and emits a status line (loss-of-
-// lock → a health event for PHM). Never disciplines the clock itself.
+// lock → a health event for PHM). Never disciplines the clock itself — it reads
+// the status of the Provider daemons the supervisor now owns (pmc speaks to the
+// running ptp4l over its UDS). On a host without the daemons it degrades to
+// UNAVAILABLE / the system wall clock, exactly as before.
 node atomic TsyncCtl {
     tipc type=0x80010005 instance=0
     requires_timers

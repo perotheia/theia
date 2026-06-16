@@ -37,3 +37,10 @@ cc_binary(
     deps = ["//services/idsm/impl:idsm_state"],
 )
 
+
+cc_test(
+    name = "test_sha256",
+    srcs = ["test_sha256.cc"],
+    copts = ["-std=c++17", "-fPIC"],
+    deps = ["//services/idsm/impl:idsm_state"],
+)

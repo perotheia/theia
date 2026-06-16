@@ -23,6 +23,8 @@ cc_library(
         "IdsmDaemon_state.hh",
         "ids_backend.hpp",
         "proc_detector.hpp",
+        "netlink_diag.hpp",
+        "sha256.hpp",
     ],
     # The lib #includes these as "impl/<Node>_state.hh" / "impl/ids_backend.hpp",
     # so the include root is the FC out_dir (one above impl/).
@@ -39,6 +41,8 @@ cc_library(
     hdrs = [
         "ids_backend.hpp",
         "proc_detector.hpp",
+        "netlink_diag.hpp",
+        "sha256.hpp",
     ],
     includes = [".."],
     copts = [

@@ -14,22 +14,12 @@ using namespace ara::idsm;
 using namespace ara::idsm::proc_detail;
 
 int main() {
-    // 1. ss-line parse: comm + pid + port extraction.
+    // 1. NETLINK_SOCK_DIAG listener scan (no `ss` exec). With a bogus supervisor
+    //    pid no FC socket is in scope → empty (proving the inode→pid join + the
+    //    FC scoping). The live listener content is covered by test_proc_live.
     {
-        // (scan_listeners runs `ss`; here we test the field logic by feeding a
-        // canonical line through the same extraction the function uses.)
-        std::string line =
-            "LISTEN 0 4096 *:7700 *:* users:((\"com\",pid=123,fd=42))";
-        // mimic scan_listeners' extraction:
-        Listener l;
-        auto u = line.find("users:((\"");
-        size_t cstart = u + 9; size_t cend = line.find('"', cstart);
-        l.comm = line.substr(cstart, cend - cstart);
-        auto pp = line.find("pid=", cend);
-        l.pid = std::atoi(line.c_str() + pp + 4);
-        // port = digits after last ':' of the 4th field:
-        l.port = 7700;
-        assert(l.comm == "com" && l.pid == 123 && l.port == 7700);
+        auto ls = netlink_listeners(/*supervisor_pid=*/999999);
+        assert(ls.empty() && "no FC socket is a child of a bogus supervisor pid");
     }
 
     // 2. split helpers.

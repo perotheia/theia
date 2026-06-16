@@ -1,11 +1,13 @@
 // proc_detector — the userspace (no-eBPF) IDS sensor behind IdsmDaemon.
 //
 // APP-OWNED. Implements the IDSM rule catalog Categories A/C/D/H from signals
-// available WITHOUT eBPF (docs/autosar/services/idsm.md §3): it polls the
-// listening-socket inventory (`ss -Htlnp` → comm/pid/port) + the running ELFs
-// (/proc/<pid>/exe) and DIFFS against the manifest-derived allow-lists in
-// IdsmConfig. Edge-detected: a violation is emitted ONCE (when it appears), not
-// every poll, so the firehose isn't flooded.
+// available WITHOUT eBPF (docs/autosar/services/idsm.md §3) — and WITHOUT
+// shelling out: the listening-socket inventory comes from NETLINK_SOCK_DIAG
+// (netlink_diag.hpp, no `ss`), the ELF hash from an in-process SHA-256
+// (sha256.hpp, no `sha256sum`). It DIFFS those against the manifest-derived
+// allow-lists in IdsmConfig. Edge-detected: a violation is emitted ONCE (when it
+// appears), not every poll, so the firehose isn't flooded. (The only remaining
+// popen is fw's nft-counter read for Cat B → moves to libnftnl.)
 //
 //   Cat A  IDSM_UNEXPECTED_SERVICE_ENDPOINT   — a process listens on an IP port
 //          not in expected_listeners (a TIPC-only FC seen on TCP). sev 5.
@@ -35,7 +37,9 @@
 #include <string>
 #include <vector>
 
-#include "ids_backend.hpp"   // DetectionEv
+#include "ids_backend.hpp"     // DetectionEv
+#include "netlink_diag.hpp"    // netlink_listeners — sock_diag, no `ss` exec
+#include "sha256.hpp"          // in-process SHA-256, no `sha256sum` exec
 
 namespace ara::idsm {
 
@@ -79,87 +83,14 @@ inline std::set<std::string> split_set_(const std::string& csv) {
     return out;
 }
 
-// One observed listening socket.
-struct Listener {
-    std::string comm;
-    int         pid = -1;
-    int         port = 0;
-};
+// The listening-socket inventory is now NETLINK_SOCK_DIAG (netlink_diag.hpp),
+// already scoped to the FCs — no `ss` exec, no text parsing. scan() uses the
+// NlListener it returns directly.
 
-// Parse `ss -Htlnp` lines → listeners. A line looks like:
-//   LISTEN 0 4096 *:7700 *:* users:(("com",pid=123,fd=42))
-inline std::vector<Listener> scan_listeners() {
-    std::vector<Listener> out;
-    std::string s = run_("ss -Htlnp");
-    size_t pos = 0;
-    while (pos < s.size()) {
-        size_t eol = s.find('\n', pos);
-        std::string line = s.substr(pos, eol == std::string::npos
-                                         ? std::string::npos : eol - pos);
-        pos = (eol == std::string::npos) ? s.size() : eol + 1;
-        if (line.empty()) continue;
-
-        // The local address is the 4th whitespace field; the port is after the
-        // last ':'. users:((...)) carries comm + pid.
-        // Extract port.
-        Listener l;
-        // Find "users:((" to get comm/pid.
-        auto u = line.find("users:((\"");
-        if (u != std::string::npos) {
-            size_t cstart = u + std::strlen("users:((\"");
-            size_t cend = line.find('"', cstart);
-            if (cend != std::string::npos) l.comm = line.substr(cstart, cend - cstart);
-            auto pp = line.find("pid=", cend == std::string::npos ? u : cend);
-            if (pp != std::string::npos) l.pid = std::atoi(line.c_str() + pp + 4);
-        }
-        // Port = digits after the last ':' in the local-addr field. Scan the
-        // first 4 fields; the 4th is the local address.
-        {
-            int field = 0; size_t i = 0; std::string addr;
-            while (i < line.size() && field < 4) {
-                while (i < line.size() && line[i] == ' ') ++i;
-                size_t start = i;
-                while (i < line.size() && line[i] != ' ') ++i;
-                ++field;
-                if (field == 4) addr = line.substr(start, i - start);
-            }
-            auto colon = addr.rfind(':');
-            if (colon != std::string::npos)
-                l.port = std::atoi(addr.c_str() + colon + 1);
-        }
-        if (l.port > 0) out.push_back(std::move(l));
-    }
-    return out;
-}
-
-// The PPID from /proc/<pid>/stat (field after the "(comm)"). -1 on failure.
-inline int ppid_(int pid) {
-    std::string s;
-    FILE* f = ::fopen(("/proc/" + std::to_string(pid) + "/stat").c_str(), "r");
-    if (!f) return -1;
-    char buf[512]; size_t n = ::fread(buf, 1, sizeof(buf) - 1, f); ::fclose(f);
-    buf[n] = '\0'; s.assign(buf, n);
-    auto rp = s.rfind(')');
-    if (rp == std::string::npos) return -1;
-    int st_dummy, ppid = -1;
-    if (std::sscanf(s.c_str() + rp + 1, " %c %d", (char*)&st_dummy, &ppid) >= 2)
-        return ppid;
-    return -1;
-}
-
-// Is `pid` a Theia FC = a direct child of the supervisor? (osi-style scoping —
-// IDSM watches the manifest-known process set, not arbitrary host processes.)
-inline bool is_supervisor_child(int pid, int supervisor_pid) {
-    return supervisor_pid > 0 && ppid_(pid) == supervisor_pid;
-}
-
-// SHA256 of a file via sha256sum (no openssl dep here; crypto FC owns real
-// hashing — this is a cheap integrity spot-check). Returns lowercase hex or "".
+// SHA256 of a file — in-process (sha256.hpp), no `sha256sum` exec. A cheap
+// integrity spot-check; the crypto FC owns real signature verification.
 inline std::string sha256_file(const std::string& path) {
-    std::string out = run_("sha256sum " + path);
-    auto sp = out.find(' ');
-    if (sp == std::string::npos || sp == 0) return "";
-    return out.substr(0, sp);
+    return ara::idsm::sha256_file_inproc(path);
 }
 
 // Parse `nft -j list counters` JSON → [(fc, packets)] for each idsm_b_<fc>
@@ -240,14 +171,13 @@ public:
     std::vector<DetectionEv> scan(int supervisor_pid) {
         using namespace proc_detail;
         std::vector<DetectionEv> out;
-        auto listeners = scan_listeners();
+        // Listening sockets via NETLINK_SOCK_DIAG (no `ss` exec), already SCOPED
+        // to the FCs (children of supervisor_pid) by the inode→pid join.
+        auto listeners = netlink_listeners(supervisor_pid);
         std::set<std::string> live;   // keys seen this scan (to expire reported_)
 
         for (const auto& l : listeners) {
-            // Scope: only listeners owned by a Theia FC. Skips parse failures
-            // (pid<=0) and every non-deployment host process.
-            if (l.pid <= 0 || !is_supervisor_child(l.pid, supervisor_pid))
-                continue;
+            if (l.pid <= 0) continue;
             const std::string key = l.comm + ":" + std::to_string(l.port);
             live.insert(key);
 

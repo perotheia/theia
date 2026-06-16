@@ -41,6 +41,8 @@ namespace ara::idsm {
 // signatures readable.
 using IdsStatusMsg = system_services_idsm_IdsStatusMsg;
 using IdsStatusReq = system_services_idsm_IdsStatusReq;
+using IdsmDigestUpdate = system_services_idsm_IdsmDigestUpdate;
+using IdsmModeInput = system_services_idsm_IdsmModeInput;
 
 
 
@@ -49,6 +51,8 @@ using IdsStatusReq = system_services_idsm_IdsStatusReq;
 // gRPC. Subscribers MUST be best-effort.
 using BroadcastStatusSubscriber =
     std::function<void(const IdsStatusMsg&)>;
+using To_smMode_inputSubscriber =
+    std::function<void(const IdsmModeInput&)>;
 
 
 class IdsmDaemon : public ::theia::runtime::GenServer<IdsmDaemon, IdsmDaemonState> {
@@ -103,6 +107,11 @@ public:
         BroadcastStatusSubscriber s);
     void     unsubscribe_broadcast_status(uint32_t id);
 
+    // to_sm.mode_input broadcast subscribers.
+    uint32_t subscribe_to_sm_mode_input(
+        To_smMode_inputSubscriber s);
+    void     unsubscribe_to_sm_mode_input(uint32_t id);
+
 
     // ---- GenServer plumbing: terminate default
     //
@@ -123,6 +132,8 @@ public:
     // TraceControl) the handler signature is identical and only
     // gets emitted once. handle_call/handle_cast dispatch by
     // request type, not by port.
+
+    void handle_cast(const IdsmDigestUpdate& msg, IdsmDaemonState& s);
 
 
     IdsStatusMsg handle_call(const IdsStatusReq& req,
@@ -160,6 +171,8 @@ public:
 
     void broadcast_broadcast_status(const IdsStatusMsg& msg);
 
+    void broadcast_to_sm_mode_input(const IdsmModeInput& msg);
+
 
 private:
 
@@ -171,6 +184,15 @@ private:
     uint32_t broadcast_status_next_id_{1};
     std::vector<BroadcastStatusEntry>
         broadcast_status_subs_;
+
+    struct To_smMode_inputEntry {
+        uint32_t id;
+        To_smMode_inputSubscriber fn;
+    };
+    std::mutex to_sm_mode_input_mu_;
+    uint32_t to_sm_mode_input_next_id_{1};
+    std::vector<To_smMode_inputEntry>
+        to_sm_mode_input_subs_;
 
 };
 
@@ -203,6 +225,37 @@ inline void IdsmDaemon::broadcast_broadcast_status(const IdsStatusMsg& msg) {
         catch (...) {
             std::fprintf(stderr,
                 "[%s] subscriber %u threw on broadcast.status — dropping\n",
+                kNodeName, e.id);
+        }
+    }
+}
+
+inline uint32_t IdsmDaemon::subscribe_to_sm_mode_input(
+        To_smMode_inputSubscriber s) {
+    std::lock_guard<std::mutex> lk(to_sm_mode_input_mu_);
+    uint32_t id = to_sm_mode_input_next_id_++;
+    to_sm_mode_input_subs_.push_back({id, std::move(s)});
+    return id;
+}
+
+inline void IdsmDaemon::unsubscribe_to_sm_mode_input(uint32_t id) {
+    std::lock_guard<std::mutex> lk(to_sm_mode_input_mu_);
+    auto& v = to_sm_mode_input_subs_;
+    v.erase(std::remove_if(v.begin(), v.end(),
+              [id](const auto& e) { return e.id == id; }), v.end());
+}
+
+inline void IdsmDaemon::broadcast_to_sm_mode_input(const IdsmModeInput& msg) {
+    std::vector<To_smMode_inputEntry> snap;
+    {
+        std::lock_guard<std::mutex> lk(to_sm_mode_input_mu_);
+        snap = to_sm_mode_input_subs_;
+    }
+    for (const auto& e : snap) {
+        try { e.fn(msg); }
+        catch (...) {
+            std::fprintf(stderr,
+                "[%s] subscriber %u threw on to_sm.mode_input — dropping\n",
                 kNodeName, e.id);
         }
     }

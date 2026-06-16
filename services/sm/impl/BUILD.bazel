@@ -16,6 +16,7 @@ cc_library(
     name = "sm_state",
     hdrs = [
         "SmGate_state.hh",
+        "FgGate_state.hh",
     ],
     # The lib #includes these as "impl/<Node>_state.hh", so the include
     # root is the FC out_dir (one above impl/).
@@ -29,6 +30,8 @@ cc_library(
     srcs = [
         "SmDaemon_handlers.cc",
         "SmGate_handlers.cc",
+        "FunctionGroupSm_handlers.cc",
+        "FgGate_handlers.cc",
     ],
     copts = [
         "-std=c++17",

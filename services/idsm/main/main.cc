@@ -141,6 +141,7 @@ int main() {
         // ops → register_call; senderReceiver `in` data → register_cast.
         config_mux.register_call<IdsStatusReq, IdsStatusMsg>(
             idsm_daemon_cfg, idsm_daemon);
+        config_mux.register_cast<IdsmDigestUpdate>(idsm_daemon_cfg, idsm_daemon);
     } else {
         idsm_daemon.log().warn("config service bind failed; live log-level "
                                  "push + signal inject disabled");

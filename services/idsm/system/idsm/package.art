@@ -106,6 +106,33 @@ interface clientServer IdsmCtlIf {
     operation GetIdsStatus(in r: IdsStatusReq) returns IdsStatusMsg
 }
 
+// ─── Cooperation edges (comm-matrix S1) ─────────────────────────────────────
+
+// crypto edge — Category H (application integrity): idsm asks crypto to verify
+// a binary's code signature / fetch its cert. CALL (request→reply). Empty
+// forward-decl; the real Verify/GetCert messages live in system.services.crypto.
+interface clientServer CryptoOneShotIf { }  // from system.services.crypto
+
+// osi edge — Category I (resource abuse): idsm's resource rule SUBSCRIBES to
+// osi's ResourceStatus broadcast (cgroup pressure / OOM). CAST (notification).
+// Empty forward-decl; ResourceStatus lives in system.services.osi.
+interface senderReceiver OsiStatusStream { }  // from system.services.osi
+
+// ucm edge — Category H baseline: UCM pushes the expected per-binary SHA-256
+// digests at install time, so idsm can flag drift. CAST (notification).
+message IdsmDigestUpdate { }   // TODO: { repeated {path, sha256} entries }
+interface senderReceiver IdsmDigestFeed {
+    data IdsmDigestUpdate digests
+}
+
+// sm edge — a critical detection is a MODE INPUT to State Management (drop to a
+// degraded/limp mode). CAST (notification, fire-and-forget escalation). The
+// phm edge (idsm → phm health event) lands with the PHM FC (S2).
+message IdsmModeInput { }      // TODO: { severity, category, detail }
+interface senderReceiver IdsmModeStream {
+    data IdsmModeInput mode_input
+}
+
 // ─── Node ─────────────────────────────────────────────────────────────────
 
 // The IDS manager node. tipc 0x8001000F. An atomic node that on a tick drains
@@ -120,5 +147,10 @@ node atomic IdsmDaemon {
     ports {
         sender broadcast provides IdsStatusStream
         server ctl       provides IdsmCtlIf
+        // Cooperation edges (comm-matrix S1):
+        client   to_crypto requires CryptoOneShotIf   // Cat H: verify signature (CALL)
+        receiver from_osi  requires OsiStatusStream    // Cat I: resource pressure (CAST)
+        receiver from_ucm  requires IdsmDigestFeed      // Cat H: expected digests (CAST)
+        sender   to_sm     provides IdsmModeStream      // escalate → SM mode input (CAST)
     }
 }

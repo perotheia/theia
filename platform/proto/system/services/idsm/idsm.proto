@@ -43,3 +43,11 @@ message IdsStatusReq {
     // empty body
 }
 
+message IdsmDigestUpdate {
+    // empty body
+}
+
+message IdsmModeInput {
+    // empty body
+}
+

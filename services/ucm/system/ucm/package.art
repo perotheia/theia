@@ -37,6 +37,13 @@ message UpdateModeRequest {
 // refs but the per-FC codegen is happier with local decls).
 interface clientServer StateMgmtCtl { }
 
+// crypto edge — UCM verifies a software cluster's signature BEFORE install
+// (ucm.md §3, crypto.md §6: "UCM verifies the digital signature of software
+// clusters before installation"). CALL: UCM drives a VERIFIER context
+// (CreateCtx/CtxStart/CtxUpdate/CtxFinish) and blocks for the verdict. Empty
+// forward-decl; the real messages live in system.services.crypto.
+interface clientServer CryptoProviderIf { }  // from system.services.crypto
+
 interface clientServer UpdateCtl {
     operation RequestUpdate(in r:UcmRequest) returns UcmReply
 }
@@ -49,5 +56,7 @@ node atomic UcmDaemon {
         receiver from_sm requires SmStateStream
         client   to_sm   requires StateMgmtCtl
         client   to_per  requires PersistencyIf
+        // crypto edge: verify a package signature before flashing. CALL.
+        client   to_crypto requires CryptoProviderIf
     }
 }

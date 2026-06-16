@@ -49,3 +49,7 @@ message PowerModeReply {
     string message = 2;
 }
 
+message ShwaExcursionEvent {
+    // empty body
+}
+

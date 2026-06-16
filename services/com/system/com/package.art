@@ -30,6 +30,13 @@ interface senderReceiver SmStateStream { }  // from system.services.sm
 interface clientServer   SupervisorControlIf { }  // from system.supervisor
 interface senderReceiver SupervisorEventIf   { }  // from system.supervisor
 
+// crypto edge — com fetches its server cert + signs the TLS handshake through
+// the crypto FC so the private key never lives in com (crypto/TLS target state,
+// docs/autosar/{com,crypto}.md). CALL (request→reply): com asks, crypto answers.
+// Empty forward-decl (com's cross-FC idiom); the real GetCert/Sign messages live
+// in package system.services.crypto and the impl uses them via RemoteCodecs.
+interface clientServer   CryptoOneShotIf     { }  // from system.services.crypto
+
 message ComEmpty { }
 
 // Placeholder shape for external gRPC RPCs — the actual wire schema is
@@ -77,6 +84,9 @@ node atomic ComDaemon {
         // event firehose ComGrpcProxy fans out to gRPC Subscribe streams.
         client   to_sup   requires SupervisorControlIf
         receiver from_sup requires SupervisorEventIf
+        // crypto edge: GetCert / Sign for the gRPC TLS handshake (key stays in
+        // crypto). CALL — com blocks for the cert/signature.
+        client   to_crypto requires CryptoOneShotIf
     }
 }
 

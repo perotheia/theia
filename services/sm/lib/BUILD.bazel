@@ -15,6 +15,10 @@ cc_library(
     hdrs = [
         "SmDaemon.hh",
         "SmDaemon_netgraph.hh",
+        "FunctionGroupSm.hh",
+        "FunctionGroupSm_netgraph.hh",
+        "FgGate.hh",
+        "FgGate_netgraph.hh",
         "SmGate.hh",
         "SmGate_netgraph.hh",
         "sm_codecs.hh",

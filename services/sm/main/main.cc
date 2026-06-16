@@ -9,6 +9,8 @@
 
 
 #include "lib/SmDaemon.hh"
+#include "lib/FunctionGroupSm.hh"
+#include "lib/FgGate.hh"
 #include "lib/SmGate.hh"
 
 #include "lib/Log.hh"    // per-node MakeContextLogger(tag) — tagged + $THEIA_LOGGER sink
@@ -144,6 +146,132 @@ int main() {
     }
 
 
+    FunctionGroupSm fg_sm;
+    // Per-node logger: tagged [#fg_sm] (kNodeName, matches `tdb ps`),
+    // sink chosen by $THEIA_LOGGER. Installed BEFORE start so init/do_* log
+    // through it; the FIRST node's logger also backs process_logger().
+    {
+        auto fg_sm_log = MakeContextLogger(FunctionGroupSm::kNodeName);
+        fg_sm_log->set_level(boot_level);
+        fg_sm.set_logger(std::move(fg_sm_log));
+    }
+    fg_sm.start_statem(timers);
+    {
+        char _tipc[96];
+        std::snprintf(_tipc, sizeof(_tipc),
+                      "up — TIPC type=0x%x instance=%u; statem initial=FG_OFF",
+                      FunctionGroupSm::kTipcType, FunctionGroupSm::kTipcInstance);
+        fg_sm.log().info(_tipc);
+    }
+    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (supervisor sets it
+    // from the rig's NodeToCPUMapping). No-op when unset; soft-fails on EPERM.
+    ::theia::runtime::apply_node_affinity(fg_sm.native_handle(),
+        FunctionGroupSm::kNodeName, std::getenv("THEIA_NODE_CFG"));
+
+    if (auto* fg_sm_cfg = config_mux.bind_node(
+            fg_sm, FunctionGroupSm::kTipcType,
+            FunctionGroupSm::kTipcInstance)) {
+        config_mux.register_cast<platform_runtime_LogLevelPush>(
+            fg_sm_cfg, fg_sm);
+        // Trace control (#403): supervisor pushes TraceControlPush to flip
+        // this node's Tracer kind filter — same path as LogLevelPush.
+        config_mux.register_cast<platform_runtime_TraceControlPush>(
+            fg_sm_cfg, fg_sm);
+        // Config update: services/per casts ConfigUpdated when a watched
+        // config changes — same framework path; GenServer base handle_cast
+        // applies it (decode + on_config_update hook).
+        config_mux.register_cast<platform_runtime_ConfigUpdated>(
+            fg_sm_cfg, fg_sm);
+        // Receiver ports (#387): register the node's declared inbound
+        // types so a real peer — or a robot-test inject via services/com
+        // — lands on the same handle_call / handle_cast path. clientServer
+        // ops → register_call; senderReceiver `in` data → register_cast.
+    } else {
+        fg_sm.log().warn("config service bind failed; live log-level "
+                                 "push + signal inject disabled");
+    }
+    // Liveness beat to the supervisor watchdog (#PHM). A reporting node must
+    // beat or the watchdog SIGTERMs it after K missed deadlines. One publisher
+    // per node, own timer thread (1s default = the supervisor's check cadence).
+    {
+        auto fg_sm_hb = std::make_unique<
+            ::theia::runtime::HeartbeatPublisher>(FunctionGroupSm::kNodeName);
+        if (fg_sm_hb->open()) {
+            fg_sm_hb->start(/*period_ms=*/1000);
+            heartbeats.push_back(std::move(fg_sm_hb));
+        } else {
+            fg_sm.log().warn("heartbeat publisher open failed; "
+                                     "supervisor watchdog will not see beats");
+        }
+    }
+
+
+    FgGate fg_gate;
+    // Per-node logger: tagged [#fg_gate] (kNodeName, matches `tdb ps`),
+    // sink chosen by $THEIA_LOGGER. Installed BEFORE start so init/do_* log
+    // through it; the FIRST node's logger also backs process_logger().
+    {
+        auto fg_gate_log = MakeContextLogger(FgGate::kNodeName);
+        fg_gate_log->set_level(boot_level);
+        fg_gate.set_logger(std::move(fg_gate_log));
+    }
+    fg_gate.start();
+    {
+        char _tipc[64];
+        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
+                      FgGate::kTipcType, FgGate::kTipcInstance);
+        fg_gate.log().info(_tipc);
+    }
+    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (supervisor sets it
+    // from the rig's NodeToCPUMapping). No-op when unset; soft-fails on EPERM.
+    ::theia::runtime::apply_node_affinity(fg_gate.native_handle(),
+        FgGate::kNodeName, std::getenv("THEIA_NODE_CFG"));
+
+    if (auto* fg_gate_cfg = config_mux.bind_node(
+            fg_gate, FgGate::kTipcType,
+            FgGate::kTipcInstance)) {
+        config_mux.register_cast<platform_runtime_LogLevelPush>(
+            fg_gate_cfg, fg_gate);
+        // Trace control (#403): supervisor pushes TraceControlPush to flip
+        // this node's Tracer kind filter — same path as LogLevelPush.
+        config_mux.register_cast<platform_runtime_TraceControlPush>(
+            fg_gate_cfg, fg_gate);
+        // Config update: services/per casts ConfigUpdated when a watched
+        // config changes — same framework path; GenServer base handle_cast
+        // applies it (decode + on_config_update hook).
+        config_mux.register_cast<platform_runtime_ConfigUpdated>(
+            fg_gate_cfg, fg_gate);
+        // Receiver ports (#387): register the node's declared inbound
+        // types so a real peer — or a robot-test inject via services/com
+        // — lands on the same handle_call / handle_cast path. clientServer
+        // ops → register_call; senderReceiver `in` data → register_cast.
+        config_mux.register_cast<FgStart>(fg_gate_cfg, fg_gate);
+        config_mux.register_cast<FgStarted>(fg_gate_cfg, fg_gate);
+        config_mux.register_cast<FgStop>(fg_gate_cfg, fg_gate);
+        config_mux.register_cast<FgStopped>(fg_gate_cfg, fg_gate);
+        config_mux.register_cast<FgDegraded>(fg_gate_cfg, fg_gate);
+        config_mux.register_cast<FgRetry>(fg_gate_cfg, fg_gate);
+        config_mux.register_cast<PhmHealthStatus>(fg_gate_cfg, fg_gate);
+    } else {
+        fg_gate.log().warn("config service bind failed; live log-level "
+                                 "push + signal inject disabled");
+    }
+    // Liveness beat to the supervisor watchdog (#PHM). A reporting node must
+    // beat or the watchdog SIGTERMs it after K missed deadlines. One publisher
+    // per node, own timer thread (1s default = the supervisor's check cadence).
+    {
+        auto fg_gate_hb = std::make_unique<
+            ::theia::runtime::HeartbeatPublisher>(FgGate::kNodeName);
+        if (fg_gate_hb->open()) {
+            fg_gate_hb->start(/*period_ms=*/1000);
+            heartbeats.push_back(std::move(fg_gate_hb));
+        } else {
+            fg_gate.log().warn("heartbeat publisher open failed; "
+                                     "supervisor watchdog will not see beats");
+        }
+    }
+
+
     SmGate sm_gate;
     // Per-node logger: tagged [#sm_gate] (kNodeName, matches `tdb ps`),
     // sink chosen by $THEIA_LOGGER. Installed BEFORE start so init/do_* log
@@ -223,6 +351,10 @@ int main() {
 
 
     sm_daemon.stop("signal");
+
+    fg_sm.stop("signal");
+
+    fg_gate.stop("signal");
 
     sm_gate.stop("signal");
 

@@ -43,6 +43,7 @@ using AccelSample = system_services_shwa_AccelSample;
 using AccelStatusReq = system_services_shwa_AccelStatusReq;
 using PowerModeReq = system_services_shwa_PowerModeReq;
 using PowerModeReply = system_services_shwa_PowerModeReply;
+using ShwaExcursionEvent = system_services_shwa_ShwaExcursionEvent;
 
 
 
@@ -51,6 +52,8 @@ using PowerModeReply = system_services_shwa_PowerModeReply;
 // gRPC. Subscribers MUST be best-effort.
 using BroadcastSampleSubscriber =
     std::function<void(const AccelSample&)>;
+using ExcursionExcursionSubscriber =
+    std::function<void(const ShwaExcursionEvent&)>;
 
 
 class ShwaDaemon : public ::theia::runtime::GenServer<ShwaDaemon, ShwaDaemonState> {
@@ -104,6 +107,11 @@ public:
     uint32_t subscribe_broadcast_sample(
         BroadcastSampleSubscriber s);
     void     unsubscribe_broadcast_sample(uint32_t id);
+
+    // excursion.excursion broadcast subscribers.
+    uint32_t subscribe_excursion_excursion(
+        ExcursionExcursionSubscriber s);
+    void     unsubscribe_excursion_excursion(uint32_t id);
 
 
     // ---- GenServer plumbing: terminate default
@@ -165,6 +173,8 @@ public:
 
     void broadcast_broadcast_sample(const AccelSample& msg);
 
+    void broadcast_excursion_excursion(const ShwaExcursionEvent& msg);
+
 
 private:
 
@@ -176,6 +186,15 @@ private:
     uint32_t broadcast_sample_next_id_{1};
     std::vector<BroadcastSampleEntry>
         broadcast_sample_subs_;
+
+    struct ExcursionExcursionEntry {
+        uint32_t id;
+        ExcursionExcursionSubscriber fn;
+    };
+    std::mutex excursion_excursion_mu_;
+    uint32_t excursion_excursion_next_id_{1};
+    std::vector<ExcursionExcursionEntry>
+        excursion_excursion_subs_;
 
 };
 
@@ -208,6 +227,37 @@ inline void ShwaDaemon::broadcast_broadcast_sample(const AccelSample& msg) {
         catch (...) {
             std::fprintf(stderr,
                 "[%s] subscriber %u threw on broadcast.sample — dropping\n",
+                kNodeName, e.id);
+        }
+    }
+}
+
+inline uint32_t ShwaDaemon::subscribe_excursion_excursion(
+        ExcursionExcursionSubscriber s) {
+    std::lock_guard<std::mutex> lk(excursion_excursion_mu_);
+    uint32_t id = excursion_excursion_next_id_++;
+    excursion_excursion_subs_.push_back({id, std::move(s)});
+    return id;
+}
+
+inline void ShwaDaemon::unsubscribe_excursion_excursion(uint32_t id) {
+    std::lock_guard<std::mutex> lk(excursion_excursion_mu_);
+    auto& v = excursion_excursion_subs_;
+    v.erase(std::remove_if(v.begin(), v.end(),
+              [id](const auto& e) { return e.id == id; }), v.end());
+}
+
+inline void ShwaDaemon::broadcast_excursion_excursion(const ShwaExcursionEvent& msg) {
+    std::vector<ExcursionExcursionEntry> snap;
+    {
+        std::lock_guard<std::mutex> lk(excursion_excursion_mu_);
+        snap = excursion_excursion_subs_;
+    }
+    for (const auto& e : snap) {
+        try { e.fn(msg); }
+        catch (...) {
+            std::fprintf(stderr,
+                "[%s] subscriber %u threw on excursion.excursion — dropping\n",
                 kNodeName, e.id);
         }
     }

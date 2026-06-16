@@ -103,6 +103,16 @@ interface clientServer ShwaCtlIf {
 // per config-store client (forward-decl via import; the per FC provides it).
 interface clientServer PersistencyIf { }
 
+// sm edge — a thermal / power excursion (over-temp, power-cap breach) is a
+// candidate MODE input to State Management (e.g. drop to a power-saving mode).
+// CAST (notification, fire-and-forget). The phm health-event variant lands with
+// the PHM FC (S2). Empty placeholder body — fillable when the excursion schema
+// (which sensor, threshold, value) is pinned.
+message ShwaExcursionEvent { }   // TODO: { kind(temp|power), value, threshold }
+interface senderReceiver ShwaExcursionStream {
+    data ShwaExcursionEvent excursion
+}
+
 // ─── Node ─────────────────────────────────────────────────────────────────
 
 // The Safe-Hardware-Accelerator node. tipc 0x80010012. An atomic node that on a
@@ -118,5 +128,7 @@ node atomic ShwaDaemon {
         sender broadcast provides AccelTelemetry
         server ctl       provides ShwaCtlIf
         client to_per    requires PersistencyIf
+        // thermal/power excursion → SM mode input (CAST). Health-event → phm in S2.
+        sender excursion provides ShwaExcursionStream
     }
 }

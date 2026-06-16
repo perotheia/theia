@@ -72,6 +72,69 @@ interface senderReceiver LifecycleIn {
     data PowerOff         power_off
 }
 
+// ─── Function Group state machine (AUTOSAR FunctionGroupState) ───────────────
+//
+// A Function Group is a bundle of processes SM moves between states as ONE unit;
+// in Theia each FG maps onto a supervisor supervision sub-tree (MachineFG=root,
+// PlatformFG=core_sup, NetworkFG=network_sup, HostSvcFG=host_svc_sup,
+// AppFG=app_sup — see docs/tasks/BACKLOG/State-Management.md §1). This is the
+// PER-FG lifecycle, distinct from SmDaemon's MACHINE-state FSM above: the machine
+// FSM picks the system mode, then drives each FG to a target state through this
+// one. Off → Startup → Running → Shutdown, with a Restart loop for the PHM
+// degraded-recovery path (the acceptance case: PHM fault → SM drops AppFG to
+// Restart while PlatformFG stays Running).
+
+enum FgState {
+    FG_OFF      = 0   // sub-tree stopped
+    FG_STARTUP  = 1   // children being started (dependency order)
+    FG_RUNNING  = 2   // all children up + healthy
+    FG_SHUTDOWN = 3   // children being stopped
+    FG_RESTART  = 4   // degraded → stopping for a re-startup (PHM recovery)
+}
+
+// The FG FSM's persistent data + broadcast payload. `fg` identifies WHICH group
+// (an FgId ordinal mapping to the sub-tree); `state` is its current lifecycle
+// state. One FSM instance per deployment for now (MachineFG); `fg` lets a future
+// multi-instance fan-out address each group.
+message FgStatusMsg { uint32 fg    FgState state    uint64 ts_ns }
+
+// FG FSM-internal events (post_event()'d in-process by FgGate, same split as the
+// machine FSM). Distinct types → GenStateM per-event overload dispatch.
+message FgStart    { }   // SM machine-mode → bring this FG up (Off → Startup)
+message FgStarted  { }   // every mapped child reported alive (Startup → Running)
+message FgStop     { }   // SM machine-mode → bring this FG down (→ Shutdown)
+message FgStopped  { }   // every mapped child confirmed stopped (Shutdown → Off)
+message FgDegraded { }   // PHM health: this FG is failing → recover (→ Restart)
+message FgRetry    { }   // recovery hold-off elapsed (Restart → Startup)
+
+interface senderReceiver FgLifecycleIn {
+    data FgStart    fg_start
+    data FgStarted  fg_started
+    data FgStop     fg_stop
+    data FgStopped  fg_stopped
+    data FgDegraded fg_degraded
+    data FgRetry    fg_retry
+}
+
+// FG state broadcast — any observer (the GUI, tdb, a mode-policy actor) can watch
+// each FG's lifecycle, the same way SmStateStream broadcasts the machine state.
+interface senderReceiver FgStateStream {
+    data FgStatusMsg fg_state
+}
+
+// ─── PHM health edge (comm-matrix S1: phm → sm) ─────────────────────────────
+//
+// Platform Health Management escalates a per-entity health verdict to SM, which
+// translates it into an FG event (a critical verdict → FgDegraded on the
+// affected group). CAST (notification, fire-and-forget) — PHM informs, SM
+// decides. The PHM FC is still planned (docs/tasks/BACKLOG/PHM.md); today the
+// supervisor's watchdog plays PHM. Empty placeholder body — fillable when the
+// health schema (entity, OK/WARNING/DEGRADED/FAILED, severity) is pinned.
+message PhmHealthStatus { }   // TODO: { entity, level(OK|WARN|DEGRADED|FAILED), fg }
+interface senderReceiver PhmHealthStream {
+    data PhmHealthStatus health
+}
+
 node atomic SmDaemon {
     tipc type=0x8001000D instance=0
     tag = "SMX"
@@ -114,6 +177,62 @@ node atomic SmDaemon {
     }
 }
 
+// ─── Function Group state machine node ──────────────────────────────────────
+//
+// FunctionGroupSm hosts the per-FG lifecycle FSM (FgState). Same gen_statem
+// shape as SmDaemon: FgStatusMsg doubles as the FSM data AND the FgStateStream
+// broadcast payload — on_enter mutates state+ts_ns and casts it out. It takes NO
+// external messages directly (the statem-never-off-the-wire rule); FgGate is its
+// event front. The machine FSM (SmDaemon) drives this one: on entering RUNNING it
+// posts FgStart to bring the app FGs up; on DEGRADED it posts FgDegraded to drop
+// the affected FG to Restart while platform FGs stay Running.
+node atomic FunctionGroupSm {
+    tipc type=0x8001003D instance=0
+    tag = "SMFG"
+    ports {
+        sender broadcast provides FgStateStream
+    }
+
+    statem {
+        states  [FG_OFF, FG_STARTUP, FG_RUNNING, FG_SHUTDOWN, FG_RESTART]
+        initial FG_OFF
+        data    FgStatusMsg
+
+        on FG_OFF:
+            event FgStart    → FG_STARTUP
+
+        on FG_STARTUP:
+            event FgStarted  → FG_RUNNING
+            timeout          → FG_RESTART
+
+        on FG_RUNNING:
+            event FgStop     → FG_SHUTDOWN
+            event FgDegraded → FG_RESTART
+
+        on FG_SHUTDOWN:
+            event FgStopped  → FG_OFF
+
+        on FG_RESTART:
+            event FgRetry    → FG_STARTUP after 5s
+    }
+}
+
+// FG gate — the external-message front for the FG FSM (distinct TIPC
+// 0x8001004D), mirroring SmGate. It receives FgLifecycleIn events AND the PHM
+// health stream; for each it post_event()s into FunctionGroupSm's FSM IN-PROCESS
+// via a LocalRef<FunctionGroupSm>. A critical PhmHealthStatus is translated to an
+// FgDegraded event here (PHM informs; SM's gate decides the FG action) — so the
+// statem still never handles a raw wire message. Producers: SmDaemon (machine
+// mode → FgStart/FgStop), phm/supervisor (PhmHealthStatus), a test probe.
+node atomic FgGate {
+    tipc type=0x8001004D instance=0
+    tag = "SMFGG"
+    ports {
+        receiver fg_lifecycle requires FgLifecycleIn
+        receiver from_phm     requires PhmHealthStream
+    }
+}
+
 // SM gate — the FC's external-message front. A separate node (distinct
 // TIPC 0x8001001D) so the wire never touches the statem directly: it
 // receives LifecycleIn data (boot/startup/shutdown/update from exec,
@@ -144,5 +263,19 @@ node atomic SmTester {
     tag = "SMT"
     ports {
         sender lifecycle provides LifecycleIn
+    }
+}
+
+// FgTester — the FG FSM's probe-only driver (mirrors SmTester). Carries senders
+// on BOTH FgLifecycleIn (to cast FgStart/FgStarted/FgStop/... at FgGate) and
+// PhmHealthStream (to inject a PhmHealthStatus and prove the health→FgDegraded
+// translation). Drives FunctionGroupSm standalone in services/sm/test. NOT
+// deployed: in no composition, so the manifest never instantiates it.
+node atomic FgTester {
+    tipc type=0x8001005D instance=0
+    tag = "SMFT"
+    ports {
+        sender fg_lifecycle provides FgLifecycleIn
+        sender phm_health    provides PhmHealthStream
     }
 }

@@ -13,6 +13,14 @@ enum SmState {
     SmState_SHUTDOWN = 5;
 }
 
+enum FgState {
+    FgState_FG_OFF = 0;
+    FgState_FG_STARTUP = 1;
+    FgState_FG_RUNNING = 2;
+    FgState_FG_SHUTDOWN = 3;
+    FgState_FG_RESTART = 4;
+}
+
 message SmStateMsg {
     SmState state = 1;
     uint64 ts_ns = 2;
@@ -51,6 +59,40 @@ message RetryStartup {
 }
 
 message PowerOff {
+    // empty body
+}
+
+message FgStatusMsg {
+    uint32 fg = 1;
+    FgState state = 2;
+    uint64 ts_ns = 3;
+}
+
+message FgStart {
+    // empty body
+}
+
+message FgStarted {
+    // empty body
+}
+
+message FgStop {
+    // empty body
+}
+
+message FgStopped {
+    // empty body
+}
+
+message FgDegraded {
+    // empty body
+}
+
+message FgRetry {
+    // empty body
+}
+
+message PhmHealthStatus {
     // empty body
 }
 

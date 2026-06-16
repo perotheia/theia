@@ -200,6 +200,16 @@ void IdsmDaemon::on_config_update(
     broadcast_status_(*this, s);
 }
 
+// IdsmDigestUpdate — UCM pushes the expected per-binary SHA-256 digests at
+// install time (Category H baseline). idsm stores them so the integrity rule
+// can flag drift. CAST (notification) — no reply. Placeholder: the message body
+// is empty until the digest schema (repeated {path, sha256}) is pinned; for now
+// just acknowledge receipt so the edge is live and the wire round-trips.
+void IdsmDaemon::handle_cast(const IdsmDigestUpdate& /*msg*/, IdsmDaemonState& /*s*/) {
+    // TODO(comm-matrix): when IdsmDigestUpdate grows its {path, sha256} entries,
+    // load them into the ProcBackend Category-H expected-digest table here.
+}
+
 // GetIdsStatus — serve the current status snapshot.
 IdsStatusMsg IdsmDaemon::handle_call(
         const IdsStatusReq& /*req*/,

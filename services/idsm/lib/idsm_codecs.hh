@@ -31,3 +31,5 @@
 
 THEIA_DECLARE_REMOTE_CODEC(system_services_idsm_IdsStatusReq)
 THEIA_DECLARE_REMOTE_CODEC(system_services_idsm_IdsStatusMsg)
+THEIA_DECLARE_REMOTE_CODEC(system_services_idsm_IdsmDigestUpdate)
+THEIA_DECLARE_REMOTE_CODEC(system_services_idsm_IdsmModeInput)

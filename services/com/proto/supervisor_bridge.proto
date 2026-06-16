@@ -19,13 +19,43 @@ package services.com;
 import "supervisor.proto";
 
 
+// SHWA hardware-telemetry sample — mirrors services/shwa AccelSample
+// (system/services/shwa/package.art) field-for-field. com receives the nanopb
+// AccelSample over TIPC (SHWA's AccelTelemetry egress) and re-emits it as an
+// `accel` arm of the firehose so the GUI's GPU / host panels fill from one
+// stream. proto3 (libprotobuf gRPC edge); wire-identical to the nanopb side.
+message AccelSample {
+    string board                 = 1;
+    bool   on_jetson             = 2;
+    uint32 power_mode            = 3;   // services_shwa PowerMode ordinal
+    uint32 cpu_util_pct          = 4;
+    uint32 cpu_count             = 5;
+    uint32 cpu_freq_mhz          = 6;
+    uint32 gpu_util_pct          = 7;
+    uint32 gpu_freq_mhz          = 8;
+    uint32 mem_used_mb           = 9;
+    uint32 mem_total_mb          = 10;
+    uint32 temp_c                = 11;
+    uint32 power_mw              = 12;
+    uint32 fan_rpm               = 13;
+    uint64 uptime_sec            = 14;
+    uint64 disk_root_total_kb    = 15;
+    uint64 disk_root_avail_kb    = 16;
+    uint64 disk_install_total_kb = 17;
+    uint64 disk_install_avail_kb = 18;
+    uint64 ts_ns                 = 19;
+}
+
 // One streamed observation from the supervisor. Discriminated union
-// — exactly one of the three fields is populated per message.
+// — exactly one of the four fields is populated per message.
 message SupervisorObservation {
     oneof kind {
         system_supervisor.SupervisionEvent event    = 1;
         system_supervisor.HealthBeacon     health   = 2;
         system_supervisor.TreeSnapshot     snapshot = 3;
+        // SHWA hardware telemetry (GPU / host monitor), folded into the same
+        // Subscribe stream and gated at com on a connected gRPC subscriber.
+        AccelSample                        accel    = 4;
     }
 }
 

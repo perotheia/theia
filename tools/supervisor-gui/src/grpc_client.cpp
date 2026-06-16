@@ -20,6 +20,7 @@ constexpr uint16_t kTagHealth      = 0x0002;
 constexpr uint16_t kTagSnapshot    = 0x0003;
 constexpr uint16_t kTagSystemInfo  = 0x0004;   // GetSystemInfo (host + build facts)
 constexpr uint16_t kTagTraceRecord = 0x0005;   // TraceStream egress (:7710)
+constexpr uint16_t kTagAccel       = 0x0006;   // SHWA AccelSample (GPU / host monitor)
 }  // namespace
 
 GrpcClient::GrpcClient(std::string machine_name,
@@ -344,6 +345,10 @@ void GrpcClient::run() {
                 case ::services::com::SupervisorObservation::kSnapshot:
                     tag = kTagSnapshot;
                     payload = obs.snapshot().SerializeAsString();
+                    break;
+                case ::services::com::SupervisorObservation::kAccel:
+                    tag = kTagAccel;
+                    payload = obs.accel().SerializeAsString();
                     break;
                 default:
                     continue;

@@ -40,6 +40,7 @@
 
 #include "impl/sup_link.hpp"      // #418 control path over the standard transport
 #include "impl/per_link.hpp"      // per (persistency) proxy — ListSchemas/Snapshot
+#include "impl/shwa_link.hpp"     // SHWA AccelTelemetry egress receiver (GPU/host)
 #include "impl/com_tls.hpp"       // shared TLS-or-insecure ServerCredentials
 
 #include "supervisor_bridge.grpc.pb.h"
@@ -61,6 +62,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 
@@ -83,6 +85,33 @@ constexpr uint32_t kOpConfigureLogLevel = 11;  // #385
 std::string listen_addr() {
     if (const char* e = std::getenv("THEIA_COM_LISTEN")) return e;
     return "0.0.0.0:7700";
+}
+
+// ---- SHWA AccelTelemetry fold-in (gated at com) --------------------------
+//
+// SHWA broadcasts AccelSample over TIPC regardless of subscribers; com folds it
+// into the SupervisorView.Subscribe firehose as the `accel` observation. The
+// GATE mirrors LogForwarder's subscriber-count gate: ShwaLink's sink only stores
+// the latest sample while ≥1 gRPC Subscribe client is connected
+// (g_accel_subscribers > 0), so com does no AccelSample work — and emits nothing
+// into any stream — without a connected subscriber ("no active forward without a
+// subscription" at the com edge). Each connected Subscribe loop emits the latest
+// stored sample on its poll tick, so the GUI's GPU/host panels fill live.
+std::atomic<int>        g_accel_subscribers{0};
+std::mutex              g_accel_mtx;
+std::string             g_accel_latest;     // raw AccelSample proto-wire bytes
+std::atomic<uint64_t>   g_accel_seq{0};     // bumps on each new sample
+
+// ShwaLink sink — called on the recv thread for each AccelSample. GATE: drop the
+// sample unless a gRPC subscriber is connected (the same gate as LogForwarder,
+// which only fans out while a Subscribe RPC holds the link).
+void on_accel_sample(const std::string& sample_bytes) {
+    if (g_accel_subscribers.load(std::memory_order_relaxed) <= 0) return;
+    {
+        std::lock_guard<std::mutex> lk(g_accel_mtx);
+        g_accel_latest = sample_bytes;
+    }
+    g_accel_seq.fetch_add(1, std::memory_order_relaxed);
 }
 
 // ---- gRPC service: forwards control RPCs onto the supervisor uplink ------
@@ -112,6 +141,11 @@ public:
         }
         std::fprintf(stderr, "com: gRPC subscriber attached "
                      "(GetTree poll every %dms)\n", poll_ms);
+        // GATE on: enable the SHWA AccelTelemetry fold-in while this subscriber
+        // is connected (LogForwarder-mirrored subscriber-count gate). The recv
+        // thread only stores samples while this is > 0.
+        g_accel_subscribers.fetch_add(1, std::memory_order_relaxed);
+        uint64_t last_accel_seq = 0;
         while (!ctx->IsCancelled()) {
             services_com::SupReply r;
             if (services_com::SupLink::instance().get_tree(r) &&
@@ -134,6 +168,29 @@ public:
                     if (!writer->Write(obs)) break;
                 }
             }
+            // SHWA hardware telemetry (GPU / host monitor): emit the latest
+            // AccelSample as the `accel` arm whenever a new one has arrived since
+            // our last tick. The recv thread only populates g_accel_latest while
+            // a subscriber is connected (the gate), so this is a no-op when SHWA
+            // is absent or quiet.
+            {
+                uint64_t seq = g_accel_seq.load(std::memory_order_relaxed);
+                if (seq != last_accel_seq) {
+                    std::string raw;
+                    {
+                        std::lock_guard<std::mutex> lk(g_accel_mtx);
+                        raw = g_accel_latest;
+                    }
+                    last_accel_seq = seq;
+                    if (!raw.empty()) {
+                        services::com::SupervisorObservation obs;
+                        auto* a = obs.mutable_accel();
+                        if (a->ParseFromString(raw)) {
+                            if (!writer->Write(obs)) break;
+                        }
+                    }
+                }
+            }
             // Sleep in short slices so cancellation is responsive.
             for (int slept = 0; slept < poll_ms && !ctx->IsCancelled();
                  slept += 100) {
@@ -141,6 +198,9 @@ public:
                     std::min(100, poll_ms - slept)));
             }
         }
+        // GATE off: this subscriber is leaving. When the count hits 0 the recv
+        // thread stops storing samples (no forward without a subscription).
+        g_accel_subscribers.fetch_sub(1, std::memory_order_relaxed);
         std::fprintf(stderr, "com: gRPC subscriber detached\n");
         return grpc::Status::OK;
     }
@@ -398,6 +458,21 @@ void ComGrpcProxy::do_start() {
                      kNodeName);
     }
 
+    // SHWA AccelTelemetry egress receiver. Bind the egress DGRAM name + start the
+    // recv thread; install the gated sink BEFORE start() so no sample is missed.
+    // Best-effort: a quiet/absent SHWA just means no `accel` observations.
+    services_com::ShwaLink::instance().set_sink(
+        [](const std::string& bytes) { on_accel_sample(bytes); });
+    if (!services_com::ShwaLink::instance().start()) {
+        std::fprintf(stderr,
+                     "[%s] WARN: SHWA AccelTelemetry egress bind failed; "
+                     "GPU/host panels will get no feed\n", kNodeName);
+    } else {
+        std::fprintf(stderr,
+                     "[%s] SHWA AccelTelemetry egress receiver up (0x8001001A/0)\n",
+                     kNodeName);
+    }
+
     g_sup_svc = std::make_unique<SupervisorViewImpl>();
     g_per_svc = std::make_unique<PerViewImpl>();
 
@@ -414,6 +489,7 @@ void ComGrpcProxy::do_start() {
         g_per_svc.reset();
         services_com::SupLink::instance().stop();
         services_com::PerLink::instance().stop();
+        services_com::ShwaLink::instance().stop();
         return;
     }
     std::fprintf(stderr,
@@ -451,6 +527,7 @@ void ComGrpcProxy::do_stop() {
     g_per_svc.reset();
     services_com::SupLink::instance().stop();
     services_com::PerLink::instance().stop();
+    services_com::ShwaLink::instance().stop();
     g_up.store(false);
 }
 

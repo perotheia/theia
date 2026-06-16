@@ -42,7 +42,6 @@
 #include <sys/signalfd.h>
 #include <sys/eventfd.h>
 #include <sys/stat.h>
-#include <sys/statvfs.h>    // statvfs — disk free for SystemInfo (System tab)
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <signal.h>
@@ -2206,31 +2205,10 @@ std::string parse_os_release_pretty(const std::string& body) {
     return body.substr(pos, end - pos);
 }
 
-uint64_t parse_mem_total_kb(const std::string& body) {
-    size_t pos = body.find("MemTotal:");
-    if (pos == std::string::npos) return 0;
-    pos += std::strlen("MemTotal:");
-    while (pos < body.size() && body[pos] == ' ') ++pos;
-    char* end = nullptr;
-    return std::strtoull(body.c_str() + pos, &end, 10);
-}
-
-uint64_t parse_uptime_sec(const std::string& body) {
-    char* end = nullptr;
-    double v = std::strtod(body.c_str(), &end);
-    return v > 0 ? static_cast<uint64_t>(v) : 0;
-}
-
-// statvfs a path; fill total/avail kB (0/0 if the path can't be stat'd —
-// e.g. an install dir that doesn't exist yet). Uses f_frsize (fragment size)
-// for the byte conversion, f_blocks for total, f_bavail for free-to-unpriv.
-void statvfs_kb(const char* path, uint64_t& total_kb, uint64_t& avail_kb) {
-    struct statvfs vfs{};
-    if (::statvfs(path, &vfs) != 0) { total_kb = avail_kb = 0; return; }
-    const uint64_t unit = vfs.f_frsize ? vfs.f_frsize : vfs.f_bsize;
-    total_kb = (static_cast<uint64_t>(vfs.f_blocks) * unit) / 1024;
-    avail_kb = (static_cast<uint64_t>(vfs.f_bavail) * unit) / 1024;
-}
+// (parse_mem_total_kb / parse_uptime_sec / statvfs_kb removed — the host
+// hardware stats they fed into SystemInfo moved to services/shwa, the host
+// system-monitor. The supervisor no longer reads /proc/meminfo, /proc/uptime,
+// or statvfs.)
 
 }  // namespace
 
@@ -2250,18 +2228,10 @@ void Supervisor::do_get_system_info(SystemInfoData& info) {
     info.os_pretty_name =
         parse_os_release_pretty(slurp_text("/etc/os-release"));
 
-    long cpus = ::sysconf(_SC_NPROCESSORS_ONLN);
-    if (cpus > 0) info.cpu_count = static_cast<uint32_t>(cpus);
-
-    info.total_ram_kb = parse_mem_total_kb(slurp_text("/proc/meminfo"));
-    info.uptime_sec   = parse_uptime_sec  (slurp_text("/proc/uptime"));
-
-    // Disk free (System tab "Resources" box): root and the install/run dir
-    // (where binaries + tombstones live). root_dir_ is the supervisor's stage
-    // dir; if it's empty (unstaged), fall back to the current dir.
-    statvfs_kb("/", info.disk_root_total_kb, info.disk_root_avail_kb);
-    statvfs_kb(root_dir_.empty() ? "." : root_dir_.c_str(),
-               info.disk_install_total_kb, info.disk_install_avail_kb);
+    // Host hardware stats (cpu_count, total_ram, uptime, disk-free) are NO
+    // LONGER reported here — services/shwa is the host system-monitor and
+    // carries them on its AccelSample telemetry (folded into the GUI stream by
+    // com). The supervisor reports only its own IDENTITY + per-child NodeState.
 
     // Build-time facts injected via -D... when the build wires them.
     // Defaults to empty when undefined, matching proto3 default.

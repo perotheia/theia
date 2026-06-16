@@ -14,6 +14,7 @@ package system.services.com
 
 interface clientServer   PersistencyIf { }  // from system.services.per
 interface senderReceiver SmStateStream { }  // from system.services.sm
+interface senderReceiver AccelTelemetry { }  // from system.services.shwa
 
 // Supervisor surfaces — from system.supervisor. com is the gRPC↔supervisor
 // bridge: ComDaemon CALLS the supervisor's control RPCs (StartChild,
@@ -77,6 +78,11 @@ node atomic ComDaemon {
         server   ctl      provides ComCtl
         receiver from_sm  requires SmStateStream
         client   to_per   requires PersistencyIf
+        // SHWA hardware-telemetry edge — com receives AccelSample (AccelTelemetry
+        // broadcast) over TIPC and folds it into the gRPC Subscribe firehose
+        // (GUI GPU / host panels). shwa_link binds the egress DGRAM name; this
+        // port just declares the wiring so the netgraph knows the edge exists.
+        receiver from_shwa requires AccelTelemetry
         // Supervisor edge (standard transport, replaces the tipc_uplink
         // socket). `to_sup` = the outbound control client (ComGrpcProxy
         // forwards gRPC mutators through it as RemoteRef call/send_request to

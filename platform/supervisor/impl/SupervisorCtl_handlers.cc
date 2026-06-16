@@ -424,18 +424,13 @@ SystemInfo SupervisorCtl::handle_call(
     std::snprintf(m.kernel, sizeof(m.kernel), "%s", info.kernel.c_str());
     std::snprintf(m.os_pretty_name, sizeof(m.os_pretty_name), "%s",
                   info.os_pretty_name.c_str());
-    m.cpu_count    = info.cpu_count;
-    m.total_ram_kb = info.total_ram_kb;
-    m.uptime_sec   = info.uptime_sec;
+    // Host hardware stats (cpu_count/total_ram/uptime/disk) moved to
+    // services/shwa — SystemInfo carries supervisor identity only now.
     std::snprintf(m.theia_git_sha, sizeof(m.theia_git_sha), "%s",
                   info.theia_git_sha.c_str());
     std::snprintf(m.build_timestamp, sizeof(m.build_timestamp), "%s",
                   info.build_timestamp.c_str());
-    m.start_timestamp_ms       = info.start_timestamp_ms;
-    m.disk_root_total_kb       = info.disk_root_total_kb;
-    m.disk_root_avail_kb       = info.disk_root_avail_kb;
-    m.disk_install_total_kb    = info.disk_install_total_kb;
-    m.disk_install_avail_kb    = info.disk_install_avail_kb;
+    m.start_timestamp_ms = info.start_timestamp_ms;
     return m;
 }
 

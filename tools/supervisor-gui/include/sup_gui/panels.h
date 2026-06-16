@@ -81,12 +81,16 @@ private:
     static constexpr int kArchRows   = 6;  // hostname,kernel,os,cpus,sha,build
     static constexpr int kResRows    = 5;  // ram,disk /,disk install,uptime,started
     static constexpr int kHealthRows = 5;  // gen,workers,restarts,tombstones,beat
+    // GPU / Accelerators — SHWA AccelSample (tag 0x0006): board, gpu util,
+    // gpu freq, temp, power, fan.
+    static constexpr int kGpuRows    = 6;  // board,gpu%,gpu freq,temp,power,fan
     struct MachineRows {
         wxStaticBox*       box{nullptr};   // outer per-machine box
         wxStaticBoxSizer*  sizer{nullptr};
         wxStaticText*      arch_vals  [kArchRows]{};
         wxStaticText*      res_vals   [kResRows]{};
         wxStaticText*      health_vals[kHealthRows]{};
+        wxStaticText*      gpu_vals   [kGpuRows]{};
     };
 
     MachineRows& ensure_box(const std::string& machine_name);

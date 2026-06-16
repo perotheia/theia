@@ -138,6 +138,31 @@ cc_library(
     ],
 )
 
+# shwa_link — the SHWA AccelTelemetry-egress receiver, same isolation rationale
+# as log_link/trace_link. Binds the AccelTelemetry egress DGRAM name (0x8001001A)
+# and recvs AccelSample casts; ComGrpcProxy_handlers.cc sees only shwa_link.hpp's
+# primitive raw-bytes sink, then ParseFromString's the bytes into the libprotobuf
+# services.com.AccelSample for the Subscribe firehose's `accel` arm. No shwa proto
+# dep: it forwards RAW bytes and matches the service_id by deriving the SAME djb2
+# of the type name the sender (SHWA AccelSubmitter) stamps — runtime only.
+cc_library(
+    name = "shwa_link",
+    srcs = ["shwa_link.cc"],
+    hdrs = ["shwa_link.hpp"],
+    includes = [".."],
+    copts = [
+        "-std=c++17",
+        "-Wall",
+        "-Wextra",
+        "-fPIC",
+    ],
+    deps = [
+        # RemoteCodec (hash_msg_type_) + TheiaMsgHeader. NO com_bridge_grpc —
+        # keeps the libprotobuf AccelSample off this raw-bytes TU.
+        "//platform/runtime:runtime",
+    ],
+)
+
 # per (persistency) proxy link — isolated nanopb TU like sup_link/trace_link.
 # Includes the NANOPB per headers (per_codecs.hh → per.pb.h, C structs) for the
 # ListSchemas/Snapshot RemoteRef-calls to PerManager (0x80010016); com_impl's
@@ -204,5 +229,8 @@ cc_library(
         # ComGrpcProxy_handlers.cc's PerView only sees per_link.hpp's
         # primitive PerSchema/PerOpReply surface.
         ":per_link",
+        # SHWA AccelTelemetry egress receiver (raw-bytes, isolated above).
+        # ComGrpcProxy_handlers.cc folds AccelSample into the Subscribe stream.
+        ":shwa_link",
     ],
 )

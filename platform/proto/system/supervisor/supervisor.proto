@@ -132,19 +132,20 @@ message GetHealthRequest {
 }
 
 message SystemInfo {
+    // Supervisor identity only. The host hardware stats (tags 4,5,6,10-13:
+    // cpu_count/total_ram_kb/uptime_sec/disk_*) moved to services/shwa — the
+    // host system-monitor. Tags reserved so the wire stays compatible + the
+    // numbers are never reused for a different meaning.
+    reserved 4, 5, 6, 10, 11, 12, 13;
+    reserved "cpu_count", "total_ram_kb", "uptime_sec",
+             "disk_root_total_kb", "disk_root_avail_kb",
+             "disk_install_total_kb", "disk_install_avail_kb";
     string hostname = 1;
     string kernel = 2;
     string os_pretty_name = 3;
-    uint32 cpu_count = 4;
-    uint64 total_ram_kb = 5;
-    uint64 uptime_sec = 6;
     string theia_git_sha = 7;
     string build_timestamp = 8;
     uint64 start_timestamp_ms = 9;
-    uint64 disk_root_total_kb = 10;
-    uint64 disk_root_avail_kb = 11;
-    uint64 disk_install_total_kb = 12;
-    uint64 disk_install_avail_kb = 13;
 }
 
 message ChildSelector {

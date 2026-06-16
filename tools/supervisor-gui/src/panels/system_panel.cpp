@@ -12,6 +12,7 @@
 #include "sup_gui/panels.h"
 
 #include "supervisor.pb.h"
+#include "supervisor_bridge.pb.h"   // services::com::AccelSample (SHWA telemetry)
 
 #include <wx/wx.h>
 #include <wx/sizer.h>
@@ -102,6 +103,9 @@ const char* const kHealthKeys[] = {
     "generation", "workers (active / total)", "total restarts",
     "total tombstones", "last heartbeat",
 };
+const char* const kGpuKeys[]    = {
+    "board", "GPU util", "GPU freq", "temp", "power", "fan",
+};
 
 }  // namespace
 
@@ -144,15 +148,10 @@ SystemPanel::MachineRows& SystemPanel::ensure_box(const std::string& machine_nam
                           kHealthKeys, mr.health_vals, kHealthRows),
               1, wxEXPAND);
 
-    // GPU / Accelerators — placeholder until the shwa FC telemetry lands.
-    {
-        auto* gbox = new wxStaticBox(box, wxID_ANY, "GPU / Accelerators");
-        auto* gsz  = new wxStaticBoxSizer(gbox, wxVERTICAL);
-        gsz->Add(new wxStaticText(gbox, wxID_ANY,
-                     "awaiting shwa feed (nvidia-smi / jtop)"),
-                 0, wxALL, 6);
-        grid->Add(gsz, 1, wxEXPAND);
-    }
+    // GPU / Accelerators — filled live from SHWA AccelSample (tag 0x0006).
+    grid->Add(make_subbox(box, "GPU / Accelerators",
+                          kGpuKeys, mr.gpu_vals, kGpuRows),
+              1, wxEXPAND);
 
     bsz->Add(grid, 1, wxEXPAND | wxALL, 4);
     container_->Add(bsz, 0, wxEXPAND | wxALL, 4);
@@ -170,23 +169,19 @@ void SystemPanel::on_frame(const std::string& machine_name,
         if (!si.ParseFromString(payload)) return;
         auto& mr = ensure_box(machine_name);
 
-        // System & Architecture
+        // System & Architecture — supervisor IDENTITY (SystemInfo carries this
+        // only now; the host hardware stats moved to SHWA / the AccelSample arm).
         mr.arch_vals[0]->SetLabel(wxString::FromUTF8(si.hostname().c_str()));
         mr.arch_vals[1]->SetLabel(wxString::FromUTF8(si.kernel().c_str()));
         mr.arch_vals[2]->SetLabel(wxString::FromUTF8(si.os_pretty_name().c_str()));
-        mr.arch_vals[3]->SetLabel(wxString::Format("%u", si.cpu_count()));
+        // arch_vals[3] (CPU count) is filled from AccelSample (SHWA) below.
         mr.arch_vals[4]->SetLabel(si.theia_git_sha().empty()
             ? "(unstamped)" : wxString::FromUTF8(si.theia_git_sha().c_str()));
         mr.arch_vals[5]->SetLabel(si.build_timestamp().empty()
             ? "(unstamped)" : wxString::FromUTF8(si.build_timestamp().c_str()));
 
-        // Resources
-        mr.res_vals[0]->SetLabel(fmt_ram_mb(si.total_ram_kb()));
-        mr.res_vals[1]->SetLabel(fmt_disk(si.disk_root_total_kb(),
-                                          si.disk_root_avail_kb()));
-        mr.res_vals[2]->SetLabel(fmt_disk(si.disk_install_total_kb(),
-                                          si.disk_install_avail_kb()));
-        mr.res_vals[3]->SetLabel(fmt_uptime(si.uptime_sec()));
+        // Resources — only "supervisor started" comes from SystemInfo now; RAM /
+        // disk / uptime are filled from the SHWA AccelSample arm (tag 0x0006).
         mr.res_vals[4]->SetLabel(fmt_epoch_ms(si.start_timestamp_ms()));
 
         mr.sizer->Layout();
@@ -205,6 +200,42 @@ void SystemPanel::on_frame(const std::string& machine_name,
         mr.health_vals[3]->SetLabel(wxString::Format("%llu",
             static_cast<unsigned long long>(hb.total_tombstones())));
         mr.health_vals[4]->SetLabel(fmt_epoch_ms(hb.timestamp_ms()));
+        mr.sizer->Layout();
+        return;
+    }
+    if (tag == 0x0006) {            // AccelSample (SHWA GPU / host telemetry)
+        services::com::AccelSample a;
+        if (!a.ParseFromString(payload)) return;
+        auto& mr = ensure_box(machine_name);
+        // GPU / Accelerators box: board, util, freq, temp, power, fan.
+        wxString board = a.board().empty()
+            ? "(unknown)" : wxString::FromUTF8(a.board().c_str());
+        if (a.on_jetson()) board += " (Jetson)";
+        mr.gpu_vals[0]->SetLabel(board);
+        mr.gpu_vals[1]->SetLabel(wxString::Format("%u%%", a.gpu_util_pct()));
+        mr.gpu_vals[2]->SetLabel(a.gpu_freq_mhz()
+            ? wxString::Format("%u MHz", a.gpu_freq_mhz()) : "—");
+        mr.gpu_vals[3]->SetLabel(a.temp_c()
+            ? wxString::Format("%u °C", a.temp_c()) : "—");
+        mr.gpu_vals[4]->SetLabel(a.power_mw()
+            ? wxString::Format("%.1f W", a.power_mw() / 1000.0) : "—");
+        mr.gpu_vals[5]->SetLabel(a.fan_rpm()
+            ? wxString::Format("%u rpm", a.fan_rpm()) : "—");
+        // SHWA is the host system-monitor (the supervisor shed these): fill the
+        // Resources box's RAM / disk / uptime + the arch CPU count live.
+        if (a.cpu_count())
+            mr.arch_vals[3]->SetLabel(wxString::Format("%u", a.cpu_count()));
+        if (a.mem_total_mb())
+            mr.res_vals[0]->SetLabel(fmt_ram_mb(
+                static_cast<uint64_t>(a.mem_total_mb()) * 1024));
+        if (a.disk_root_total_kb())
+            mr.res_vals[1]->SetLabel(fmt_disk(a.disk_root_total_kb(),
+                                              a.disk_root_avail_kb()));
+        if (a.disk_install_total_kb())
+            mr.res_vals[2]->SetLabel(fmt_disk(a.disk_install_total_kb(),
+                                              a.disk_install_avail_kb()));
+        if (a.uptime_sec())
+            mr.res_vals[3]->SetLabel(fmt_uptime(a.uptime_sec()));
         mr.sizer->Layout();
         return;
     }

@@ -72,6 +72,15 @@ message AccelSample {
     uint32   power_mw       // instantaneous board power (0 if unknown)
     uint32   fan_rpm        // 0 if no fan / unknown
 
+    // Host system-monitor facts (SHWA is the host monitor now). Field names
+    // mirror the supervisor's SystemInfo EXACTLY (platform/supervisor/system/
+    // package.art) so a later supervisor-shed of these is a clean move.
+    uint64   uptime_sec             // /proc/uptime — boot-relative uptime
+    uint64   disk_root_total_kb     // statvfs("/")          f_blocks
+    uint64   disk_root_avail_kb     // statvfs("/")          f_bavail
+    uint64   disk_install_total_kb  // statvfs(install dir)  f_blocks
+    uint64   disk_install_avail_kb  // statvfs(install dir)  f_bavail
+
     uint64   ts_ns
 }
 

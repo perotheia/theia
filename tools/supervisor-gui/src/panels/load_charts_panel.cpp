@@ -26,6 +26,7 @@
 #include "sup_gui/panels.h"
 
 #include "supervisor.pb.h"
+#include "supervisor_bridge.pb.h"   // services::com::AccelSample (SHWA telemetry)
 
 #include <wx/wx.h>
 #include <wx/dcbuffer.h>
@@ -46,6 +47,7 @@ namespace sup_gui {
 namespace {
 
 constexpr uint16_t kTagTree        = 0x0003;
+constexpr uint16_t kTagAccel       = 0x0006;   // SHWA AccelSample (GPU load + mem)
 constexpr int      kStripPadding   = 4;
 constexpr int      kWindowSeconds  = 60;
 constexpr int      kRefreshMs      = 1000;
@@ -56,6 +58,15 @@ struct ProcSample {
     int64_t  t_ms{};
     double   cpu_pct{};   // already converted from hundredths
     double   rss_mb{};
+};
+
+// One GPU/accelerator sample (from a SHWA AccelSample, tag 0x0006). Both series
+// are normalized to a 0..100% scale: GPU load is util_pct as-is; GPU mem is
+// mem_used/mem_total as a percent (whole-system memory, the jtop reading).
+struct GpuSample {
+    int64_t  t_ms{};
+    double   load_pct{};   // gpu_util_pct
+    double   mem_pct{};    // 100 * mem_used_mb / mem_total_mb
 };
 
 // Stable colour per series index (FC), OTP-perf-style palette. Cycles.
@@ -125,6 +136,16 @@ public:
         }
     }
 
+    // One GPU/accelerator point per machine, from a SHWA AccelSample. One series
+    // per machine (the host accelerator), time-windowed like the proc series.
+    void ingest_gpu(const std::string& machine, const GpuSample& s,
+                    int64_t t_ms) {
+        std::lock_guard<std::mutex> lk(mtx_);
+        auto& q = gpu_[machine];
+        q.push_back(s);
+        prune(q, t_ms);
+    }
+
     void repaint() { if (IsShownOnScreen()) Refresh(false); }
 
 private:
@@ -135,9 +156,11 @@ private:
 
         std::map<std::string,
                  std::map<std::string, std::deque<ProcSample>>> psnap;
+        std::map<std::string, std::deque<GpuSample>> gsnap;
         {
             std::lock_guard<std::mutex> lk(mtx_);
             psnap = procs_;
+            gsnap = gpu_;
         }
 
         if (psnap.empty()) {
@@ -195,8 +218,9 @@ private:
                             [](const ProcSample& p) { return p.rss_mb; },
                             /*legend=*/false);
 
-            // BOTTOM-RIGHT — GPU load + mem (placeholder until shwa feed).
-            draw_gpu_placeholder(*gc, dc,
+            // BOTTOM-RIGHT — GPU load + mem, live from the SHWA AccelSample feed
+            // (falls back to the "awaiting shwa feed" box when no data yet).
+            draw_gpu_graph(*gc, dc, gsnap[m],
                             wxRect(gap + half_w + gap, bot_y, half_w, bot_h));
 
             y += dash_h + kStripPadding;
@@ -345,32 +369,67 @@ private:
         }
     }
 
-    // GPU load + mem placeholder (bottom-right). Mirrors draw_proc_graph's
-    // title + empty plot box, with a centred "awaiting shwa feed" note and a
-    // two-line legend (GPU load / GPU mem) so the eventual shwa wiring drops in.
-    void draw_gpu_placeholder(wxGraphicsContext& gc, wxDC& dc, const wxRect& r) {
+    // GPU load + mem (bottom-right), live from the SHWA AccelSample feed. Two
+    // fixed series on a 0..100% scale (GPU load = magenta, GPU mem = teal) over
+    // the shared 60s window, same 6×4 grid + time axis as the proc graphs. When
+    // no samples have arrived yet, renders the "awaiting shwa feed" box so the
+    // dual-series legend still reads correctly.
+    void draw_gpu_graph(wxGraphicsContext& gc, wxDC& dc,
+                        const std::deque<GpuSample>& series, const wxRect& r) {
         dc.SetTextForeground(wxColour(0x20, 0x20, 0x20));
         dc.DrawText("GPU load + mem (%)", r.x, r.y);
         const int box_y = r.y + 16;
-        const int box_h = std::max(r.height - 16 - kTimeAxisH, 24);  // bottom room for X labels
+        const int box_h = std::max(r.height - 16 - kTimeAxisH, 24);
+        const wxRect box(r.x, box_y, r.width, box_h);
 
         gc.SetPen(wxPen(wxColour(0xC0, 0xC0, 0xC0), 1));
         gc.SetBrush(*wxTRANSPARENT_BRUSH);
-        gc.DrawRectangle(r.x, box_y, r.width, box_h);
+        gc.DrawRectangle(box.x, box.y, box.width, box.height);
 
-        // Same 6×4 grid as the live graphs (0..100% scale) so the panels match
-        // even before the shwa feed lands.
-        draw_grid(gc, dc, wxRect(r.x, box_y, r.width, box_h), 100.0, "");
+        // Fixed 0..100% scale (util / mem-percent), 6×4 grid like the live graphs.
+        constexpr double kYmax = 100.0;
+        draw_grid(gc, dc, box, kYmax, "");
 
-        dc.SetTextForeground(wxColour(0x80, 0x80, 0x80));
-        dc.DrawText("awaiting shwa feed (nvidia-smi / jtop)",
-                    r.x + 10, box_y + box_h / 2 - 6);
+        const wxColour kLoadCol(0xB0, 0x30, 0xB0);   // magenta — GPU load
+        const wxColour kMemCol (0x16, 0xA0, 0x85);   // teal    — GPU mem
 
-        // Two-line colour key so the layout already reads as a dual-series
-        // graph. Distinct from the FC palette: GPU load = magenta, mem = teal.
+        if (series.empty()) {
+            dc.SetTextForeground(wxColour(0x80, 0x80, 0x80));
+            dc.DrawText("awaiting shwa feed (nvidia-smi / jtop)",
+                        box.x + 10, box.y + box.height / 2 - 6);
+        } else {
+            int64_t t_max = 0;
+            for (const auto& s : series) t_max = std::max(t_max, s.t_ms);
+            const int64_t t_min = t_max -
+                std::chrono::milliseconds(
+                    std::chrono::seconds(kWindowSeconds)).count();
+            const double t_span = std::max<int64_t>(1, t_max - t_min);
+            auto px_x = [&](int64_t t) {
+                return box.x + ((t - t_min) / t_span) * box.width;
+            };
+            auto px_y = [&](double v) {
+                return box.y + box.height - (v / kYmax) * box.height;
+            };
+            auto plot = [&](const wxColour& col, auto value_fn) {
+                gc.SetPen(wxPen(col, 2));
+                wxGraphicsPath path = gc.CreatePath();
+                bool first = true;
+                for (const auto& s : series) {
+                    const double x  = px_x(s.t_ms);
+                    const double yp = px_y(value_fn(s));
+                    if (first) { path.MoveToPoint(x, yp); first = false; }
+                    else        path.AddLineToPoint(x, yp);
+                }
+                if (!first) gc.StrokePath(path);
+            };
+            plot(kLoadCol, [](const GpuSample& s) { return s.load_pct; });
+            plot(kMemCol,  [](const GpuSample& s) { return s.mem_pct;  });
+        }
+
+        // Two-line colour key (matches the line colours).
         struct { const char* name; wxColour col; } keys[] = {
-            {"GPU load", wxColour(0xB0, 0x30, 0xB0)},
-            {"GPU mem",  wxColour(0x16, 0xA0, 0x85)},
+            {"GPU load", kLoadCol},
+            {"GPU mem",  kMemCol},
         };
         dc.SetPen(*wxTRANSPARENT_PEN);
         for (int i = 0; i < 2; ++i) {
@@ -395,6 +454,8 @@ private:
     // machine → child → per-process CPU/RSS series.
     std::map<std::string,
              std::map<std::string, std::deque<ProcSample>>> procs_;
+    // machine → GPU load/mem series (SHWA AccelSample).
+    std::map<std::string, std::deque<GpuSample>> gpu_;
 };
 
 
@@ -445,6 +506,21 @@ void LoadChartsPanel::on_frame(const std::string& machine_name,
             c->ingest_procs(machine_name, procs, now_ms);
             c->repaint();
         }
+        return;
+    }
+
+    if (tag == kTagAccel) {
+        // SHWA AccelSample → the GPU load + mem series. load = util%, mem =
+        // used/total as a percent (whole-system memory, the jtop reading).
+        services::com::AccelSample a;
+        if (!a.ParseFromString(payload)) return;
+        GpuSample s;
+        s.t_ms     = now_ms;
+        s.load_pct = a.gpu_util_pct();
+        s.mem_pct  = a.mem_total_mb()
+            ? 100.0 * a.mem_used_mb() / a.mem_total_mb() : 0.0;
+        c->ingest_gpu(machine_name, s, now_ms);
+        c->repaint();
         return;
     }
 }

@@ -17,6 +17,7 @@
 #include <cstring>
 #include <dirent.h>
 #include <string>
+#include <sys/statvfs.h>
 #include <unistd.h>
 
 namespace ara::shwa {
@@ -93,6 +94,49 @@ uint32_t hottest_temp_c_() {
     return (uint32_t)(max_mC / 1000);
 }
 
+// ─── Host system-monitor reads (uptime + disk-free) ─────────────────────────
+// Mirrors the supervisor's parse_uptime_sec + statvfs_kb (platform/supervisor/
+// impl/core/runtime.cpp). SHWA is the host monitor now; these are host-generic
+// (not Jetson-specific), so the jetson backend uses identical code.
+
+// /proc/uptime first token (seconds, float) → integer seconds.
+uint64_t uptime_sec_() {
+    std::string body = slurp_("/proc/uptime");
+    char* end = nullptr;
+    double v = std::strtod(body.c_str(), &end);
+    return v > 0 ? (uint64_t)v : 0;
+}
+
+// statvfs a path; fill total/avail kB (0/0 if it can't be stat'd). f_frsize for
+// the byte unit, f_blocks for total, f_bavail for free-to-unpriv.
+void statvfs_kb_(const char* path, uint64_t& total_kb, uint64_t& avail_kb) {
+    struct statvfs vfs{};
+    if (::statvfs(path, &vfs) != 0) { total_kb = avail_kb = 0; return; }
+    const uint64_t unit = vfs.f_frsize ? vfs.f_frsize : vfs.f_bsize;
+    total_kb = ((uint64_t)vfs.f_blocks * unit) / 1024;
+    avail_kb = ((uint64_t)vfs.f_bavail * unit) / 1024;
+}
+
+// The install/run dir: the directory of this binary (where bin/ + tombstones
+// live), via /proc/self/exe. Falls back to "." when the link can't be read.
+std::string install_dir_() {
+    char buf[4096];
+    ssize_t n = ::readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+    if (n <= 0) return ".";
+    buf[n] = '\0';
+    std::string p(buf);
+    auto slash = p.find_last_of('/');
+    return slash == std::string::npos ? "." : p.substr(0, slash);
+}
+
+// Fill the host system-monitor fields (uptime + root/install disk-free).
+void fill_host_sys_(AccelReading& r) {
+    r.uptime_sec = uptime_sec_();
+    statvfs_kb_("/", r.disk_root_total_kb, r.disk_root_avail_kb);
+    statvfs_kb_(install_dir_().c_str(),
+                r.disk_install_total_kb, r.disk_install_avail_kb);
+}
+
 }  // namespace
 
 namespace backend {
@@ -154,6 +198,9 @@ void sample(AccelReading& r) {
 
     r.temp_c  = hottest_temp_c_();
     r.fan_rpm = fan_rpm_();
+
+    // Host system-monitor facts (uptime + disk-free) — SHWA is the host monitor.
+    fill_host_sys_(r);
 }
 
 }  // namespace backend

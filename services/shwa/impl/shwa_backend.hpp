@@ -40,6 +40,14 @@ struct AccelReading {
     uint32_t    temp_c = 0;
     uint32_t    power_mw = 0;
     uint32_t    fan_rpm = 0;
+
+    // Host system-monitor facts (SHWA is the host monitor) — uptime + disk-free.
+    // Field names mirror the supervisor's SystemInfo so a later shed is clean.
+    uint64_t    uptime_sec = 0;
+    uint64_t    disk_root_total_kb = 0;
+    uint64_t    disk_root_avail_kb = 0;
+    uint64_t    disk_install_total_kb = 0;
+    uint64_t    disk_install_avail_kb = 0;
 };
 
 // The backend interface — ONE implementation is linked (host or jetson).

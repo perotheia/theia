@@ -19,7 +19,19 @@ int main() {
     std::string err;
     assert(!backend::apply_power_mode(PM_MAXN, false, err) &&
            "power apply is a no-op on the host backend");
-    std::printf("shwa-host-backend: OK — board=%s mem=%u/%u MB cpu=x%u temp=%u C\n",
-                r.board.c_str(), r.mem_used_mb, r.mem_total_mb, r.cpu_count, r.temp_c);
+    // Host system-monitor facts (SHWA is the host monitor): uptime + disk-free.
+    assert(r.uptime_sec > 0 && "uptime from /proc/uptime");
+    assert(r.disk_root_total_kb > 0 && "root fs total from statvfs(/)");
+    assert(r.disk_root_avail_kb <= r.disk_root_total_kb);
+    assert(r.disk_install_total_kb > 0 && "install fs total from statvfs");
+    assert(r.disk_install_avail_kb <= r.disk_install_total_kb);
+    std::printf("shwa-host-backend: OK — board=%s mem=%u/%u MB cpu=x%u temp=%u C "
+                "uptime=%llus root=%llu/%lluMB install=%llu/%lluMB\n",
+                r.board.c_str(), r.mem_used_mb, r.mem_total_mb, r.cpu_count, r.temp_c,
+                (unsigned long long)r.uptime_sec,
+                (unsigned long long)(r.disk_root_avail_kb / 1024),
+                (unsigned long long)(r.disk_root_total_kb / 1024),
+                (unsigned long long)(r.disk_install_avail_kb / 1024),
+                (unsigned long long)(r.disk_install_total_kb / 1024));
     return 0;
 }

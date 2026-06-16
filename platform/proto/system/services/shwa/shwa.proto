@@ -32,7 +32,12 @@ message AccelSample {
     uint32 temp_c = 11;
     uint32 power_mw = 12;
     uint32 fan_rpm = 13;
-    uint64 ts_ns = 14;
+    uint64 uptime_sec = 14;
+    uint64 disk_root_total_kb = 15;
+    uint64 disk_root_avail_kb = 16;
+    uint64 disk_install_total_kb = 17;
+    uint64 disk_install_avail_kb = 18;
+    uint64 ts_ns = 19;
 }
 
 message AccelStatusReq {

@@ -272,20 +272,20 @@ message GetChildRequest {
 message GetSystemInfoRequest {
 }
 
+// Supervisor IDENTITY only — who/what this supervisor is, NOT host monitoring.
+// The host hardware stats (cpu_count, total_ram, uptime, disk-free) MOVED to
+// services/shwa, which is now the host system-monitor (it reports them on the
+// AccelSample telemetry, folded into the GUI stream by com). The supervisor
+// concerns itself with its own children's state (NodeState), not host-wide
+// numbers — parental responsibility, not a system dashboard. Proto field tags
+// kept stable (4,5,6,10-13 reserved) so the wire stays compatible.
 message SystemInfo {
     string  hostname            // uname(2).nodename
     string  kernel              // sysname + release + machine
     string  os_pretty_name      // /etc/os-release PRETTY_NAME
-    uint32  cpu_count           // logical CPUs online
-    uint64  total_ram_kb        // /proc/meminfo MemTotal
-    uint64  uptime_sec          // boot-relative uptime
     string  theia_git_sha       // -DTHEIA_GIT_SHA at build time
     string  build_timestamp     // -DTHEIA_BUILD_TIMESTAMP
     uint64  start_timestamp_ms  // wall-clock millis when supervisor started
-    uint64  disk_root_total_kb     // statvfs("/")          f_blocks
-    uint64  disk_root_avail_kb     // statvfs("/")          f_bavail
-    uint64  disk_install_total_kb  // statvfs(install dir)  f_blocks
-    uint64  disk_install_avail_kb  // statvfs(install dir)  f_bavail
 }
 
 message ChildSelector {

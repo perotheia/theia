@@ -95,20 +95,15 @@ struct NodeStateData {
 };
 
 // Host facts for GetSystemInfo (replaces the libprotobuf SystemInfo).
+// Supervisor IDENTITY only. The host hardware stats (cpu_count/total_ram/
+// uptime/disk) moved to services/shwa, the host system-monitor.
 struct SystemInfoData {
     std::string hostname;
     std::string kernel;
     std::string os_pretty_name;
-    uint32_t    cpu_count{0};
-    uint64_t    total_ram_kb{0};
-    uint64_t    uptime_sec{0};
     std::string theia_git_sha;
     std::string build_timestamp;
     uint64_t    start_timestamp_ms{0};
-    uint64_t    disk_root_total_kb{0};     // statvfs("/")          f_blocks
-    uint64_t    disk_root_avail_kb{0};     // statvfs("/")          f_bavail
-    uint64_t    disk_install_total_kb{0};  // statvfs(install dir)  f_blocks
-    uint64_t    disk_install_avail_kb{0};  // statvfs(install dir)  f_bavail
 };
 
 // One read-back trace-config row for GetTraceConfig.

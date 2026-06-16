@@ -92,7 +92,3 @@ message FgRetry {
     // empty body
 }
 
-message PhmHealthStatus {
-    // empty body
-}
-

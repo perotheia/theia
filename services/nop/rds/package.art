@@ -1,9 +1,0 @@
-// Rds (RDS) — Adaptive Platform Functional Cluster.
-//
-// NOT IMPLEMENTED. See README.md.
-
-package system.services.rds
-
-node atomic RdsDaemon {
-    tipc type=0x80010010 instance=0
-}

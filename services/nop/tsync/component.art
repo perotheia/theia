@@ -1,7 +1,0 @@
-package system.services.tsync
-
-
-composition Tsync {
-    prototype TsyncDaemon tsync_daemon
-}
-

@@ -1,9 +1,0 @@
-// Idsm (IDSM) — Adaptive Platform Functional Cluster.
-//
-// NOT IMPLEMENTED. See README.md.
-
-package system.services.idsm
-
-node atomic IdsmDaemon {
-    tipc type=0x8001000B instance=0
-}

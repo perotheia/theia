@@ -1,0 +1,12 @@
+package system.services.phm
+
+
+// Platform Health Management — the {Gate; Fsm} split (same idiom as SM): PhmGate
+// is the wire-reachable ingest (subscribes to the supervisor + node + app health
+// signals, does the threshold counting) and PhmFsm is the per-entity fault state
+// machine it post_event()s into in-process. Both prototypes share one process.
+// PhmTester is probe-only (in no composition).
+composition Phm {
+    prototype PhmFsm  phm_fsm
+    prototype PhmGate phm_gate
+}

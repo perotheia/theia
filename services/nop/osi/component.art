@@ -1,7 +1,0 @@
-package system.services.osi
-
-
-composition Osi {
-    prototype OsiDaemon osi_daemon
-}
-

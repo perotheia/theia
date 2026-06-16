@@ -1,0 +1,232 @@
+// Phm (PHM) — Platform Health Management. Adaptive Platform Functional Cluster.
+//
+// PHM is the supervisory WATCHDOG + FAULT-CORRELATION engine — the POLICY layer
+// on top of the supervisor's raw detection. It does NOT re-detect: it CONSUMES
+// the signals the supervisor (Theia's EM) already emits, runs a per-entity
+// OK → WARNING → DEGRADED → FAILED fault state machine against configured
+// thresholds, and ESCALATES a PhmHealthStatus to State Management (services/sm)
+// when an entity degrades — closing the loop SM's FgGate already waits for
+// (PhmHealthStatus → FgDegraded → the FG drops to Restart). Clean division of
+// labour (docs/tasks/BACKLOG/PHM.md): PHM decides, EM executes, SM drops the mode.
+//
+// The four AUTOSAR supervision types, all feeding ONE fault FSM:
+//   alive     — SupervisionEvent (child died/restarted) + HeartbeatReport gaps
+//   deadline  — SendTimeoutReport (an outbound call/cast missed its budget)
+//   logical   — PhmCheckpoint with an out-of-order execution step
+//   state     — PhmCheckpoint with an illegal lifecycle transition
+// alive+deadline come from the supervisor (it already detects); logical+state
+// come from a NODE-side report path (apps emit checkpoints to PHM).
+
+package system.services.phm
+
+// Reuse the SUPERVISOR's own signal types — the SAME SupervisionEvent /
+// HeartbeatReport / SendTimeoutReport the supervisor's SupervisorCtl emits
+// and decodes. Cross-package import (the supervisor↔runtime idiom): PHM's
+// from_sup / from_nodes receiver ports carry these real types so gen-app
+// emits the matching handle_cast + register_cast on PhmGate's config_mux
+// binding (race-free, pre-start) and pulls the supervisor RemoteCodecs in.
+// Real defs live in platform/supervisor/system/package.art.
+import system.supervisor.*
+
+// ─── Fault state (per monitored entity) ─────────────────────────────────────
+
+// The AUTOSAR-style health verdict for one entity (an FC / worker / node).
+enum HealthLevel {
+    OK       = 0   // healthy — within all thresholds
+    WARNING  = 1   // a first/isolated fault (e.g. one restart) — watch
+    DEGRADED = 2   // threshold breached (e.g. N restarts in a window) — escalate
+    FAILED   = 3   // budget blown / unrecoverable — hard escalation
+}
+
+// The AUTOSAR supervision category a fault came from (which detector saw it).
+enum SupervisionKind {
+    SK_ALIVE    = 0   // heartbeat / process death
+    SK_DEADLINE = 1   // send-side budget miss (SendTimeoutReport)
+    SK_LOGICAL  = 2   // app-reported wrong execution order
+    SK_STATE    = 3   // app-reported illegal lifecycle transition
+}
+
+// ─── Thresholds (static deploy params; etcd hot-reload is the plan) ──────────
+//
+// `config PhmConfig` binds these as the node's structured config (etcd via
+// services/per); a change arrives as ConfigUpdated → on_config_update. Start as
+// deploy knobs; the per-entity override table is the later phase.
+message PhmConfig {
+    // Restart-thrash window (ms): N restarts inside this window → DEGRADED.
+    uint32 restart_window_ms = 30000
+    // Restart count within the window that trips WARNING (1) then DEGRADED.
+    uint32 restart_warn   = 1
+    uint32 restart_degrade = 3
+    // Restarts that trip FAILED (budget exhausted).
+    uint32 restart_fail   = 5
+    // A deadline (SendTimeoutReport) count in the window that trips DEGRADED.
+    uint32 deadline_degrade = 5
+    // A logical/state checkpoint violation trips this level immediately
+    // (default DEGRADED=2 — an illegal transition is never just a warning).
+    uint32 checkpoint_level = 2
+}
+
+// ─── Supervision inputs (the four types) ────────────────────────────────────
+//
+// alive + deadline: the SUPERVISOR's own signals, imported (system.supervisor)
+// so gen-app generates the typed handle_cast + register_cast on PhmGate's
+// config_mux binding. PHM SUBSCRIBES — it does not re-detect.
+interface senderReceiver SupervisorEventIf {
+    data SupervisionEvent event              // from system.supervisor — alive
+}
+interface senderReceiver NodeReportIf {
+    data HeartbeatReport   heartbeat         // from system.supervisor — alive
+    data SendTimeoutReport send_timeout      // from system.supervisor — deadline
+}
+
+// logical + state: the NODE→PHM checkpoint path. An app reports it reached a
+// named execution step / lifecycle state; PHM evaluates expected-vs-observed
+// (the order/transition table is the later phase — v1 carries the verdict the
+// node already computed). A senderReceiver cast (fire-and-forget, never blocks
+// the reporting app — async per AUTOSAR PHM checkpoint semantics).
+message PhmCheckpoint {
+    string          entity        // who is reporting (node/worker name)
+    SupervisionKind kind          // SK_LOGICAL or SK_STATE
+    string          checkpoint    // the step/transition name reached
+    bool            violation     // true = the app/PHM judged it out-of-order/illegal
+}
+interface senderReceiver PhmReportIf {
+    data PhmCheckpoint checkpoint
+}
+
+// ─── Escalation OUT → State Management (the comm-matrix phm → sm edge) ───────
+//
+// The REAL PhmHealthStatus schema (SM declared an empty placeholder; this is the
+// canonical definition — SM's from_phm receiver decodes it). A DEGRADED/FAILED
+// verdict on an entity is cast to SM, whose FgGate translates it to FgDegraded
+// for the affected Function Group. CAST — PHM informs, SM decides.
+message PhmHealthStatus {
+    string          entity        // the FC/worker the verdict is about
+    HealthLevel     level         // OK | WARNING | DEGRADED | FAILED
+    SupervisionKind kind          // which supervision type tripped it
+    uint32          fg            // Function Group id the entity belongs to (0=Machine)
+    string          detail        // human note (e.g. "5 restarts in 30s")
+    uint64          ts_ns
+}
+interface senderReceiver PhmHealthStream {
+    data PhmHealthStatus health
+}
+
+// ─── DTC-like fault events → future ara::diag ───────────────────────────────
+//
+// A structured fault record (entity, type, severity, timestamps, restart count,
+// tombstone ref) emitted on every state transition toward a future Diagnostics
+// FC. Distinct from the SM escalation: this is the persistent fault-history /
+// DTC surface, not the mode-control path. CAST.
+message PhmFaultEvent {
+    string          entity
+    HealthLevel     level
+    SupervisionKind kind
+    uint32          restart_count
+    string          tombstone_path  // from the supervisor's tombstone, "" if none
+    string          detail
+    uint64          ts_ns
+}
+interface senderReceiver PhmDtcStream {
+    data PhmFaultEvent fault
+}
+
+// ─── Status query (the ara::phm read surface) ───────────────────────────────
+
+message PhmStatusReq { }
+message PhmStatusMsg {
+    HealthLevel worst        // worst level across all tracked entities
+    uint32      n_entities   // how many entities PHM is tracking
+    uint32      n_degraded   // how many are DEGRADED or worse
+    uint64      ts_ns
+}
+interface clientServer PhmCtlIf {
+    operation GetHealthStatus(in r: PhmStatusReq) returns PhmStatusMsg
+}
+
+// ─── Fault FSM events (post_event'd in-process by PhmGate) ───────────────────
+//
+// PhmGate does the THRESHOLD arithmetic (counts restarts/deadlines per entity in
+// the window) and posts the resulting LEVEL-CHANGE event into the FSM. Distinct
+// types → GenStateM per-event overload dispatch. (The FSM is the verdict
+// authority — the gate only counts; the FSM owns the OK/WARNING/DEGRADED/FAILED
+// transitions + the on_enter escalation casts.)
+// These are the statem `event` triggers — PhmGate post_event()s them into the
+// FSM IN-PROCESS (LocalRef + post_event), they never cross the wire, so there is
+// NO interface/port carrying them (a state machine is never driven directly off
+// the wire — the gate is the only ingress).
+message FaultObserved   { }   // a fault tick (restart/deadline/checkpoint) — may step up
+message FaultEscalate   { }   // threshold crossed → step toward DEGRADED/FAILED
+message FaultCleared    { }   // recovery window elapsed clean → step back toward OK
+
+// ─── Nodes ──────────────────────────────────────────────────────────────────
+//
+// {Gate; Fsm} split (same idiom as SM): PhmGate is the only wire-reachable
+// surface (subscribes to the supervisor + node reports + app checkpoints, does
+// the threshold counting), and post_event()s level-change events into PhmFsm's
+// fault state machine IN-PROCESS. The FSM never handles a raw wire message.
+
+// The fault state machine. One instance for v1 (the platform-wide worst-case);
+// the per-entity table lives in PhmGate's State and selects which entity the
+// current transition is about (carried in the FSM data). on_enter(DEGRADED/
+// FAILED) casts PhmHealthStatus → SM + a PhmFaultEvent → the DTC stream.
+node atomic PhmFsm {
+    tipc type=0x80010065 instance=0
+    tag = "PHMF"
+    ports {
+        sender to_sm    provides PhmHealthStream   // escalate → State Management
+        sender dtc_out  provides PhmDtcStream       // fault history → future ara::diag
+    }
+    statem {
+        states  [OK, WARNING, DEGRADED, FAILED]
+        initial OK
+        data    PhmHealthStatus
+
+        on OK:
+            event FaultObserved → WARNING
+            event FaultEscalate → DEGRADED
+
+        on WARNING:
+            event FaultEscalate → DEGRADED
+            event FaultCleared  → OK
+
+        on DEGRADED:
+            event FaultEscalate → FAILED
+            event FaultCleared  → WARNING
+
+        on FAILED:
+            event FaultCleared  → DEGRADED
+    }
+}
+
+// The PHM ingest gate — the only TIPC-reachable surface. Subscribes to the
+// supervisor's SupervisionEvent (alive: died/restarted) + NodeReportIf
+// (HeartbeatReport, SendTimeoutReport = deadline) + app PhmReportIf (logical+
+// state checkpoints). Per entity it counts faults in the config window and
+// post_event()s the matching FaultObserved/FaultEscalate/FaultCleared into
+// PhmFsm via a LocalRef<PhmFsm>. Also binds config (PhmConfig) + serves the
+// GetHealthStatus read.
+node atomic PhmGate {
+    tipc type=0x80010075 instance=0
+    requires_timers
+    tag = "PHMG"
+    config PhmConfig
+    ports {
+        receiver from_sup    requires SupervisorEventIf   // alive: SupervisionEvent
+        receiver from_nodes  requires NodeReportIf         // alive+deadline reports
+        receiver from_apps   requires PhmReportIf          // logical+state checkpoints
+        server   ctl         provides PhmCtlIf             // GetHealthStatus
+    }
+}
+
+// Test-only driver (probe). Casts SupervisionEvent-like faults + checkpoints at
+// PhmGate to drive the fault FSM standalone (services/phm/test). NOT deployed.
+node atomic PhmTester {
+    tipc type=0x80010085 instance=0
+    tag = "PHMT"
+    ports {
+        // Drives the gate (the only FSM ingress) with PhmCheckpoint violations —
+        // the gate then post_events the FSM. The FSM is NOT driven directly.
+        sender to_gate provides PhmReportIf
+    }
+}

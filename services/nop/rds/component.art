@@ -1,7 +1,0 @@
-package system.services.rds
-
-
-composition Rds {
-    prototype RdsDaemon rds_daemon
-}
-

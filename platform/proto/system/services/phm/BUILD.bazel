@@ -1,0 +1,22 @@
+# Generated nanopb sources for the system.services.phm package.
+# .pb.{c,h} are produced by the genrule from phm.proto; not committed.
+
+package(default_visibility = ["//visibility:public"])
+
+genrule(
+    name = "phm_pb",
+    srcs = ["phm.proto"],
+    outs = [
+        "phm.pb.c",
+        "phm.pb.h",
+    ],
+    cmd = "set -e;"
+        + " in_dir=$$(dirname $(location phm.proto));"
+        + " out_dir=$$(dirname $(location phm.pb.c));"
+        + " nanopb_generator -I $$in_dir -D $$out_dir phm.proto;",
+    local = True,
+)
+
+filegroup(name = "phm_pb_c", srcs = ["phm.pb.c"])
+filegroup(name = "phm_pb_h", srcs = ["phm.pb.h"])
+filegroup(name = "phm_proto", srcs = ["phm.proto"])

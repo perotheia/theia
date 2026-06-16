@@ -1,9 +1,0 @@
-// Osi (OSI) — Adaptive Platform Functional Cluster.
-//
-// NOT IMPLEMENTED. See README.md.
-
-package system.services.osi
-
-node atomic OsiDaemon {
-    tipc type=0x80010002 instance=0
-}

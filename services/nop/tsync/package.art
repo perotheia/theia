@@ -1,9 +1,0 @@
-// Tsync (TSYNC) — Adaptive Platform Functional Cluster.
-//
-// NOT IMPLEMENTED. See README.md.
-
-package system.services.tsync
-
-node atomic TsyncDaemon {
-    tipc type=0x80010004 instance=0
-}

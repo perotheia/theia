@@ -1,0 +1,50 @@
+# HAND-OWNED. source: system/services/phm/package.art
+#
+# Impl slice — handler bodies. The user owns this BUILD.bazel after first
+# emit. PHM's PhmGate_state.hh #includes the phm nanopb header (PhmConfig +
+# HealthLevel for the per-entity tally), so phm_state pulls platform_protos;
+# and the handlers decode the SUPERVISOR's SupervisionEvent / HeartbeatReport /
+# SendTimeoutReport (cross-FC, via phm_codecs.hh → supervisor.pb.h), which the
+# phm_lib already carries transitively through //platform/proto:platform_protos.
+
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+# State structs (write-once, app-owned). A leaf header-only target so
+# BOTH the lib (which #includes "impl/<Node>_state.hh" as the GenServer
+# State type) and the impl can depend on it WITHOUT a lib<->impl cycle:
+#   phm_state  ←  lib  ←  impl
+cc_library(
+    name = "phm_state",
+    hdrs = [
+        "PhmGate_state.hh",
+    ],
+    # The lib #includes these as "impl/<Node>_state.hh", so the include
+    # root is the FC out_dir (one above impl/).
+    includes = [".."],
+    copts = ["-std=c++17", "-fPIC"],
+    deps = [
+        "//platform/runtime:runtime",
+        # PhmGate_state.hh #includes "system/services/phm/phm.pb.h" (PhmConfig
+        # + HealthLevel for the per-entity tally).
+        "//platform/proto:platform_protos",
+    ],
+)
+
+cc_library(
+    name = "phm_impl",
+    srcs = [
+        "PhmFsm_handlers.cc",
+        "PhmGate_handlers.cc",
+    ],
+    copts = [
+        "-std=c++17",
+        "-Wall",
+        "-Wextra",
+        "-fPIC",
+    ],
+    deps = [
+        "//services/phm/lib:phm_lib",
+    ],
+)

@@ -80,16 +80,24 @@ void FgGate::handle_cast(const FgRetry& msg, FgGateState& /*s*/) {
 
 // ---- PHM health (comm-matrix phm → sm) — TRANSLATE, don't forward. ---------
 //
-// A PHM health verdict is not an FG event; the gate maps it to one. Today the
-// placeholder PhmHealthStatus carries no fields, so any health cast is treated
-// as a degraded signal (drop the FG into Restart). When the message grows its
-// {entity, level, fg} fields, gate ONLY on a DEGRADED/FAILED level and address
-// the named fg — until then this is the conservative "health blip → recover".
-void FgGate::handle_cast(const PhmHealthStatus& /*msg*/, FgGateState& /*s*/) {
+// A PHM health verdict is not an FG event; the gate maps it to one. The real
+// PhmHealthStatus (now imported from system.services.phm) carries
+// { entity, level, kind, fg, detail, ts_ns }. Gate ONLY on a DEGRADED (2) or
+// FAILED (3) level: those drop the FG into Restart (FgDegraded). OK/WARNING are
+// informational — PHM broadcasts them so observers see the climb, but they
+// don't warrant an FG action. (A richer build would address msg.fg / msg.entity
+// to the specific Function Group; v1 drives the single MachineFG FSM.)
+void FgGate::handle_cast(const PhmHealthStatus& msg, FgGateState& /*s*/) {
+    const bool critical =
+        msg.level == system_services_phm_HealthLevel_HealthLevel_DEGRADED ||
+        msg.level == system_services_phm_HealthLevel_HealthLevel_FAILED;
     std::fprintf(stderr,
-        "[%s] PhmHealthStatus → FgDegraded (placeholder: any health cast "
-        "→ recover; gate on level once the schema is pinned)\n", kNodeName);
-    forward_to_fg_statem(kNodeName, "FgDegraded(from PHM)", FgDegraded{});
+        "[%s] PhmHealthStatus entity=%s level=%u fg=%u%s\n",
+        kNodeName, msg.entity, (unsigned)msg.level, (unsigned)msg.fg,
+        critical ? " → FgDegraded" : " (below DEGRADED — no FG action)");
+    if (critical) {
+        forward_to_fg_statem(kNodeName, "FgDegraded(from PHM)", FgDegraded{});
+    }
 }
 
 }  // namespace ara::sm

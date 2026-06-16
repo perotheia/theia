@@ -1,7 +1,0 @@
-package system.services.nm
-
-
-composition Nm {
-    prototype NmDaemon nm_daemon
-}
-

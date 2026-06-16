@@ -1,7 +1,0 @@
-package system.services.phm
-
-
-composition Phm {
-    prototype PhmDaemon phm_daemon
-}
-

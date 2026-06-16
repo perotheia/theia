@@ -1,9 +1,0 @@
-// Nm (NM) — Adaptive Platform Functional Cluster.
-//
-// NOT IMPLEMENTED. See README.md.
-
-package system.services.nm
-
-node atomic NmDaemon {
-    tipc type=0x80010009 instance=0
-}

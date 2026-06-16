@@ -17,6 +17,14 @@
 
 package system.services.sm
 
+// Reuse PHM's REAL health verdict type (the comm-matrix phm→sm edge). PHM is
+// the defining package for PhmHealthStatus + HealthLevel; SM's FgGate decodes
+// it and gates the FG action on the level. Cross-package import so SM's
+// register_cast service_id (djb2 of system_services_phm_PhmHealthStatus)
+// matches the one PhmFsm stamps when it casts. Real defs live in
+// services/phm/system/phm/package.art.
+import system.services.phm.*
+
 // Forward decls of foreign interfaces.
 interface clientServer   PersistencyIf { }  // from system.services.per
 
@@ -127,10 +135,10 @@ interface senderReceiver FgStateStream {
 // Platform Health Management escalates a per-entity health verdict to SM, which
 // translates it into an FG event (a critical verdict → FgDegraded on the
 // affected group). CAST (notification, fire-and-forget) — PHM informs, SM
-// decides. The PHM FC is still planned (docs/tasks/BACKLOG/PHM.md); today the
-// supervisor's watchdog plays PHM. Empty placeholder body — fillable when the
-// health schema (entity, OK/WARNING/DEGRADED/FAILED, severity) is pinned.
-message PhmHealthStatus { }   // TODO: { entity, level(OK|WARN|DEGRADED|FAILED), fg }
+// decides. PhmHealthStatus is now the REAL type from system.services.phm
+// (imported above): { entity, level(OK|WARNING|DEGRADED|FAILED), kind, fg,
+// detail, ts_ns }. FgGate decodes `level` and only translates to FgDegraded
+// when level >= DEGRADED (2).
 interface senderReceiver PhmHealthStream {
     data PhmHealthStatus health
 }

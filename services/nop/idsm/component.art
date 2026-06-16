@@ -1,7 +1,0 @@
-package system.services.idsm
-
-
-composition Idsm {
-    prototype IdsmDaemon idsm_daemon
-}
-

@@ -1,9 +1,0 @@
-// Phm (PHM) — Adaptive Platform Functional Cluster.
-//
-// NOT IMPLEMENTED. See README.md.
-
-package system.services.phm
-
-node atomic PhmDaemon {
-    tipc type=0x8001000A instance=0
-}

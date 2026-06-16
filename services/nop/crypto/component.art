@@ -1,7 +1,0 @@
-package system.services.crypto
-
-
-composition Crypto {
-    prototype CryptoDaemon crypto_daemon
-}
-

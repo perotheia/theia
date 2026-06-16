@@ -36,3 +36,4 @@ cc_binary(
     copts = ["-std=c++17", "-fPIC"],
     deps = ["//services/idsm/impl:idsm_state"],
 )
+

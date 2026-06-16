@@ -1,0 +1,15 @@
+# HAND-OWNED. fw tests.
+#
+# Unit check for the per-FC egress ruleset generation (fw_backend.hpp). Uses a
+# throwaway cgroup root under /tmp, so it runs in the sandbox (no real cgroups).
+
+load("@rules_cc//cc:defs.bzl", "cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_test(
+    name = "test_egress_gen",
+    srcs = ["test_egress_gen.cc"],
+    copts = ["-std=c++17", "-fPIC"],
+    deps = ["//services/fw/impl:fw_state"],
+)

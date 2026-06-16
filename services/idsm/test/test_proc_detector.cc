@@ -64,7 +64,22 @@ int main() {
     auto v = d.scan(/*supervisor_pid=*/999999);
     assert(v.empty() && "no listener is a child of a bogus supervisor pid");
 
+    // 5. Cat B — parse fw's nft counter JSON (the real shape `nft -j` emits).
+    {
+        std::string j = R"({"nftables": [{"metainfo": {"version": "1.0.2"}},
+          {"counter": {"family": "inet", "name": "idsm_b_per", "table":
+           "theia_fw", "handle": 2, "packets": 7, "bytes": 420}},
+          {"counter": {"family": "inet", "name": "idsm_b_rogue", "table":
+           "theia_fw", "handle": 3, "packets": 0, "bytes": 0}},
+          {"counter": {"family": "inet", "name": "unrelated", "packets": 99}}]})";
+        auto drops = parse_nft_counters_(j);
+        assert(drops.size() == 2 && "only idsm_b_* counters, not 'unrelated'");
+        // order preserved: per=7, rogue=0.
+        assert(drops[0].first == "per" && drops[0].second == 7);
+        assert(drops[1].first == "rogue" && drops[1].second == 0);
+    }
+
     std::printf("proc-detector test: OK — ss parse + split + grpc-port + "
-                "configure/scan wiring\n");
+                "configure/scan wiring + Cat-B nft-counter parse\n");
     return 0;
 }

@@ -162,6 +162,49 @@ inline std::string sha256_file(const std::string& path) {
     return out.substr(0, sp);
 }
 
+// Parse `nft -j list counters` JSON → [(fc, packets)] for each idsm_b_<fc>
+// counter. PURE (testable): walk for {"counter": {"name":"idsm_b_<fc>", …
+// "packets": N}}. Tolerates nft's spacing ("name": vs "name":).
+inline std::vector<std::pair<std::string, uint64_t>>
+parse_nft_counters_(const std::string& j) {
+    std::vector<std::pair<std::string, uint64_t>> out;
+    size_t pos = 0;
+    const std::string marker = "idsm_b_";
+    // Find each "name"... "idsm_b_<fc>"; nft emits "name": "idsm_b_per".
+    while ((pos = j.find("\"name\"", pos)) != std::string::npos) {
+        size_t q1 = j.find('"', j.find(':', pos) + 0);
+        // value string starts at the first '"' after the ':'
+        size_t colon = j.find(':', pos);
+        size_t vs = j.find('"', colon);
+        if (vs == std::string::npos) break;
+        size_t ve = j.find('"', vs + 1);
+        if (ve == std::string::npos) break;
+        std::string name = j.substr(vs + 1, ve - vs - 1);
+        pos = ve + 1;
+        if (name.rfind(marker, 0) != 0) continue;   // not an idsm_b_ counter
+        std::string fc = name.substr(marker.size());
+        size_t pk = j.find("\"packets\"", ve);
+        uint64_t pkts = 0;
+        if (pk != std::string::npos) {
+            size_t pc = j.find(':', pk);
+            if (pc != std::string::npos)
+                pkts = std::strtoull(j.c_str() + pc + 1, nullptr, 10);
+        }
+        out.emplace_back(fc, pkts);
+        (void)q1;
+    }
+    return out;
+}
+
+// Read fw's per-FC egress-drop counters (Cat B): runs `nft -j list counters
+// table inet theia_fw` and parses it. fw declares idsm_b_<fc> before its
+// `socket cgroupv2 … drop` rules, so a nonzero packet count means that FC tried
+// a denied egress. Empty if nft/the table is absent (no enforcement → no Cat B).
+inline std::vector<std::pair<std::string, uint64_t>> nft_egress_drops() {
+    return parse_nft_counters_(
+        run_("nft -j list counters table inet theia_fw"));
+}
+
 }  // namespace proc_detail
 
 // Stateful userspace detector. The FC owns one instance; call scan() each tick.
@@ -239,9 +282,28 @@ public:
         // Expire edges that are gone, so a re-appearance re-fires.
         for (auto it = reported_.begin(); it != reported_.end();) {
             // keep Cat-H keys (pid-scoped, expire on pid change) + live socket keys
-            if (it->rfind("elfH:", 0) == 0 || live.count(it->substr(it->find(':') + 1)))
+            if (it->rfind("elfH:", 0) == 0 || it->rfind("catB:", 0) == 0 ||
+                live.count(it->substr(it->find(':') + 1)))
                 ++it;
             else it = reported_.erase(it);
+        }
+
+        // Cat B — denied egress, correlated from fw's nft drop counters. A
+        // nonzero packet delta on idsm_b_<fc> means that FC tried a destination
+        // fw's per-cgroup egress allow-list denied. This is the DETECT side of
+        // fw's ENFORCE — no eBPF; the enforcement + the signal both ride nft.
+        for (const auto& [fc, pkts] : proc_detail::nft_egress_drops()) {
+            uint64_t prev = last_drops_.count(fc) ? last_drops_[fc] : 0;
+            if (pkts > prev) {
+                last_drops_[fc] = pkts;
+                // Re-key per cumulative count so each new burst re-fires.
+                emit_once_(out, "catB:" + fc + ":" + std::to_string(pkts), 4,
+                           "IDSM_UNEXPECTED_OUTBOUND_CONNECTION", fc,
+                           "denied-egress(" + std::to_string(pkts - prev) +
+                           " pkts)");
+            } else {
+                last_drops_[fc] = pkts;
+            }
         }
         return out;
     }
@@ -258,6 +320,7 @@ private:
     std::set<std::string> known_fcs_;      // comms that are real platform FCs
     std::set<std::string> reported_;       // edge-dedup keys
     std::map<int, std::string> elf_checked_;   // pid → sha already verified
+    std::map<std::string, uint64_t> last_drops_;   // fc → last egress-drop count
 
     bool comm_is_known_fc_(const std::string& comm) const {
         if (known_fcs_.count(comm)) return true;

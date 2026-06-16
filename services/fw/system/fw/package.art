@@ -44,6 +44,20 @@ message FwConfig {
     // Re-apply cadence (ms) — FwDaemon re-asserts its table on a tick so a
     // foreign flush (another tool clobbering nft) self-heals. 0 = apply once.
     uint32 reassert_ms    = 0
+
+    // ---- per-FC EGRESS enforcement (cgroup v2, over osi's theia.slice) ----
+    // Generates an `output` chain matching each FC's cgroup via
+    // `socket cgroupv2 level 2 "<slice>/<fc>"` and allow-listing its egress
+    // destinations; everything else from that FC is logged ("IDSM_B " prefix,
+    // so idsm correlates it as Cat B) + dropped. nft-native — NO eBPF. Needs
+    // osi's slice present (the FC must run under theia.slice/<fc>); absent →
+    // the output chain is empty (no enforcement, graceful). See
+    // docs/autosar/services/idsm.md Cat B + project-linux-mapping-fcs.
+    // Format: "fc=cidr,cidr;fc2=cidr" (per-FC allow CIDRs). Empty = no egress
+    // enforcement (the default — opt-in, since it can break a misconfigured FC).
+    string egress_policy  = ""
+    // The cgroup v2 slice osi places FCs under (matches OsiConfig.slice_name).
+    string egress_slice   = "theia.slice"
 }
 
 // ─── Status wire types ──────────────────────────────────────────────────────

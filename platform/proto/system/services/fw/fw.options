@@ -1,7 +1,7 @@
 # nanopb field-size constraints for system.services.fw wire messages.
 # HAND-MAINTAINED: the gen-app default of 64 truncates nft error/status messages
-# (`nft -f` diagnostics are verbose) and a growing DMZ port list. nanopb_generator
-# auto-loads this file (same basename next to fw.proto).
+# (`nft -f` diagnostics are verbose), the DMZ port list, and the per-FC egress
+# policy. nanopb_generator auto-loads this file (same basename next to fw.proto).
 #
 # Grammar: "<Fully.Qualified.field>  max_size:N".
 
@@ -9,6 +9,9 @@
 system_services_fw.FwConfig.fw_d_dir        max_size:128
 system_services_fw.FwConfig.dmz_tcp_ports   max_size:128
 system_services_fw.FwConfig.default_policy  max_size:16
+# Per-FC egress policy "fc=cidr,cidr;fc2=cidr" — grows with the FC set + CIDRs.
+system_services_fw.FwConfig.egress_policy   max_size:1024
+system_services_fw.FwConfig.egress_slice    max_size:64
 
 # ---- Status / reload — message carries nft apply diagnostics ---------------
 system_services_fw.FwStatusMsg.message      max_size:192

@@ -140,14 +140,59 @@ inline void raise_net_admin_ambient() {
 
 }  // namespace fw_detail
 
+// Parse the per-FC egress policy "fc=cidr,cidr;fc2=cidr" → [(fc, [cidrs])].
+// A cgroup that doesn't exist under the slice is skipped at emit time (nft would
+// reject the rule), so a policy can name FCs that aren't placed yet.
+inline std::vector<std::pair<std::string, std::vector<std::string>>>
+parse_egress_(const std::string& policy) {
+    std::vector<std::pair<std::string, std::vector<std::string>>> out;
+    std::string cur;
+    auto flush = [&] {
+        if (cur.empty()) return;
+        auto eq = cur.find('=');
+        if (eq != std::string::npos) {
+            std::string fc = cur.substr(0, eq);
+            std::vector<std::string> cidrs;
+            std::string c;
+            for (char ch : cur.substr(eq + 1)) {
+                if (ch == ',') { if (!c.empty()) cidrs.push_back(c); c.clear(); }
+                else if (ch != ' ') c += ch;
+            }
+            if (!c.empty()) cidrs.push_back(c);
+            if (!fc.empty()) out.emplace_back(fc, cidrs);
+        }
+        cur.clear();
+    };
+    for (char ch : policy) { if (ch == ';') flush(); else if (ch != ' ') cur += ch; }
+    flush();
+    return out;
+}
+
+// Does the FC's cgroup dir exist under the slice? (nft `socket cgroupv2` needs
+// the path to resolve at rule-add time, else the whole `nft -f` fails.)
+inline bool fc_cgroup_exists(const std::string& cgroup_root,
+                             const std::string& slice, const std::string& fc) {
+    std::string p = cgroup_root + "/" + slice + "/" + fc;
+    FILE* f = ::fopen((p + "/cgroup.procs").c_str(), "r");
+    if (f) { ::fclose(f); return true; }
+    return false;
+}
+
 // Build the `inet theia_fw` ruleset text. `policy` is "drop" (deny-by-default)
-// or "accept". DMZ ports become a single `tcp dport { … } accept`. Override
-// fragments from fw_d_dir are appended inside the input chain. Returns the text
-// + the override count + a rule count (the fixed rules + 1 dmz set + overrides).
+// or "accept" for the INPUT chain. DMZ ports become a single
+// `tcp dport { … } accept`. Override fragments from fw_d_dir are appended inside
+// the input chain. When `egress_policy` is set, an OUTPUT chain enforces per-FC
+// egress over osi's cgroup slices (socket cgroupv2 — nft-native, no eBPF): each
+// FC's allowed CIDRs accept, the rest log "IDSM_B " (so idsm flags Cat B) + drop.
+// `cgroup_root` (default /sys/fs/cgroup) + `egress_slice` locate the cgroups.
 inline std::string build_ruleset(const std::string& dmz_csv,
                                  const std::string& policy,
                                  const std::string& fw_d_dir,
-                                 int& rule_count, int& override_count) {
+                                 const std::string& egress_policy,
+                                 const std::string& egress_slice,
+                                 const std::string& cgroup_root,
+                                 int& rule_count, int& override_count,
+                                 int& egress_fc_count) {
     using namespace fw_detail;
     auto ports = split_ports_(dmz_csv);
     const std::string pol = (policy == "accept") ? "accept" : "drop";
@@ -174,6 +219,50 @@ inline std::string build_ruleset(const std::string& dmz_csv,
     if (!ov.empty()) s += ov;
     rules += override_count;
     s += "    }\n";
+
+    // ---- per-FC EGRESS (output chain over osi's cgroup slices) ----------
+    egress_fc_count = 0;
+    auto egress = parse_egress_(egress_policy);
+    if (!egress.empty()) {
+        // policy accept = anything not matched by an FC rule passes (host +
+        // unplaced FCs unaffected); each enrolled FC is allow-list-then-drop.
+        std::string counters;   // table-level named counters (declared first)
+        std::string out_chain;
+        for (const auto& [fc, cidrs] : egress) {
+            if (!fc_cgroup_exists(cgroup_root, egress_slice, fc))
+                continue;   // FC not placed under the slice yet — skip (graceful)
+            const std::string match =
+                "socket cgroupv2 level 2 \"" + egress_slice + "/" + fc + "\"";
+            if (!cidrs.empty()) {
+                out_chain += "        " + match + " ip daddr { ";
+                for (size_t i = 0; i < cidrs.size(); ++i) {
+                    out_chain += cidrs[i];
+                    if (i + 1 < cidrs.size()) out_chain += ", ";
+                }
+                out_chain += " } accept\n";
+            }
+            // loopback always allowed (TIPC/local), then default-deny this FC:
+            // a NAMED COUNTER (per FC) so idsm can poll `nft list counter` for a
+            // nonzero delta → Cat B IDSM_UNEXPECTED_OUTBOUND_CONNECTION (the
+            // detect side of this enforce); plus a log prefix for forensics.
+            out_chain += "        " + match + " ip daddr 127.0.0.0/8 accept\n";
+            out_chain += "        " + match +
+                " counter name \"idsm_b_" + fc + "\" log prefix \"IDSM_B " +
+                fc + " \" drop\n";
+            counters += "    counter idsm_b_" + fc + " { }\n";
+            ++egress_fc_count;
+        }
+        if (egress_fc_count > 0) {
+            s += counters;   // named counters declared at table scope first
+            s += "    chain output {\n";
+            s += "        type filter hook output priority 0; policy accept;\n";
+            s += "        ct state established,related accept\n";
+            s += out_chain;
+            s += "    }\n";
+            rules += egress_fc_count;
+        }
+    }
+
     s += "}\n";
     rule_count = rules;
     return s;

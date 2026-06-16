@@ -17,6 +17,8 @@ message FwConfig {
     string dmz_tcp_ports = 3;
     string default_policy = 4;
     uint32 reassert_ms = 5;
+    string egress_policy = 6;
+    string egress_slice = 7;
 }
 
 message FwStatusMsg {

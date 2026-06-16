@@ -44,15 +44,20 @@ void apply_now(FwDaemon& self, FwDaemonState& s) {
         s.message = "firewall disabled (config) — table flushed";
         self.log().info(s.message);
     } else {
-        int rules = 0, overrides = 0;
-        std::string ruleset = build_ruleset(s.dmz_tcp_ports, s.default_policy,
-                                            s.fw_d_dir, rules, overrides);
+        int rules = 0, overrides = 0, egress_fcs = 0;
+        std::string ruleset = build_ruleset(
+            s.dmz_tcp_ports, s.default_policy, s.fw_d_dir,
+            s.egress_policy, s.egress_slice, s.cgroup_root,
+            rules, overrides, egress_fcs);
         ApplyResult r = apply_ruleset(ruleset, rules, overrides);
         s.rule_count = static_cast<uint32_t>(r.rule_count);
         s.override_count = static_cast<uint32_t>(r.override_count);
+        s.egress_fc_count = static_cast<uint32_t>(egress_fcs);
         s.message = r.message;
         s.state = r.ok ? F_APPLIED : F_DEGRADED;
-        if (r.ok) self.log().info("nftables: " + r.message);
+        if (r.ok) self.log().info("nftables: " + r.message +
+                                  (egress_fcs ? " (+" + std::to_string(egress_fcs) +
+                                   " FC egress)" : ""));
         else      self.log().warn("nftables: " + r.message);
     }
 
@@ -106,9 +111,12 @@ void FwDaemon::on_config_update(
     if (c.dmz_tcp_ports[0])  s.dmz_tcp_ports  = c.dmz_tcp_ports;
     if (c.default_policy[0]) s.default_policy = c.default_policy;
     s.reassert_ms    = c.reassert_ms;
+    s.egress_policy  = c.egress_policy;
+    if (c.egress_slice[0]) s.egress_slice = c.egress_slice;
     log().info(std::string("config: enabled=") + (s.enabled ? "1" : "0") +
         " policy=" + s.default_policy + " dmz=" + s.dmz_tcp_ports +
-        " fw.d=" + s.fw_d_dir + " reassert_ms=" + std::to_string(s.reassert_ms));
+        " fw.d=" + s.fw_d_dir + " reassert_ms=" + std::to_string(s.reassert_ms) +
+        " egress='" + s.egress_policy + "'");
     apply_now(*this, s);
     // If reassert was off and is now on, kick the tick (init's may have ended).
     if (!was_ticking && s.reassert_ms)

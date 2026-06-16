@@ -38,6 +38,7 @@ import system.services.crypto.*
 import system.services.log.*
 import system.services.per.*
 import system.services.sm.*
+import system.services.tsync.*
 import system.services.ucm.*
 import system.services.shwa.*
 
@@ -46,17 +47,18 @@ import system.services.shwa.*
 // Only the FCs with a real daemon are declared here — one per `import`
 // above, and exactly the members of `cluster Services` below. The
 // daemon-less / conceptual FCs (core, diag, exec, fw, idsm, nm,
-// osi, phm, rds, tsync, vucm — see services/system/<short>/README.md)
+// osi, phm, rds, vucm — see services/system/<short>/README.md)
 // are NOT declared: they have no composition, aren't imported, and
 // aren't packaged. They live in the source tree only as TIPC-slot
 // placeholders; add a forward-decl + import here when one grows a daemon.
-// crypto grew a daemon (the ara::crypto Crypto Service Manager) — added below.
+// crypto + tsync grew daemons (Crypto Service Manager; Time-Sync control).
 
 composition Com      { }
 composition Crypto   { }
 composition Log      { }
 composition Per      { }
 composition Sm       { }
+composition Tsync    { }
 composition Ucm      { }
 composition Shwa     { }
 
@@ -70,6 +72,7 @@ cluster Services {
     composition Log    log
     composition Per    per
     composition Sm     sm
+    composition Tsync  tsync
     composition Ucm    ucm
     composition Shwa   shwa
 }

@@ -46,6 +46,7 @@ SERVICES_MEMBERS: list[tuple[str, str, list[str]]] = [
     ('log', 'Log', []),
     ('per', 'Per', []),
     ('sm', 'Sm', []),
+    ('tsync', 'Tsync', []),
     ('ucm', 'Ucm', []),
     ('shwa', 'Shwa', [])
 ]

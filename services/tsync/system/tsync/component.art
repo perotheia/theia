@@ -1,0 +1,8 @@
+package system.services.tsync
+
+
+// The Time-Sync FC: a single control node managing linuxptp / chrony and
+// exposing the platform's global time-sync status. One process, one node.
+composition Tsync {
+    prototype TsyncCtl tsync_ctl
+}

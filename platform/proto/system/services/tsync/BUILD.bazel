@@ -1,0 +1,39 @@
+# Generated nanopb sources for the system.services.tsync package.
+#
+# .pb.{c,h} are BUILT, not committed: the genrule below invokes
+# nanopb_generator (a system-installed tool) on the .proto.
+
+package(default_visibility = ["//visibility:public"])
+
+genrule(
+    name = "tsync_pb",
+    srcs = [
+        "tsync.proto",
+        "tsync.options",
+    ],
+    outs = [
+        "tsync.pb.c",
+        "tsync.pb.h",
+    ],
+    cmd = "set -e;"
+        + " in_dir=$$(dirname $(location tsync.proto));"
+        + " out_dir=$$(dirname $(location tsync.pb.c));"
+        + " nanopb_generator -I $$in_dir -D $$out_dir tsync.proto;",
+    tools = [],
+    local = True,
+)
+
+filegroup(
+    name = "tsync_pb_c",
+    srcs = ["tsync.pb.c"],
+)
+
+filegroup(
+    name = "tsync_pb_h",
+    srcs = ["tsync.pb.h"],
+)
+
+filegroup(
+    name = "tsync_proto",
+    srcs = ["tsync.proto"],
+)

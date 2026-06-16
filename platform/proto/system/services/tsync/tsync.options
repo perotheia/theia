@@ -1,0 +1,9 @@
+# nanopb field-size constraints for system.services.tsync wire messages.
+# HAND-MAINTAINED (a gen-app regen defaults strings to 64; message needs more).
+# nanopb_generator auto-loads this (same basename next to tsync.proto).
+
+system_services_tsync.TsyncConfig.ptp_interface max_size:32
+system_services_tsync.TsyncConfig.source        max_size:16
+system_services_tsync.SyncStatus.grandmaster    max_size:32
+system_services_tsync.SyncStatus.interface      max_size:32
+system_services_tsync.SyncStatus.message        max_size:128

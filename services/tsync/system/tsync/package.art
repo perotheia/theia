@@ -1,0 +1,92 @@
+// Time Synchronization (ara::tsync / TSY) — Adaptive Platform Functional Cluster.
+//
+// A THIN control plane over Linux time-sync, NOT a reimplementation: the FC
+// manages linuxptp (ptp4l + phc2sys) / chrony and EXPOSES the sync status; the
+// kernel + the PTP daemons do the actual clock discipline. The FC never sits in
+// the time data path. See docs/tasks/PROGRESS/AUTOSAR-LINUX-mapping.md.
+//
+// Role (AUTOSAR TSY): a global time reference + deterministic timestamp
+// alignment across the platform — the clock the trace/log `ts_ns` and sensor
+// pipelines align to. Loss-of-lock is a health event (→ PHM).
+//
+// v1 backend: query ptp4l/phc2sys (pmc / status) when present; GRACEFULLY
+// DEGRADE to the system wall clock + report UNAVAILABLE when they aren't (the
+// dev host has no linuxptp). Real PTP lock needs a host with the daemons + NIC
+// hardware timestamping.
+
+package system.services.tsync
+
+// ─── Sync state + source ───────────────────────────────────────────────────
+
+// The clock's discipline state — what a consumer checks before trusting the
+// global time (sensor fusion gates on LOCKED).
+enum SyncState {
+    UNAVAILABLE = 0   // no PTP/chrony daemon reachable — system wall clock only
+    UNLOCKED    = 1   // daemon up, not yet synced (acquiring)
+    HOLDOVER    = 2   // was locked, lost the master, free-running within budget
+    LOCKED      = 3   // disciplined to the grandmaster / time source
+}
+
+// The time source backing the global reference.
+enum TimeSource {
+    SYSTEM = 0   // CLOCK_REALTIME (no discipline) — the degrade fallback
+    PTP    = 1   // ptp4l + phc2sys (IEEE 1588, NIC PHC)
+    NTP    = 2   // chrony / NTP
+}
+
+// ─── Runtime config (etcd-backed via services/per) ─────────────────────────
+//
+// `config TsyncConfig` binds this as the node's structured config; gen-schema
+// registers it + services/per stores it in etcd; changes arrive as ConfigUpdated
+// → on_config_update (re-point the interface / domain / mode live).
+message TsyncConfig {
+    // The PTP NIC the host disciplines to (ptp4l -i <iface>). "" = auto/none.
+    string ptp_interface = ""
+    // IEEE 1588 PTP domain number.
+    uint32 ptp_domain    = 0
+    // Preferred source: "ptp" | "ntp" | "system" (the degrade order anchor).
+    string source        = "ptp"
+    // Status poll cadence (ms) — how often the FC re-reads ptp4l/phc2sys.
+    uint32 poll_ms       = 1000
+    // Offset (ns) above which LOCKED degrades to UNLOCKED (lock quality gate).
+    uint32 lock_offset_ns = 100000
+}
+
+// ─── Status wire types ─────────────────────────────────────────────────────
+
+// GetSyncStatus → the current discipline snapshot. tdb / firehose / PHM read it;
+// a sensor pipeline checks `state == LOCKED` before timestamping fused frames.
+message SyncStatusReq { }
+message SyncStatus {
+    SyncState  state
+    TimeSource source
+    sint64     offset_ns      // current offset from the master (signed)
+    string     grandmaster    // GM clock identity, "" if none
+    string     interface      // the disciplined NIC, "" if none
+    uint64     ts_ns          // FC's wall-clock at this reading (epoch ns)
+    string     message        // human note (e.g. "ptp4l not installed")
+}
+
+// ─── Interface ─────────────────────────────────────────────────────────────
+
+// The TSYNC status surface. Read-only in v1 (the daemons own the discipline;
+// the FC reports). A later op could force a source / re-sync.
+interface clientServer TsyncCtlIf {
+    operation GetSyncStatus(in r: SyncStatusReq) returns SyncStatus
+}
+
+// ─── Nodes ─────────────────────────────────────────────────────────────────
+
+// The Time-Sync control node. tipc 0x80010005. An atomic gen_server: polls the
+// PTP/chrony backend on a self-scheduled tick (handle_info), holds the latest
+// SyncStatus in State, serves GetSyncStatus, and emits a status line (loss-of-
+// lock → a health event for PHM). Never disciplines the clock itself.
+node atomic TsyncCtl {
+    tipc type=0x80010005 instance=0
+    requires_timers
+    tag = "TSYN"
+    config TsyncConfig
+    ports {
+        server status provides TsyncCtlIf
+    }
+}

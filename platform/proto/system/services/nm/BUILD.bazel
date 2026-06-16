@@ -1,0 +1,38 @@
+# Generated nanopb sources for the system.services.nm package.
+#
+# .pb.{c,h} are BUILT, not committed: the genrule invokes nanopb_generator.
+
+package(default_visibility = ["//visibility:public"])
+
+genrule(
+    name = "nm_pb",
+    srcs = [
+        "nm.proto",
+        "nm.options",
+    ],
+    outs = [
+        "nm.pb.c",
+        "nm.pb.h",
+    ],
+    cmd = "set -e;"
+        + " in_dir=$$(dirname $(location nm.proto));"
+        + " out_dir=$$(dirname $(location nm.pb.c));"
+        + " nanopb_generator -I $$in_dir -D $$out_dir nm.proto;",
+    tools = [],
+    local = True,
+)
+
+filegroup(
+    name = "nm_pb_c",
+    srcs = ["nm.pb.c"],
+)
+
+filegroup(
+    name = "nm_pb_h",
+    srcs = ["nm.pb.h"],
+)
+
+filegroup(
+    name = "nm_proto",
+    srcs = ["nm.proto"],
+)

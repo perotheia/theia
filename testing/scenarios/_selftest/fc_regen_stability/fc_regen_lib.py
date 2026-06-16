@@ -84,6 +84,8 @@ FC_SPECS = [
            hand_owned_impl_build=True),   # shared trace_hub cc_library
     FcSpec("tsync", "services/tsync/system/tsync/package.art", "ara::tsync",
            "services/tsync", hand_owned_impl_build=True),   # ptp_backend.hpp hdr
+    FcSpec("nm", "services/nm/system/nm/package.art", "ara::nm", "services/nm",
+           hand_owned_impl_build=True),   # nm_backend.hpp hdr (the `ip` observer)
     # Non-services FCs — same generator, different homes. These prove
     # gen-app's path-agnostic label derivation (//<out>/lib:<short>_lib).
     # The apps spec is one spec with three process-compositions; each is its

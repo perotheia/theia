@@ -1,0 +1,9 @@
+package system.services.nm
+
+
+// The Network-Management FC: the readiness FSM (NmDaemon) + the netlink poller
+// (NmPoller) that drives it. Two nodes, one process — like sm's daemon+gate.
+composition Nm {
+    prototype NmDaemon nm_daemon
+    prototype NmPoller nm_poller
+}

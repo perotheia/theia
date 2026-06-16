@@ -1,0 +1,47 @@
+# HAND-OWNED. source: system/services/nm/package.art
+#
+# Impl slice — handler bodies. The user owns this BUILD.bazel: it adds
+# nm_backend.hpp (the read-only `ip` observer header) to nm_impl's hdrs +
+# include root, which gen-app can't derive from the .art. Excluded from the
+# regen-stability diff (see fc_regen_lib.py hand_owned_impl_build).
+
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+# State structs (write-once, app-owned). A leaf header-only target so
+# BOTH the lib (which #includes "impl/<Node>_state.hh" as the GenServer
+# State type) and the impl can depend on it WITHOUT a lib<->impl cycle:
+#   nm_state  ←  lib  ←  impl
+cc_library(
+    name = "nm_state",
+    hdrs = [
+        "NmPoller_state.hh",
+    ],
+    # The lib #includes these as "impl/<Node>_state.hh", so the include
+    # root is the FC out_dir (one above impl/).
+    includes = [".."],
+    copts = ["-std=c++17", "-fPIC"],
+    deps = ["//platform/runtime:runtime"],
+)
+
+cc_library(
+    name = "nm_impl",
+    srcs = [
+        "NmDaemon_handlers.cc",
+        "NmPoller_handlers.cc",
+    ],
+    # The read-only `ip` observer behind NmPoller, included as
+    # "impl/nm_backend.hpp" — so the include root is the FC out_dir.
+    hdrs = ["nm_backend.hpp"],
+    includes = [".."],
+    copts = [
+        "-std=c++17",
+        "-Wall",
+        "-Wextra",
+        "-fPIC",
+    ],
+    deps = [
+        "//services/nm/lib:nm_lib",
+    ],
+)

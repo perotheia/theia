@@ -1,0 +1,134 @@
+// Network Management (ara::nm / NMX) — Adaptive Platform Functional Cluster.
+//
+// A THIN control plane over Linux networking, NOT a reimplementation: the FC
+// tracks NETWORK READINESS as a state machine driven by netlink/`ip` link+addr
+// state, and feeds that readiness to State Management. systemd-networkd / the
+// kernel own the actual configuration; NM observes + reports. NOT NetworkManager
+// (too heavy / non-deterministic for an ADAS host). See
+// docs/tasks/PROGRESS/AUTOSAR-LINUX-mapping.md.
+//
+// Shape mirrors sm (a statem node + an event front): NmDaemon is the readiness
+// FSM (takes no external messages), NmPoller reads `ip` on a tick and
+// post_event()s link/addr changes into the FSM IN-PROCESS via a LocalRef. The
+// FSM broadcasts NmStatusMsg (→ SM gates "operational" on network ready) and
+// serves GetNetworkStatus.
+
+package system.services.nm
+
+// ─── Readiness state ───────────────────────────────────────────────────────
+
+// The network-readiness level — a SM input. "operational" mode can gate on READY.
+enum NetState {
+    DOWN     = 0   // no monitored link has carrier
+    LINK_UP  = 1   // a monitored link has carrier, no usable address yet
+    READY    = 2   // link up + address acquired — operational network
+    DEGRADED = 3   // was READY, lost carrier/address (recoverable)
+}
+
+// ─── Runtime config (etcd-backed via services/per) ─────────────────────────
+//
+// `config NmConfig` binds this; services/per stores it in etcd; on_config_update
+// applies it live.
+message NmConfig {
+    // The interface(s) to monitor (comma-separated, e.g. "eth0,eth1"). "" = the
+    // first non-loopback link with carrier (auto).
+    string interfaces = ""
+    // Poll cadence (ms) — how often NmPoller re-reads `ip` link/addr state.
+    uint32 poll_ms    = 1000
+    // Require a routable address (not just link-up) before READY.
+    bool   require_address = true
+}
+
+// ─── FSM events (posted by NmPoller into the FSM in-process) ───────────────
+//
+// Per-event overload dispatch (Erlang "one clause per event"). The poller
+// post_event()s these on a link/addr state EDGE.
+message LinkUp       { }   // a monitored link gained carrier
+message LinkDown     { }   // all monitored links lost carrier
+message AddrAcquired { }   // a routable address appeared on a monitored link
+message AddrLost     { }   // the routable address went away
+
+// ─── Status wire types ─────────────────────────────────────────────────────
+
+// The broadcast payload AND the FSM's persistent data (mirrors sm's SmStateMsg).
+message NmStatusMsg {
+    NetState state
+    string   interface     // the monitored link, "" if none
+    bool     has_carrier
+    bool     has_address
+    uint64   ts_ns
+}
+
+message NetStatusReq { }
+
+// ─── Interfaces ────────────────────────────────────────────────────────────
+
+// Readiness broadcast — senderReceiver pub/sub. NmDaemon is the SENDER; SM (and
+// anything gating on network readiness) is a RECEIVER.
+interface senderReceiver NmStatusStream {
+    data NmStatusMsg status
+}
+
+// The event ingress the poller drives the FSM through (in-process; NmDaemon's
+// FSM takes no TIPC events directly — the statem-must-not-handle-external rule).
+interface senderReceiver NmEventIn {
+    data LinkUp       link_up
+    data LinkDown     link_down
+    data AddrAcquired addr_acquired
+    data AddrLost     addr_lost
+}
+
+// Status query — GetNetworkStatus returns the current readiness snapshot.
+interface clientServer NmCtlIf {
+    operation GetNetworkStatus(in r: NetStatusReq) returns NmStatusMsg
+}
+
+// ─── Nodes ─────────────────────────────────────────────────────────────────
+
+// The network-readiness FSM. tipc 0x8001002E. Broadcasts NmStatusMsg on every
+// transition; serves GetNetworkStatus. Takes NO external messages — NmPoller
+// post_event()s into it in-process (like sm's gate→daemon split).
+node atomic NmDaemon {
+    tipc type=0x8001002E instance=0
+    tag = "NMX"
+    config NmConfig
+    ports {
+        sender broadcast provides NmStatusStream
+        server ctl       provides NmCtlIf
+    }
+    statem {
+        states  [DOWN, LINK_UP, READY, DEGRADED]
+        initial DOWN
+        data    NmStatusMsg
+
+        on DOWN:
+            event LinkUp       → LINK_UP
+
+        on LINK_UP:
+            event AddrAcquired → READY
+            event LinkDown     → DOWN
+
+        on READY:
+            event AddrLost     → DEGRADED
+            event LinkDown     → DEGRADED
+
+        on DEGRADED:
+            event AddrAcquired → READY
+            event LinkUp       → LINK_UP
+            event LinkDown     → DOWN
+    }
+}
+
+// The netlink poller. tipc 0x80010004. An atomic node that reads `ip` link+addr
+// state on a timer tick, diffs vs the last reading, and post_event()s the
+// LinkUp/LinkDown/AddrAcquired/AddrLost edges into NmDaemon's FSM in-process.
+// Never configures the network — read-only observation.
+node atomic NmPoller {
+    tipc type=0x80010004 instance=0
+    requires_timers
+    tag = "NMP"
+    config NmConfig
+    ports {
+        sender events provides NmEventIn
+    }
+}

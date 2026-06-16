@@ -67,8 +67,21 @@ def _run(argv: list[str], cwd: "Path | None" = None) -> int:
     print(f"$ {' '.join(argv)}", file=sys.stderr)
     env = os.environ.copy()
     ws = str(WORKSPACE)
-    env["PYTHONPATH"] = ws + (os.pathsep + env["PYTHONPATH"]
-                              if env.get("PYTHONPATH") else "")
+    # Build the PYTHONPATH prefix. WORKSPACE lets a subprocess (`artheia
+    # generate-manifest manifest.rig`) import the workspace's rig + generated
+    # manifest modules. BUT: when the subprocess runs with cwd=WORKSPACE (the
+    # framework checkout), Python auto-adds cwd to sys.path, and the source-tree
+    # `artheia/` DIRECTORY there shadows the editable-installed `artheia` PACKAGE
+    # as a bare namespace portion — so `from artheia import __version__` fails
+    # (the real artheia/artheia/__init__.py never runs). Prepend the package's
+    # real parent (THEIA_ROOT/artheia) so the installed package wins. Absent in a
+    # pip-installed consuming workspace (no source tree) → harmless no-op.
+    prefix = [ws]
+    artheia_parent = THEIA_ROOT / "artheia"
+    if (artheia_parent / "artheia" / "__init__.py").is_file():
+        prefix.insert(0, str(artheia_parent))
+    env["PYTHONPATH"] = os.pathsep.join(
+        prefix + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
     try:
         return subprocess.call(argv, env=env,
                                cwd=str(cwd) if cwd is not None else None)

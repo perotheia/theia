@@ -1,0 +1,22 @@
+# Generated nanopb sources for the system.services.rds package.
+# .pb.{c,h} are produced by the genrule from rds.proto; not committed.
+
+package(default_visibility = ["//visibility:public"])
+
+genrule(
+    name = "rds_pb",
+    srcs = ["rds.proto"],
+    outs = [
+        "rds.pb.c",
+        "rds.pb.h",
+    ],
+    cmd = "set -e;"
+        + " in_dir=$$(dirname $(location rds.proto));"
+        + " out_dir=$$(dirname $(location rds.pb.c));"
+        + " nanopb_generator -I $$in_dir -D $$out_dir rds.proto;",
+    local = True,
+)
+
+filegroup(name = "rds_pb_c", srcs = ["rds.pb.c"])
+filegroup(name = "rds_pb_h", srcs = ["rds.pb.h"])
+filegroup(name = "rds_proto", srcs = ["rds.proto"])

@@ -49,6 +49,7 @@ SERVICES_MEMBERS: list[tuple[str, str, list[str]]] = [
     ('nm', 'Nm', []),
     ('osi', 'Osi', []),
     ('per', 'Per', []),
+    ('rds', 'Rds', []),
     ('sm', 'Sm', []),
     ('tsync', 'Tsync', []),
     ('ucm', 'Ucm', []),
@@ -56,7 +57,7 @@ SERVICES_MEMBERS: list[tuple[str, str, list[str]]] = [
 ]
 SERVICES_SHORTS = [m[0] for m in SERVICES_MEMBERS]
 SERVICES_COMPONENTS = [
-    app_component_for('services', ident, comp)
+    app_component_for('services', ident, comp, 'services')
     for ident, comp, _ in SERVICES_MEMBERS
 ]
 SERVICES_EXECUTABLES = [_executable_for(ident) for ident, _, _ in SERVICES_MEMBERS]
@@ -64,46 +65,6 @@ SERVICES_PROCESSES = [
     app_process_for('services', ident, nodes)
     for ident, _, nodes in SERVICES_MEMBERS
 ]
-
-# ---------------------------------------------------------------------------
-# Native infrastructure daemons (NOT Theia FCs — no .art / component / gen-app).
-# RouDi is the iceoryx broker (services/rds) — a prebuilt system binary that
-# owns the shared-memory pools the requires_rds FCs publish into. It runs as a
-# SUPERVISED child (like com), started before any RDS FC. start_cmd is the
-# on-PATH `iox-roudi`; nodes=[] (it has no Theia nodes). See
-# docs/autosar/services/rds.md.
-# ---------------------------------------------------------------------------
-from artheia.manifest.execution import (   # noqa: E402
-    Process,
-    SchedulingPolicy,
-    StartupConfig,
-    StateDependentStartupConfig,
-    TerminationBehaviorEnum,
-)
-
-ROUDI_PROCESS = Process(
-    name="roudi",
-    executable="roudi",
-    function_cluster_affiliation="",
-    # The system iceoryx broker. ABSOLUTE path — the supervisor execs relative
-    # to the run dir (./<cmd>), so a bare name on PATH won't resolve.
-    start_cmd=["/usr/bin/iox-roudi"],
-    nodes=[],
-    state_dependent_startup_config=[
-        StateDependentStartupConfig(
-            function_group_state=["Default.Running"],
-            startup_config=StartupConfig(
-                name="roudi_startup",
-                scheduling_policy=SchedulingPolicy.SCHED_OTHER,
-                scheduling_priority=0,
-                termination_behavior=(
-                    TerminationBehaviorEnum.PROCESS_IS_NOT_SELF_TERMINATING
-                ),
-            ),
-        ),
-    ],
-)
-SERVICES_PROCESSES = SERVICES_PROCESSES + [ROUDI_PROCESS]
 
 # ---------------------------------------------------------------------------
 # Aggregate across all clusters (every component / process).
@@ -120,16 +81,18 @@ MACHINES: list = []
 
 
 # ---------------------------------------------------------------------------
-# Supervisor tree — SIDECARED in services/manifest/executor.py.
+# Supervisor tree — SIDECARED in the sibling ``executor.py`` (same package).
 #
-# The supervisor hierarchy (restart strategies + child grouping) is
-# hand-authored and has NO .art declaration, so it must survive any
-# regeneration of THIS file. It lives in the executor.py sidecar; we
-# re-export it here so existing consumers keep reading ``SUPERVISORS``
-# unchanged. Edit the tree in executor.py.
+# The supervisor hierarchy (restart strategies + child grouping) has NO .art
+# declaration, so it lives in a sidecar that survives regeneration of THIS file.
+# gen-manifest emits executor.py alongside this module; we re-export its
+# SUPERVISORS so consumers read ``<this>.SUPERVISORS`` unchanged. Edit the tree
+# in executor.py. (For an apps manifest the sidecar is a single ``app_sup`` node
+# with the app members as children; the full platform tree is the services
+# sidecar — the rig combines them.)
 # ---------------------------------------------------------------------------
 
-from services.manifest.executor import SUPERVISORS  # noqa: E402,F401
+from .executor import SUPERVISORS  # noqa: E402,F401
 
 
 # ---------------------------------------------------------------------------

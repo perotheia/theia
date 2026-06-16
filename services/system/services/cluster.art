@@ -41,6 +41,7 @@ import system.services.log.*
 import system.services.nm.*
 import system.services.osi.*
 import system.services.per.*
+import system.services.rds.*
 import system.services.sm.*
 import system.services.tsync.*
 import system.services.ucm.*
@@ -68,6 +69,7 @@ composition Log      { }
 composition Nm       { }
 composition Osi      { }
 composition Per      { }
+composition Rds      { }
 composition Sm       { }
 composition Tsync    { }
 composition Ucm      { }
@@ -86,6 +88,7 @@ cluster Services {
     composition Nm     nm
     composition Osi    osi
     composition Per    per
+    composition Rds    rds
     composition Sm     sm
     composition Tsync  tsync
     composition Ucm    ucm

@@ -95,6 +95,12 @@ FC_SPECS = [
     FcSpec("idsm", "services/idsm/system/idsm/package.art", "ara::idsm",
            "services/idsm", hand_owned_impl_build=True),   # ids_backend.hpp + log dep
     # log carries the SECURITY TraceKind IDSM produces; keep it regen-checked.
+    # rds exercises the `node prebuilt` primitive: RoudiBroker (forks iox-roudi,
+    # fully-generated fork/drain runnable, no state.hh) + RdsCtl (atomic). Proves
+    # the prebuilt template-pair + impl/BUILD `not n.prebuilt` state-skip stay
+    # regen-stable. The ara::rds transport lib lives in services/rds/transport
+    # (a sibling target), not impl/BUILD, so impl/BUILD is gen-app-default.
+    FcSpec("rds", "services/rds/system/rds/package.art", "ara::rds", "services/rds"),
     # Non-services FCs — same generator, different homes. These prove
     # gen-app's path-agnostic label derivation (//<out>/lib:<short>_lib).
     # The apps spec is one spec with three process-compositions; each is its

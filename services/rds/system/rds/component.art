@@ -1,0 +1,7 @@
+package system.services.rds
+
+
+composition Rds {
+    prototype RoudiBroker roudi
+    prototype RdsCtl      ctl
+}

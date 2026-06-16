@@ -1,0 +1,59 @@
+// Rds (RDS) — Raw Data Stream Functional Cluster.
+//
+// The Rds composition is TWO nodes:
+//
+//   - RoudiBroker (node prebuilt): the iceoryx broker (iox-roudi). A
+//     fully-generated GenRunnable whose do_start forks+execvp's the
+//     `path` binary, drains its stdout/stderr into the node logger, and
+//     do_stop SIGTERMs+reaps. It owns the shared-memory pools the
+//     `requires_rds` FCs publish/subscribe through. reporting=false — the
+//     broker is a third-party process, sends no HeartbeatReport, so the
+//     supervisor watchdog does not expect a beat.
+//
+//   - RdsCtl (node atomic): a thin reporting=true status FC. Serves
+//     GetStatus so tdb / com / the GUI can ask "is RouDi up, how many
+//     streams". It is the Theia-native face of the RDS cluster.
+//
+// The old daemon-less rds phantom (services/nop/rds, RdsDaemon @ 0x80010010)
+// is superseded by this real FC.
+
+package system.services.rds
+
+// ─── Messages ───────────────────────────────────────────────────────────────
+
+// GetStatus request — no args (the FC reports its own broker view).
+message GetRdsStatus { }
+
+// GetStatus reply — the RDS cluster's live status.
+message RdsStatus {
+    bool   roudi_up  = 1   // is the iceoryx broker (RoudiBroker) running
+    uint32 n_streams = 2   // number of registered raw-data streams
+}
+
+// ─── Interfaces ─────────────────────────────────────────────────────────────
+
+// Control — query the RDS cluster status.
+interface clientServer RdsCtl_If {
+    operation GetStatus(in r: GetRdsStatus) returns RdsStatus
+}
+
+// ─── Nodes ──────────────────────────────────────────────────────────────────
+
+// The iceoryx broker. A `node prebuilt`: gen-app emits a fully-generated
+// GenRunnable that forks+execvp's `path` (iox-roudi runs argless), drains its
+// stdout/stderr into the node logger, and SIGTERM+reaps on stop. tipc 0x80010099.
+node prebuilt RoudiBroker {
+    tipc type=0x80010099 instance=0
+    path = "/usr/bin/iox-roudi"
+    reporting = false
+}
+
+// The RDS status FC. tipc 0x80010098. A reporting=true atomic node serving
+// GetStatus — the Theia-native control face of the RDS cluster.
+node atomic RdsCtl {
+    tipc type=0x80010098 instance=0
+    tag = "RDS"
+    ports {
+        server ctl provides RdsCtl_If
+    }
+}

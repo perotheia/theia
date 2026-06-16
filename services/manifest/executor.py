@@ -97,12 +97,14 @@ SUPERVISORS: list[SupervisorNode] = [
         # rtdb / rf trace surface — it MUST be forked by the supervisor so the
         # stack comes up complete without launching com by hand.
         #
-        # "roudi" = the iceoryx broker (services/rds) — a NATIVE prebuilt binary
-        # (iox-roudi, not a Theia FC) that owns the shared-memory pools the
-        # requires_rds FCs publish/subscribe through. FIRST in the list so it's
-        # up before any RDS producer/consumer registers with it. (This is the
-        # real "rds" — the old daemon-less rds phantom is finally a thing.)
-        children=["roudi", "log", "per", "com"],
+        # "rds" = the services/rds FC (composition Rds): RoudiBroker (a
+        # `node prebuilt` that forks+supervises iox-roudi, the iceoryx broker)
+        # + RdsCtl (the reporting status node). The broker is no longer a bare
+        # prebuilt Process — the rds FC owns/forks iox-roudi internally and the
+        # FC owns the shared-memory pools the requires_rds FCs publish/subscribe
+        # through. FIRST in the list so it's up before any RDS producer/consumer
+        # registers with RouDi. (The old daemon-less rds phantom is gone.)
+        children=["rds", "log", "per", "com"],
     ),
     SupervisorNode(
         name="pltf_sup",

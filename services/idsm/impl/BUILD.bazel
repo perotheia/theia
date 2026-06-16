@@ -22,6 +22,7 @@ cc_library(
     hdrs = [
         "IdsmDaemon_state.hh",
         "ids_backend.hpp",
+        "proc_detector.hpp",
     ],
     # The lib #includes these as "impl/<Node>_state.hh" / "impl/ids_backend.hpp",
     # so the include root is the FC out_dir (one above impl/).
@@ -35,7 +36,10 @@ cc_library(
     srcs = [
         "IdsmDaemon_handlers.cc",
     ],
-    hdrs = ["ids_backend.hpp"],
+    hdrs = [
+        "ids_backend.hpp",
+        "proc_detector.hpp",
+    ],
     includes = [".."],
     copts = [
         "-std=c++17",

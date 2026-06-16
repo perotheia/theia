@@ -28,6 +28,7 @@
 #include <cstdint>
 #include <cstring>
 #include <string>
+#include <unistd.h>   // getppid
 
 namespace ara::idsm {
 
@@ -96,24 +97,11 @@ void broadcast_status_(IdsmDaemon& self, IdsmDaemonState& s) {
     self.broadcast_broadcast_status(msg);
 }
 
-}  // namespace
-
-// init: open the detector + kick off the drain loop.
-void IdsmDaemon::init(IdsmDaemonState& s) {
-    reopen_backend_(s);
-    log().info(std::string("idsm up — IDS manager (eBPF ring-buffer ingest → "
-        "SECURITY firehose); state=") + std::to_string(s.state) +
-        " on_ebpf=" + (s.backend.on_ebpf() ? "yes" : "no"));
-    broadcast_status_(*this, s);
-    ::theia::runtime::post_info(*this, "drain");
-}
-
-// handle_info "drain": pull new detections, spill each to the firehose, escalate
-// severe ones, then reschedule at the config cadence.
-void IdsmDaemon::handle_info(const char* info, IdsmDaemonState& s) {
-    if (!info || std::strcmp(info, "drain") != 0) return;
-
-    auto events = s.backend.poll();
+// Spill a batch of detections to the firehose + escalate the severe ones. Shared
+// by the eBPF/mock backend poll AND the userspace proc scan. Returns true if any
+// were emitted (so the caller re-broadcasts status).
+bool process_detections_(IdsmDaemon& self, IdsmDaemonState& s,
+                         const std::vector<DetectionEv>& events) {
     for (const auto& ev : events) {
         submit_detection_(ev);                 // → trace firehose (kind=SECURITY)
         s.events_total++;
@@ -123,12 +111,54 @@ void IdsmDaemon::handle_info(const char* info, IdsmDaemonState& s) {
             // PHM/SM escalation hook: a critical detection is a health event. The
             // cast to PHM/SM lands here once those receiver ports exist; for now
             // the count + a WARN make it observable.
-            log().warn("IDS escalation: '" + ev.signature + "' sev=" +
-                       std::to_string(ev.severity) + " (" + ev.src + " -> " +
-                       ev.dst + ")");
+            self.log().warn("IDS escalation: '" + ev.signature + "' sev=" +
+                            std::to_string(ev.severity) + " (" + ev.src + " -> " +
+                            ev.dst + ")");
         }
     }
-    if (!events.empty()) broadcast_status_(*this, s);
+    return !events.empty();
+}
+
+// Apply the ProcDetector config (Cat A/C/D/H allow-lists) + seed the known-FC
+// set so it can tell a real-FC-on-wrong-port (Cat A) from a rogue listener (C).
+void apply_proc_config_(IdsmDaemonState& s) {
+    s.proc.configure(s.expected_listeners, s.grpc_servers, s.elf_digests);
+    // The platform FCs (the manifest's process set). Hardcoded here = the
+    // services + demo apps the supervisor forks; a manifest reader can replace
+    // this. Used only to classify A-vs-C; not a security gate.
+    s.proc.set_known_fcs({"com", "crypto", "log", "nm", "osi", "per", "sm",
+                          "tsync", "ucm", "shwa", "fw", "idsm",
+                          "p1", "p2", "p3", "p4"});
+}
+
+}  // namespace
+
+// init: open the detector + the userspace proc sensor + kick off the drain loop.
+void IdsmDaemon::init(IdsmDaemonState& s) {
+    reopen_backend_(s);
+    s.supervisor_pid = ::getppid();   // FC processes are the supervisor's children
+    apply_proc_config_(s);
+    log().info(std::string("idsm up — IDS manager (eBPF ring-buffer + userspace "
+        "ss/proc → SECURITY firehose); state=") + std::to_string(s.state) +
+        " on_ebpf=" + (s.backend.on_ebpf() ? "yes" : "no") +
+        " proc_scan=" + (s.proc_scan ? "on" : "off"));
+    broadcast_status_(*this, s);
+    ::theia::runtime::post_info(*this, "drain");
+}
+
+// handle_info "drain": pull new detections, spill each to the firehose, escalate
+// severe ones, then reschedule at the config cadence.
+void IdsmDaemon::handle_info(const char* info, IdsmDaemonState& s) {
+    if (!info || std::strcmp(info, "drain") != 0) return;
+
+    bool any = false;
+    // 1. the raw eBPF/mock backend (Cat B short-lived dials on a capable host).
+    any |= process_detections_(*this, s, s.backend.poll());
+    // 2. the userspace ss/proc sensor (Cat A/C/D/H — no eBPF needed), scoped to
+    //    the Theia FCs (children of the supervisor).
+    if (s.proc_scan)
+        any |= process_detections_(*this, s, s.proc.scan(s.supervisor_pid));
+    if (any) broadcast_status_(*this, s);
 
     uint32_t ms = s.poll_ms ? s.poll_ms : 500;
     ::theia::runtime::send_after(::theia::runtime::process_timers(), ms,
@@ -156,10 +186,17 @@ void IdsmDaemon::on_config_update(
     s.escalate_severity = c.escalate_severity;
     s.mock_event_path  = c.mock_event_path;
     if (reopen) reopen_backend_(s);
+    // ProcBackend (Cat A/C/D/H) allow-lists.
+    s.proc_scan         = c.proc_scan;
+    s.expected_listeners = c.expected_listeners;
+    s.grpc_servers      = c.grpc_servers;
+    s.elf_digests       = c.elf_digests;
+    apply_proc_config_(s);
     log().info(std::string("config: bpf='") + s.bpf_object_path + "' mock='" +
         s.mock_event_path + "' poll_ms=" + std::to_string(s.poll_ms) +
         " escalate>=" + std::to_string(s.escalate_severity) +
-        " state=" + std::to_string(s.state));
+        " proc_scan=" + (s.proc_scan ? "on" : "off") +
+        " expected_listeners='" + s.expected_listeners + "'");
     broadcast_status_(*this, s);
 }
 

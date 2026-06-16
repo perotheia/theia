@@ -3,7 +3,7 @@
 # A unit check for the ingest → SECURITY-firehose pipeline: drives the mock
 # IdsBackend + the TraceSubmitter test_sink seam (no TIPC, runs in the sandbox).
 
-load("@rules_cc//cc:defs.bzl", "cc_test")
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_test")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -16,4 +16,23 @@ cc_test(
         "//platform/runtime:runtime",
         "//platform/proto:platform_protos",
     ],
+)
+
+# ProcDetector (Cat A/C/D/H) — parse/classify wiring. The live listener coverage
+# is the live test below (run against a real stack).
+cc_test(
+    name = "test_proc_detector",
+    srcs = ["test_proc_detector.cc"],
+    copts = ["-std=c++17", "-fPIC"],
+    deps = ["//services/idsm/impl:idsm_state"],
+)
+
+# Live positive test: drives the ProcDetector against the RUNNING supervisor's
+# children. NOT a sandboxed cc_test (it needs host `ss`/`/proc` + the live
+# stack) — a cc_binary run directly by the robot suite. Skips if no stack.
+cc_binary(
+    name = "test_proc_live",
+    srcs = ["test_proc_live.cc"],
+    copts = ["-std=c++17", "-fPIC"],
+    deps = ["//services/idsm/impl:idsm_state"],
 )

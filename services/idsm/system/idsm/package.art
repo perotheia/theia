@@ -52,6 +52,22 @@ message IdsmConfig {
     // object is loaded (lets the ingest→firehose→escalate pipeline run on a host
     // without eBPF). Empty = no mock source.
     string mock_event_path = ""
+
+    // ---- userspace ProcBackend (Cat A/C/D/H — no eBPF needed) -------------
+    // The ProcBackend polls `ss`/`/proc` and diffs against these manifest-
+    // derived allow-lists. Disabled (enabled=false) leaves only the eBPF/mock
+    // path. See docs/autosar/services/idsm.md §3.
+    bool   proc_scan = true
+    // The DMZ listeners the deployment EXPECTS (comma-separated "comm:port",
+    // e.g. "com:7700,com:7710,com:7711"). A listening socket NOT in this set is
+    // Cat A/C. Default = com's gRPC servers (the only sanctioned IP endpoints).
+    string expected_listeners = "com:7700,com:7710,com:7711"
+    // The processes allowed to expose a gRPC endpoint (comma-separated comm).
+    // Only com in Theia; anything else accepting on a gRPC port is Cat D.
+    string grpc_servers = "com"
+    // Comma-separated "comm:sha256hex" the running ELF must match (Cat H). Empty
+    // = integrity check off (the digests are normally manifest/UCM-supplied).
+    string elf_digests = ""
 }
 
 // ─── Detection ──────────────────────────────────────────────────────────────

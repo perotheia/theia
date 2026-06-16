@@ -16,6 +16,10 @@ message IdsmConfig {
     uint32 poll_ms = 3;
     uint32 escalate_severity = 4;
     string mock_event_path = 5;
+    bool proc_scan = 6;
+    string expected_listeners = 7;
+    string grpc_servers = 8;
+    string elf_digests = 9;
 }
 
 message Detection {

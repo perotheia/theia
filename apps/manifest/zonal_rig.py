@@ -120,8 +120,13 @@ CentralHost = MachineManifest(
     # its stable type at instance=0 (supervisor:0, shwa:0); central com addresses
     # other machines at instance=N over the cluster-wide TIPC fabric.
     machine_index=0,
+    # REAL HARDWARE: central = Raspberry Pi 4 (aarch64). The all-x86 docker
+    # variant of this 2-machine split lives in apps/manifest/test_rig.py (for
+    # provisioning/orchestration testing without arm64 hardware). Building this
+    # rig needs the rpi4 aarch64 sysroot + cc-toolchain registered (see
+    # third_party/sysroot/setup_rpi4.sh + //rules/config:rpi4).
     hardware=HardwareResource(
-        cpu=CpuResource(architecture=CpuArchitecture.X86_64),
+        cpu=CpuResource(architecture=CpuArchitecture.AARCH64),
     ),
     # services/com gRPC endpoint — the GUI connects here. In the
     # Docker scenario this is the bridge-IP of the `central` container
@@ -156,13 +161,14 @@ ComputeHost = MachineManifest(
     # supervisor:1, its shwa binds shwa:1; central com reaches them at instance=1.
     machine_index=1,
     hardware=HardwareResource(
-        # x86_64 for now — both demo containers are amd64 (the aarch64/rpi4
-        # cross-toolchain isn't registered; dropped for the demo). Flip back to
-        # AARCH64 + register the rpi4 cc toolchain for a real zonal split.
-        cpu=CpuResource(architecture=CpuArchitecture.X86_64),
+        # REAL HARDWARE: compute = NVIDIA Jetson AGX Orin (aarch64) — the GPU/
+        # accelerator box (shwa reads nvidia-smi/jtop there). aarch64 like
+        # central. Needs the jetson aarch64 sysroot + cc-toolchain registered.
+        # (The all-x86 docker variant is apps/manifest/test_rig.py.)
+        cpu=CpuResource(architecture=CpuArchitecture.AARCH64),
     ),
-    # The compute container exposes a distinct gRPC port so a multi-
-    # machine GUI can talk to both supervisors (one tab per machine).
+    # The compute box exposes a distinct gRPC port so a multi-machine GUI can
+    # talk to both supervisors (one tab per machine).
     com_endpoint=IpEndpoint(
         address=IPv4Address("127.0.0.1"),
         port=7701,

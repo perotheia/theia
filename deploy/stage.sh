@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-readonly RIG="${1:-rig_zonal}"
+readonly RIG="${1:-rig_test}"
 readonly DEPLOY_DIR="$(cd "$(dirname "$0")" && pwd)"
 readonly WORKSPACE="$(cd "$DEPLOY_DIR/.." && pwd)"
 readonly BAZEL_RIG_DIR="$WORKSPACE/bazel-bin/external/+rig_ext+${RIG}"
@@ -54,6 +54,7 @@ machines=()
 # extending the case below.
 
 case "$RIG" in
+    rig_test)  RIG_MODULE="apps.manifest.test_rig" ;;
     rig_zonal) RIG_MODULE="apps.manifest.zonal_rig" ;;
     rig_apps)  RIG_MODULE="apps.manifest.rig" ;;
     *)         RIG_MODULE="" ;;  # unknown rig; skip rig-deps discovery

@@ -209,31 +209,42 @@ def _discover_rig_module(zonal: bool = False) -> "str | None":
       2. The single `*/manifest/rig.py` (or zonal_rig.py) under the workspace
          → its dotted module (apps/manifest/rig.py → apps.manifest.rig;
          manifest/rig.py → manifest.rig).
-    Returns None if none/ambiguous (caller errors helpfully)."""
-    leaf = "zonal_rig.py" if zonal else "rig.py"
+    Returns None if none/ambiguous (caller errors helpfully).
+
+    The "zonal" (2-machine) rig has TWO flavours: test_rig.py (all-x86, for the
+    docker provisioning/orchestration test — the in-repo default) and
+    zonal_rig.py (arm64 rpi4+jetson, real hardware). `theia manifest`/`dist` for
+    docker want the x86 test_rig, so it's PREFERRED here; zonal_rig (hardware) is
+    reached by an explicit module arg or $THEIA_ZONAL_RIG_MODULE."""
     env = os.environ.get(
         "THEIA_ZONAL_RIG_MODULE" if zonal else "THEIA_RIG_MODULE")
     if env:
         return env
+    # 2-machine: prefer the x86 docker test_rig, fall back to the arm64 zonal_rig.
+    leaves = ["test_rig.py", "zonal_rig.py"] if zonal else ["rig.py"]
     # Trees that are not the WORKSPACE's deploy rig: vendored repos, the venv,
     # bazel/build outputs, the framework's own internals (artheia.manifest.*),
     # and the shipped workspace template.
     _skip = {"up", ".venv", "bazel-bin", "bazel-out", "external", "vendor",
              "artheia", "templates", "build", ".git"}
-    hits = []
-    for p in WORKSPACE.glob(f"**/manifest/{leaf}"):
-        rel = p.relative_to(WORKSPACE)
-        if any(seg in _skip for seg in rel.parts):
-            continue
-        # dotted module = the path minus the .py, dirs joined by '.'
-        hits.append(".".join(rel.with_suffix("").parts))
-    if len(hits) == 1:
-        return hits[0]
-    if not hits:
-        return None
-    # Ambiguous: prefer a top-level `manifest.<leaf>` (the downstream convention).
-    top = f"manifest.{leaf[:-3]}"
-    return top if top in hits else None
+    # Try each candidate leaf in PREFERENCE order; return the first that resolves
+    # to exactly one module (test_rig before zonal_rig for the 2-machine case).
+    for leaf in leaves:
+        hits = []
+        for p in WORKSPACE.glob(f"**/manifest/{leaf}"):
+            rel = p.relative_to(WORKSPACE)
+            if any(seg in _skip for seg in rel.parts):
+                continue
+            # dotted module = the path minus the .py, dirs joined by '.'
+            hits.append(".".join(rel.with_suffix("").parts))
+        if len(hits) == 1:
+            return hits[0]
+        if len(hits) > 1:
+            # Ambiguous: prefer a top-level `manifest.<leaf>` (downstream conv).
+            top = f"manifest.{leaf[:-3]}"
+            if top in hits:
+                return top
+    return None
 
 
 def _load_install_components(manifest_root: Path):
@@ -894,8 +905,9 @@ def _stage_local_no_puppet(dest: Path, supervisor_src: str,
 # is touched for deploy — `theia manifest` emits JSON, and `theia dist` then
 # works purely from that JSON (no rig.py). Dev iteration uses `bazel build
 # @rig_zonal//<host>:image` directly (rules/rig.bzl), unchanged.
-_ZONAL_RIG_MODULE = "apps.manifest.zonal_rig"
-_ZONAL_RIG_ATTR = "DemoSoftware"
+_ZONAL_RIG_MODULE = "apps.manifest.zonal_rig"   # arm64 hardware (rpi4 + jetson)
+_TEST_RIG_MODULE  = "apps.manifest.test_rig"    # all-x86 docker test rig
+_ZONAL_RIG_ATTR = "DemoSoftware"   # the full 2-machine spec (both rigs export it)
 _MANIFEST_DIR = "dist/manifest"
 
 # machine.json CPU arch → bazel platform label (for the per-host cross-build).
@@ -957,11 +969,15 @@ def cmd_manifest(args: list[str]) -> int:
     rig_arg = next((args[i + 1] for i, a in enumerate(args) if a == "--rig"), None)
     out = WORKSPACE / _MANIFEST_DIR
     cmd = ["artheia", "generate-manifest", module, "--out", str(out)]
-    # Pin the rig attr only for the framework default (its export is named
-    # DemoSoftware); a discovered/explicit rig auto-resolves.
+    # Pin the rig attr for the framework's 2-machine rigs: BOTH test_rig (x86
+    # docker) and zonal_rig (arm64 hardware) export several *Software specs —
+    # CentralSoftware/ComputeSoftware are per-machine intermediates, DemoSoftware
+    # is the full multi-machine one. Without the pin the resolver alphabetically
+    # picks CentralSoftware (central-only → 1 machine emitted). A discovered
+    # downstream rig with one export auto-resolves; an explicit --rig wins.
     if rig_arg:
         cmd += ["--rig", rig_arg]
-    elif module == _ZONAL_RIG_MODULE:
+    elif module in (_ZONAL_RIG_MODULE, _TEST_RIG_MODULE):
         cmd += ["--rig", _ZONAL_RIG_ATTR]
     if (rc := _run(cmd)) != 0:
         return rc

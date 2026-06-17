@@ -74,15 +74,25 @@ rig_ext.declare(
     rig_module = "apps.manifest.rig",
 )
 
-# @rig_zonal — the 2-machine central+compute split, from apps.manifest.zonal_rig.
-# Drives the distributed Docker/Puppet deploy (`theia dist` →
-# @rig_zonal//{central_host,compute_host}:image). rig_attr=DemoSoftware: the
-# module exports several *Software specs (CentralSoftware/ComputeSoftware are
-# per-machine intermediates); DemoSoftware is the full multi-machine one (the
-# alphabetical default would wrongly pick CentralSoftware = central-only).
+# @rig_test — the 2-machine central+compute split, ALL-x86, from
+# apps.manifest.test_rig. Drives the DOCKER provisioning/orchestration test
+# (`theia dist` → @rig_test//{central,compute}:image; docker-compose). x86 so it
+# builds + runs on the dev box without arm64 hardware. rig_attr=DemoSoftware (the
+# full multi-machine spec; CentralSoftware/ComputeSoftware are per-machine
+# intermediates the alphabetical default would wrongly pick).
+rig_ext.declare(
+    name = "rig_test",
+    rig_module = "apps.manifest.test_rig",
+    rig_attr = "DemoSoftware",
+)
+
+# @rig_zonal — the SAME 2-machine split but for REAL HARDWARE (aarch64): central
+# = Raspberry Pi 4, compute = Jetson AGX Orin. Needs the rpi4/jetson sysroots +
+# cc-toolchains registered to build. Use @rig_test for docker; @rig_zonal for the
+# physical deploy.
 rig_ext.declare(
     name = "rig_zonal",
     rig_module = "apps.manifest.zonal_rig",
     rig_attr = "DemoSoftware",
 )
-use_repo(rig_ext, "rig_apps", "rig_zonal")
+use_repo(rig_ext, "rig_apps", "rig_test", "rig_zonal")

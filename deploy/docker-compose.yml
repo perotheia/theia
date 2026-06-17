@@ -1,6 +1,6 @@
 # deploy/docker-compose.yml — two-host Theia bringup in Docker (host network).
 #
-# Topology (matches demo/manifest/zonal_rig.py::DemoSoftware):
+# Topology (matches apps/manifest/test_rig.py::DemoSoftware — all-x86 docker):
 #
 #   central — services (the FC daemons) + gateway.
 #   compute — demo binaries.

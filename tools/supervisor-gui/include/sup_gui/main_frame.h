@@ -60,6 +60,11 @@ private:
                             uint16_t tag, const std::string& payload);
     void note_machine(const std::string& machine_name);
 
+    // Connect… — switch the single aggregator hub to a new host:port: stop the
+    // current GrpcClient, start one against the new endpoint, reset the demux's
+    // seen-machine set so the left panel re-populates from the new cluster.
+    void switch_hub(const std::string& host_port);
+
     wxNotebook*              notebook_{nullptr};
     MachinesPanel*           machines_panel_{nullptr};
     SystemPanel*             system_panel_{nullptr};
@@ -79,6 +84,7 @@ private:
     // aggregated stream reveals (local + each mN/ peer) so the left panel
     // auto-populates without a per-machine connection.
     std::string                  local_name_;
+    std::string                  current_hub_;     // host:port of the active hub
     std::set<std::string>        seen_machines_;
 
     wxTimer*                 status_timer_{nullptr};

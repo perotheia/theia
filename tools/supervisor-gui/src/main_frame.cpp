@@ -58,6 +58,7 @@ enum : int {
     ID_MENU_REFRESH_MACHINES = wxID_HIGHEST + 100,
     ID_MENU_CONNECT_ALL      = wxID_HIGHEST + 101,
     ID_MENU_DISCONNECT_ALL   = wxID_HIGHEST + 102,
+    ID_MENU_CONNECT_HOST     = wxID_HIGHEST + 103,   // Connect… (host:port dialog)
     // The right-click context menu IDs in machines_panel.cpp.
     // Re-declared here for the dispatch in handle_focus_event().
     ID_CTX_CONNECT     = wxID_HIGHEST + 5001,
@@ -144,12 +145,17 @@ MainFrame::MainFrame(std::vector<MachineEndpoint> machines)
         mb->Append(file_menu, "&File");
 
         auto* machines_menu = new wxMenu();
+        machines_menu->Append(ID_MENU_CONNECT_HOST,
+                              "&Connect…\tCtrl+N",
+                              "Connect to a com aggregator at host:port "
+                              "(switches the hub)");
+        machines_menu->AppendSeparator();
         machines_menu->Append(ID_MENU_CONNECT_ALL,
-                              "&Connect all",
-                              "Start gRPC clients for every machine");
+                              "Re&connect",
+                              "Restart the gRPC client for the current hub");
         machines_menu->Append(ID_MENU_DISCONNECT_ALL,
-                              "&Disconnect all",
-                              "Stop every gRPC client (state stays cached)");
+                              "&Disconnect",
+                              "Stop the gRPC client (state stays cached)");
         mb->Append(machines_menu, "&Machines");
 
         auto* help_menu = new wxMenu();
@@ -366,16 +372,53 @@ MainFrame::MainFrame(std::vector<MachineEndpoint> machines)
         });
 
     // ONE GrpcClient — to the central aggregator. The demux in on_sup_frame
-    // splits its stream per machine.
+    // splits its stream per machine. Connect… (Machines menu) switches it.
+    current_hub_ = hub.address + ":" + std::to_string(hub.port);
     {
-        std::string host_port = hub.address + ":" + std::to_string(hub.port);
         clients_.emplace_back(new GrpcClient(
-            hub.name, host_port,
+            hub.name, current_hub_,
             [this](const std::string& mn, uint16_t tag, std::string payload) {
                 post_frame_from_thread(mn, tag, std::move(payload));
             }));
         clients_.back()->start();
     }
+}
+
+// Connect… — repoint the single aggregator hub at a new host:port. Stop the
+// current client, clear the demux's per-machine state (the new cluster may have
+// a different machine set), start a fresh client. local_name_ becomes the new
+// host (the unprefixed/instance-0 nodes from the new hub render under it).
+void MainFrame::switch_hub(const std::string& host_port) {
+    for (auto& c : clients_) if (c) c->stop();
+    clients_.clear();
+
+    current_hub_ = host_port;
+    // Label the hub by its host (strip the port) so the left panel reads cleanly.
+    const auto colon = host_port.rfind(':');
+    local_name_ = (colon == std::string::npos) ? host_port
+                                               : host_port.substr(0, colon);
+    seen_machines_.clear();
+    seen_machines_.insert(local_name_);
+
+    // Reset the left panel to just the new hub; peers re-appear via note_machine.
+    {
+        std::vector<MachineRow> rows;
+        MachineRow r;
+        r.name    = local_name_;
+        r.address = host_port;
+        r.state   = MachineConnState::Connecting;
+        rows.push_back(std::move(r));
+        machines_panel_->set_machines(std::move(rows));
+    }
+
+    clients_.emplace_back(new GrpcClient(
+        local_name_, host_port,
+        [this](const std::string& mn, uint16_t tag, std::string payload) {
+            post_frame_from_thread(mn, tag, std::move(payload));
+        }));
+    clients_.back()->start();
+    SetStatusText(wxString::Format("connecting to %s…", host_port.c_str()), 0);
+    wxLogStatus(this, "Hub → %s", host_port.c_str());
 }
 
 GrpcClient* MainFrame::client_for_focus() {
@@ -561,20 +604,31 @@ void MainFrame::on_menu(wxCommandEvent& evt) {
             wxLogStatus(this, "Refresh machines: not implemented");
             return;
 
+        case ID_MENU_CONNECT_HOST: {
+            // Prompt for host:port, default to the current hub. Switch on OK.
+            wxString def = wxString::FromUTF8(
+                (clients_.empty() ? std::string("127.0.0.1:7700")
+                                  : current_hub_).c_str());
+            wxTextEntryDialog dlg(this,
+                "Connect to a com aggregator (host:port).\n"
+                "The hub aggregates its whole cluster; the GUI demuxes per machine.",
+                "Connect…", def);
+            if (dlg.ShowModal() != wxID_OK) return;
+            std::string hp = dlg.GetValue().Trim().Trim(false).ToStdString();
+            if (hp.empty()) return;
+            if (hp.find(':') == std::string::npos) hp += ":7700";   // default port
+            switch_hub(hp);
+            return;
+        }
+
         case ID_MENU_CONNECT_ALL:
             for (auto& c : clients_) if (c) c->start();
-            wxLogStatus(this, "Connect all: %zu clients", clients_.size());
+            wxLogStatus(this, "Reconnect: %zu client(s)", clients_.size());
             return;
 
         case ID_MENU_DISCONNECT_ALL:
             for (auto& c : clients_) if (c) c->stop();
-            if (machines_panel_) {
-                // Reflect state immediately; the next status_tick
-                // also resyncs but the user expects instant feedback.
-                // (no good way to iterate machines without saving the
-                // names — skip; next tick covers it.)
-            }
-            wxLogStatus(this, "Disconnect all: %zu clients", clients_.size());
+            wxLogStatus(this, "Disconnect: %zu client(s)", clients_.size());
             return;
 
         default:

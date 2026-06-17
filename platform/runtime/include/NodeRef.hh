@@ -158,7 +158,17 @@ public:
     // the one per-app epoll loop (no-op if no process mux is published —
     // e.g. a cast-only caller, or a test without a mux).
     bool connect(int timeout_ms = 3000) {
-        if (!client_.connect(TipcType, TipcInstance, timeout_ms))
+        return connect_instance(TipcInstance, timeout_ms);
+    }
+
+    // Connect at a RUNTIME instance, overriding the compile-time TipcInstance
+    // template arg. The destination TYPE is fixed by the template (TipcType),
+    // but the instance is a per-machine selector (central=0, compute=1, …) that
+    // a fan-out caller (com aggregating both machines' supervisors) only learns
+    // at runtime from TipcTopology. Otherwise identical to connect(): registers
+    // the reply fd with the process mux so a synchronous call() gets pumped.
+    bool connect_instance(uint32_t instance, int timeout_ms = 3000) {
+        if (!client_.connect(TipcType, instance, timeout_ms))
             return false;
         watched_fd_ = client_.fd();
         watch_reply_fd(watched_fd_,

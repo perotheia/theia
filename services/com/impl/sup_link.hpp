@@ -82,10 +82,19 @@ struct SupReply {
 // the libprotobuf gRPC edge in ComGrpcProxy_handlers.cc.
 class SupLink {
 public:
+    // The local supervisor (instance 0). Unchanged behaviour: all control
+    // RPCs (StartChild/Restart/…) target THIS machine's supervisor.
     static SupLink& instance();
 
-    // Connect the RemoteRef (TIPC type 0x80020001/0) and start the reply
-    // pump. Returns false if the supervisor isn't reachable. Idempotent.
+    // Per-machine link to the supervisor at TIPC (0x80020001, `inst`). One
+    // singleton per instance — for_instance(0) == instance(). com's tree/health
+    // AGGREGATION fans out across the present instances (central=0, compute=1, …)
+    // discovered via TipcTopology; control stays on instance().
+    static SupLink& for_instance(uint32_t inst);
+
+    // Connect the RemoteRef (TIPC type 0x80020001, this link's instance) and
+    // start the reply pump. Returns false if the supervisor isn't reachable.
+    // Idempotent.
     bool start(int connect_timeout_ms = 3000);
 
     // Stop the reply pump + drop the connection.
@@ -128,7 +137,7 @@ public:
                        int timeout_ms = 5000);
 
 private:
-    SupLink();
+    explicit SupLink(uint32_t tipc_instance = 0);
     ~SupLink();
     SupLink(const SupLink&)            = delete;
     SupLink& operator=(const SupLink&) = delete;

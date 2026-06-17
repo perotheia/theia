@@ -22,6 +22,7 @@
 #include <cstdio>
 #include <cstring>
 #include <mutex>
+#include <unordered_map>
 
 namespace services_com {
 
@@ -65,6 +66,7 @@ uint32_t level_ordinal(const std::string& level) {
 struct SupLink::Impl {
     theia::runtime::TipcMux  mux;        // reply pump for ref's client fd
     SupRef                  ref;
+    uint32_t                tipc_instance = 0;  // 0=central, 1=compute, …
     bool                    started = false;
     std::mutex              call_mu;    // serialize call(); RemoteRef demuxes
                                         // by corr_id, but one outstanding call
@@ -91,17 +93,34 @@ struct SupLink::Impl {
     }
 };
 
-SupLink::SupLink() : impl_(new Impl()) {}
+SupLink::SupLink(uint32_t tipc_instance) : impl_(new Impl()) {
+    impl_->tipc_instance = tipc_instance;
+}
 SupLink::~SupLink() { stop(); delete impl_; }
 
 SupLink& SupLink::instance() {
-    static SupLink s;
-    return s;
+    return for_instance(kSupCtlTipcInstance);   // the local supervisor (0)
+}
+
+// Per-instance singleton. A map keyed by instance, each a SupLink connected at
+// (0x80020001, inst). instance()==for_instance(0) keeps central-only callers +
+// every control RPC byte-identical. Guarded by a mutex (Subscribe loops on
+// multiple gRPC threads may race the first-touch of a remote instance).
+SupLink& SupLink::for_instance(uint32_t inst) {
+    // Raw owning pointers (never freed): these are process-lifetime singletons,
+    // exactly like the old `static SupLink s`. A unique_ptr can't see the private
+    // dtor, and there's nothing to reclaim at exit anyway.
+    static std::mutex                              mu;
+    static std::unordered_map<uint32_t, SupLink*>  links;
+    std::lock_guard<std::mutex> lk(mu);
+    auto& slot = links[inst];
+    if (!slot) slot = new SupLink(inst);
+    return *slot;
 }
 
 bool SupLink::start(int connect_timeout_ms) {
     if (impl_->started) return true;
-    if (!impl_->ref.connect(connect_timeout_ms)) {
+    if (!impl_->ref.connect_instance(impl_->tipc_instance, connect_timeout_ms)) {
         return false;   // supervisor not up / TIPC unavailable
     }
     // Watch the ref's client fd for GW_MSG_GEN_CALL_REPLY frames so call()'s

@@ -43,6 +43,8 @@
 #include "impl/shwa_link.hpp"     // SHWA AccelTelemetry egress receiver (GPU/host)
 #include "impl/com_tls.hpp"       // shared TLS-or-insecure ServerCredentials
 
+#include "TipcTopology.hh"        // Stage 3: live supervisor-instance discovery
+
 #include "supervisor_bridge.grpc.pb.h"
 
 // The supervisor's wire types com bridges — now ONE consolidated libprotobuf
@@ -114,6 +116,82 @@ void on_accel_sample(const std::string& sample_bytes) {
     g_accel_seq.fetch_add(1, std::memory_order_relaxed);
 }
 
+// ---- Stage 3: cluster-wide supervisor fan-out ----------------------------
+//
+// com on central aggregates EVERY present machine's supervisor tree into ONE
+// SupervisorView stream, so a single rtdb/GUI against central:7700 sees the
+// whole cluster. The supervisor control node binds TIPC type 0x80020001 at a
+// per-machine instance (central=0, compute=1, …). A TipcTopology subscribed to
+// {0x80020001, 0..kMaxSupInstance} keeps the live set of present instances; the
+// Subscribe poll fans get_tree() across them and MERGES the children.
+//
+// Instance 0 (the local supervisor) is ALWAYS the back-compat path: control
+// RPCs and a lone-machine stack behave exactly as before. Remote instances are
+// only ever touched while a Subscribe client is connected (the poll loop).
+constexpr uint32_t kSupCtlTipcType   = 0x80020001u;
+constexpr uint32_t kMaxSupInstance   = 16u;   // generous machine-count ceiling
+
+theia::runtime::TipcTopology g_sup_topology;
+std::atomic<bool>            g_topology_up{false};
+
+// Merge the present supervisors' trees into one TreeSnapshot. Instance 0 is the
+// local supervisor (always tried, even if topology hasn't fired yet — back-compat
+// for a single-machine stack where the local sup may bind after com). Instances
+// ≥1 come from TipcTopology and are tagged: their child + parent names get an
+// "mN/" prefix so the merged flat tree renders as a SEPARATE subtree per machine
+// (rtdb's _render_tree rebuilds by parent_name, so each machine's root supervisor
+// stays a distinct top-level node and its children hang under it). instance-0
+// names are UNTOUCHED — a central-only stack looks byte-identical to before.
+//
+// We tag by NAME rather than adding a machine field to TreeSnapshot: the instance
+// already disambiguates the machine, and name-prefixing needs ZERO wire/proto/rtdb
+// change (no supervisor-proto regen hazard) while still making the machine visible
+// in `rtdb ps`. Returns false if NO instance yielded a tree.
+bool merge_present_trees(system_supervisor::TreeSnapshot* merged) {
+    // Present remote instances from topology; always include 0.
+    std::vector<uint32_t> insts;
+    if (g_topology_up.load(std::memory_order_relaxed)) {
+        insts = g_sup_topology.instances_of(kSupCtlTipcType);
+    }
+    if (std::find(insts.begin(), insts.end(), 0u) == insts.end())
+        insts.insert(insts.begin(), 0u);
+    std::sort(insts.begin(), insts.end());
+
+    bool any = false;
+    uint64_t newest_gen = 0, newest_ts = 0;
+    for (uint32_t inst : insts) {
+        auto& link = services_com::SupLink::for_instance(inst);
+        // Lazily connect a remote link the first time it's seen (instance 0 is
+        // already started in do_start). Cheap: only happens once per machine.
+        if (!link.connected()) {
+            if (!link.start(/*connect_timeout_ms=*/1500)) continue;
+        }
+        services_com::SupReply r;
+        if (!link.get_tree(r) || r.tree_snapshot.empty()) continue;
+        system_supervisor::TreeSnapshot one;
+        if (!one.ParseFromString(r.tree_snapshot)) continue;
+        any = true;
+        if (one.generation() > newest_gen) newest_gen = one.generation();
+        if (one.timestamp_ms() > newest_ts) newest_ts = one.timestamp_ms();
+        const std::string pfx =
+            inst == 0 ? std::string() : ("m" + std::to_string(inst) + "/");
+        for (const auto& ch : one.children()) {
+            auto* dst = merged->add_children();
+            *dst = ch;
+            if (!pfx.empty()) {
+                dst->set_name(pfx + ch.name());
+                // Re-anchor parent: the per-machine root (parent_name=="") stays
+                // a top-level node so each machine renders as its own subtree.
+                if (!ch.parent_name().empty())
+                    dst->set_parent_name(pfx + ch.parent_name());
+            }
+        }
+    }
+    merged->set_generation(newest_gen);
+    merged->set_timestamp_ms(newest_ts);
+    return any;
+}
+
 // ---- gRPC service: forwards control RPCs onto the supervisor uplink ------
 class SupervisorViewImpl final
     : public services::com::SupervisorView::Service {
@@ -147,12 +225,13 @@ public:
         g_accel_subscribers.fetch_add(1, std::memory_order_relaxed);
         uint64_t last_accel_seq = 0;
         while (!ctx->IsCancelled()) {
-            services_com::SupReply r;
-            if (services_com::SupLink::instance().get_tree(r) &&
-                !r.tree_snapshot.empty()) {
+            // Stage 3: ONE merged snapshot across every present machine's
+            // supervisor (central=inst 0 + compute=inst 1 + …). On a single-
+            // machine stack this is exactly the instance-0 tree as before.
+            {
                 services::com::SupervisorObservation obs;
                 auto* s = obs.mutable_snapshot();
-                if (s->ParseFromString(r.tree_snapshot)) {
+                if (merge_present_trees(s) && s->children_size() > 0) {
                     if (!writer->Write(obs)) break;   // client gone
                 }
             }
@@ -445,6 +524,29 @@ void ComGrpcProxy::do_start() {
                      kNodeName);
     }
 
+    // Stage 3 — live discovery of which machines' supervisors are present.
+    // Subscribe to all instances [0..kMaxSupInstance] of the supervisor control
+    // type; the Subscribe poll fans get_tree() across instances_of(). CLUSTER
+    // scope, so com on central sees compute's supervisor. Best-effort: if TIPC's
+    // topology server is unreachable we fall back to instance-0-only (g_topology_up
+    // stays false → merge_present_trees still always tries instance 0).
+    g_sup_topology.subscribe(kSupCtlTipcType, 0u, kMaxSupInstance);
+    if (g_sup_topology.start([](const theia::runtime::TopologyEvent& ev) {
+            std::fprintf(stderr,
+                         "[com] supervisor instance %u %s\n",
+                         ev.instance, ev.present ? "PUBLISHED" : "WITHDRAWN");
+        })) {
+        g_topology_up.store(true);
+        std::fprintf(stderr,
+                     "[%s] supervisor-instance topology up "
+                     "(0x80020001, 0..%u); tree fans out per machine\n",
+                     kNodeName, kMaxSupInstance);
+    } else {
+        std::fprintf(stderr,
+                     "[%s] WARN: TIPC topology server unreachable; tree stays "
+                     "single-machine (instance 0 only)\n", kNodeName);
+    }
+
     // per (persistency) proxy link — RemoteRef → PerManager (0x80010016).
     // Best-effort like the supervisor link: PerView RPCs return UNAVAILABLE
     // until per is reachable. (per may be down or absent on a machine.)
@@ -525,6 +627,8 @@ void ComGrpcProxy::do_stop() {
     }
     g_sup_svc.reset();
     g_per_svc.reset();
+    g_sup_topology.stop();
+    g_topology_up.store(false);
     services_com::SupLink::instance().stop();
     services_com::PerLink::instance().stop();
     services_com::ShwaLink::instance().stop();

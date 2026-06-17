@@ -52,6 +52,15 @@ void DemoFsm::on_enter(DemoFsmState new_s,
     // GenStateM base on each transition — see GenStateM.hh. rf asserts on those.
 }
 
+// on_config_update — services/per casts platform.runtime.ConfigUpdated when the
+// etcd-backed P4Config changes. The GenStateM base decodes + logs, then calls
+// this hook. This demo FSM only reads config at boot, so the body is empty
+// (the declaration is emitted by the lib because the node binds `config P4Config`).
+void DemoFsm::on_config_update(
+        const platform_runtime_ConfigUpdated& /*cfg*/,
+        ::theia::runtime::GenStateMHolder<DemoFsmState, DemoFsmData>& /*h*/) {
+}
+
 
 
 }  // namespace demo

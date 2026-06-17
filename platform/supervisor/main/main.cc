@@ -12,7 +12,7 @@
 #include "TimerService.hh"
 #include "Logger.hh"     // parse_log_level / process_logger / set_process_logger
 #include "NodeAffinity.hh"  // apply_node_affinity($THEIA_NODE_CFG) per node
-#include "MachineInstance.hh"  // effective_instance() — bind ctl at this machine's idx
+#include "MachineInstance.hh"  // resolve_node_tipc(--tipc) — per-node addr
 #include "ParamsConfig.hh"  // init_config(fc) / get_config() — static params JSON
 #include "tombstone/tombstone.h"  // install_handlers — crash → tombstone file
 
@@ -42,9 +42,14 @@ void on_signal(int /*sig*/) { g_running.store(false); }
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
     std::signal(SIGINT,  on_signal);
     std::signal(SIGTERM, on_signal);
+
+    // --tipc=<node>=<type>:<inst>|... — the supervisor's own SupervisorCtl address
+    // (so central binds supervisor:0, compute supervisor:1). `theia start` appends
+    // it from the machine's index; absent → the compiled instance 0.
+    ::theia::runtime::set_node_tipc_arg(argc, argv);
 
     // Crash forensics: install the libtombstone fatal-signal handler BEFORE any
     // node starts, so a SIGSEGV/SIGABRT/etc — even during startup — writes a
@@ -117,17 +122,19 @@ int main() {
     // supervisor:0, compute supervisor:1, so central com reaches each machine's
     // supervisor at (0x80020001, instance=N). machine_instance() reads the
     // supervisor's THEIA_MACHINE_INSTANCE boot env (0 on a single-machine deploy).
-    const uint32_t supervisor_ctl_inst =
-        ::theia::runtime::effective_instance(SupervisorCtl::kTipcInstance);
+    uint32_t supervisor_ctl_type, supervisor_ctl_inst;
+    ::theia::runtime::resolve_node_tipc(SupervisorCtl::kNodeName,
+        SupervisorCtl::kTipcType, SupervisorCtl::kTipcInstance,
+        supervisor_ctl_type, supervisor_ctl_inst);
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
-                      SupervisorCtl::kTipcType, supervisor_ctl_inst);
+                      supervisor_ctl_type, supervisor_ctl_inst);
         supervisor_ctl.log().info(_tipc);
     }
 
     if (auto* supervisor_ctl_cfg = config_mux.bind_node(
-            supervisor_ctl, SupervisorCtl::kTipcType,
+            supervisor_ctl, supervisor_ctl_type,
             supervisor_ctl_inst)) {
         config_mux.register_cast<platform_runtime_LogLevelPush>(
             supervisor_ctl_cfg, supervisor_ctl);

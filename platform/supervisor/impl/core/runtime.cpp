@@ -649,6 +649,38 @@ void Supervisor::start_worker(WorkerNode& w) {
         argv[0] = root_dir_ + "/" + argv[0];
     }
 
+    // --tipc=<node>=<type>:<inst>|... — the per-NODE TIPC address the child binds,
+    // appended to its argv (ARG-only: the binary is the SAME on every machine; the
+    // address comes from the arg, not a compiled constant). The supervisor knows
+    // each node's type/instance from executor.json (w.nodes); the INSTANCE is
+    // shifted by this machine's index (a STABLE type + per-MACHINE instance, so the
+    // same binary on machine N binds type:declared+N). The supervisor's own machine
+    // index is THEIA_MACHINE_INSTANCE (set per machine by `theia start`); 0 on a
+    // single-machine deploy → the child binds exactly executor.json's instance.
+    // Only Theia FC binaries take --tipc; a child with no TIPC-addressed nodes
+    // (e.g. a pure third-party binary) is skipped (its w.nodes is empty).
+    if (!w.nodes.empty()) {
+        unsigned machine_idx = 0;
+        if (const char* mi = std::getenv("THEIA_MACHINE_INSTANCE"); mi && *mi)
+            machine_idx = static_cast<unsigned>(std::strtoul(mi, nullptr, 10));
+        std::string tipc;
+        for (const auto& ni : w.nodes) {
+            if (ni.tipc_type.empty()) continue;   // address-less node, skip
+            unsigned inst = 0;
+            if (!ni.tipc_instance.empty())
+                inst = static_cast<unsigned>(
+                    std::strtoul(ni.tipc_instance.c_str(), nullptr, 10));
+            inst += machine_idx;
+            if (!tipc.empty()) tipc += '|';
+            tipc += ni.name;
+            tipc += '=';
+            tipc += ni.tipc_type;        // hex string "0x...." passed through
+            tipc += ':';
+            tipc += std::to_string(inst);
+        }
+        if (!tipc.empty()) argv.push_back("--tipc=" + tipc);
+    }
+
     std::ostringstream msg;
     msg << "starting child " << w.name << ": " << join(argv);
     log_info(msg.str());
@@ -741,40 +773,6 @@ void Supervisor::start_worker(WorkerNode& w) {
                 }
             }
             if (!cfg.empty()) setenv("THEIA_NODE_CFG", cfg.c_str(), 1);
-        }
-
-        // THEIA_NODE_TIPC — per-node TIPC ADDRESS for the child's main.cc to bind,
-        // so the binary is ADDRESS-AGNOSTIC: it reads its node addresses from the
-        // env the supervisor builds from executor.json (which already carries
-        // tipc_type/tipc_instance per node), NOT from a compiled-in constant.
-        // Encoding mirrors THEIA_NODE_CFG: <node>=<type>:<instance> | <node2>=...
-        //
-        // The INSTANCE is shifted by this machine's index — a service has a
-        // STABLE type and a per-MACHINE instance, so the same binary on machine N
-        // binds (type, declared_instance + N). The supervisor reads its own index
-        // from THEIA_MACHINE_INSTANCE (set per machine by the deploy) and applies
-        // it to every child node here. Absent → 0 (single-machine/legacy: the
-        // child binds exactly executor.json's instance).
-        {
-            unsigned machine_idx = 0;
-            if (const char* mi = std::getenv("THEIA_MACHINE_INSTANCE"); mi && *mi)
-                machine_idx = static_cast<unsigned>(std::strtoul(mi, nullptr, 10));
-            std::string tipc;
-            for (const auto& ni : w.nodes) {
-                if (ni.tipc_type.empty()) continue;   // address-less node, skip
-                unsigned inst = 0;
-                if (!ni.tipc_instance.empty())
-                    inst = static_cast<unsigned>(
-                        std::strtoul(ni.tipc_instance.c_str(), nullptr, 10));
-                inst += machine_idx;
-                if (!tipc.empty()) tipc += '|';
-                tipc += ni.name;
-                tipc += '=';
-                tipc += ni.tipc_type;        // hex string "0x...." passed through
-                tipc += ':';
-                tipc += std::to_string(inst);
-            }
-            if (!tipc.empty()) setenv("THEIA_NODE_TIPC", tipc.c_str(), 1);
         }
 
         // CPU affinity. AUTOSAR ProcessToMachineMapping flavour:

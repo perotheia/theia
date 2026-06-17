@@ -1,69 +1,92 @@
-// MachineInstance — see MachineInstance.hh.
+// MachineInstance — see MachineInstance.hh. ARG-only per-node TIPC resolution.
 
 #include "MachineInstance.hh"
 
 #include <cstdlib>
 #include <cstring>
+#include <map>
+#include <mutex>
+#include <string>
 
 namespace theia {
 namespace runtime {
 
-uint32_t machine_instance() noexcept {
-    // Read + cache once. THEIA_MACHINE_INSTANCE is a small decimal (0,1,2,…);
-    // anything unparseable or absent → 0.
-    static const uint32_t kInstance = []() -> uint32_t {
-        const char* e = std::getenv("THEIA_MACHINE_INSTANCE");
-        if (!e || !*e) return 0u;
-        char* end = nullptr;
-        unsigned long v = std::strtoul(e, &end, 10);
-        if (end == e) return 0u;  // not a number
-        return static_cast<uint32_t>(v);
-    }();
-    return kInstance;
+namespace {
+
+struct Addr {
+    bool     has_type;     // false → instance-only entry (keep compiled type)
+    uint32_t type;
+    uint32_t instance;
+};
+
+std::map<std::string, Addr>& tipc_map() {
+    static std::map<std::string, Addr> m;
+    return m;
+}
+std::once_flag g_parsed;
+
+// Parse one "<type>:<inst>" or ":<inst>" value into an Addr.
+bool parse_addr(const char* val, Addr& out) {
+    const char* colon = std::strchr(val, ':');
+    if (!colon) return false;
+    if (colon == val) {
+        // ":<inst>" — instance only.
+        out.has_type = false;
+        out.type     = 0;
+    } else {
+        out.has_type = true;
+        out.type     = static_cast<uint32_t>(std::strtoul(val, nullptr, 0));  // 0x… ok
+    }
+    out.instance = static_cast<uint32_t>(std::strtoul(colon + 1, nullptr, 10));
+    return true;
+}
+
+// Parse the whole "--tipc" value: "n1=type:inst|n2=:inst|...".
+void parse_tipc_value(const char* value) {
+    auto& m = tipc_map();
+    const char* p = value;
+    while (p && *p) {
+        const char* bar = std::strchr(p, '|');
+        const char* end = bar ? bar : p + std::strlen(p);
+        const char* eq  = std::strchr(p, '=');
+        if (eq && eq < end) {
+            std::string node(p, static_cast<size_t>(eq - p));
+            std::string val(eq + 1, static_cast<size_t>(end - (eq + 1)));
+            Addr a{};
+            if (parse_addr(val.c_str(), a)) m[node] = a;
+        }
+        if (!bar) break;
+        p = bar + 1;
+    }
+}
+
+}  // namespace
+
+void set_node_tipc_arg(int argc, char** argv) noexcept {
+    std::call_once(g_parsed, [argc, argv] {
+        for (int i = 1; i < argc; ++i) {
+            const char* a = argv[i];
+            if (std::strncmp(a, "--tipc=", 7) == 0) {
+                parse_tipc_value(a + 7);
+            } else if (std::strcmp(a, "--tipc") == 0 && i + 1 < argc) {
+                parse_tipc_value(argv[++i]);
+            }
+        }
+    });
 }
 
 bool resolve_node_tipc(const char* node_name,
                        uint32_t default_type, uint32_t default_instance,
                        uint32_t& out_type, uint32_t& out_instance) noexcept {
-    // Fallback: the compiled defaults, with this machine's index applied to the
-    // instance (so even an env-less run with THEIA_MACHINE_INSTANCE set shifts).
     out_type     = default_type;
-    out_instance = default_instance + machine_instance();
-
-    const char* env = std::getenv("THEIA_NODE_TIPC");
-    if (!env || !*env || !node_name) return false;
-
-    // Format: "<node>=<type>:<inst>|<node2>=<type>:<inst>|...". Scan for our node.
-    const size_t nlen = std::strlen(node_name);
-    const char* p = env;
-    while (*p) {
-        // Start of an entry: match "<node_name>=".
-        const char* eq = std::strchr(p, '=');
-        if (!eq) break;
-        const size_t this_nlen = static_cast<size_t>(eq - p);
-        const char* val = eq + 1;
-        const char* bar = std::strchr(val, '|');
-        const char* val_end = bar ? bar : val + std::strlen(val);
-
-        if (this_nlen == nlen && std::strncmp(p, node_name, nlen) == 0) {
-            // val is "<type>:<inst>" (type may be hex "0x...."). strtoul base 0
-            // auto-detects 0x. The instance here is ALREADY machine-shifted by
-            // the supervisor, so don't re-apply machine_instance().
-            char* cp = nullptr;
-            unsigned long ty = std::strtoul(val, &cp, 0);
-            if (cp && *cp == ':') {
-                unsigned long in = std::strtoul(cp + 1, nullptr, 10);
-                out_type     = static_cast<uint32_t>(ty);
-                out_instance = static_cast<uint32_t>(in);
-                return true;
-            }
-            return false;  // malformed entry → keep the fallback
-        }
-        if (!bar) break;
-        p = bar + 1;
-        (void)val_end;
-    }
-    return false;
+    out_instance = default_instance;
+    if (!node_name) return false;
+    auto& m = tipc_map();
+    auto it = m.find(node_name);
+    if (it == m.end()) return false;
+    if (it->second.has_type) out_type = it->second.type;  // else keep compiled type
+    out_instance = it->second.instance;
+    return true;
 }
 
 }  // namespace runtime

@@ -14,7 +14,7 @@
 #include "TimerService.hh"
 #include "Logger.hh"     // parse_log_level / process_logger / set_process_logger
 #include "NodeAffinity.hh"  // apply_node_affinity($THEIA_NODE_CFG) per node
-#include "MachineInstance.hh"  // resolve_node_tipc($THEIA_NODE_TIPC) — per-node addr
+#include "MachineInstance.hh"  // resolve_node_tipc(--tipc arg) — per-node addr
 #include "ParamsConfig.hh"  // init_config(fc) / get_config() — static params JSON
 #include "tombstone/tombstone.h"  // install_handlers — crash → tombstone file
 
@@ -44,9 +44,16 @@ void on_signal(int /*sig*/) { g_running.store(false); }
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
     std::signal(SIGINT,  on_signal);
     std::signal(SIGTERM, on_signal);
+
+    // --tipc=<node>=<type>:<inst>|... — per-NODE TIPC address from the command
+    // line (ARG-only; the supervisor appends it per child, instance machine-
+    // shifted). Parse it once; each node below resolves its own address via
+    // resolve_node_tipc(), falling back to its compiled .art address when absent
+    // (a bare / un-supervised run binds the declared instance 0 — host-dev).
+    ::theia::runtime::set_node_tipc_arg(argc, argv);
 
     // Crash forensics: install the libtombstone fatal-signal handler BEFORE any
     // node starts, so a SIGSEGV/SIGABRT/etc — even during startup — writes a
@@ -118,11 +125,10 @@ int main() {
     // exists now.
     ::theia::runtime::apply_node_affinity(ptp4l.native_handle(),
         Ptp4lProvider::kNodeName, std::getenv("THEIA_NODE_CFG"));
-    // Resolve this node's TIPC address from the env the supervisor built from
-    // executor.json (THEIA_NODE_TIPC, instance already machine-shifted), so the
-    // BINARY is address-agnostic — same binary on every machine, the instance
-    // assigned at deploy. Falls back to the compiled kTipcType/kTipcInstance
-    // (machine-shifted) for a standalone / un-supervised run.
+    // Resolve this node's TIPC address from the --tipc arg the supervisor built
+    // from executor.json (per node, instance machine-shifted), so the BINARY is
+    // address-agnostic — same binary on every machine. Falls back to the compiled
+    // kTipcType/kTipcInstance (the .art instance) for a standalone run.
     uint32_t ptp4l_type, ptp4l_inst;
     ::theia::runtime::resolve_node_tipc(Ptp4lProvider::kNodeName,
         Ptp4lProvider::kTipcType, Ptp4lProvider::kTipcInstance,
@@ -154,11 +160,10 @@ int main() {
     // exists now.
     ::theia::runtime::apply_node_affinity(phc2sys.native_handle(),
         Phc2sysProvider::kNodeName, std::getenv("THEIA_NODE_CFG"));
-    // Resolve this node's TIPC address from the env the supervisor built from
-    // executor.json (THEIA_NODE_TIPC, instance already machine-shifted), so the
-    // BINARY is address-agnostic — same binary on every machine, the instance
-    // assigned at deploy. Falls back to the compiled kTipcType/kTipcInstance
-    // (machine-shifted) for a standalone / un-supervised run.
+    // Resolve this node's TIPC address from the --tipc arg the supervisor built
+    // from executor.json (per node, instance machine-shifted), so the BINARY is
+    // address-agnostic — same binary on every machine. Falls back to the compiled
+    // kTipcType/kTipcInstance (the .art instance) for a standalone run.
     uint32_t phc2sys_type, phc2sys_inst;
     ::theia::runtime::resolve_node_tipc(Phc2sysProvider::kNodeName,
         Phc2sysProvider::kTipcType, Phc2sysProvider::kTipcInstance,
@@ -190,11 +195,10 @@ int main() {
     // exists now.
     ::theia::runtime::apply_node_affinity(chrony.native_handle(),
         ChronyProvider::kNodeName, std::getenv("THEIA_NODE_CFG"));
-    // Resolve this node's TIPC address from the env the supervisor built from
-    // executor.json (THEIA_NODE_TIPC, instance already machine-shifted), so the
-    // BINARY is address-agnostic — same binary on every machine, the instance
-    // assigned at deploy. Falls back to the compiled kTipcType/kTipcInstance
-    // (machine-shifted) for a standalone / un-supervised run.
+    // Resolve this node's TIPC address from the --tipc arg the supervisor built
+    // from executor.json (per node, instance machine-shifted), so the BINARY is
+    // address-agnostic — same binary on every machine. Falls back to the compiled
+    // kTipcType/kTipcInstance (the .art instance) for a standalone run.
     uint32_t chrony_type, chrony_inst;
     ::theia::runtime::resolve_node_tipc(ChronyProvider::kNodeName,
         ChronyProvider::kTipcType, ChronyProvider::kTipcInstance,
@@ -226,11 +230,10 @@ int main() {
     // exists now.
     ::theia::runtime::apply_node_affinity(tsync_ctl.native_handle(),
         TsyncCtl::kNodeName, std::getenv("THEIA_NODE_CFG"));
-    // Resolve this node's TIPC address from the env the supervisor built from
-    // executor.json (THEIA_NODE_TIPC, instance already machine-shifted), so the
-    // BINARY is address-agnostic — same binary on every machine, the instance
-    // assigned at deploy. Falls back to the compiled kTipcType/kTipcInstance
-    // (machine-shifted) for a standalone / un-supervised run.
+    // Resolve this node's TIPC address from the --tipc arg the supervisor built
+    // from executor.json (per node, instance machine-shifted), so the BINARY is
+    // address-agnostic — same binary on every machine. Falls back to the compiled
+    // kTipcType/kTipcInstance (the .art instance) for a standalone run.
     uint32_t tsync_ctl_type, tsync_ctl_inst;
     ::theia::runtime::resolve_node_tipc(TsyncCtl::kNodeName,
         TsyncCtl::kTipcType, TsyncCtl::kTipcInstance,

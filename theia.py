@@ -373,8 +373,10 @@ def cmd_start(args: list[str]) -> int:
         "THEIA_SUPERVISOR_MANIFEST": "executor.json",
         "THEIA_ROOT_DIR": ".",
         "THEIA_SUPERVISOR_INSTANCE": instance,
-        # The cluster machine index — the supervisor reads it (effective_instance
-        # for its own ctl bind + the per-child THEIA_NODE_TIPC instance shift).
+        # The cluster machine index — a supervisor BOOT knob (not a node address):
+        # the supervisor reads it to shift each CHILD's --tipc instance by N when
+        # it builds the child's argv. The supervisor's OWN ctl address is passed
+        # via --tipc below (ARG-only, like every node).
         "THEIA_MACHINE_INSTANCE": machine_instance,
     }
     # Bundled shared libs the FCs link at runtime (per → libetcd-cpp-api.so). In
@@ -394,8 +396,14 @@ def cmd_start(args: list[str]) -> int:
     # to the log. start_new_session=True == setsid → the supervisor leads its
     # own session (its children already setsid per-worker).
     logf = open(log, "ab")
+    # The supervisor's own SupervisorCtl address is ARG-driven like every node:
+    # --tipc=supervisor_ctl=<type>:<machine_index>. Instance-only (":N") keeps the
+    # compiled type 0x80020001. central → :0, compute → :1.
+    sup_argv = ["./supervisor"]
+    if machine_instance != "0":
+        sup_argv.append(f"--tipc=supervisor_ctl=:{machine_instance}")
     proc = subprocess.Popen(
-        ["./supervisor"], cwd=str(dest), env=env,
+        sup_argv, cwd=str(dest), env=env,
         stdout=logf, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
         start_new_session=True,
     )

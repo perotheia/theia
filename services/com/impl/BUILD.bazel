@@ -187,6 +187,25 @@ cc_library(
     ],
 )
 
+# machine_manifest — com's read-only index→name map of the cluster machines,
+# loaded once from THEIA_MACHINE_MANIFEST (exported by the supervisor, inherited
+# by com). Used to label per-machine telemetry (the AccelSample demux) with a
+# human machine NAME instead of a bare TIPC instance. nlohmann/json stays in the
+# .cc; the header is primitive types only.
+cc_library(
+    name = "machine_manifest",
+    srcs = ["machine_manifest.cc"],
+    hdrs = ["machine_manifest.hpp"],
+    includes = [".."],
+    copts = [
+        "-std=c++17",
+        "-Wall",
+        "-Wextra",
+        "-fPIC",
+    ],
+    deps = ["//third_party:nlohmann_json"],
+)
+
 cc_library(
     name = "com_impl",
     srcs = [
@@ -232,5 +251,8 @@ cc_library(
         # SHWA AccelTelemetry egress receiver (raw-bytes, isolated above).
         # ComGrpcProxy_handlers.cc folds AccelSample into the Subscribe stream.
         ":shwa_link",
+        # Cluster machine index→name map (THEIA_MACHINE_MANIFEST) for labelling
+        # per-machine AccelTelemetry with a human machine name.
+        ":machine_manifest",
     ],
 )

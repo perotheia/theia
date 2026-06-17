@@ -44,6 +44,11 @@ message AccelSample {
     uint64 disk_install_total_kb = 17;
     uint64 disk_install_avail_kb = 18;
     uint64 ts_ns                 = 19;
+    // Cluster identity (mirror of shwa.proto). shwa stamps machine_index from
+    // its resolved TIPC instance; com fills machine_name from the machine
+    // manifest. The GUI Load panel labels per-machine HW from these.
+    uint32 machine_index         = 20;
+    string machine_name          = 21;
 }
 
 // One streamed observation from the supervisor. Discriminated union

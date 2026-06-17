@@ -6,4 +6,5 @@
 # `[max_size:N]` option.
 
 system_services_shwa.AccelSample.board   max_size:64
+system_services_shwa.AccelSample.machine_name   max_size:32
 system_services_shwa.PowerModeReply.message   max_size:64

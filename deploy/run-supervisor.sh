@@ -79,6 +79,16 @@ fi
 export THEIA_MACHINE_INSTANCE
 log "machine instance=${THEIA_MACHINE_INSTANCE} (from machine.json)"
 
+# The CLUSTER manifest root — machines.json (the index→name list) + each
+# <machine>/machine.json. com inherits this from the supervisor's env and reads
+# it to map a TIPC instance (e.g. an AccelSample's machine_index) back to a
+# machine NAME (central/compute) for the GUI. The supervisor itself doesn't use
+# it; it just passes it down to every child it forks.
+if [[ -d "/etc/theia/manifest" ]]; then
+    export THEIA_MACHINE_MANIFEST="/etc/theia/manifest"
+    log "machine manifest root=${THEIA_MACHINE_MANIFEST} (com inherits)"
+fi
+
 puppet_apply() {  # $1 = site manifest (provisioning.pp / orchestration.pp)
     log "puppet apply $1 (machine=$MACHINE)"
     puppet apply \

@@ -41,6 +41,7 @@
 #include "impl/sup_link.hpp"      // #418 control path over the standard transport
 #include "impl/per_link.hpp"      // per (persistency) proxy — ListSchemas/Snapshot
 #include "impl/shwa_link.hpp"     // SHWA AccelTelemetry egress receiver (GPU/host)
+#include "impl/machine_manifest.hpp"  // cluster index→name map (per-machine label)
 #include "impl/com_tls.hpp"       // shared TLS-or-insecure ServerCredentials
 
 #include "TipcTopology.hh"        // Stage 3: live supervisor-instance discovery
@@ -67,6 +68,8 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
+#include <vector>
 
 namespace ara::com {
 
@@ -101,17 +104,28 @@ std::string listen_addr() {
 // stored sample on its poll tick, so the GUI's GPU/host panels fill live.
 std::atomic<int>        g_accel_subscribers{0};
 std::mutex              g_accel_mtx;
-std::string             g_accel_latest;     // raw AccelSample proto-wire bytes
-std::atomic<uint64_t>   g_accel_seq{0};     // bumps on each new sample
+// PER-MACHINE latest sample, keyed by machine_index. Both machines' shwa push to
+// the SAME egress name (0x8001001A) on the shared host TIPC namespace, so com's
+// one receiver gets all of them interleaved; the AccelSample.machine_index field
+// (stamped by shwa from its TIPC instance) is the demux key. Each Subscribe tick
+// emits one `accel` arm per machine that has a fresh sample.
+std::unordered_map<uint32_t, std::string> g_accel_latest;   // inst → raw bytes
+std::atomic<uint64_t>   g_accel_seq{0};     // bumps on each new sample (any machine)
 
 // ShwaLink sink — called on the recv thread for each AccelSample. GATE: drop the
 // sample unless a gRPC subscriber is connected (the same gate as LogForwarder,
-// which only fans out while a Subscribe RPC holds the link).
+// which only fans out while a Subscribe RPC holds the link). Demux by machine:
+// parse the sample's machine_index and store it under that key so a multi-machine
+// cluster keeps each machine's latest HW telemetry separately.
 void on_accel_sample(const std::string& sample_bytes) {
     if (g_accel_subscribers.load(std::memory_order_relaxed) <= 0) return;
+    // Parse just enough to read machine_index (cheap; the GUI re-uses the bytes).
+    services::com::AccelSample s;
+    uint32_t inst = 0;
+    if (s.ParseFromString(sample_bytes)) inst = s.machine_index();
     {
         std::lock_guard<std::mutex> lk(g_accel_mtx);
-        g_accel_latest = sample_bytes;
+        g_accel_latest[inst] = sample_bytes;
     }
     g_accel_seq.fetch_add(1, std::memory_order_relaxed);
 }
@@ -281,27 +295,37 @@ public:
                     if (!writer->Write(obs)) break;
                 }
             }
-            // SHWA hardware telemetry (GPU / host monitor): emit the latest
-            // AccelSample as the `accel` arm whenever a new one has arrived since
-            // our last tick. The recv thread only populates g_accel_latest while
-            // a subscriber is connected (the gate), so this is a no-op when SHWA
-            // is absent or quiet.
+            // SHWA hardware telemetry (GPU / host monitor): emit each MACHINE's
+            // latest AccelSample as its own `accel` arm whenever a new one has
+            // arrived since our last tick. The recv thread only populates
+            // g_accel_latest while a subscriber is connected (the gate), so this
+            // is a no-op when SHWA is absent or quiet. machine_name is filled
+            // from the manifest so the GUI Load panel labels per-machine HW.
             {
                 uint64_t seq = g_accel_seq.load(std::memory_order_relaxed);
                 if (seq != last_accel_seq) {
-                    std::string raw;
+                    std::vector<std::string> raws;
                     {
                         std::lock_guard<std::mutex> lk(g_accel_mtx);
-                        raw = g_accel_latest;
+                        raws.reserve(g_accel_latest.size());
+                        for (const auto& kv : g_accel_latest)
+                            raws.push_back(kv.second);
                     }
                     last_accel_seq = seq;
-                    if (!raw.empty()) {
+                    bool client_gone = false;
+                    for (const auto& raw : raws) {
+                        if (raw.empty()) continue;
                         services::com::SupervisorObservation obs;
                         auto* a = obs.mutable_accel();
-                        if (a->ParseFromString(raw)) {
-                            if (!writer->Write(obs)) break;
-                        }
+                        if (!a->ParseFromString(raw)) continue;
+                        // Label with the human machine name (manifest lookup by
+                        // the index shwa stamped); falls back to "mN".
+                        a->set_machine_name(
+                            services_com::MachineManifest::instance().name(
+                                a->machine_index()));
+                        if (!writer->Write(obs)) { client_gone = true; break; }
                     }
+                    if (client_gone) break;
                 }
             }
             // Sleep in short slices so cancellation is responsive.
@@ -593,6 +617,11 @@ void ComGrpcProxy::do_start() {
                      "[%s] persistency link up (RemoteRef 0x80010016/0)\n",
                      kNodeName);
     }
+
+    // Load the cluster machine manifest (index→name) once, up front, so the
+    // first AccelSample's machine_name lookup is warm and the load is logged at
+    // startup (vs lazily on the recv thread). Best-effort: no manifest → "mN".
+    (void)services_com::MachineManifest::instance();
 
     // SHWA AccelTelemetry egress receiver. Bind the egress DGRAM name + start the
     // recv thread; install the gated sink BEFORE start() so no sample is missed.

@@ -14,6 +14,7 @@
 #include "TimerService.hh"      // post_info / send_after / process_timers
 #include "TheiaMsgHeader.hh"    // TheiaMsgHeader + kBusTypeRpc / kMsgGenCast
 #include "RemoteCodec.hh"       // hash_msg_type_ (AccelSample service_id)
+#include "MachineInstance.hh"   // resolve_node_tipc → this machine's instance
 
 #include <pb_decode.h>
 #include <pb_encode.h>
@@ -22,6 +23,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -38,6 +40,12 @@ uint64_t now_ns_() {
     return static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(now).count());
 }
+
+// This machine's TIPC instance (central=0, compute=1, …), set once from main
+// via set_machine_index() and stamped on every AccelSample so com can demux the
+// shared-namespace telemetry per machine. Read on the poll thread, written once
+// before the daemon starts — relaxed atomic is enough.
+std::atomic<uint32_t> g_machine_index{0};
 
 // Fill an AccelSample wire message from a backend AccelReading.
 AccelSample to_wire_(const AccelReading& r) {
@@ -61,6 +69,9 @@ AccelSample to_wire_(const AccelReading& r) {
     m.disk_install_total_kb  = r.disk_install_total_kb;
     m.disk_install_avail_kb  = r.disk_install_avail_kb;
     m.ts_ns        = now_ns_();
+    // Cluster identity. machine_name is left empty here — com fills it from the
+    // machine manifest (it has the index→name map); shwa only knows its index.
+    m.machine_index = g_machine_index.load(std::memory_order_relaxed);
     return m;
 }
 
@@ -138,15 +149,31 @@ private:
 
 }  // namespace
 
+// Cluster identity setter — see the declaration in ShwaDaemon.hh. Stamped on
+// every AccelSample by to_wire_() so com can demux per-machine telemetry.
+void set_machine_index(uint32_t machine_index) noexcept {
+    g_machine_index.store(machine_index, std::memory_order_relaxed);
+}
+
 // init: bring up the backend, apply config, kick off the poll loop.
 void ShwaDaemon::init(ShwaDaemonState& s) {
     backend::init();
     s.started = true;
     s.power_mode = backend::read_power_mode();   // initial read (UNKNOWN off-Jetson)
     backend::sample(s.last);                     // a first reading for GetAccelStatus
+
+    // Cluster identity for telemetry. main.cc already parsed --tipc; resolve our
+    // own node's instance (central=0, compute=1, …) and stamp it on every
+    // AccelSample so com can demux the shared-namespace egress per machine.
+    uint32_t my_type = 0, my_inst = 0;
+    ::theia::runtime::resolve_node_tipc(kNodeName, kTipcType, kTipcInstance,
+                                        my_type, my_inst);
+    set_machine_index(my_inst);
+
     log().info(std::string("shwa up — hardware telemetry + power "
         "(board=") + s.last.board + ", on_jetson=" +
-        (backend::on_jetson() ? "yes" : "no") + ")");
+        (backend::on_jetson() ? "yes" : "no") +
+        ", machine=" + std::to_string(my_inst) + ")");
     ::theia::runtime::post_info(*this, "poll");
 }
 

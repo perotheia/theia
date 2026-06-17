@@ -55,6 +55,13 @@ using BroadcastSampleSubscriber =
 using ExcursionExcursionSubscriber =
     std::function<void(const ShwaExcursionEvent&)>;
 
+// Cluster identity for AccelTelemetry. main.cc calls this once after
+// resolve_node_tipc() with shwa_daemon's resolved TIPC instance (central=0,
+// compute=1, …); every emitted AccelSample carries it as machine_index so com
+// — which receives both machines' samples on the shared host TIPC namespace —
+// can demux per machine without a second egress address. Default 0.
+void set_machine_index(uint32_t machine_index) noexcept;
+
 
 class ShwaDaemon : public ::theia::runtime::GenServer<ShwaDaemon, ShwaDaemonState> {
 public:

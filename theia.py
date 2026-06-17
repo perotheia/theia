@@ -379,6 +379,15 @@ def cmd_start(args: list[str]) -> int:
         # via --tipc below (ARG-only, like every node).
         "THEIA_MACHINE_INSTANCE": machine_instance,
     }
+    # The cluster manifest ROOT (machines.json + per-machine machine.json). The
+    # supervisor passes it down to every child it forks; com reads it to map a
+    # TIPC instance back to a machine NAME (central/compute) for per-machine
+    # telemetry labels. Only set when a cluster manifest exists next to the
+    # install (a single-machine dev stack has none → com falls back to "mN").
+    for _mroot in (WORKSPACE / "install" / "manifest", dest.parent):
+        if (_mroot / "machines.json").is_file():
+            env["THEIA_MACHINE_MANIFEST"] = str(_mroot)
+            break
     # Bundled shared libs the FCs link at runtime (per → libetcd-cpp-api.so). In
     # sibling-source mode the .so lives under THEIA_ROOT (not on the loader path
     # + the bazel binary's RPATH breaks once staged to install/bin/); in deb mode

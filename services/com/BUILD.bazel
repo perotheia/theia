@@ -16,8 +16,29 @@
 # wire) — the deliberate two-codec, one-process design.
 
 load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@rpi4_sysroot//:path.bzl", "RPI4_SYSROOT")
 
 package(default_visibility = ["//visibility:public"])
+
+# The proto codegen toolset (protoc + grpc_cpp_plugin) must match the protobuf
+# the .pb.{cc,h} are LINKED against, or the headers `#error regenerate ... newer
+# protoc`. On the host (x86) that's the system protoc/plugin (= the host
+# libprotobuf the cc_binary links). Targeting aarch64 the link uses the rpi4
+# SYSROOT's libprotobuf (bookworm 3.21.12 / grpc 1.51), so codegen must run a
+# host-x86 protoc 3.21.12 + grpc_cpp_plugin 1.51 — staged (with their runtime
+# .so's) under third_party/codegen-bookworm-x86/ (gitignored host data; the
+# RPI4_SYSROOT repo rule captures the workspace abs path the same way).
+# These _CG_* select strings PREFIX the genrule cmd with the right PATH/lib env.
+# RPI4_SYSROOT = <ws>/third_party/sysroot/rpi4 → the codegen dir is at
+# <ws>/third_party/codegen-bookworm-x86 (two dirs up, then down).
+_CG_DIR = RPI4_SYSROOT + "/../../codegen-bookworm-x86"
+_CODEGEN_ENV = select({
+    "//rules/config:is_arm64": (
+        "export PATH=\"" + _CG_DIR + "/bin:$$PATH\";" +
+        " export LD_LIBRARY_PATH=\"" + _CG_DIR + "/lib:$${LD_LIBRARY_PATH:-}\";"
+    ),
+    "//conditions:default": "",
+})
 
 # .proto sources consumed by external CMake builds (the repo-root
 # supervisor-gui/ tree) via a relative path into this package.
@@ -60,6 +81,7 @@ genrule(
         "cpp/platform_runtime/runtime.pb.h",
     ],
     cmd = ("set -e;" +
+           _CODEGEN_ENV +   # aarch64: use the staged bookworm-x86 protoc/plugin
            " com_dir=$$(dirname $(location proto/supervisor_bridge.proto));" +
            " sup_proto=$(location //platform/proto/system/supervisor:supervisor_proto);" +
            " sup_dir=$$(dirname $$sup_proto);" +

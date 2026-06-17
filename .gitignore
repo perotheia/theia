@@ -132,3 +132,4 @@ services/idsm/bpf/vmlinux.h
 # Reproduce: puppet module install puppetlabs-stdlib --version 4.25.1 \
 #   --modulepath deploy/puppet/modules
 /deploy/puppet/modules/stdlib/
+/third_party/codegen-bookworm-x86/

@@ -35,6 +35,11 @@ cc_library(
     srcs = ["etcd_store.cc"],
     hdrs = ["etcd_store.hpp"],
     copts = ["-std=c++17", "-fPIC"],
+    # NOTE on cross-compile: etcd_store.cc includes the etcd-cpp-apiv3 headers
+    # system-style (<etcd/SyncClient.hpp>); the foreign_cc cmake() exposes them
+    # by absolute source path, which the aarch64 toolchain's strict header scan
+    # rejected until the third_party/etcd-cpp-apiv3 root was added to that
+    # toolchain's cxx_builtin_include_directories. No per-target opt-out needed.
     deps = [
         "//third_party:etcd_cc",
     ],

@@ -90,11 +90,19 @@ def _impl(ctx):
         tool_paths           = tool_paths,
         features             = [compile_flags, link_flags],
         # The cross-gcc's own headers + the sysroot's system headers.
+        # sysroot_abs = <ws>/third_party/sysroot/rpi4, so <sysroot_abs>/../..
+        # is <ws>/third_party — the etcd-cpp-apiv3 submodule lives there. Its
+        # headers are consumed system-style (#include <etcd/SyncClient.hpp>) and
+        # the foreign_cc cmake() build exposes them by ABSOLUTE source path; the
+        # host toolchain tolerates that, but this cross toolchain's strict header
+        # scan rejects it. Declaring the third_party root builtin (these ARE
+        # external system-style headers) is what builtin-include-dirs is for.
         cxx_builtin_include_directories = [
             "/usr/lib/gcc-cross/" + _TRIPLE,
             "/usr/" + _TRIPLE + "/include",
             sysroot_abs + "/usr/include",
             sysroot_abs + "/usr/include/" + _TRIPLE,
+            sysroot_abs + "/../../etcd-cpp-apiv3",
         ],
         builtin_sysroot = sysroot_abs,
     )

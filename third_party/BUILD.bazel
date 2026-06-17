@@ -14,6 +14,12 @@ load("@rpi4_sysroot//:path.bzl", "RPI4_SYSROOT")
 
 package(default_visibility = ["//visibility:public"])
 
+# Staged host-x86 codegen toolset matching the rpi4 sysroot's protobuf (bookworm
+# 3.21.12 / grpc 1.51). RPI4_SYSROOT = <ws>/third_party/sysroot/rpi4, so this is
+# <ws>/third_party/codegen-bookworm-x86 (gitignored host data; see
+# services/com/BUILD.bazel for the same prefix used by the proto genrules).
+_CG_DIR = RPI4_SYSROOT + "/../../codegen-bookworm-x86"
+
 # Cross-compile cache entries for the etcd_cpp foreign_cc CMake build. On the
 # host (x86) the empty default lets CMake find_package() the host -dev packages.
 # Targeting aarch64 (//rules/config:rpi4) CMake must instead find Boost / cpprest
@@ -32,13 +38,16 @@ _ETCD_CROSS_CACHE = select({
         # CMake at the HOST pkg-config binary (a program, so excluded from the
         # sysroot-only find above); the env below aims it at the sysroot's .pc's.
         "PKG_CONFIG_EXECUTABLE": "/usr/bin/pkg-config",
-        # CODEGEN tools must be HOST-arch (the build runs on x86; the sysroot's
-        # protoc/grpc_cpp_plugin are arm64 and can't exec). etcd's CMakeLists
-        # uses the protobuf::protoc / gRPC::grpc_cpp_plugin IMPORTED targets,
-        # which point into the sysroot — override their locations to host bins.
-        "Protobuf_PROTOC_EXECUTABLE": "/usr/bin/protoc",
-        "_PROTOBUF_PROTOC": "/usr/bin/protoc",
-        "_GRPC_CPP_PLUGIN_EXECUTABLE": "/usr/bin/grpc_cpp_plugin",
+        # CODEGEN tools must be HOST-arch (the build runs on x86) AND match the
+        # sysroot's protobuf VERSION (bookworm 3.21.12 / grpc 1.51) — the sysroot's
+        # own protoc/grpc_cpp_plugin are arm64 (can't exec) and the dev host's are
+        # an older protobuf. Point at the staged host-x86 bookworm toolset (its
+        # runtime .so's are on LD_LIBRARY_PATH via _ETCD_CROSS_ENV below). etcd's
+        # CMakeLists reads protobuf::protoc / gRPC::grpc_cpp_plugin IMPORTED-target
+        # LOCATIONs from the sysroot configs, so override them explicitly.
+        "Protobuf_PROTOC_EXECUTABLE": _CG_DIR + "/bin/protoc",
+        "_PROTOBUF_PROTOC": _CG_DIR + "/bin/protoc",
+        "_GRPC_CPP_PLUGIN_EXECUTABLE": _CG_DIR + "/bin/grpc_cpp_plugin",
     },
     "//conditions:default": {},
 })
@@ -51,6 +60,9 @@ _ETCD_CROSS_ENV = select({
         "CCACHE_DISABLE": "1",
         "PKG_CONFIG_PATH": RPI4_SYSROOT + "/usr/lib/aarch64-linux-gnu/pkgconfig",
         "PKG_CONFIG_SYSROOT_DIR": RPI4_SYSROOT,
+        # The staged host-x86 protoc/grpc_cpp_plugin (3.21.12 / 1.51) need their
+        # bookworm runtime .so's (libprotoc.so.32, libgrpc_plugin_support.so.1.51).
+        "LD_LIBRARY_PATH": _CG_DIR + "/lib",
     },
     "//conditions:default": {"CCACHE_DISABLE": "1"},
 })
@@ -169,6 +181,10 @@ cc_library(
         "-lgrpc++",
         "-lgrpc",
         "-lgpr",
+        # bookworm's grpc 1.51 no longer DT_NEEDED-pulls abseil, so the etcd
+        # .a's grpc-generated TUs leave absl::Mutex undefined. Pull it explicitly
+        # (DT_NEEDED-pulls its own absl deps) — same fix as com_bridge_grpc.
+        "-labsl_synchronization",
         "-lprotobuf",
         "-lssl",
         "-lcrypto",

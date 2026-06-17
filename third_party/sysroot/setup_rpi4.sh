@@ -147,23 +147,69 @@ sudo cp "$nps"/pb.h "$nps"/pb_common.h "$nps"/pb_encode.h "$nps"/pb_decode.h \
 sudo cp "$nps/libprotobuf-nanopb.a" "$TARGET/usr/lib/aarch64-linux-gnu/"
 rm -rf "$np"
 
-# --- host protoc / grpc_cpp_plugin matching the sysroot's libprotobuf ----
+# --- host-x86 codegen toolset matching the sysroot's libprotobuf -----------
 # The libprotobuf-using FCs (services/com, services/per) generate .pb.{cc,h}
-# with the HOST protoc but LINK the sysroot's libprotobuf. Those MUST be the
-# same protobuf release or the generated headers `#error regenerate ... newer
-# protoc`. Debian bookworm ships protobuf 3.21.12 + grpc 1.51.1; if the host's
-# /usr/bin/protoc is older (e.g. Ubuntu 22.04 = 3.12), the cross-build of com/
-# per fails. Stage host-x86 protoc 3.21.12 + grpc_cpp_plugin 1.51.1 (+ their
-# runtime .so's) into the sysroot's bin so the cmake/genrule codegen runs them
-# on the build host while producing 3.21-compatible output:
-#   - protoc 3.21.12:    github protobuf v21.12 linux-x86_64 release zip
-#   - grpc plugin 1.51:  debian bookworm protobuf-compiler-grpc_1.51.1 amd64 +
-#                        libgrpc_plugin_support / libprotoc.so.32 (x86 runtimes)
-# (TODO: this is the one piece not yet scripted end-to-end — see
-#  docs/tasks/BACKLOG/cross-compile-rpi4.md. The codegen-tool/libprotobuf version
-#  alignment is the remaining gate for cross-building com+per to aarch64.)
-echo "==> NOTE: ensure host protoc/grpc_cpp_plugin match the sysroot protobuf" \
-     "(bookworm = 3.21.12 / grpc 1.51) before cross-building services/com+per."
+# with a HOST-x86 protoc but LINK the sysroot's (aarch64) libprotobuf. The
+# codegen protoc/grpc_cpp_plugin MUST be the SAME protobuf release as the
+# sysroot (bookworm 3.21.12 / grpc 1.51.1) or the generated headers
+# `#error regenerate ... newer protoc`. The sysroot's own protoc is aarch64
+# (can't exec on x86); the dev host's is usually older (Ubuntu 22.04 = 3.12).
+# So we stage a host-x86 protoc 3.21.12 + grpc_cpp_plugin 1.51.1 + their runtime
+# .so closure under third_party/codegen-bookworm-x86/{bin,lib} (gitignored host
+# data, ~28 MB). The com proto genrules (services/com/BUILD.bazel) and the etcd
+# foreign_cc cmake (third_party/BUILD.bazel) prepend this dir to PATH/
+# LD_LIBRARY_PATH for `--platforms=//rules/config:rpi4` builds (the _CG_DIR
+# selects). We assemble it by fetching the bookworm AMD64 .debs (same upstream
+# versions as the arm64 sysroot) and extracting their bin+lib:
+#   protobuf-compiler 3.21.12, libprotoc32, libprotobuf32 (protoc + libprotoc.so)
+#   protobuf-compiler-grpc 1.51.1, libgrpc++1.51 / libgrpc29 / libgpr29
+#     (grpc_cpp_plugin + libgrpc_plugin_support.so)
+#   libabsl20220623, libre2-9, libc-ares2 (their transitive runtime .so's)
+# DANGER: do NOT `sudo cp` these 3.21 bins over the HOST /usr/bin — that breaks
+# the x86 (host-libprotobuf 3.12) build. They live ONLY under third_party/
+# codegen-bookworm-x86/, reached via LD_LIBRARY_PATH, never on the system PATH.
+CG_DIR="$SCRIPT_DIR/../codegen-bookworm-x86"
+if [[ -x "$CG_DIR/bin/protoc" && -x "$CG_DIR/bin/grpc_cpp_plugin" ]]; then
+    echo "==> codegen toolset already staged at $CG_DIR (skipping)"
+else
+    echo "==> staging host-x86 bookworm codegen toolset (protoc 3.21.12 / grpc 1.51)"
+    mkdir -p "$CG_DIR/bin" "$CG_DIR/lib"
+    cgtmp="$(mktemp -d)"
+    BW="http://ftp.debian.org/debian/pool/main"
+    # (deb path, …) — bookworm AMD64. apt-get download needs the host on bookworm;
+    # fetch the pool .debs directly so this works from any host distro.
+    DEBS=(
+        "$BW/p/protobuf/protobuf-compiler_3.21.12-3_amd64.deb"
+        "$BW/p/protobuf/libprotoc32_3.21.12-3_amd64.deb"
+        "$BW/p/protobuf/libprotobuf32_3.21.12-3_amd64.deb"
+        "$BW/g/grpc/protobuf-compiler-grpc_1.51.1-3_amd64.deb"
+        "$BW/g/grpc/libgrpc++1.51_1.51.1-3_amd64.deb"
+        "$BW/g/grpc/libgrpc29_1.51.1-3_amd64.deb"
+        "$BW/g/grpc/libgpr29_1.51.1-3_amd64.deb"
+        "$BW/a/abseil/libabsl20220623_20220623.1-1_amd64.deb"
+        "$BW/r/re2/libre2-9_20220601-1_amd64.deb"
+        "$BW/c/c-ares/libc-ares2_1.18.1-3_amd64.deb"
+    )
+    for url in "${DEBS[@]}"; do
+        f="$cgtmp/$(basename "$url")"
+        curl -fsSL "$url" -o "$f" || { err "fetch failed: $url"; exit 3; }
+        dpkg-deb -x "$f" "$cgtmp/root"
+    done
+    cp "$cgtmp/root/usr/bin/protoc"          "$CG_DIR/bin/"
+    cp "$cgtmp/root/usr/bin/grpc_cpp_plugin" "$CG_DIR/bin/"
+    # protoc bundles the well-known protos (google/protobuf/*.proto) it needs on
+    # its import path; ship them so etcd's gogoproto imports resolve.
+    cp -r "$cgtmp/root/usr/include" "$CG_DIR/"
+    # the .so closure both bins dlopen/link (libprotoc, libgrpc_plugin_support,
+    # the abseil/grpc/protobuf/re2/c-ares runtimes).
+    find "$cgtmp/root/usr/lib" -name '*.so*' -exec cp -P {} "$CG_DIR/lib/" \;
+    rm -rf "$cgtmp"
+    if LD_LIBRARY_PATH="$CG_DIR/lib" "$CG_DIR/bin/protoc" --version | grep -q '3.21.12'; then
+        echo "==> codegen toolset ready: $(LD_LIBRARY_PATH="$CG_DIR/lib" "$CG_DIR/bin/protoc" --version)"
+    else
+        err "WARN: staged protoc does not report 3.21.12 — check the .deb versions"
+    fi
+fi
 
 # --- sanity check ---------------------------------------------------
 

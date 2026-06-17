@@ -128,26 +128,83 @@ void on_accel_sample(const std::string& sample_bytes) {
 // Instance 0 (the local supervisor) is ALWAYS the back-compat path: control
 // RPCs and a lone-machine stack behave exactly as before. Remote instances are
 // only ever touched while a Subscribe client is connected (the poll loop).
-constexpr uint32_t kSupCtlTipcType   = 0x80020001u;
-constexpr uint32_t kMaxSupInstance   = 16u;   // generous machine-count ceiling
+//
+// kSupCtlTipcType / kMaxSupInstance come from sup_link.hpp (shared with the
+// SupLink that owns the per-instance connections) — one source of truth.
+using services_com::kSupCtlTipcType;
+using services_com::kMaxSupInstance;
 
 theia::runtime::TipcTopology g_sup_topology;
 std::atomic<bool>            g_topology_up{false};
 
-// Merge the present supervisors' trees into one TreeSnapshot. Instance 0 is the
-// local supervisor (always tried, even if topology hasn't fired yet — back-compat
-// for a single-machine stack where the local sup may bind after com). Instances
-// ≥1 come from TipcTopology and are tagged: their child + parent names get an
-// "mN/" prefix so the merged flat tree renders as a SEPARATE subtree per machine
-// (rtdb's _render_tree rebuilds by parent_name, so each machine's root supervisor
-// stays a distinct top-level node and its children hang under it). instance-0
-// names are UNTOUCHED — a central-only stack looks byte-identical to before.
+// The machine-tag prefix for a non-local instance: "m1/", "m2/", … Instance 0
+// (the local supervisor) is UNTAGGED — a central-only stack stays byte-identical.
+// A real node name never contains '/', so this prefix can't collide with one;
+// rtdb's _render_tree rebuilds the forest by parent_name, so each machine's root
+// (parent_name=="") becomes its own top-level subtree under its mN/ alias.
+std::string machine_prefix(uint32_t inst) {
+    return inst == 0 ? std::string() : ("m" + std::to_string(inst) + "/");
+}
+
+// One present supervisor's children, machine-tagged, appended to `merged`.
+// Returns true if it contributed a parseable, non-empty tree. `newest_gen` /
+// `newest_ts` accumulate the freshest generation/timestamp across machines.
+//
+// timeout_ms is the per-machine call budget: the LOCAL supervisor (inst 0) gets
+// the full budget, but a REMOTE machine gets a TIGHT one so a single wedged /
+// slow-to-answer peer can't stall the whole cluster poll (the Subscribe loop
+// must keep ticking for the machines that ARE healthy). A remote miss just drops
+// that machine from this snapshot; it reappears on the next tick once it answers.
+bool fold_instance_tree(uint32_t inst, system_supervisor::TreeSnapshot* merged,
+                        uint64_t& newest_gen, uint64_t& newest_ts,
+                        int timeout_ms) {
+    auto& link = services_com::SupLink::for_instance(inst);
+    // Lazily connect a remote link the first time it's seen (instance 0 is
+    // already started in do_start). Cheap: only happens once per machine. A
+    // WITHDRAWN machine that comes back keeps this same link (re-PUBLISH reuses
+    // it); a still-gone machine just fails get_tree below and is skipped.
+    if (!link.connected()) {
+        if (!link.start(/*connect_timeout_ms=*/1500)) return false;
+    }
+    services_com::SupReply r;
+    if (!link.get_tree(r, timeout_ms) || r.tree_snapshot.empty()) return false;
+    system_supervisor::TreeSnapshot one;
+    if (!one.ParseFromString(r.tree_snapshot)) return false;
+
+    if (one.generation()   > newest_gen) newest_gen = one.generation();
+    if (one.timestamp_ms() > newest_ts)  newest_ts  = one.timestamp_ms();
+
+    const std::string pfx = machine_prefix(inst);
+    for (const auto& ch : one.children()) {
+        auto* dst = merged->add_children();
+        *dst = ch;
+        if (!pfx.empty()) {
+            dst->set_name(pfx + ch.name());
+            // Re-anchor parent: the per-machine root (parent_name=="") stays a
+            // top-level node so each machine renders as its own subtree.
+            if (!ch.parent_name().empty())
+                dst->set_parent_name(pfx + ch.parent_name());
+        }
+    }
+    return true;
+}
+
+// Merge every PRESENT supervisor's tree into one TreeSnapshot so a single
+// rtdb/GUI against central:7700 sees the whole cluster. Instance 0 (the local
+// supervisor) is ALWAYS tried — even before topology fires — so a single-machine
+// stack works the instant the local sup binds (and looks byte-identical to the
+// pre-cluster behaviour). Instances ≥1 come from TipcTopology and are mN/-tagged.
 //
 // We tag by NAME rather than adding a machine field to TreeSnapshot: the instance
 // already disambiguates the machine, and name-prefixing needs ZERO wire/proto/rtdb
 // change (no supervisor-proto regen hazard) while still making the machine visible
 // in `rtdb ps`. Returns false if NO instance yielded a tree.
 bool merge_present_trees(system_supervisor::TreeSnapshot* merged) {
+    // Per-machine call budgets: local gets the full default, remotes a tight
+    // one so one slow peer can't stall the cluster poll (see fold_instance_tree).
+    constexpr int kLocalTreeTimeoutMs  = 3000;
+    constexpr int kRemoteTreeTimeoutMs = 800;
+
     // Present remote instances from topology; always include 0.
     std::vector<uint32_t> insts;
     if (g_topology_up.load(std::memory_order_relaxed)) {
@@ -160,32 +217,9 @@ bool merge_present_trees(system_supervisor::TreeSnapshot* merged) {
     bool any = false;
     uint64_t newest_gen = 0, newest_ts = 0;
     for (uint32_t inst : insts) {
-        auto& link = services_com::SupLink::for_instance(inst);
-        // Lazily connect a remote link the first time it's seen (instance 0 is
-        // already started in do_start). Cheap: only happens once per machine.
-        if (!link.connected()) {
-            if (!link.start(/*connect_timeout_ms=*/1500)) continue;
-        }
-        services_com::SupReply r;
-        if (!link.get_tree(r) || r.tree_snapshot.empty()) continue;
-        system_supervisor::TreeSnapshot one;
-        if (!one.ParseFromString(r.tree_snapshot)) continue;
-        any = true;
-        if (one.generation() > newest_gen) newest_gen = one.generation();
-        if (one.timestamp_ms() > newest_ts) newest_ts = one.timestamp_ms();
-        const std::string pfx =
-            inst == 0 ? std::string() : ("m" + std::to_string(inst) + "/");
-        for (const auto& ch : one.children()) {
-            auto* dst = merged->add_children();
-            *dst = ch;
-            if (!pfx.empty()) {
-                dst->set_name(pfx + ch.name());
-                // Re-anchor parent: the per-machine root (parent_name=="") stays
-                // a top-level node so each machine renders as its own subtree.
-                if (!ch.parent_name().empty())
-                    dst->set_parent_name(pfx + ch.parent_name());
-            }
-        }
+        const int budget = (inst == 0) ? kLocalTreeTimeoutMs
+                                       : kRemoteTreeTimeoutMs;
+        any |= fold_instance_tree(inst, merged, newest_gen, newest_ts, budget);
     }
     merged->set_generation(newest_gen);
     merged->set_timestamp_ms(newest_ts);

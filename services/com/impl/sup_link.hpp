@@ -24,6 +24,16 @@
 
 namespace services_com {
 
+// The supervisor control node's TIPC address. TYPE is stable cluster-wide; the
+// INSTANCE is the machine (central=0, compute=1, …). The LOCAL supervisor is
+// always instance 0 — control RPCs target it; com's cluster-wide tree fan-out
+// reaches the others via for_instance(N). Single source of truth so sup_link.cc
+// and the gRPC edge (ComGrpcProxy_handlers.cc) can't drift.
+constexpr uint32_t kSupCtlTipcType     = 0x80020001u;
+constexpr uint32_t kSupCtlTipcInstance = 0u;          // the local supervisor
+constexpr uint32_t kMaxSupInstance     = 16u;         // machine-count ceiling
+                                                      // (topology subscribe range)
+
 // The control op_kind values, mirrored from the supervisor's control switch
 // (platform/supervisor/src/control_node.cpp + ComGrpcProxy_handlers.cc).
 enum SupOpKind : uint32_t {

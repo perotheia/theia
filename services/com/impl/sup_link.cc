@@ -34,8 +34,8 @@ namespace {
 // (the old split-out 0x80020003 control node is gone). This is exactly what
 // tdb's probe resolves SupervisorCtl to. Instance is per-machine (central=0,
 // compute=1) — see sup_instance below.
-constexpr uint32_t kSupCtlTipcType     = 0x80020001u;
-constexpr uint32_t kSupCtlTipcInstance = 0u;
+// kSupCtlTipcType / kSupCtlTipcInstance live in sup_link.hpp (shared with the
+// gRPC edge's fan-out) — single source of truth.
 
 // RemoteRef needs a NodeType only for the trace tag (NodeType::kNodeName) and
 // to name the destination. This is the peer's identity from com's side.

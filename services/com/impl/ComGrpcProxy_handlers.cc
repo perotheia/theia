@@ -152,13 +152,17 @@ using services_com::kMaxSupInstance;
 theia::runtime::TipcTopology g_sup_topology;
 std::atomic<bool>            g_topology_up{false};
 
-// The machine-tag prefix for a non-local instance: "m1/", "m2/", … Instance 0
-// (the local supervisor) is UNTAGGED — a central-only stack stays byte-identical.
-// A real node name never contains '/', so this prefix can't collide with one;
-// rtdb's _render_tree rebuilds the forest by parent_name, so each machine's root
-// (parent_name=="") becomes its own top-level subtree under its mN/ alias.
+// The machine-tag prefix for an instance: "<machine_name>/" from the manifest
+// (central=0 → "central/", compute=1 → "compute/"); falls back to "mN/" when the
+// manifest is absent. EVERY instance — including 0 — is name-tagged so each
+// machine is a first-class NAMED subtree (the GUI/rtdb key on the real machine
+// name, not a synthetic mN or the connection host). A real node name never
+// contains '/', so the prefix can't collide with one; rtdb rebuilds the forest
+// by parent_name, so each machine's root (parent_name=="") becomes its own
+// top-level subtree. route_target() resolves the prefix back to an instance via
+// the manifest's name→index lookup.
 std::string machine_prefix(uint32_t inst) {
-    return inst == 0 ? std::string() : ("m" + std::to_string(inst) + "/");
+    return services_com::MachineManifest::instance().name(inst) + "/";
 }
 
 // One present supervisor's children, machine-tagged, appended to `merged`.
@@ -189,17 +193,15 @@ bool fold_instance_tree(uint32_t inst, system_supervisor::TreeSnapshot* merged,
     if (one.generation()   > newest_gen) newest_gen = one.generation();
     if (one.timestamp_ms() > newest_ts)  newest_ts  = one.timestamp_ms();
 
-    const std::string pfx = machine_prefix(inst);
+    const std::string pfx = machine_prefix(inst);   // "<machine_name>/"
     for (const auto& ch : one.children()) {
         auto* dst = merged->add_children();
         *dst = ch;
-        if (!pfx.empty()) {
-            dst->set_name(pfx + ch.name());
-            // Re-anchor parent: the per-machine root (parent_name=="") stays a
-            // top-level node so each machine renders as its own subtree.
-            if (!ch.parent_name().empty())
-                dst->set_parent_name(pfx + ch.parent_name());
-        }
+        dst->set_name(pfx + ch.name());
+        // Re-anchor parent: the per-machine root (parent_name=="") stays a
+        // top-level node so each machine renders as its own subtree.
+        if (!ch.parent_name().empty())
+            dst->set_parent_name(pfx + ch.parent_name());
     }
     return true;
 }
@@ -495,28 +497,25 @@ private:
                             "supervisor control link unavailable / timeout");
     }
     // Route a control op to the supervisor that OWNS the target. The aggregated
-    // tree tags non-local nodes "mN/<name>" (Stage 3); a control op on such a
-    // node must reach machine N's supervisor (SupLink::for_instance(N)), NOT the
-    // local one. Strip the prefix → (link, bare name). No prefix → instance 0
-    // (the local supervisor, unchanged). A real node name never contains '/'.
+    // tree tags EVERY node "<machine_name>/<node>" (central/…, compute/…); a
+    // control op on such a node must reach that machine's supervisor
+    // (SupLink::for_instance(N)). Resolve the "<machine>/" prefix → instance via
+    // the manifest's name→index lookup; strip it → bare name. An unprefixed
+    // target (or an unknown machine) falls back to instance 0 (the local
+    // supervisor). A real node name never contains '/'.
     static services_com::SupLink& route_target(const std::string& target,
                                                std::string& bare) {
-        if (target.size() > 1 && target[0] == 'm') {
-            auto slash = target.find('/');
-            if (slash != std::string::npos && slash >= 1) {
-                bool digits = true;
-                for (size_t i = 1; i < slash; ++i)
-                    if (!std::isdigit((unsigned char)target[i])) { digits = false; break; }
-                if (digits) {
-                    uint32_t inst = (uint32_t)std::strtoul(
-                        target.substr(1, slash - 1).c_str(), nullptr, 10);
-                    bare = target.substr(slash + 1);
-                    auto& link = services_com::SupLink::for_instance(inst);
-                    // Lazily connect a peer link the first time a control op
-                    // targets it (tree fan-out may not have touched it yet).
-                    if (!link.connected()) link.start(/*timeout_ms=*/1500);
-                    return link;
-                }
+        auto slash = target.find('/');
+        if (slash != std::string::npos && slash >= 1) {
+            const std::string machine = target.substr(0, slash);
+            uint32_t inst = 0;
+            if (services_com::MachineManifest::instance().index_of(machine, inst)) {
+                bare = target.substr(slash + 1);
+                auto& link = services_com::SupLink::for_instance(inst);
+                // Lazily connect a peer link the first time a control op targets
+                // it (tree fan-out may not have touched it yet).
+                if (!link.connected()) link.start(/*timeout_ms=*/1500);
+                return link;
             }
         }
         bare = target;

@@ -5,6 +5,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -86,6 +87,22 @@ std::string MachineManifest::name(uint32_t inst) const {
     auto it = impl_->by_instance.find(inst);
     if (it != impl_->by_instance.end()) return it->second;
     return "m" + std::to_string(inst);   // synthetic fallback (Stage-3 prefix)
+}
+
+bool MachineManifest::index_of(const std::string& nm, uint32_t& out) const {
+    for (const auto& kv : impl_->by_instance)
+        if (kv.second == nm) { out = kv.first; return true; }
+    // Synthetic "mN" form (the name() fallback) — parse the digits.
+    if (nm.size() > 1 && nm[0] == 'm') {
+        bool all_digits = true;
+        for (size_t i = 1; i < nm.size(); ++i)
+            if (!std::isdigit((unsigned char)nm[i])) { all_digits = false; break; }
+        if (all_digits) {
+            out = (uint32_t)std::strtoul(nm.c_str() + 1, nullptr, 10);
+            return true;
+        }
+    }
+    return false;
 }
 
 bool MachineManifest::loaded() const { return impl_->loaded; }

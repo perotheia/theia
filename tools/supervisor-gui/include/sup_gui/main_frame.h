@@ -83,7 +83,8 @@ private:
     // the aggregated TreeSnapshot). seen_machines_ accumulates every machine the
     // aggregated stream reveals (local + each mN/ peer) so the left panel
     // auto-populates without a per-machine connection.
-    std::string                  local_name_;
+    std::string                  local_name_;      // instance-0 machine's name
+    bool                         local_host_resolved_{false};  // adopted yet?
     std::string                  current_hub_;     // host:port of the active hub
     std::set<std::string>        seen_machines_;
     // The single machine the data panels (System/Load/Apps/Processes) currently

@@ -87,44 +87,37 @@ struct FrameMsg {
 // names prefixed "mN/" (com's merge tag). Split that one snapshot back into a
 // per-machine snapshot (prefix stripped) so the existing panels — which key
 // every row by machine_name — see clean per-machine trees, exactly as they did
-// when the GUI held one gRPC client per machine. The local (unprefixed) nodes
-// go under `local_name` (the machine the GUI is connected to, instance 0).
+// when the GUI held one gRPC client per machine.
 //
-// A node name "m1/foo" → machine "m1", node "foo"; "m1/" with empty parent is
-// that machine's root. A real node name never contains '/', so the split is
-// unambiguous (com guarantees this).
+// com now tags EVERY node "<machine_name>/<node>" (central/…, compute/…) — the
+// first '/'-delimited token IS the real machine name (from com's manifest), so
+// the split needs no fallback and every machine is named correctly (no synthetic
+// mN, no connection-host leak). A real node name never contains '/', so the
+// first '/' unambiguously delimits the machine. `local_name` is the fallback for
+// a (legacy/manifest-less) unprefixed node only.
 std::map<std::string, system_supervisor::TreeSnapshot>
 split_tree_by_machine(const system_supervisor::TreeSnapshot& agg,
                       const std::string& local_name) {
     std::map<std::string, system_supervisor::TreeSnapshot> out;
-    auto strip = [](const std::string& s, std::string& machine,
-                    std::string& bare) {
-        // "m<digits>/rest" → machine="m<digits>", bare="rest". Else machine="".
-        if (s.size() > 1 && s[0] == 'm') {
-            auto slash = s.find('/');
-            if (slash != std::string::npos && slash >= 1) {
-                bool all_digits = true;
-                for (size_t i = 1; i < slash; ++i)
-                    if (!std::isdigit((unsigned char)s[i])) { all_digits = false; break; }
-                if (all_digits) {
-                    machine = s.substr(0, slash);
-                    bare    = s.substr(slash + 1);
-                    return;
-                }
-            }
+    auto strip = [&](const std::string& s, std::string& machine,
+                     std::string& bare) {
+        auto slash = s.find('/');
+        if (slash != std::string::npos && slash >= 1) {
+            machine = s.substr(0, slash);
+            bare    = s.substr(slash + 1);
+        } else {
+            machine = local_name;   // unprefixed (manifest-less fallback)
+            bare    = s;
         }
-        machine.clear();
-        bare = s;
     };
     for (const auto& ch : agg.children()) {
-        std::string m, name_bare, parent_machine, parent_bare;
+        std::string m, name_bare, pm, parent_bare;
         strip(ch.name(), m, name_bare);
-        strip(ch.parent_name(), parent_machine, parent_bare);
-        const std::string machine = m.empty() ? local_name : m;
-        auto& snap = out[machine];
+        strip(ch.parent_name(), pm, parent_bare);
+        auto& snap = out[m];
         auto* dst = snap.add_children();
         *dst = ch;                         // copy all the resource fields verbatim
-        dst->set_name(name_bare);          // prefix stripped
+        dst->set_name(name_bare);          // machine prefix stripped
         dst->set_parent_name(parent_bare); // (parent shares the same prefix)
     }
     return out;
@@ -408,6 +401,7 @@ void MainFrame::switch_hub(const std::string& host_port) {
     const auto colon = host_port.rfind(':');
     local_name_ = (colon == std::string::npos) ? host_port
                                                : host_port.substr(0, colon);
+    local_host_resolved_ = false;   // re-adopt instance-0's name from the new tree
     seen_machines_.clear();
     selected_machine_.clear();
     if (machines_panel_) {
@@ -479,14 +473,22 @@ void MainFrame::dispatch_to_panels(const std::string& machine_name,
 // up without a dedicated gRPC connection).
 void MainFrame::note_machine(const std::string& machine_name) {
     if (machine_name.empty()) return;
+    // The FIRST machine discovered is the local (instance-0) one — com folds it
+    // first. Adopt its REAL name as local_name_ (it was seeded with the
+    // connection host) so the rig-common SystemInfo/Health frames land on a real
+    // machine, and the "(via …)" labels read by machine, not by host:port.
+    if (!local_host_resolved_) {
+        local_name_ = machine_name;
+        local_host_resolved_ = true;
+    }
     if (!seen_machines_.insert(machine_name).second) return;   // already known
     if (machines_panel_) {
-        machines_panel_->add_machine(machine_name, "(via " + local_name_ + ")",
+        machines_panel_->add_machine(machine_name, "(via " + current_hub_ + ")",
                                      MachineConnState::Connected);
     }
     // Auto-select the FIRST machine discovered so the data panels aren't blank
-    // right after connecting (the local/instance-0 machine tends to arrive
-    // first). Later machines just appear in the list; the user clicks to switch.
+    // right after connecting. Later machines just appear in the list; the user
+    // clicks to switch.
     if (selected_machine_.empty()) {
         selected_machine_ = machine_name;
         if (machines_panel_) machines_panel_->select_machine(machine_name);
@@ -505,7 +507,8 @@ void MainFrame::on_sup_frame(wxThreadEvent& evt) {
     // Stage 4 — demux the SINGLE central com's AGGREGATED stream into per-machine
     // dispatches so the panels (keyed by machine_name) render one machine each.
     if (tag == 0x0003) {
-        // TreeSnapshot: split by the mN/ prefix → a clean per-machine snapshot.
+        // TreeSnapshot: split by the "<machine_name>/" prefix → a clean
+        // per-machine snapshot.
         system_supervisor::TreeSnapshot agg;
         if (!agg.ParseFromString(msg.payload)) return;
         auto by_machine = split_tree_by_machine(agg, local_name_);
@@ -703,29 +706,42 @@ void MainFrame::on_machine_focus(wxCommandEvent& evt) {
     }
 }
 
-// EVT_CONNECTION_SELECT — the transport notion. A plain select (Int==0) or
-// Connect switches the hub to that endpoint; Disconnect stops the client.
+// EVT_CONNECTION_SELECT — the transport notion. GetInt(): 0 = plain row select,
+// ID_MENU_CONNECT/DISCONNECT = the connection context menu.
 void MainFrame::on_connection_select(wxCommandEvent& evt) {
     const std::string hp = evt.GetString().ToStdString();
     if (hp.empty()) return;
-    switch (evt.GetInt()) {
-        case 0:                              // plain select → make it the hub
-        case ID_MENU_CONNECT_HOST:           // (unused here; kept for symmetry)
-            if (hp != current_hub_ || clients_.empty()) switch_hub(hp);
-            return;
-        default:
-            break;
-    }
-    // The connection context-menu Connect/Disconnect (ids from machines_panel).
     const int id = evt.GetInt();
-    if (id == (wxID_HIGHEST + 5001)) {       // ID_MENU_CONNECT
-        if (hp != current_hub_ || clients_.empty()) switch_hub(hp);
-    } else if (id == (wxID_HIGHEST + 5002)) {  // ID_MENU_DISCONNECT
+
+    // Connect (menu) OR a plain select of a DIFFERENT endpoint → (re)connect.
+    // switch_hub tears down any existing client and starts a fresh one, so it
+    // works whether this endpoint is new, the current-but-disconnected hub, or a
+    // switch from another hub.
+    const bool is_connect  = (id == (wxID_HIGHEST + 5001));   // ID_MENU_CONNECT
+    const bool is_disc     = (id == (wxID_HIGHEST + 5002));   // ID_MENU_DISCONNECT
+    const bool plain_sel   = (id == 0);
+
+    if (is_disc) {
         for (auto& c : clients_) if (c) c->stop();
-        if (machines_panel_)
+        clients_.clear();                    // drop the stopped client(s)
+        if (machines_panel_) {
             machines_panel_->set_connection_state(hp,
                 MachineConnState::Disconnected);
+            machines_panel_->set_machines({});   // its machines are gone too
+        }
+        seen_machines_.clear();
+        selected_machine_.clear();
         wxLogStatus(this, "Disconnect %s", hp.c_str());
+        return;
+    }
+
+    if (is_connect) {                        // explicit Connect → always (re)connect
+        switch_hub(hp);
+        return;
+    }
+
+    if (plain_sel) {                         // selecting a row only switches hubs
+        if (hp != current_hub_) switch_hub(hp);
     }
 }
 

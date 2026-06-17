@@ -30,6 +30,10 @@ public:
     // always get a stable, non-empty label. Thread-safe (immutable after load).
     std::string name(uint32_t instance) const;
 
+    // Reverse: the TIPC instance for a machine NAME (the inverse of name()).
+    // Accepts the synthetic "mN" form too (parses N). Returns false if unknown.
+    bool index_of(const std::string& machine_name, uint32_t& out) const;
+
     // Was a manifest actually loaded (vs the env-unset fallback)? For logging.
     bool loaded() const;
 

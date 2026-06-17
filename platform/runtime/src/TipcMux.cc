@@ -17,7 +17,12 @@ namespace runtime {
 
 static constexpr int kBacklog   = 16;
 static constexpr int kMaxEvents = 32;
-static constexpr int kRecvBuf   = 4096;
+// Must match the reply ENCODE ceiling (TipcMux.hh kReplyCap = 48*1024): the
+// server can emit a reply up to 48KB (e.g. the supervisor's GetTree
+// TreeSnapshot — ~30 nodes × ~360B), and a SEQPACKET datagram larger than this
+// recv buffer arrives TRUNCATED → pb_decode fails → the caller sees no reply
+// (an empty tree). 4096 silently dropped any full-cluster GetTree.
+static constexpr int kRecvBuf   = 48 * 1024;
 
 TipcMux::TipcMux() {
     epoll_fd_ = ::epoll_create1(0);

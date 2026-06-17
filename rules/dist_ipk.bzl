@@ -46,7 +46,11 @@ ALL_BINARIES = [
     "//services/tsync/main:tsync",
     "//services/ucm/main:ucm",
     "//services/shwa/main:shwa",
-    "//platform/gateway/main:gateway",
+    # NOTE: //platform/gateway is NOT here. Gateway (the PSP/AUTOSAR data plane)
+    # is a CONSUMING-WORKSPACE concern, not part of standalone theia.git — and it
+    # drags pcap/expat-dependent libs (cmpdecoder) that aren't in the rpi4 sysroot,
+    # breaking the cross-build. No zonal/test machine's application.json references
+    # it; a consuming workspace adds its own gateway binary to this list.
     "//apps/Demo3WayP1/main:apps",
     "//apps/Demo3WayP2/main:apps",
     "//apps/Demo3WayP3/main:apps",

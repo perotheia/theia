@@ -42,16 +42,33 @@ EXT
 openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
     -days "$DAYS" -sha256 -extfile server.ext -out server.crt 2>/dev/null
 
-rm -f server.csr server.ext ca.srl
+# --- client cert (signed by the dev CA) -----------------------------------
+# MUTUAL auth: com REQUIRES + VERIFIES a client cert when a CA is configured,
+# so the GUI/rtdb present this. clientAuth EKU; CN identifies the client. No SAN
+# needed (clients aren't dialled by name), but harmless to omit.
+openssl genrsa -out client.key 4096 2>/dev/null
+openssl req -new -key client.key -subj "/O=Theia Dev/CN=theia-client" \
+    -out client.csr 2>/dev/null
+
+cat > client.ext <<EXT
+extendedKeyUsage = clientAuth
+EXT
+
+openssl x509 -req -in client.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
+    -days "$DAYS" -sha256 -extfile client.ext -out client.crt 2>/dev/null
+
+rm -f server.csr server.ext client.csr client.ext ca.srl
 
 echo "[gen_dev_certs] done:"
 echo "  CA cert:     $(pwd)/ca.crt"
-echo "  server cert: $(pwd)/server.crt"
-echo "  server key:  $(pwd)/server.key"
+echo "  server cert: $(pwd)/server.crt    server key: $(pwd)/server.key"
+echo "  client cert: $(pwd)/client.crt    client key: $(pwd)/client.key"
 echo
-echo "Run com with TLS:"
+echo "Run com with MUTUAL TLS (requires + verifies the client cert):"
 echo "  THEIA_COM_TLS_CERT=$(pwd)/server.crt \\"
 echo "  THEIA_COM_TLS_KEY=$(pwd)/server.key \\"
 echo "  THEIA_COM_TLS_CA=$(pwd)/ca.crt ./supervisor ..."
-echo "Point rtdb/GUI at the CA:"
-echo "  THEIA_COM_TLS_CA=$(pwd)/ca.crt rtdb ps"
+echo "Point rtdb/GUI at the CA + present the client identity:"
+echo "  THEIA_COM_TLS_CA=$(pwd)/ca.crt \\"
+echo "  THEIA_COM_TLS_CLIENT_CERT=$(pwd)/client.crt \\"
+echo "  THEIA_COM_TLS_CLIENT_KEY=$(pwd)/client.key rtdb ps"

@@ -10,6 +10,8 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <fstream>
+#include <sstream>
 #include <thread>
 
 namespace sup_gui {
@@ -21,6 +23,34 @@ constexpr uint16_t kTagSnapshot    = 0x0003;
 constexpr uint16_t kTagSystemInfo  = 0x0004;   // GetSystemInfo (host + build facts)
 constexpr uint16_t kTagTraceRecord = 0x0005;   // TraceStream egress (:7710)
 constexpr uint16_t kTagAccel       = 0x0006;   // SHWA AccelSample (GPU / host monitor)
+
+std::string read_file_(const char* env) {
+    const char* path = std::getenv(env);
+    if (!path || !*path) return {};
+    std::ifstream f(path, std::ios::binary);
+    if (!f) {
+        std::fprintf(stderr, "grpc_client: %s=%s unreadable — ignoring\n",
+                     env, path);
+        return {};
+    }
+    std::ostringstream ss; ss << f.rdbuf();
+    return ss.str();
+}
+
+// Channel credentials, TLS or insecure — matches com's opt-in TLS + rtdb's
+// _make_channel. TLS is ON when THEIA_COM_TLS_CA is set (the client trusts the
+// dev CA); THEIA_COM_TLS_CLIENT_CERT/_KEY add the client identity for MUTUAL
+// auth (com REQUIRES + VERIFIES it when a CA is pinned). No CA → insecure (the
+// local-dev default, no flag day).
+std::shared_ptr<grpc::ChannelCredentials> channel_creds() {
+    const std::string ca = read_file_("THEIA_COM_TLS_CA");
+    if (ca.empty()) return grpc::InsecureChannelCredentials();
+    grpc::SslCredentialsOptions opts;
+    opts.pem_root_certs  = ca;
+    opts.pem_cert_chain  = read_file_("THEIA_COM_TLS_CLIENT_CERT");  // mTLS id
+    opts.pem_private_key = read_file_("THEIA_COM_TLS_CLIENT_KEY");
+    return grpc::SslCredentials(opts);
+}
 }  // namespace
 
 GrpcClient::GrpcClient(std::string machine_name,
@@ -75,7 +105,7 @@ void GrpcClient::run_trace() {
     const std::string endpoint = trace_endpoint();
     while (running_.load()) {
         trace_channel_ = grpc::CreateChannel(
-            endpoint, grpc::InsecureChannelCredentials());
+            endpoint, channel_creds());
         auto ci = std::static_pointer_cast< ::grpc::ChannelInterface>(
             trace_channel_);
         auto stub = ::services::com::TraceStream::NewStub(ci);
@@ -106,7 +136,7 @@ int GrpcClient::configure_trace(const std::string& target_node,
     // rtdb / tdb drive. (TraceStream is the EGRESS stream on :7710, a
     // separate service; control stays on SupervisorView.)
     auto chan = grpc::CreateChannel(host_port_,
-                                    grpc::InsecureChannelCredentials());
+                                    channel_creds());
     auto ci = std::static_pointer_cast< ::grpc::ChannelInterface>(chan);
     auto stub = ::services::com::SupervisorView::NewStub(ci);
 
@@ -137,7 +167,7 @@ std::vector<GrpcClient::SchemaRow>
 GrpcClient::list_schemas(const std::string& config_type, bool* ok) {
     std::vector<SchemaRow> out;
     auto chan = grpc::CreateChannel(host_port_,
-                                    grpc::InsecureChannelCredentials());
+                                    channel_creds());
     auto ci = std::static_pointer_cast< ::grpc::ChannelInterface>(chan);
     auto stub = ::services::com::PerView::NewStub(ci);
     ::services::com::ListSchemasCall req;
@@ -160,7 +190,7 @@ GrpcClient::list_schemas(const std::string& config_type, bool* ok) {
 
 int GrpcClient::snapshot(const std::string& label, std::string* msg) {
     auto chan = grpc::CreateChannel(host_port_,
-                                    grpc::InsecureChannelCredentials());
+                                    channel_creds());
     auto ci = std::static_pointer_cast< ::grpc::ChannelInterface>(chan);
     auto stub = ::services::com::PerView::NewStub(ci);
     ::services::com::SnapshotCall req;
@@ -187,7 +217,7 @@ GrpcClient::TombstoneResult
 GrpcClient::get_tombstone(const std::string& child_name, bool* ok) {
     TombstoneResult out;
     auto chan = grpc::CreateChannel(host_port_,
-                                    grpc::InsecureChannelCredentials());
+                                    channel_creds());
     auto ci = std::static_pointer_cast< ::grpc::ChannelInterface>(chan);
     auto stub = ::services::com::SupervisorView::NewStub(ci);
     ::services::com::GetTombstoneCall req;
@@ -218,7 +248,7 @@ GrpcClient::get_tombstone(const std::string& child_name, bool* ok) {
 int GrpcClient::configure_log_level(const std::string& target_node,
                                     const std::string& level) {
     auto chan = grpc::CreateChannel(host_port_,
-                                    grpc::InsecureChannelCredentials());
+                                    channel_creds());
     auto ci = std::static_pointer_cast< ::grpc::ChannelInterface>(chan);
     auto stub = ::services::com::SupervisorView::NewStub(ci);
     ::services::com::LogLevelCall req;
@@ -243,7 +273,7 @@ int GrpcClient::configure_log_level(const std::string& target_node,
 std::string GrpcClient::get_log_level(const std::string& node) {
     static const char* kLvl[] = {"TRACE", "DEBUG", "INFO", "WARN", "ERROR"};
     auto chan = grpc::CreateChannel(host_port_,
-                                    grpc::InsecureChannelCredentials());
+                                    channel_creds());
     auto ci = std::static_pointer_cast< ::grpc::ChannelInterface>(chan);
     auto stub = ::services::com::SupervisorView::NewStub(ci);
     ::services::com::GetLogLevelConfigCall req;
@@ -274,7 +304,7 @@ int GrpcClient::terminate_child(const std::string& name, std::string* msg) {
 int GrpcClient::child_op(const std::string& name, bool no_restart,
                          const char* which, std::string* msg) {
     auto chan = grpc::CreateChannel(host_port_,
-                                    grpc::InsecureChannelCredentials());
+                                    channel_creds());
     auto ci = std::static_pointer_cast< ::grpc::ChannelInterface>(chan);
     auto stub = ::services::com::SupervisorView::NewStub(ci);
     ::system_supervisor::ChildSelector sel;
@@ -299,7 +329,7 @@ int GrpcClient::child_op(const std::string& name, bool no_restart,
 void GrpcClient::run() {
     while (running_.load()) {
         channel_ = grpc::CreateChannel(host_port_,
-                                        grpc::InsecureChannelCredentials());
+                                        channel_creds());
         // NewStub wants shared_ptr<ChannelInterface>. Channel inherits
         // from it but the implicit conversion isn't picked up in
         // grpc 1.30 — go through static_pointer_cast.

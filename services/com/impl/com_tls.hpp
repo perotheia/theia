@@ -222,6 +222,17 @@ inline std::shared_ptr<grpc::ServerCredentials> make_server_creds(
     const std::string ca_path  = tls_path_("THEIA_COM_TLS_CA",  ca_param);
     const std::string ca_cert  = read_file_(ca_path);   // "" = no CA pinning
 
+    // MUTUAL auth when a CA is pinned: a CA means we know who may connect, so
+    // REQUIRE + VERIFY the client cert (the GUI/rtdb present one signed by the
+    // same dev CA). Without a CA we can't verify anyone — fall back to
+    // REQUEST_BUT_DONT_VERIFY (encryption only; cert-less dev clients connect).
+    const auto client_auth = ca_cert.empty()
+        ? GRPC_SSL_REQUEST_CLIENT_CERTIFICATE_BUT_DONT_VERIFY
+        : GRPC_SSL_REQUEST_AND_REQUIRE_CLIENT_CERTIFICATE_AND_VERIFY;
+    const char* client_auth_str = ca_cert.empty()
+        ? "client-cert optional (no CA pinned)"
+        : "MUTUAL — client cert required + verified vs CA";
+
     // ---- mode 1: engine (key never in com) --------------------------------
     //
     // The com/crypto CERTIFICATE AGREEMENT. com does not read the cert from disk
@@ -259,12 +270,12 @@ inline std::shared_ptr<grpc::ServerCredentials> make_server_creds(
                          "refusing to serve. Aborting for restart.\n", who, slot);
             std::abort();
         }
-        grpc::SslServerCredentialsOptions ssl_opts(
-            GRPC_SSL_REQUEST_CLIENT_CERTIFICATE_BUT_DONT_VERIFY);
+        grpc::SslServerCredentialsOptions ssl_opts(client_auth);
         ssl_opts.pem_root_certs = ca_cert;
         ssl_opts.pem_key_cert_pairs.push_back({eng_key, crypto_cert});
         std::fprintf(stderr, "[%s] gRPC: TLS on (slot '%s', cert from crypto, "
-                     "engine key — private key never in com)\n", who, slot);
+                     "engine key — private key never in com; %s)\n",
+                     who, slot, client_auth_str);
         return grpc::SslServerCredentials(ssl_opts);
     }
 
@@ -285,12 +296,11 @@ inline std::shared_ptr<grpc::ServerCredentials> make_server_creds(
         return grpc::InsecureServerCredentials();
     }
 
-    grpc::SslServerCredentialsOptions ssl_opts(
-        GRPC_SSL_REQUEST_CLIENT_CERTIFICATE_BUT_DONT_VERIFY);
+    grpc::SslServerCredentialsOptions ssl_opts(client_auth);
     ssl_opts.pem_root_certs = ca_cert;
     ssl_opts.pem_key_cert_pairs.push_back({server_key, server_cert});
-    std::fprintf(stderr, "[%s] gRPC: TLS on (cert=%s, file key, client-cert "
-                 "optional)\n", who, cert_path.c_str());
+    std::fprintf(stderr, "[%s] gRPC: TLS on (cert=%s, file key; %s)\n",
+                 who, cert_path.c_str(), client_auth_str);
     return grpc::SslServerCredentials(ssl_opts);
 }
 

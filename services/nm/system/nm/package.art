@@ -18,11 +18,18 @@ package system.services.nm
 // ─── Readiness state ───────────────────────────────────────────────────────
 
 // The network-readiness level — a SM input. "operational" mode can gate on READY.
+//
+// WIFI_ASSOCIATED sits on the WIRELESS readiness ladder between carrier and
+// address: a wifi link reports carrier (LINK_UP) the moment the NIC is up, but
+// is not usable until wpa_supplicant/iwd ASSOCIATES with an AP. NM only OBSERVES
+// the association (via `iw dev <if> link`); iwd/wpa does the 802.11 work. Wired
+// links skip this rung (LINK_UP → READY directly on address).
 enum NetState {
-    DOWN     = 0   // no monitored link has carrier
-    LINK_UP  = 1   // a monitored link has carrier, no usable address yet
-    READY    = 2   // link up + address acquired — operational network
-    DEGRADED = 3   // was READY, lost carrier/address (recoverable)
+    DOWN            = 0   // no monitored link has carrier
+    LINK_UP         = 1   // a monitored link has carrier, no usable address yet
+    WIFI_ASSOCIATED = 4   // wifi link carrier + associated to an AP, no addr yet
+    READY           = 2   // link up + address acquired — operational network
+    DEGRADED        = 3   // was READY, lost carrier/address/association (recoverable)
 }
 
 // ─── Runtime config (etcd-backed via services/per) ─────────────────────────
@@ -47,6 +54,10 @@ message LinkUp       { }   // a monitored link gained carrier
 message LinkDown     { }   // all monitored links lost carrier
 message AddrAcquired { }   // a routable address appeared on a monitored link
 message AddrLost     { }   // the routable address went away
+// Wireless association edges — observed via `iw dev <if> link`. iwd/wpa does the
+// actual 802.11 association; NM only watches it cross the LINK_UP↔associated line.
+message WifiAssociated    { }   // a monitored wifi link associated to an AP
+message WifiDisassociated { }   // the wifi link dropped its AP association
 
 // ─── Status wire types ─────────────────────────────────────────────────────
 
@@ -61,6 +72,29 @@ message NmStatusMsg {
 
 message NetStatusReq { }
 
+// ─── WiFi scan wire types (read-only observation via `iw`) ─────────────────
+//
+// NM does NOT perform 802.11 itself — it asks `iw dev <if> scan` for the
+// visible APs and reports them. One BSS row per AP seen in the last scan.
+message WifiBss {
+    string ssid          // network name ("" = hidden SSID)
+    string bssid         // AP MAC (aa:bb:cc:dd:ee:ff)
+    sint32 signal_dbm    // RSSI in dBm (e.g. -54); signed
+    uint32 freq_mhz      // channel centre frequency (e.g. 2412, 5180)
+    string security      // "open" | "WPA2" | "WPA3" | "WEP" (best-effort parse)
+}
+
+// WifiScan(interface) → the BSS list + the link's current association snapshot.
+// interface "" = the first wireless interface NM is monitoring.
+message WifiScanReq   { string interface }
+message WifiScanReply {
+    string  interface              // the wifi link actually scanned
+    bool    associated             // is the link currently associated to an AP?
+    string  assoc_ssid             // the associated SSID ("" if not associated)
+    string  assoc_bssid            // the associated AP MAC ("" if not associated)
+    repeated WifiBss bss           // APs visible in the latest scan
+}
+
 // ─── Interfaces ────────────────────────────────────────────────────────────
 
 // Readiness broadcast — senderReceiver pub/sub. NmDaemon is the SENDER; SM (and
@@ -72,15 +106,19 @@ interface senderReceiver NmStatusStream {
 // The event ingress the poller drives the FSM through (in-process; NmDaemon's
 // FSM takes no TIPC events directly — the statem-must-not-handle-external rule).
 interface senderReceiver NmEventIn {
-    data LinkUp       link_up
-    data LinkDown     link_down
-    data AddrAcquired addr_acquired
-    data AddrLost     addr_lost
+    data LinkUp            link_up
+    data LinkDown          link_down
+    data AddrAcquired      addr_acquired
+    data AddrLost          addr_lost
+    data WifiAssociated    wifi_associated
+    data WifiDisassociated wifi_disassociated
 }
 
-// Status query — GetNetworkStatus returns the current readiness snapshot.
+// Status query — GetNetworkStatus returns the current readiness snapshot;
+// WifiScan returns the visible AP list + association snapshot (tdb/rtdb `wifi`).
 interface clientServer NmCtlIf {
     operation GetNetworkStatus(in r: NetStatusReq) returns NmStatusMsg
+    operation WifiScan(in r: WifiScanReq)          returns WifiScanReply
 }
 
 // ─── Nodes ─────────────────────────────────────────────────────────────────
@@ -97,25 +135,36 @@ node atomic NmDaemon {
         server ctl       provides NmCtlIf
     }
     statem {
-        states  [DOWN, LINK_UP, READY, DEGRADED]
+        states  [DOWN, LINK_UP, WIFI_ASSOCIATED, READY, DEGRADED]
         initial DOWN
         data    NmStatusMsg
 
         on DOWN:
-            event LinkUp       → LINK_UP
+            event LinkUp        → LINK_UP
 
+        // LINK_UP: carrier present. A WIRED link goes straight to READY on
+        // address; a WIRELESS link must associate to an AP first.
         on LINK_UP:
-            event AddrAcquired → READY
-            event LinkDown     → DOWN
+            event WifiAssociated → WIFI_ASSOCIATED
+            event AddrAcquired   → READY
+            event LinkDown       → DOWN
+
+        // WIFI_ASSOCIATED: wifi carrier + AP association, awaiting DHCP/addr.
+        on WIFI_ASSOCIATED:
+            event AddrAcquired      → READY
+            event WifiDisassociated → LINK_UP
+            event LinkDown          → DOWN
 
         on READY:
-            event AddrLost     → DEGRADED
-            event LinkDown     → DEGRADED
+            event AddrLost          → DEGRADED
+            event WifiDisassociated → DEGRADED
+            event LinkDown          → DEGRADED
 
         on DEGRADED:
-            event AddrAcquired → READY
-            event LinkUp       → LINK_UP
-            event LinkDown     → DOWN
+            event AddrAcquired   → READY
+            event WifiAssociated → WIFI_ASSOCIATED
+            event LinkUp         → LINK_UP
+            event LinkDown       → DOWN
     }
 }
 

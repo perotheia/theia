@@ -19,6 +19,7 @@ struct NmPollerState {
     // edges (from the FSM's DOWN initial state up to the observed level).
     bool has_carrier = false;
     bool has_address = false;
+    bool wifi_assoc  = false;   // last observed wifi-association state (edge base)
     bool primed      = false;
 
     // Applied config (the poller reads the same etcd NmConfig as NmDaemon via

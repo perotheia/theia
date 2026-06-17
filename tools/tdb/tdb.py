@@ -128,6 +128,11 @@ class _Session:
     def log_factory(self) -> LogClient:
         return LogClient.from_workspace(REPO)
 
+    def nm_factory(self) -> "NmClient":
+        # services/nm over the TIPC probe (tdb.art TdbNm) — backs `wifi`.
+        from tdb_client import NmClient
+        return NmClient.from_workspace(REPO)
+
     def close(self) -> None:
         if self._sup is not None:
             self._sup.stop()
@@ -143,6 +148,13 @@ def _dispatch(sess: _Session, verb: str, args: list[str]) -> int:
     if fn is None:
         print(f"unknown command: {verb!r} (try `help`)", file=sys.stderr)
         return 2
+    # `wifi` reaches services/nm over the TIPC probe; expose the factory on the
+    # sup handle (cmd_wifi reads sup._nm_factory). Avoids `sup` connecting just to
+    # scan — nm_factory builds its own probe client lazily.
+    if verb == "wifi":
+        class _NmHandle:
+            _nm_factory = staticmethod(sess.nm_factory)
+        return fn(args, _NmHandle(), None)
     if verb in _LOG_VERBS:
         return fn(args, sess.sup, sess.log_factory)
     return fn(args, sess.sup, sess.trace_factory)

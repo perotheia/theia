@@ -16,7 +16,7 @@
 // derived from the .art), so the struct lives in a WRITE-ONCE impl header
 // (seeded empty, never clobbered without --force) that the user fills in.
 // Included at GLOBAL scope (the header opens its own `namespace
-// ara::nm`) so it isn't nested under this file's
+// system_services_nm`) so it isn't nested under this file's
 // namespace block — bound as the GenServer State type below.
 #include "impl/NmPoller_state.hh"
 
@@ -43,6 +43,8 @@ using LinkUp = system_services_nm_LinkUp;
 using LinkDown = system_services_nm_LinkDown;
 using AddrAcquired = system_services_nm_AddrAcquired;
 using AddrLost = system_services_nm_AddrLost;
+using WifiAssociated = system_services_nm_WifiAssociated;
+using WifiDisassociated = system_services_nm_WifiDisassociated;
 
 // statem block declared in .art — see the corresponding StateMBase
 // header produced by `artheia gen-cpp-stubs`. The daemon below
@@ -63,6 +65,10 @@ using EventsAddr_acquiredSubscriber =
     std::function<void(const AddrAcquired&)>;
 using EventsAddr_lostSubscriber =
     std::function<void(const AddrLost&)>;
+using EventsWifi_associatedSubscriber =
+    std::function<void(const WifiAssociated&)>;
+using EventsWifi_disassociatedSubscriber =
+    std::function<void(const WifiDisassociated&)>;
 
 
 class NmPoller : public ::theia::runtime::GenServer<NmPoller, NmPollerState> {
@@ -132,6 +138,16 @@ public:
         EventsAddr_lostSubscriber s);
     void     unsubscribe_events_addr_lost(uint32_t id);
 
+    // events.wifi_associated broadcast subscribers.
+    uint32_t subscribe_events_wifi_associated(
+        EventsWifi_associatedSubscriber s);
+    void     unsubscribe_events_wifi_associated(uint32_t id);
+
+    // events.wifi_disassociated broadcast subscribers.
+    uint32_t subscribe_events_wifi_disassociated(
+        EventsWifi_disassociatedSubscriber s);
+    void     unsubscribe_events_wifi_disassociated(uint32_t id);
+
 
     // ---- GenServer plumbing: terminate default
     //
@@ -192,6 +208,10 @@ public:
 
     void broadcast_events_addr_lost(const AddrLost& msg);
 
+    void broadcast_events_wifi_associated(const WifiAssociated& msg);
+
+    void broadcast_events_wifi_disassociated(const WifiDisassociated& msg);
+
 
 private:
 
@@ -230,6 +250,24 @@ private:
     uint32_t events_addr_lost_next_id_{1};
     std::vector<EventsAddr_lostEntry>
         events_addr_lost_subs_;
+
+    struct EventsWifi_associatedEntry {
+        uint32_t id;
+        EventsWifi_associatedSubscriber fn;
+    };
+    std::mutex events_wifi_associated_mu_;
+    uint32_t events_wifi_associated_next_id_{1};
+    std::vector<EventsWifi_associatedEntry>
+        events_wifi_associated_subs_;
+
+    struct EventsWifi_disassociatedEntry {
+        uint32_t id;
+        EventsWifi_disassociatedSubscriber fn;
+    };
+    std::mutex events_wifi_disassociated_mu_;
+    uint32_t events_wifi_disassociated_next_id_{1};
+    std::vector<EventsWifi_disassociatedEntry>
+        events_wifi_disassociated_subs_;
 
 };
 
@@ -355,6 +393,68 @@ inline void NmPoller::broadcast_events_addr_lost(const AddrLost& msg) {
         catch (...) {
             std::fprintf(stderr,
                 "[%s] subscriber %u threw on events.addr_lost — dropping\n",
+                kNodeName, e.id);
+        }
+    }
+}
+
+inline uint32_t NmPoller::subscribe_events_wifi_associated(
+        EventsWifi_associatedSubscriber s) {
+    std::lock_guard<std::mutex> lk(events_wifi_associated_mu_);
+    uint32_t id = events_wifi_associated_next_id_++;
+    events_wifi_associated_subs_.push_back({id, std::move(s)});
+    return id;
+}
+
+inline void NmPoller::unsubscribe_events_wifi_associated(uint32_t id) {
+    std::lock_guard<std::mutex> lk(events_wifi_associated_mu_);
+    auto& v = events_wifi_associated_subs_;
+    v.erase(std::remove_if(v.begin(), v.end(),
+              [id](const auto& e) { return e.id == id; }), v.end());
+}
+
+inline void NmPoller::broadcast_events_wifi_associated(const WifiAssociated& msg) {
+    std::vector<EventsWifi_associatedEntry> snap;
+    {
+        std::lock_guard<std::mutex> lk(events_wifi_associated_mu_);
+        snap = events_wifi_associated_subs_;
+    }
+    for (const auto& e : snap) {
+        try { e.fn(msg); }
+        catch (...) {
+            std::fprintf(stderr,
+                "[%s] subscriber %u threw on events.wifi_associated — dropping\n",
+                kNodeName, e.id);
+        }
+    }
+}
+
+inline uint32_t NmPoller::subscribe_events_wifi_disassociated(
+        EventsWifi_disassociatedSubscriber s) {
+    std::lock_guard<std::mutex> lk(events_wifi_disassociated_mu_);
+    uint32_t id = events_wifi_disassociated_next_id_++;
+    events_wifi_disassociated_subs_.push_back({id, std::move(s)});
+    return id;
+}
+
+inline void NmPoller::unsubscribe_events_wifi_disassociated(uint32_t id) {
+    std::lock_guard<std::mutex> lk(events_wifi_disassociated_mu_);
+    auto& v = events_wifi_disassociated_subs_;
+    v.erase(std::remove_if(v.begin(), v.end(),
+              [id](const auto& e) { return e.id == id; }), v.end());
+}
+
+inline void NmPoller::broadcast_events_wifi_disassociated(const WifiDisassociated& msg) {
+    std::vector<EventsWifi_disassociatedEntry> snap;
+    {
+        std::lock_guard<std::mutex> lk(events_wifi_disassociated_mu_);
+        snap = events_wifi_disassociated_subs_;
+    }
+    for (const auto& e : snap) {
+        try { e.fn(msg); }
+        catch (...) {
+            std::fprintf(stderr,
+                "[%s] subscriber %u threw on events.wifi_disassociated — dropping\n",
                 kNodeName, e.id);
         }
     }

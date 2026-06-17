@@ -7,3 +7,16 @@
 
 system_services_nm.NmConfig.interfaces   max_size:64
 system_services_nm.NmStatusMsg.interface   max_size:64
+
+# WiFi scan wire types. ssid ≤ 32 octets per 802.11 + NUL; bssid "aa:bb:..:ff"
+# = 17 + NUL; security a short tag. bss rows capped so the whole WifiScanReply
+# encodes under the 48 KiB TIPC reply cap (TipcMux) — 48 APs is plenty for a
+# scan list (each row ≈ 70 B → ~3.4 KiB).
+system_services_nm.WifiBss.ssid               max_size:33
+system_services_nm.WifiBss.bssid              max_size:18
+system_services_nm.WifiBss.security           max_size:16
+system_services_nm.WifiScanReq.interface      max_size:16
+system_services_nm.WifiScanReply.interface    max_size:16
+system_services_nm.WifiScanReply.assoc_ssid   max_size:33
+system_services_nm.WifiScanReply.assoc_bssid  max_size:18
+system_services_nm.WifiScanReply.bss          max_count:48

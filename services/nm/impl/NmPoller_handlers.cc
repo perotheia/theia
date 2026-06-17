@@ -82,21 +82,39 @@ void NmPoller::handle_info(const char* info, NmPollerState& s) {
     // FSM reaches READY on carrier without waiting for a routable address.
     const bool addr = s.require_address ? obs.has_address : obs.has_carrier;
 
+    // WiFi association: a CHEAP `iw dev <if> link` probe (no radio scan) ONLY for
+    // a wireless monitored interface. Wired links report assoc=false and skip the
+    // WIFI_ASSOCIATED rung. The full scan is on-demand via the WifiScan op, never
+    // per-tick. assoc is only meaningful while carrier is up.
+    bool wifi_assoc = false;
+    if (obs.has_carrier) {
+        WifiObservation w;
+        if (wifi_assoc_probe(want, w)) wifi_assoc = w.associated;
+    }
+
+    // Edge ORDER matters: the FSM ladder is LINK_UP → WIFI_ASSOCIATED → READY, so
+    // emit LinkUp before WifiAssociated before AddrAcquired; on teardown reverse.
     if (!s.primed) {
         // First observation: emit the edges that take the FSM from its DOWN
         // initial state up to the observed level.
         s.primed = true;
         if (obs.has_carrier) post_edge(kNodeName, "LinkUp", LinkUp{});
+        if (wifi_assoc)      post_edge(kNodeName, "WifiAssociated", WifiAssociated{});
         if (addr)            post_edge(kNodeName, "AddrAcquired", AddrAcquired{});
         log().info(std::string("primed: iface=") +
             (obs.interface.empty() ? "(none)" : obs.interface) +
             " carrier=" + (obs.has_carrier ? "1" : "0") +
+            " wifi_assoc=" + (wifi_assoc ? "1" : "0") +
             " addr=" + (addr ? "1" : "0"));
     } else {
         // Steady state: only emit on a CHANGE.
         if (obs.has_carrier != s.has_carrier) {
             if (obs.has_carrier) post_edge(kNodeName, "LinkUp", LinkUp{});
             else                 post_edge(kNodeName, "LinkDown", LinkDown{});
+        }
+        if (wifi_assoc != s.wifi_assoc) {
+            if (wifi_assoc) post_edge(kNodeName, "WifiAssociated", WifiAssociated{});
+            else            post_edge(kNodeName, "WifiDisassociated", WifiDisassociated{});
         }
         if (addr != s.has_address) {
             if (addr) post_edge(kNodeName, "AddrAcquired", AddrAcquired{});
@@ -105,6 +123,7 @@ void NmPoller::handle_info(const char* info, NmPollerState& s) {
     }
     s.has_carrier = obs.has_carrier;
     s.has_address = addr;
+    s.wifi_assoc  = wifi_assoc;
 
     uint32_t ms = s.poll_ms ? s.poll_ms : 1000;
     ::theia::runtime::send_after(::theia::runtime::process_timers(), ms,

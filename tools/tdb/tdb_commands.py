@@ -559,6 +559,97 @@ def cmd_logcat(args, _sup, log_factory) -> int:
     return 0
 
 
+def cmd_wifi(args, sup, _factory) -> int:
+    """wifi [<iface>] [--json] [--status]
+
+    Ask services/nm to observe a wireless interface via `iw` (read-only): the
+    visible AP list (SSID / BSSID / signal / freq / security) + the link's
+    current association snapshot. NM does NOT associate — iwd/wpa does; this only
+    reports what `iw` shows. `<iface>` "" = nm's monitored / first wireless link.
+
+      tdb wifi               scan the default wifi interface
+      tdb wifi wlan0         scan a specific interface
+      tdb wifi --status      readiness state only (no scan)
+      tdb wifi --json        machine-readable
+
+    nm is reached over the TIPC probe (tdb.art TdbNm). rtdb (gRPC→com) needs a
+    com NmView proxy — not wired yet; use tdb on the machine, or `tdb -i <inst>`."""
+    # The session exposes nm_factory() on the TIPC (tdb) path. rtdb has none yet.
+    nm_factory = getattr(sup, "_nm_factory", None) or _NM_FACTORY.get("fn")
+    if nm_factory is None:
+        print("wifi: not available here — rtdb reaches FCs over gRPC→com and the "
+              "com NmView proxy isn't wired yet. Run `tdb wifi` on the machine.",
+              file=sys.stderr)
+        return 2
+
+    as_json = "--json" in args
+    status_only = "--status" in args
+    iface = next((a for a in args if not a.startswith("--")), "")
+
+    nm = nm_factory()
+    try:
+        if status_only:
+            st = nm.net_status()
+            state = _NETSTATE.get(_g(st, "state", 0), str(_g(st, "state")))
+            if as_json:
+                print(json.dumps({"interface": _g(st, "interface", ""),
+                                  "state": state,
+                                  "has_carrier": bool(_g(st, "has_carrier")),
+                                  "has_address": bool(_g(st, "has_address"))},
+                                 separators=(",", ":")))
+            else:
+                print(f"net: {state}  iface={_g(st, 'interface', '') or '(auto)'} "
+                      f"carrier={int(bool(_g(st, 'has_carrier')))} "
+                      f"addr={int(bool(_g(st, 'has_address')))}")
+            return 0
+
+        rep = nm.wifi_scan(iface)
+        bss = list(_g(rep, "bss", []) or [])
+        if as_json:
+            print(json.dumps({
+                "interface": _g(rep, "interface", ""),
+                "associated": bool(_g(rep, "associated")),
+                "assoc_ssid": _g(rep, "assoc_ssid", ""),
+                "assoc_bssid": _g(rep, "assoc_bssid", ""),
+                "bss": [{"ssid": _g(b, "ssid", ""), "bssid": _g(b, "bssid", ""),
+                         "signal_dbm": _g(b, "signal_dbm", 0),
+                         "freq_mhz": _g(b, "freq_mhz", 0),
+                         "security": _g(b, "security", "")} for b in bss],
+            }, separators=(",", ":")))
+            return 0
+
+        iface_name = _g(rep, "interface", "") or "(none)"
+        if bool(_g(rep, "associated")):
+            print(f"{iface_name}: associated → {_g(rep, 'assoc_ssid', '') or '(hidden)'} "
+                  f"[{_g(rep, 'assoc_bssid', '')}]")
+        else:
+            print(f"{iface_name}: not associated")
+        if not bss:
+            print("  (no APs in scan — needs CAP_NET_ADMIN for an active scan, "
+                  "or no networks visible)")
+            return 0
+        # Strongest signal first.
+        bss.sort(key=lambda b: _g(b, "signal_dbm", -999), reverse=True)
+        print(f"  {'SSID':<28} {'BSSID':<18} {'SIG':>5} {'FREQ':>6}  SECURITY")
+        for b in bss:
+            star = "*" if (bool(_g(rep, "associated")) and
+                           _g(b, "bssid", "") == _g(rep, "assoc_bssid", "")) else " "
+            print(f"{star} {(_g(b, 'ssid', '') or '(hidden)'):<28} "
+                  f"{_g(b, 'bssid', ''):<18} {_g(b, 'signal_dbm', 0):>4}d "
+                  f"{_g(b, 'freq_mhz', 0):>6}  {_g(b, 'security', '')}")
+        return 0
+    finally:
+        nm.stop()
+
+
+# tdb.py installs the NM client factory here (rtdb leaves it None → wifi errors
+# with a clear "use tdb" message). A module-level hook keeps cmd_wifi shared.
+_NM_FACTORY: dict = {"fn": None}
+
+# Wire NetState ordinal → label (matches the .art enum; WIFI_ASSOCIATED=4).
+_NETSTATE = {0: "DOWN", 1: "LINK_UP", 2: "READY", 3: "DEGRADED", 4: "WIFI_ASSOCIATED"}
+
+
 _COMMANDS = {
     "ps": cmd_ps,
     "supervisor": cmd_supervisor,
@@ -571,6 +662,7 @@ _COMMANDS = {
     "terminate": cmd_terminate,
     "tracecat": cmd_tracecat,
     "logcat": cmd_logcat,     # the LOG firehose (node log lines); tracecat = TRACES
+    "wifi": cmd_wifi,         # nm wifi scan + association (TIPC probe; tdb only)
 }
 
 _HELP = """tdb — Theia Debug Bridge. commands:
@@ -591,5 +683,7 @@ _HELP = """tdb — Theia Debug Bridge. commands:
                            adb-style, e.g. `logcat MyApp/counter:V *:E`
   restart <name>           restart a child
   terminate <name>         stop-and-hold a child
+  wifi [<iface>]           nm wifi scan: visible APs + association (via `iw`)
+  wifi --status            network readiness state only (no scan)
   help                     this help
   quit / exit              leave the REPL"""

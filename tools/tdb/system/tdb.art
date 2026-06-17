@@ -30,6 +30,7 @@ import system.services.osi.*
 import system.services.fw.*
 import system.services.idsm.*
 import system.services.shwa.*
+import system.services.nm.*
 
 // ---- extern peers (materialized from the imports) ------------------------
 //
@@ -64,6 +65,10 @@ extern node atomic FwDaemon { }
 // idsm's IDS-manager node (tipc 0x8001000F) — system.services.idsm.
 // GetIdsStatus (detector state / event + escalation counters).
 extern node atomic IdsmDaemon { }
+
+// nm's network-readiness node (tipc 0x8001002E) — system.services.nm.
+// GetNetworkStatus (readiness snapshot) / WifiScan (visible APs + assoc).
+extern node atomic NmDaemon { }
 
 // ---- tdb client nodes ----------------------------------------------------
 //
@@ -137,6 +142,15 @@ node atomic TdbShwa {
     tipc type=0x80020107 instance=0
     ports {
         client shwa_ctl  requires system.services.shwa.ShwaCtlIf
+    }
+}
+
+// nm client: drives NmCtlIf (GetNetworkStatus / WifiScan) — used by `tdb wifi`
+// (the visible-AP scan + association snapshot) and `tdb netstatus`.
+node atomic TdbNm {
+    tipc type=0x80020108 instance=0
+    ports {
+        client nm_ctl  requires system.services.nm.NmCtlIf
     }
 }
 

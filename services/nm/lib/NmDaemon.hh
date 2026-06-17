@@ -40,8 +40,9 @@ namespace ara::nm {
 enum class NmDaemonState : uint8_t {
     DOWN = 0,
     LINK_UP = 1,
-    READY = 2,
-    DEGRADED = 3
+    WIFI_ASSOCIATED = 2,
+    READY = 3,
+    DEGRADED = 4
 };
 
 // Local-namespace aliases over the nanopb C structs. The nanopb
@@ -51,10 +52,14 @@ enum class NmDaemonState : uint8_t {
 using NmStatusMsg = system_services_nm_NmStatusMsg;
 
 using LinkUp = system_services_nm_LinkUp;
+using WifiAssociated = system_services_nm_WifiAssociated;
 using AddrAcquired = system_services_nm_AddrAcquired;
 using LinkDown = system_services_nm_LinkDown;
+using WifiDisassociated = system_services_nm_WifiDisassociated;
 using AddrLost = system_services_nm_AddrLost;
 using NetStatusReq = system_services_nm_NetStatusReq;
+using WifiScanReq = system_services_nm_WifiScanReq;
+using WifiScanReply = system_services_nm_WifiScanReply;
 
 
 using NmDaemonData = NmStatusMsg;
@@ -76,7 +81,7 @@ class NmDaemon;
 //   - init(NmDaemonData&) returns the initial state
 //     (NmDaemonState::DOWN)
 //   - one handle_event overload per declared event type
-//     (LinkUp, AddrAcquired, LinkDown, AddrLost, LinkDown, AddrAcquired, LinkUp, LinkDown)
+//     (LinkUp, WifiAssociated, AddrAcquired, LinkDown, AddrAcquired, WifiDisassociated, LinkDown, AddrLost, WifiDisassociated, LinkDown, AddrAcquired, WifiAssociated, LinkUp, LinkDown)
 //   - handle_event for ::theia::runtime::StateTimeoutMsg<NmDaemonState>
 //     covering states with `timeout → ...` rules
 //   - subscribe/unsubscribe/broadcast helpers for sender ports
@@ -99,6 +104,7 @@ public:
         switch (s) {
         case NmDaemonState::DOWN: return "DOWN";
         case NmDaemonState::LINK_UP: return "LINK_UP";
+        case NmDaemonState::WIFI_ASSOCIATED: return "WIFI_ASSOCIATED";
         case NmDaemonState::READY: return "READY";
         case NmDaemonState::DEGRADED: return "DEGRADED";
         }
@@ -166,11 +172,30 @@ public:
         return ::theia::runtime::keep_state<NmDaemonState>();
     }
 
-    // AddrAcquired — handled from: LINK_UP → READY | DEGRADED → READY
+    // WifiAssociated — handled from: LINK_UP → WIFI_ASSOCIATED | DEGRADED → WIFI_ASSOCIATED
+    ::theia::runtime::EventResult<NmDaemonState> handle_event(
+            NmDaemonState s, const WifiAssociated& /*e*/,
+            NmDaemonData& /*d*/) {
+        if (s == NmDaemonState::LINK_UP) {
+            return ::theia::runtime::transition_to<NmDaemonState>(
+                NmDaemonState::WIFI_ASSOCIATED);
+        }
+        if (s == NmDaemonState::DEGRADED) {
+            return ::theia::runtime::transition_to<NmDaemonState>(
+                NmDaemonState::WIFI_ASSOCIATED);
+        }
+        return ::theia::runtime::keep_state<NmDaemonState>();
+    }
+
+    // AddrAcquired — handled from: LINK_UP → READY | WIFI_ASSOCIATED → READY | DEGRADED → READY
     ::theia::runtime::EventResult<NmDaemonState> handle_event(
             NmDaemonState s, const AddrAcquired& /*e*/,
             NmDaemonData& /*d*/) {
         if (s == NmDaemonState::LINK_UP) {
+            return ::theia::runtime::transition_to<NmDaemonState>(
+                NmDaemonState::READY);
+        }
+        if (s == NmDaemonState::WIFI_ASSOCIATED) {
             return ::theia::runtime::transition_to<NmDaemonState>(
                 NmDaemonState::READY);
         }
@@ -181,11 +206,15 @@ public:
         return ::theia::runtime::keep_state<NmDaemonState>();
     }
 
-    // LinkDown — handled from: LINK_UP → DOWN | READY → DEGRADED | DEGRADED → DOWN
+    // LinkDown — handled from: LINK_UP → DOWN | WIFI_ASSOCIATED → DOWN | READY → DEGRADED | DEGRADED → DOWN
     ::theia::runtime::EventResult<NmDaemonState> handle_event(
             NmDaemonState s, const LinkDown& /*e*/,
             NmDaemonData& /*d*/) {
         if (s == NmDaemonState::LINK_UP) {
+            return ::theia::runtime::transition_to<NmDaemonState>(
+                NmDaemonState::DOWN);
+        }
+        if (s == NmDaemonState::WIFI_ASSOCIATED) {
             return ::theia::runtime::transition_to<NmDaemonState>(
                 NmDaemonState::DOWN);
         }
@@ -196,6 +225,21 @@ public:
         if (s == NmDaemonState::DEGRADED) {
             return ::theia::runtime::transition_to<NmDaemonState>(
                 NmDaemonState::DOWN);
+        }
+        return ::theia::runtime::keep_state<NmDaemonState>();
+    }
+
+    // WifiDisassociated — handled from: WIFI_ASSOCIATED → LINK_UP | READY → DEGRADED
+    ::theia::runtime::EventResult<NmDaemonState> handle_event(
+            NmDaemonState s, const WifiDisassociated& /*e*/,
+            NmDaemonData& /*d*/) {
+        if (s == NmDaemonState::WIFI_ASSOCIATED) {
+            return ::theia::runtime::transition_to<NmDaemonState>(
+                NmDaemonState::LINK_UP);
+        }
+        if (s == NmDaemonState::READY) {
+            return ::theia::runtime::transition_to<NmDaemonState>(
+                NmDaemonState::DEGRADED);
         }
         return ::theia::runtime::keep_state<NmDaemonState>();
     }
@@ -247,6 +291,8 @@ public:
     // TraceControl), the handler signature is identical and only
     // gets emitted once. Dispatch is by request type, not by port.
 NmStatusMsg handle_call(const NetStatusReq& req,
+                                            ::theia::runtime::GenStateMHolder<NmDaemonState, NmDaemonData>& h);
+WifiScanReply handle_call(const WifiScanReq& req,
                                             ::theia::runtime::GenStateMHolder<NmDaemonState, NmDaemonData>& h);
 
 

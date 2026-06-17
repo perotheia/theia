@@ -207,6 +207,34 @@ class PerClient:
         self.probe.stop()
 
 
+class NmClient:
+    """Drives services/nm (network management) — NmDaemon's NmCtlIf. Built from
+    tdb.art's TdbNm node so the probe resolves nm's TIPC addr + op service_ids
+    from the model. `wifi_scan` returns the visible AP list + association
+    snapshot; `net_status` the readiness state."""
+
+    def __init__(self, ctx, repo) -> None:
+        self.ctx = ctx
+        self.repo = Path(repo)
+        self.probe = ctx.probe("TdbNm", instance=_unique_instance()).start()
+
+    @classmethod
+    def from_workspace(cls, repo: str | Path) -> "NmClient":
+        repo = Path(repo)
+        return cls(_ctx(repo), repo)
+
+    def wifi_scan(self, interface: str = "", timeout: float = 8.0) -> dict[str, Any]:
+        # An active scan can take several seconds — give it a generous budget.
+        return self.probe.call("NmDaemon", "WifiScan", timeout=timeout,
+                               interface=interface)
+
+    def net_status(self, timeout: float = 3.0) -> dict[str, Any]:
+        return self.probe.call("NmDaemon", "GetNetworkStatus", timeout=timeout)
+
+    def stop(self) -> None:
+        self.probe.stop()
+
+
 def _read_persnap(path: Path):
     """Parse a .persnap file → [(node, digest, config_bytes), ...]. Format
     (snapshot_ops.hpp): "PERSNAP1\\n" then per record three length-prefixed

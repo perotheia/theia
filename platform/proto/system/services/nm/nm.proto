@@ -7,6 +7,7 @@ package system_services_nm;
 enum NetState {
     NetState_DOWN = 0;
     NetState_LINK_UP = 1;
+    NetState_WIFI_ASSOCIATED = 4;
     NetState_READY = 2;
     NetState_DEGRADED = 3;
 }
@@ -33,6 +34,14 @@ message AddrLost {
     // empty body
 }
 
+message WifiAssociated {
+    // empty body
+}
+
+message WifiDisassociated {
+    // empty body
+}
+
 message NmStatusMsg {
     NetState state = 1;
     string interface = 2;
@@ -43,5 +52,25 @@ message NmStatusMsg {
 
 message NetStatusReq {
     // empty body
+}
+
+message WifiBss {
+    string ssid = 1;
+    string bssid = 2;
+    sint32 signal_dbm = 3;
+    uint32 freq_mhz = 4;
+    string security = 5;
+}
+
+message WifiScanReq {
+    string interface = 1;
+}
+
+message WifiScanReply {
+    string interface = 1;
+    bool associated = 2;
+    string assoc_ssid = 3;
+    string assoc_bssid = 4;
+    repeated WifiBss bss = 5;
 }
 

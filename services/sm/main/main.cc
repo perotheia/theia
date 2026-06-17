@@ -16,6 +16,7 @@
 #include "lib/Log.hh"    // per-node MakeContextLogger(tag) — tagged + $THEIA_LOGGER sink
 #include "Logger.hh"     // parse_log_level / process_logger / set_process_logger
 #include "NodeAffinity.hh"  // apply_node_affinity($THEIA_NODE_CFG) per node
+#include "MachineInstance.hh"  // resolve_node_tipc($THEIA_NODE_TIPC) — per-node addr
 #include "ParamsConfig.hh"  // init_config(fc) / get_config() — static params JSON
 #include "tombstone/tombstone.h"  // install_handlers — crash → tombstone file
 
@@ -94,11 +95,19 @@ int main() {
         sm_daemon.set_logger(std::move(sm_daemon_log));
     }
     sm_daemon.start_statem(timers);
+    // Resolve this node's TIPC address from THEIA_NODE_TIPC (the supervisor built
+    // it per node from executor.json, instance machine-shifted) so the binary is
+    // address-agnostic. Falls back to the compiled kTipcType/kTipcInstance for a
+    // standalone run.
+    uint32_t sm_daemon_type, sm_daemon_inst;
+    ::theia::runtime::resolve_node_tipc(SmDaemon::kNodeName,
+        SmDaemon::kTipcType, SmDaemon::kTipcInstance,
+        sm_daemon_type, sm_daemon_inst);
     {
         char _tipc[96];
         std::snprintf(_tipc, sizeof(_tipc),
                       "up — TIPC type=0x%x instance=%u; statem initial=OFF",
-                      SmDaemon::kTipcType, SmDaemon::kTipcInstance);
+                      sm_daemon_type, sm_daemon_inst);
         sm_daemon.log().info(_tipc);
     }
     // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (supervisor sets it
@@ -107,8 +116,8 @@ int main() {
         SmDaemon::kNodeName, std::getenv("THEIA_NODE_CFG"));
 
     if (auto* sm_daemon_cfg = config_mux.bind_node(
-            sm_daemon, SmDaemon::kTipcType,
-            SmDaemon::kTipcInstance)) {
+            sm_daemon, sm_daemon_type,
+            sm_daemon_inst)) {
         config_mux.register_cast<platform_runtime_LogLevelPush>(
             sm_daemon_cfg, sm_daemon);
         // Trace control (#403): supervisor pushes TraceControlPush to flip
@@ -156,11 +165,19 @@ int main() {
         fg_sm.set_logger(std::move(fg_sm_log));
     }
     fg_sm.start_statem(timers);
+    // Resolve this node's TIPC address from THEIA_NODE_TIPC (the supervisor built
+    // it per node from executor.json, instance machine-shifted) so the binary is
+    // address-agnostic. Falls back to the compiled kTipcType/kTipcInstance for a
+    // standalone run.
+    uint32_t fg_sm_type, fg_sm_inst;
+    ::theia::runtime::resolve_node_tipc(FunctionGroupSm::kNodeName,
+        FunctionGroupSm::kTipcType, FunctionGroupSm::kTipcInstance,
+        fg_sm_type, fg_sm_inst);
     {
         char _tipc[96];
         std::snprintf(_tipc, sizeof(_tipc),
                       "up — TIPC type=0x%x instance=%u; statem initial=FG_OFF",
-                      FunctionGroupSm::kTipcType, FunctionGroupSm::kTipcInstance);
+                      fg_sm_type, fg_sm_inst);
         fg_sm.log().info(_tipc);
     }
     // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (supervisor sets it
@@ -169,8 +186,8 @@ int main() {
         FunctionGroupSm::kNodeName, std::getenv("THEIA_NODE_CFG"));
 
     if (auto* fg_sm_cfg = config_mux.bind_node(
-            fg_sm, FunctionGroupSm::kTipcType,
-            FunctionGroupSm::kTipcInstance)) {
+            fg_sm, fg_sm_type,
+            fg_sm_inst)) {
         config_mux.register_cast<platform_runtime_LogLevelPush>(
             fg_sm_cfg, fg_sm);
         // Trace control (#403): supervisor pushes TraceControlPush to flip
@@ -216,10 +233,18 @@ int main() {
         fg_gate.set_logger(std::move(fg_gate_log));
     }
     fg_gate.start();
+    // Resolve this node's TIPC address from THEIA_NODE_TIPC (the supervisor built
+    // it per node from executor.json, instance machine-shifted) so the binary is
+    // address-agnostic. Falls back to the compiled kTipcType/kTipcInstance for a
+    // standalone run.
+    uint32_t fg_gate_type, fg_gate_inst;
+    ::theia::runtime::resolve_node_tipc(FgGate::kNodeName,
+        FgGate::kTipcType, FgGate::kTipcInstance,
+        fg_gate_type, fg_gate_inst);
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
-                      FgGate::kTipcType, FgGate::kTipcInstance);
+                      fg_gate_type, fg_gate_inst);
         fg_gate.log().info(_tipc);
     }
     // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (supervisor sets it
@@ -228,8 +253,8 @@ int main() {
         FgGate::kNodeName, std::getenv("THEIA_NODE_CFG"));
 
     if (auto* fg_gate_cfg = config_mux.bind_node(
-            fg_gate, FgGate::kTipcType,
-            FgGate::kTipcInstance)) {
+            fg_gate, fg_gate_type,
+            fg_gate_inst)) {
         config_mux.register_cast<platform_runtime_LogLevelPush>(
             fg_gate_cfg, fg_gate);
         // Trace control (#403): supervisor pushes TraceControlPush to flip
@@ -282,10 +307,18 @@ int main() {
         sm_gate.set_logger(std::move(sm_gate_log));
     }
     sm_gate.start();
+    // Resolve this node's TIPC address from THEIA_NODE_TIPC (the supervisor built
+    // it per node from executor.json, instance machine-shifted) so the binary is
+    // address-agnostic. Falls back to the compiled kTipcType/kTipcInstance for a
+    // standalone run.
+    uint32_t sm_gate_type, sm_gate_inst;
+    ::theia::runtime::resolve_node_tipc(SmGate::kNodeName,
+        SmGate::kTipcType, SmGate::kTipcInstance,
+        sm_gate_type, sm_gate_inst);
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
-                      SmGate::kTipcType, SmGate::kTipcInstance);
+                      sm_gate_type, sm_gate_inst);
         sm_gate.log().info(_tipc);
     }
     // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (supervisor sets it
@@ -294,8 +327,8 @@ int main() {
         SmGate::kNodeName, std::getenv("THEIA_NODE_CFG"));
 
     if (auto* sm_gate_cfg = config_mux.bind_node(
-            sm_gate, SmGate::kTipcType,
-            SmGate::kTipcInstance)) {
+            sm_gate, sm_gate_type,
+            sm_gate_inst)) {
         config_mux.register_cast<platform_runtime_LogLevelPush>(
             sm_gate_cfg, sm_gate);
         // Trace control (#403): supervisor pushes TraceControlPush to flip

@@ -13,6 +13,7 @@
 #include "TimerService.hh"
 #include "Logger.hh"     // parse_log_level / process_logger / set_process_logger
 #include "NodeAffinity.hh"  // apply_node_affinity($THEIA_NODE_CFG) per node
+#include "MachineInstance.hh"  // resolve_node_tipc($THEIA_NODE_TIPC) — per-node addr
 #include "ParamsConfig.hh"  // init_config(fc) / get_config() — static params JSON
 #include "tombstone/tombstone.h"  // install_handlers — crash → tombstone file
 
@@ -116,16 +117,25 @@ int main() {
     // exists now.
     ::theia::runtime::apply_node_affinity(counter.native_handle(),
         CounterNode::kNodeName, std::getenv("THEIA_NODE_CFG"));
+    // Resolve this node's TIPC address from the env the supervisor built from
+    // executor.json (THEIA_NODE_TIPC, instance already machine-shifted), so the
+    // BINARY is address-agnostic — same binary on every machine, the instance
+    // assigned at deploy. Falls back to the compiled kTipcType/kTipcInstance
+    // (machine-shifted) for a standalone / un-supervised run.
+    uint32_t counter_type, counter_inst;
+    ::theia::runtime::resolve_node_tipc(CounterNode::kNodeName,
+        CounterNode::kTipcType, CounterNode::kTipcInstance,
+        counter_type, counter_inst);
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
-                      CounterNode::kTipcType, CounterNode::kTipcInstance);
+                      counter_type, counter_inst);
         counter.log().info(_tipc);
     }
 
     if (auto* counter_cfg = config_mux.bind_node(
-            counter, CounterNode::kTipcType,
-            CounterNode::kTipcInstance)) {
+            counter, counter_type,
+            counter_inst)) {
         config_mux.register_cast<platform_runtime_LogLevelPush>(
             counter_cfg, counter);
         // Trace control (#403): supervisor pushes TraceControlPush to flip
@@ -185,16 +195,25 @@ int main() {
     // exists now.
     ::theia::runtime::apply_node_affinity(driver.native_handle(),
         DriverNode::kNodeName, std::getenv("THEIA_NODE_CFG"));
+    // Resolve this node's TIPC address from the env the supervisor built from
+    // executor.json (THEIA_NODE_TIPC, instance already machine-shifted), so the
+    // BINARY is address-agnostic — same binary on every machine, the instance
+    // assigned at deploy. Falls back to the compiled kTipcType/kTipcInstance
+    // (machine-shifted) for a standalone / un-supervised run.
+    uint32_t driver_type, driver_inst;
+    ::theia::runtime::resolve_node_tipc(DriverNode::kNodeName,
+        DriverNode::kTipcType, DriverNode::kTipcInstance,
+        driver_type, driver_inst);
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
-                      DriverNode::kTipcType, DriverNode::kTipcInstance);
+                      driver_type, driver_inst);
         driver.log().info(_tipc);
     }
 
     if (auto* driver_cfg = config_mux.bind_node(
-            driver, DriverNode::kTipcType,
-            DriverNode::kTipcInstance)) {
+            driver, driver_type,
+            driver_inst)) {
         config_mux.register_cast<platform_runtime_LogLevelPush>(
             driver_cfg, driver);
         // Trace control (#403): supervisor pushes TraceControlPush to flip
@@ -251,16 +270,25 @@ int main() {
     // exists now.
     ::theia::runtime::apply_node_affinity(ticker.native_handle(),
         TickerNode::kNodeName, std::getenv("THEIA_NODE_CFG"));
+    // Resolve this node's TIPC address from the env the supervisor built from
+    // executor.json (THEIA_NODE_TIPC, instance already machine-shifted), so the
+    // BINARY is address-agnostic — same binary on every machine, the instance
+    // assigned at deploy. Falls back to the compiled kTipcType/kTipcInstance
+    // (machine-shifted) for a standalone / un-supervised run.
+    uint32_t ticker_type, ticker_inst;
+    ::theia::runtime::resolve_node_tipc(TickerNode::kNodeName,
+        TickerNode::kTipcType, TickerNode::kTipcInstance,
+        ticker_type, ticker_inst);
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
-                      TickerNode::kTipcType, TickerNode::kTipcInstance);
+                      ticker_type, ticker_inst);
         ticker.log().info(_tipc);
     }
 
     if (auto* ticker_cfg = config_mux.bind_node(
-            ticker, TickerNode::kTipcType,
-            TickerNode::kTipcInstance)) {
+            ticker, ticker_type,
+            ticker_inst)) {
         config_mux.register_cast<platform_runtime_LogLevelPush>(
             ticker_cfg, ticker);
         // Trace control (#403): supervisor pushes TraceControlPush to flip

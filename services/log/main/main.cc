@@ -14,6 +14,7 @@
 #include "TimerService.hh"
 #include "Logger.hh"     // parse_log_level / process_logger / set_process_logger
 #include "NodeAffinity.hh"  // apply_node_affinity($THEIA_NODE_CFG) per node
+#include "MachineInstance.hh"  // resolve_node_tipc($THEIA_NODE_TIPC) — per-node addr
 #include "ParamsConfig.hh"  // init_config(fc) / get_config() — static params JSON
 #include "tombstone/tombstone.h"  // install_handlers — crash → tombstone file
 
@@ -114,16 +115,25 @@ int main() {
     // exists now.
     ::theia::runtime::apply_node_affinity(log_daemon.native_handle(),
         LogDaemon::kNodeName, std::getenv("THEIA_NODE_CFG"));
+    // Resolve this node's TIPC address from the env the supervisor built from
+    // executor.json (THEIA_NODE_TIPC, instance already machine-shifted), so the
+    // BINARY is address-agnostic — same binary on every machine, the instance
+    // assigned at deploy. Falls back to the compiled kTipcType/kTipcInstance
+    // (machine-shifted) for a standalone / un-supervised run.
+    uint32_t log_daemon_type, log_daemon_inst;
+    ::theia::runtime::resolve_node_tipc(LogDaemon::kNodeName,
+        LogDaemon::kTipcType, LogDaemon::kTipcInstance,
+        log_daemon_type, log_daemon_inst);
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
-                      LogDaemon::kTipcType, LogDaemon::kTipcInstance);
+                      log_daemon_type, log_daemon_inst);
         log_daemon.log().info(_tipc);
     }
 
     if (auto* log_daemon_cfg = config_mux.bind_node(
-            log_daemon, LogDaemon::kTipcType,
-            LogDaemon::kTipcInstance)) {
+            log_daemon, log_daemon_type,
+            log_daemon_inst)) {
         config_mux.register_cast<platform_runtime_LogLevelPush>(
             log_daemon_cfg, log_daemon);
         // Trace control (#403): supervisor pushes TraceControlPush to flip
@@ -182,10 +192,19 @@ int main() {
     // exists now.
     ::theia::runtime::apply_node_affinity(log_pump.native_handle(),
         LogStreamPump::kNodeName, std::getenv("THEIA_NODE_CFG"));
+    // Resolve this node's TIPC address from the env the supervisor built from
+    // executor.json (THEIA_NODE_TIPC, instance already machine-shifted), so the
+    // BINARY is address-agnostic — same binary on every machine, the instance
+    // assigned at deploy. Falls back to the compiled kTipcType/kTipcInstance
+    // (machine-shifted) for a standalone / un-supervised run.
+    uint32_t log_pump_type, log_pump_inst;
+    ::theia::runtime::resolve_node_tipc(LogStreamPump::kNodeName,
+        LogStreamPump::kTipcType, LogStreamPump::kTipcInstance,
+        log_pump_type, log_pump_inst);
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
-                      LogStreamPump::kTipcType, LogStreamPump::kTipcInstance);
+                      log_pump_type, log_pump_inst);
         log_pump.log().info(_tipc);
     }
 
@@ -197,7 +216,7 @@ int main() {
     // touching only atomics). This is what makes a runnable's log level + trace
     // live-controllable (`tdb loglevel`/`trace <node>`), same as a gen_server.
     if (auto* log_pump_cfg = config_mux.bind_listener(
-            LogStreamPump::kTipcType, LogStreamPump::kTipcInstance)) {
+            log_pump_type, log_pump_inst)) {
         config_mux.register_cast_inline<platform_runtime_LogLevelPush>(
             log_pump_cfg, log_pump, &LogStreamPump::on_log_level_push);
         config_mux.register_cast_inline<platform_runtime_TraceControlPush>(
@@ -242,10 +261,19 @@ int main() {
     // exists now.
     ::theia::runtime::apply_node_affinity(trace_pump.native_handle(),
         TraceStreamPump::kNodeName, std::getenv("THEIA_NODE_CFG"));
+    // Resolve this node's TIPC address from the env the supervisor built from
+    // executor.json (THEIA_NODE_TIPC, instance already machine-shifted), so the
+    // BINARY is address-agnostic — same binary on every machine, the instance
+    // assigned at deploy. Falls back to the compiled kTipcType/kTipcInstance
+    // (machine-shifted) for a standalone / un-supervised run.
+    uint32_t trace_pump_type, trace_pump_inst;
+    ::theia::runtime::resolve_node_tipc(TraceStreamPump::kNodeName,
+        TraceStreamPump::kTipcType, TraceStreamPump::kTipcInstance,
+        trace_pump_type, trace_pump_inst);
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
-                      TraceStreamPump::kTipcType, TraceStreamPump::kTipcInstance);
+                      trace_pump_type, trace_pump_inst);
         trace_pump.log().info(_tipc);
     }
 
@@ -257,7 +285,7 @@ int main() {
     // touching only atomics). This is what makes a runnable's log level + trace
     // live-controllable (`tdb loglevel`/`trace <node>`), same as a gen_server.
     if (auto* trace_pump_cfg = config_mux.bind_listener(
-            TraceStreamPump::kTipcType, TraceStreamPump::kTipcInstance)) {
+            trace_pump_type, trace_pump_inst)) {
         config_mux.register_cast_inline<platform_runtime_LogLevelPush>(
             trace_pump_cfg, trace_pump, &TraceStreamPump::on_log_level_push);
         config_mux.register_cast_inline<platform_runtime_TraceControlPush>(
@@ -302,16 +330,25 @@ int main() {
     // exists now.
     ::theia::runtime::apply_node_affinity(trace_ctl.native_handle(),
         TraceCtl::kNodeName, std::getenv("THEIA_NODE_CFG"));
+    // Resolve this node's TIPC address from the env the supervisor built from
+    // executor.json (THEIA_NODE_TIPC, instance already machine-shifted), so the
+    // BINARY is address-agnostic — same binary on every machine, the instance
+    // assigned at deploy. Falls back to the compiled kTipcType/kTipcInstance
+    // (machine-shifted) for a standalone / un-supervised run.
+    uint32_t trace_ctl_type, trace_ctl_inst;
+    ::theia::runtime::resolve_node_tipc(TraceCtl::kNodeName,
+        TraceCtl::kTipcType, TraceCtl::kTipcInstance,
+        trace_ctl_type, trace_ctl_inst);
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
-                      TraceCtl::kTipcType, TraceCtl::kTipcInstance);
+                      trace_ctl_type, trace_ctl_inst);
         trace_ctl.log().info(_tipc);
     }
 
     if (auto* trace_ctl_cfg = config_mux.bind_node(
-            trace_ctl, TraceCtl::kTipcType,
-            TraceCtl::kTipcInstance)) {
+            trace_ctl, trace_ctl_type,
+            trace_ctl_inst)) {
         config_mux.register_cast<platform_runtime_LogLevelPush>(
             trace_ctl_cfg, trace_ctl);
         // Trace control (#403): supervisor pushes TraceControlPush to flip

@@ -14,6 +14,7 @@
 #include "TimerService.hh"
 #include "Logger.hh"     // parse_log_level / process_logger / set_process_logger
 #include "NodeAffinity.hh"  // apply_node_affinity($THEIA_NODE_CFG) per node
+#include "MachineInstance.hh"  // resolve_node_tipc($THEIA_NODE_TIPC) — per-node addr
 #include "ParamsConfig.hh"  // init_config(fc) / get_config() — static params JSON
 #include "tombstone/tombstone.h"  // install_handlers — crash → tombstone file
 
@@ -117,10 +118,19 @@ int main() {
     // exists now.
     ::theia::runtime::apply_node_affinity(ptp4l.native_handle(),
         Ptp4lProvider::kNodeName, std::getenv("THEIA_NODE_CFG"));
+    // Resolve this node's TIPC address from the env the supervisor built from
+    // executor.json (THEIA_NODE_TIPC, instance already machine-shifted), so the
+    // BINARY is address-agnostic — same binary on every machine, the instance
+    // assigned at deploy. Falls back to the compiled kTipcType/kTipcInstance
+    // (machine-shifted) for a standalone / un-supervised run.
+    uint32_t ptp4l_type, ptp4l_inst;
+    ::theia::runtime::resolve_node_tipc(Ptp4lProvider::kNodeName,
+        Ptp4lProvider::kTipcType, Ptp4lProvider::kTipcInstance,
+        ptp4l_type, ptp4l_inst);
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
-                      Ptp4lProvider::kTipcType, Ptp4lProvider::kTipcInstance);
+                      ptp4l_type, ptp4l_inst);
         ptp4l.log().info(_tipc);
     }
 
@@ -144,10 +154,19 @@ int main() {
     // exists now.
     ::theia::runtime::apply_node_affinity(phc2sys.native_handle(),
         Phc2sysProvider::kNodeName, std::getenv("THEIA_NODE_CFG"));
+    // Resolve this node's TIPC address from the env the supervisor built from
+    // executor.json (THEIA_NODE_TIPC, instance already machine-shifted), so the
+    // BINARY is address-agnostic — same binary on every machine, the instance
+    // assigned at deploy. Falls back to the compiled kTipcType/kTipcInstance
+    // (machine-shifted) for a standalone / un-supervised run.
+    uint32_t phc2sys_type, phc2sys_inst;
+    ::theia::runtime::resolve_node_tipc(Phc2sysProvider::kNodeName,
+        Phc2sysProvider::kTipcType, Phc2sysProvider::kTipcInstance,
+        phc2sys_type, phc2sys_inst);
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
-                      Phc2sysProvider::kTipcType, Phc2sysProvider::kTipcInstance);
+                      phc2sys_type, phc2sys_inst);
         phc2sys.log().info(_tipc);
     }
 
@@ -171,10 +190,19 @@ int main() {
     // exists now.
     ::theia::runtime::apply_node_affinity(chrony.native_handle(),
         ChronyProvider::kNodeName, std::getenv("THEIA_NODE_CFG"));
+    // Resolve this node's TIPC address from the env the supervisor built from
+    // executor.json (THEIA_NODE_TIPC, instance already machine-shifted), so the
+    // BINARY is address-agnostic — same binary on every machine, the instance
+    // assigned at deploy. Falls back to the compiled kTipcType/kTipcInstance
+    // (machine-shifted) for a standalone / un-supervised run.
+    uint32_t chrony_type, chrony_inst;
+    ::theia::runtime::resolve_node_tipc(ChronyProvider::kNodeName,
+        ChronyProvider::kTipcType, ChronyProvider::kTipcInstance,
+        chrony_type, chrony_inst);
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
-                      ChronyProvider::kTipcType, ChronyProvider::kTipcInstance);
+                      chrony_type, chrony_inst);
         chrony.log().info(_tipc);
     }
 
@@ -198,16 +226,25 @@ int main() {
     // exists now.
     ::theia::runtime::apply_node_affinity(tsync_ctl.native_handle(),
         TsyncCtl::kNodeName, std::getenv("THEIA_NODE_CFG"));
+    // Resolve this node's TIPC address from the env the supervisor built from
+    // executor.json (THEIA_NODE_TIPC, instance already machine-shifted), so the
+    // BINARY is address-agnostic — same binary on every machine, the instance
+    // assigned at deploy. Falls back to the compiled kTipcType/kTipcInstance
+    // (machine-shifted) for a standalone / un-supervised run.
+    uint32_t tsync_ctl_type, tsync_ctl_inst;
+    ::theia::runtime::resolve_node_tipc(TsyncCtl::kNodeName,
+        TsyncCtl::kTipcType, TsyncCtl::kTipcInstance,
+        tsync_ctl_type, tsync_ctl_inst);
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
-                      TsyncCtl::kTipcType, TsyncCtl::kTipcInstance);
+                      tsync_ctl_type, tsync_ctl_inst);
         tsync_ctl.log().info(_tipc);
     }
 
     if (auto* tsync_ctl_cfg = config_mux.bind_node(
-            tsync_ctl, TsyncCtl::kTipcType,
-            TsyncCtl::kTipcInstance)) {
+            tsync_ctl, tsync_ctl_type,
+            tsync_ctl_inst)) {
         config_mux.register_cast<platform_runtime_LogLevelPush>(
             tsync_ctl_cfg, tsync_ctl);
         // Trace control (#403): supervisor pushes TraceControlPush to flip

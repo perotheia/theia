@@ -12,6 +12,7 @@
 #include "TimerService.hh"
 #include "Logger.hh"     // parse_log_level / process_logger / set_process_logger
 #include "NodeAffinity.hh"  // apply_node_affinity($THEIA_NODE_CFG) per node
+#include "MachineInstance.hh"  // resolve_node_tipc($THEIA_NODE_TIPC) — per-node addr
 #include "ParamsConfig.hh"  // init_config(fc) / get_config() — static params JSON
 #include "tombstone/tombstone.h"  // install_handlers — crash → tombstone file
 
@@ -112,16 +113,25 @@ int main() {
     // exists now.
     ::theia::runtime::apply_node_affinity(per_client.native_handle(),
         PerClient::kNodeName, std::getenv("THEIA_NODE_CFG"));
+    // Resolve this node's TIPC address from the env the supervisor built from
+    // executor.json (THEIA_NODE_TIPC, instance already machine-shifted), so the
+    // BINARY is address-agnostic — same binary on every machine, the instance
+    // assigned at deploy. Falls back to the compiled kTipcType/kTipcInstance
+    // (machine-shifted) for a standalone / un-supervised run.
+    uint32_t per_client_type, per_client_inst;
+    ::theia::runtime::resolve_node_tipc(PerClient::kNodeName,
+        PerClient::kTipcType, PerClient::kTipcInstance,
+        per_client_type, per_client_inst);
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
-                      PerClient::kTipcType, PerClient::kTipcInstance);
+                      per_client_type, per_client_inst);
         per_client.log().info(_tipc);
     }
 
     if (auto* per_client_cfg = config_mux.bind_node(
-            per_client, PerClient::kTipcType,
-            PerClient::kTipcInstance)) {
+            per_client, per_client_type,
+            per_client_inst)) {
         config_mux.register_cast<platform_runtime_LogLevelPush>(
             per_client_cfg, per_client);
         // Trace control (#403): supervisor pushes TraceControlPush to flip
@@ -184,16 +194,25 @@ int main() {
     // exists now.
     ::theia::runtime::apply_node_affinity(per_manager.native_handle(),
         PerManager::kNodeName, std::getenv("THEIA_NODE_CFG"));
+    // Resolve this node's TIPC address from the env the supervisor built from
+    // executor.json (THEIA_NODE_TIPC, instance already machine-shifted), so the
+    // BINARY is address-agnostic — same binary on every machine, the instance
+    // assigned at deploy. Falls back to the compiled kTipcType/kTipcInstance
+    // (machine-shifted) for a standalone / un-supervised run.
+    uint32_t per_manager_type, per_manager_inst;
+    ::theia::runtime::resolve_node_tipc(PerManager::kNodeName,
+        PerManager::kTipcType, PerManager::kTipcInstance,
+        per_manager_type, per_manager_inst);
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
-                      PerManager::kTipcType, PerManager::kTipcInstance);
+                      per_manager_type, per_manager_inst);
         per_manager.log().info(_tipc);
     }
 
     if (auto* per_manager_cfg = config_mux.bind_node(
-            per_manager, PerManager::kTipcType,
-            PerManager::kTipcInstance)) {
+            per_manager, per_manager_type,
+            per_manager_inst)) {
         config_mux.register_cast<platform_runtime_LogLevelPush>(
             per_manager_cfg, per_manager);
         // Trace control (#403): supervisor pushes TraceControlPush to flip

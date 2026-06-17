@@ -14,6 +14,7 @@
 #include "lib/Log.hh"    // per-node MakeContextLogger(tag) — tagged + $THEIA_LOGGER sink
 #include "Logger.hh"     // parse_log_level / process_logger / set_process_logger
 #include "NodeAffinity.hh"  // apply_node_affinity($THEIA_NODE_CFG) per node
+#include "MachineInstance.hh"  // resolve_node_tipc($THEIA_NODE_TIPC) — per-node addr
 #include "ParamsConfig.hh"  // init_config(fc) / get_config() — static params JSON
 #include "tombstone/tombstone.h"  // install_handlers — crash → tombstone file
 
@@ -92,11 +93,19 @@ int main() {
         phm_fsm.set_logger(std::move(phm_fsm_log));
     }
     phm_fsm.start_statem(timers);
+    // Resolve this node's TIPC address from THEIA_NODE_TIPC (the supervisor built
+    // it per node from executor.json, instance machine-shifted) so the binary is
+    // address-agnostic. Falls back to the compiled kTipcType/kTipcInstance for a
+    // standalone run.
+    uint32_t phm_fsm_type, phm_fsm_inst;
+    ::theia::runtime::resolve_node_tipc(PhmFsm::kNodeName,
+        PhmFsm::kTipcType, PhmFsm::kTipcInstance,
+        phm_fsm_type, phm_fsm_inst);
     {
         char _tipc[96];
         std::snprintf(_tipc, sizeof(_tipc),
                       "up — TIPC type=0x%x instance=%u; statem initial=OK",
-                      PhmFsm::kTipcType, PhmFsm::kTipcInstance);
+                      phm_fsm_type, phm_fsm_inst);
         phm_fsm.log().info(_tipc);
     }
     // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (supervisor sets it
@@ -105,8 +114,8 @@ int main() {
         PhmFsm::kNodeName, std::getenv("THEIA_NODE_CFG"));
 
     if (auto* phm_fsm_cfg = config_mux.bind_node(
-            phm_fsm, PhmFsm::kTipcType,
-            PhmFsm::kTipcInstance)) {
+            phm_fsm, phm_fsm_type,
+            phm_fsm_inst)) {
         config_mux.register_cast<platform_runtime_LogLevelPush>(
             phm_fsm_cfg, phm_fsm);
         // Trace control (#403): supervisor pushes TraceControlPush to flip
@@ -152,10 +161,18 @@ int main() {
         phm_gate.set_logger(std::move(phm_gate_log));
     }
     phm_gate.start();
+    // Resolve this node's TIPC address from THEIA_NODE_TIPC (the supervisor built
+    // it per node from executor.json, instance machine-shifted) so the binary is
+    // address-agnostic. Falls back to the compiled kTipcType/kTipcInstance for a
+    // standalone run.
+    uint32_t phm_gate_type, phm_gate_inst;
+    ::theia::runtime::resolve_node_tipc(PhmGate::kNodeName,
+        PhmGate::kTipcType, PhmGate::kTipcInstance,
+        phm_gate_type, phm_gate_inst);
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
-                      PhmGate::kTipcType, PhmGate::kTipcInstance);
+                      phm_gate_type, phm_gate_inst);
         phm_gate.log().info(_tipc);
     }
     // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (supervisor sets it
@@ -164,8 +181,8 @@ int main() {
         PhmGate::kNodeName, std::getenv("THEIA_NODE_CFG"));
 
     if (auto* phm_gate_cfg = config_mux.bind_node(
-            phm_gate, PhmGate::kTipcType,
-            PhmGate::kTipcInstance)) {
+            phm_gate, phm_gate_type,
+            phm_gate_inst)) {
         config_mux.register_cast<platform_runtime_LogLevelPush>(
             phm_gate_cfg, phm_gate);
         // Trace control (#403): supervisor pushes TraceControlPush to flip

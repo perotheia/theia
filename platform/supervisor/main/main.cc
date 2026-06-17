@@ -12,6 +12,7 @@
 #include "TimerService.hh"
 #include "Logger.hh"     // parse_log_level / process_logger / set_process_logger
 #include "NodeAffinity.hh"  // apply_node_affinity($THEIA_NODE_CFG) per node
+#include "MachineInstance.hh"  // effective_instance() — bind ctl at this machine's idx
 #include "ParamsConfig.hh"  // init_config(fc) / get_config() — static params JSON
 #include "tombstone/tombstone.h"  // install_handlers — crash → tombstone file
 
@@ -112,16 +113,22 @@ int main() {
     // exists now.
     ::theia::runtime::apply_node_affinity(supervisor_ctl.native_handle(),
         SupervisorCtl::kNodeName, std::getenv("THEIA_NODE_CFG"));
+    // The supervisor binds its OWN ctl node at this machine's instance: central
+    // supervisor:0, compute supervisor:1, so central com reaches each machine's
+    // supervisor at (0x80020001, instance=N). machine_instance() reads the
+    // supervisor's THEIA_MACHINE_INSTANCE boot env (0 on a single-machine deploy).
+    const uint32_t supervisor_ctl_inst =
+        ::theia::runtime::effective_instance(SupervisorCtl::kTipcInstance);
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
-                      SupervisorCtl::kTipcType, SupervisorCtl::kTipcInstance);
+                      SupervisorCtl::kTipcType, supervisor_ctl_inst);
         supervisor_ctl.log().info(_tipc);
     }
 
     if (auto* supervisor_ctl_cfg = config_mux.bind_node(
             supervisor_ctl, SupervisorCtl::kTipcType,
-            SupervisorCtl::kTipcInstance)) {
+            supervisor_ctl_inst)) {
         config_mux.register_cast<platform_runtime_LogLevelPush>(
             supervisor_ctl_cfg, supervisor_ctl);
         // Trace control (#403): supervisor pushes TraceControlPush to flip

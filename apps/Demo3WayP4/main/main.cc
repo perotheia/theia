@@ -14,6 +14,7 @@
 #include "lib/Log.hh"    // per-node MakeContextLogger(tag) — tagged + $THEIA_LOGGER sink
 #include "Logger.hh"     // parse_log_level / process_logger / set_process_logger
 #include "NodeAffinity.hh"  // apply_node_affinity($THEIA_NODE_CFG) per node
+#include "MachineInstance.hh"  // resolve_node_tipc($THEIA_NODE_TIPC) — per-node addr
 #include "ParamsConfig.hh"  // init_config(fc) / get_config() — static params JSON
 #include "tombstone/tombstone.h"  // install_handlers — crash → tombstone file
 
@@ -66,7 +67,11 @@ int main() {
     ::theia::runtime::init_config("apps");
 
     ::theia::runtime::TimerService timers;
-    (void)timers;  // wired into statem nodes' send_after
+    // Publish the process TimerService. start_statem(timers) drives the FSM's
+    // own send_after, but a plain `requires_timers` node sharing this FC (e.g. a
+    // poller that send_after()s its own tick) reaches the SAME service via the
+    // global process_timers() accessor — which must be set, or it fatals.
+    ::theia::runtime::set_process_timers(&timers);
 
     // Config-service receiver (#386): reporting nodes register_cast the
     // supervisor's LogLevelPush, applied by GenServer's base handler.
@@ -88,11 +93,19 @@ int main() {
         demo_fsm.set_logger(std::move(demo_fsm_log));
     }
     demo_fsm.start_statem(timers);
+    // Resolve this node's TIPC address from THEIA_NODE_TIPC (the supervisor built
+    // it per node from executor.json, instance machine-shifted) so the binary is
+    // address-agnostic. Falls back to the compiled kTipcType/kTipcInstance for a
+    // standalone run.
+    uint32_t demo_fsm_type, demo_fsm_inst;
+    ::theia::runtime::resolve_node_tipc(DemoFsm::kNodeName,
+        DemoFsm::kTipcType, DemoFsm::kTipcInstance,
+        demo_fsm_type, demo_fsm_inst);
     {
         char _tipc[96];
         std::snprintf(_tipc, sizeof(_tipc),
                       "up — TIPC type=0x%x instance=%u; statem initial=IDLE",
-                      DemoFsm::kTipcType, DemoFsm::kTipcInstance);
+                      demo_fsm_type, demo_fsm_inst);
         demo_fsm.log().info(_tipc);
     }
     // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (supervisor sets it
@@ -101,8 +114,8 @@ int main() {
         DemoFsm::kNodeName, std::getenv("THEIA_NODE_CFG"));
 
     if (auto* demo_fsm_cfg = config_mux.bind_node(
-            demo_fsm, DemoFsm::kTipcType,
-            DemoFsm::kTipcInstance)) {
+            demo_fsm, demo_fsm_type,
+            demo_fsm_inst)) {
         config_mux.register_cast<platform_runtime_LogLevelPush>(
             demo_fsm_cfg, demo_fsm);
         // Trace control (#403): supervisor pushes TraceControlPush to flip
@@ -148,10 +161,18 @@ int main() {
         demo_gate.set_logger(std::move(demo_gate_log));
     }
     demo_gate.start();
+    // Resolve this node's TIPC address from THEIA_NODE_TIPC (the supervisor built
+    // it per node from executor.json, instance machine-shifted) so the binary is
+    // address-agnostic. Falls back to the compiled kTipcType/kTipcInstance for a
+    // standalone run.
+    uint32_t demo_gate_type, demo_gate_inst;
+    ::theia::runtime::resolve_node_tipc(DemoFsmGate::kNodeName,
+        DemoFsmGate::kTipcType, DemoFsmGate::kTipcInstance,
+        demo_gate_type, demo_gate_inst);
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
-                      DemoFsmGate::kTipcType, DemoFsmGate::kTipcInstance);
+                      demo_gate_type, demo_gate_inst);
         demo_gate.log().info(_tipc);
     }
     // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (supervisor sets it
@@ -160,8 +181,8 @@ int main() {
         DemoFsmGate::kNodeName, std::getenv("THEIA_NODE_CFG"));
 
     if (auto* demo_gate_cfg = config_mux.bind_node(
-            demo_gate, DemoFsmGate::kTipcType,
-            DemoFsmGate::kTipcInstance)) {
+            demo_gate, demo_gate_type,
+            demo_gate_inst)) {
         config_mux.register_cast<platform_runtime_LogLevelPush>(
             demo_gate_cfg, demo_gate);
         // Trace control (#403): supervisor pushes TraceControlPush to flip

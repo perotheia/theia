@@ -116,6 +116,10 @@ _PLATFORM_OPKG_ARTIFACTS = [
 
 CentralHost = MachineManifest(
     name="central",
+    # Cluster TIPC instance — central is machine 0. Every node on central binds
+    # its stable type at instance=0 (supervisor:0, shwa:0); central com addresses
+    # other machines at instance=N over the cluster-wide TIPC fabric.
+    machine_index=0,
     hardware=HardwareResource(
         cpu=CpuResource(architecture=CpuArchitecture.X86_64),
     ),
@@ -140,6 +144,9 @@ CentralHost = MachineManifest(
 
 ComputeHost = MachineManifest(
     name="compute",
+    # Cluster TIPC instance — compute is machine 1. Its supervisor binds
+    # supervisor:1, its shwa binds shwa:1; central com reaches them at instance=1.
+    machine_index=1,
     hardware=HardwareResource(
         # x86_64 for now — both demo containers are amd64 (the aarch64/rpi4
         # cross-toolchain isn't registered; dropped for the demo). Flip back to

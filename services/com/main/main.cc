@@ -14,6 +14,7 @@
 #include "TimerService.hh"
 #include "Logger.hh"     // parse_log_level / process_logger / set_process_logger
 #include "NodeAffinity.hh"  // apply_node_affinity($THEIA_NODE_CFG) per node
+#include "MachineInstance.hh"  // resolve_node_tipc($THEIA_NODE_TIPC) — per-node addr
 #include "ParamsConfig.hh"  // init_config(fc) / get_config() — static params JSON
 #include "tombstone/tombstone.h"  // install_handlers — crash → tombstone file
 
@@ -114,16 +115,25 @@ int main() {
     // exists now.
     ::theia::runtime::apply_node_affinity(com_daemon.native_handle(),
         ComDaemon::kNodeName, std::getenv("THEIA_NODE_CFG"));
+    // Resolve this node's TIPC address from the env the supervisor built from
+    // executor.json (THEIA_NODE_TIPC, instance already machine-shifted), so the
+    // BINARY is address-agnostic — same binary on every machine, the instance
+    // assigned at deploy. Falls back to the compiled kTipcType/kTipcInstance
+    // (machine-shifted) for a standalone / un-supervised run.
+    uint32_t com_daemon_type, com_daemon_inst;
+    ::theia::runtime::resolve_node_tipc(ComDaemon::kNodeName,
+        ComDaemon::kTipcType, ComDaemon::kTipcInstance,
+        com_daemon_type, com_daemon_inst);
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
-                      ComDaemon::kTipcType, ComDaemon::kTipcInstance);
+                      com_daemon_type, com_daemon_inst);
         com_daemon.log().info(_tipc);
     }
 
     if (auto* com_daemon_cfg = config_mux.bind_node(
-            com_daemon, ComDaemon::kTipcType,
-            ComDaemon::kTipcInstance)) {
+            com_daemon, com_daemon_type,
+            com_daemon_inst)) {
         config_mux.register_cast<platform_runtime_LogLevelPush>(
             com_daemon_cfg, com_daemon);
         // Trace control (#403): supervisor pushes TraceControlPush to flip
@@ -184,10 +194,19 @@ int main() {
     // exists now.
     ::theia::runtime::apply_node_affinity(com_grpc_proxy.native_handle(),
         ComGrpcProxy::kNodeName, std::getenv("THEIA_NODE_CFG"));
+    // Resolve this node's TIPC address from the env the supervisor built from
+    // executor.json (THEIA_NODE_TIPC, instance already machine-shifted), so the
+    // BINARY is address-agnostic — same binary on every machine, the instance
+    // assigned at deploy. Falls back to the compiled kTipcType/kTipcInstance
+    // (machine-shifted) for a standalone / un-supervised run.
+    uint32_t com_grpc_proxy_type, com_grpc_proxy_inst;
+    ::theia::runtime::resolve_node_tipc(ComGrpcProxy::kNodeName,
+        ComGrpcProxy::kTipcType, ComGrpcProxy::kTipcInstance,
+        com_grpc_proxy_type, com_grpc_proxy_inst);
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
-                      ComGrpcProxy::kTipcType, ComGrpcProxy::kTipcInstance);
+                      com_grpc_proxy_type, com_grpc_proxy_inst);
         com_grpc_proxy.log().info(_tipc);
     }
 
@@ -211,10 +230,19 @@ int main() {
     // exists now.
     ::theia::runtime::apply_node_affinity(trace_forwarder.native_handle(),
         TraceForwarder::kNodeName, std::getenv("THEIA_NODE_CFG"));
+    // Resolve this node's TIPC address from the env the supervisor built from
+    // executor.json (THEIA_NODE_TIPC, instance already machine-shifted), so the
+    // BINARY is address-agnostic — same binary on every machine, the instance
+    // assigned at deploy. Falls back to the compiled kTipcType/kTipcInstance
+    // (machine-shifted) for a standalone / un-supervised run.
+    uint32_t trace_forwarder_type, trace_forwarder_inst;
+    ::theia::runtime::resolve_node_tipc(TraceForwarder::kNodeName,
+        TraceForwarder::kTipcType, TraceForwarder::kTipcInstance,
+        trace_forwarder_type, trace_forwarder_inst);
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
-                      TraceForwarder::kTipcType, TraceForwarder::kTipcInstance);
+                      trace_forwarder_type, trace_forwarder_inst);
         trace_forwarder.log().info(_tipc);
     }
 
@@ -238,10 +266,19 @@ int main() {
     // exists now.
     ::theia::runtime::apply_node_affinity(log_forwarder.native_handle(),
         LogForwarder::kNodeName, std::getenv("THEIA_NODE_CFG"));
+    // Resolve this node's TIPC address from the env the supervisor built from
+    // executor.json (THEIA_NODE_TIPC, instance already machine-shifted), so the
+    // BINARY is address-agnostic — same binary on every machine, the instance
+    // assigned at deploy. Falls back to the compiled kTipcType/kTipcInstance
+    // (machine-shifted) for a standalone / un-supervised run.
+    uint32_t log_forwarder_type, log_forwarder_inst;
+    ::theia::runtime::resolve_node_tipc(LogForwarder::kNodeName,
+        LogForwarder::kTipcType, LogForwarder::kTipcInstance,
+        log_forwarder_type, log_forwarder_inst);
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
-                      LogForwarder::kTipcType, LogForwarder::kTipcInstance);
+                      log_forwarder_type, log_forwarder_inst);
         log_forwarder.log().info(_tipc);
     }
 

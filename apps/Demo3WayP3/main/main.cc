@@ -11,6 +11,7 @@
 #include "TimerService.hh"
 #include "Logger.hh"     // parse_log_level / process_logger / set_process_logger
 #include "NodeAffinity.hh"  // apply_node_affinity($THEIA_NODE_CFG) per node
+#include "MachineInstance.hh"  // resolve_node_tipc($THEIA_NODE_TIPC) — per-node addr
 #include "ParamsConfig.hh"  // init_config(fc) / get_config() — static params JSON
 #include "tombstone/tombstone.h"  // install_handlers — crash → tombstone file
 
@@ -114,16 +115,25 @@ int main() {
     // exists now.
     ::theia::runtime::apply_node_affinity(incrementer.native_handle(),
         IncrementerNode::kNodeName, std::getenv("THEIA_NODE_CFG"));
+    // Resolve this node's TIPC address from the env the supervisor built from
+    // executor.json (THEIA_NODE_TIPC, instance already machine-shifted), so the
+    // BINARY is address-agnostic — same binary on every machine, the instance
+    // assigned at deploy. Falls back to the compiled kTipcType/kTipcInstance
+    // (machine-shifted) for a standalone / un-supervised run.
+    uint32_t incrementer_type, incrementer_inst;
+    ::theia::runtime::resolve_node_tipc(IncrementerNode::kNodeName,
+        IncrementerNode::kTipcType, IncrementerNode::kTipcInstance,
+        incrementer_type, incrementer_inst);
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
-                      IncrementerNode::kTipcType, IncrementerNode::kTipcInstance);
+                      incrementer_type, incrementer_inst);
         incrementer.log().info(_tipc);
     }
 
     if (auto* incrementer_cfg = config_mux.bind_node(
-            incrementer, IncrementerNode::kTipcType,
-            IncrementerNode::kTipcInstance)) {
+            incrementer, incrementer_type,
+            incrementer_inst)) {
         config_mux.register_cast<platform_runtime_LogLevelPush>(
             incrementer_cfg, incrementer);
         // Trace control (#403): supervisor pushes TraceControlPush to flip

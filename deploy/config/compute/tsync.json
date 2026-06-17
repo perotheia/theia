@@ -1,0 +1,10 @@
+{
+  "nodes": {
+    "gpsd": {
+      "enabled": false
+    },
+    "ptp4l": {
+      "args": "-i ptpIf0 -s -m -q"
+    }
+  }
+}

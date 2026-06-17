@@ -553,6 +553,14 @@ def cmd_install(args: list[str]) -> int:
     # Rig attr: $THEIA_RIG if set, else let the resolver auto-rank (*Software /
     # *Rig). No hardcoded "CentralRig" — a consuming workspace names its own.
     rig = os.environ.get("THEIA_RIG")
+    # Multi-machine fallback: installing a NON-central machine (e.g. compute) needs
+    # the full-vehicle spec that actually has that machine. The auto-ranker picks
+    # the alphabetically-first *Software (CentralSoftware), which has only central
+    # → an empty tree for `--machine compute`. When the zonal rig module is in play
+    # and the target isn't central, default to the all-machines spec
+    # (THEIA_ZONAL_RIG / DemoSoftware). central keeps auto-ranking (back-compat).
+    if rig is None and machine not in (None, "central"):
+        rig = os.environ.get("THEIA_ZONAL_RIG", _ZONAL_RIG_ATTR)
     manifest_root = WORKSPACE / "install" / "manifest"
 
     # Name-independent rig discovery — apps.manifest.rig in the monorepo,
@@ -664,15 +672,31 @@ def cmd_install(args: list[str]) -> int:
     #     params-less FC emits an empty {nodes:{}} (harmless; lookups default).
     cfg_dir = dest / "config"
     cfg_dir.mkdir(parents=True, exist_ok=True)
+    # Per-machine override source: deploy/config/<machine>/<fc>.json (partial,
+    # mirrors the gen-params shape: {"nodes":{"<node>":{"<key>":<val>}}}). After
+    # gen-params writes the machine-generic default, deep-merge the hand-written
+    # override (if any) onto it so each machine gets its own profile (e.g. tsync
+    # central=GPS-grandmaster vs compute=PTP-slave) without forking the .art.
+    import json as _json
+    override_root = WORKSPACE / "deploy" / "config" / machine
     for fc, target in binaries.items():
         art = _fc_art_path(fc, target)
         if art is None:
             continue
+        out_json = cfg_dir / f"{fc}.json"
         if (rc := _run([
             "artheia", "gen-params", str(art),
-            "--out", str(cfg_dir / f"{fc}.json"),
+            "--out", str(out_json),
         ])) != 0:
             return rc
+        ov_path = override_root / f"{fc}.json"
+        if ov_path.is_file():
+            base = _json.loads(out_json.read_text())
+            override = _json.loads(ov_path.read_text())
+            merged = _deep_merge(base, override)
+            out_json.write_text(_json.dumps(merged, indent=2) + "\n")
+            rel = ov_path.relative_to(WORKSPACE)
+            print(f"applied per-machine config override {rel}")
     print(f"staged {cfg_dir}/<fc>.json (static params)")
 
     # 4. Stage binaries + setcap. A binary's source is its prebuilt path (deb
@@ -705,6 +729,24 @@ def cmd_install(args: list[str]) -> int:
         "-e", manifest,
         *[a for a in args if a.startswith("-")],
     ])
+
+
+def _deep_merge(base: dict, override: dict) -> dict:
+    """Recursively merge *override* onto *base*, returning *base* (mutated).
+
+    Dict values are merged key-by-key; any non-dict value in *override*
+    (scalar, list) REPLACES the corresponding value in *base*. This is the
+    per-machine config override semantics: the override carries only the keys
+    it wants to change (e.g. nodes.ptp4l.args), leaving every untouched default
+    (e.g. nodes.ptp4l.enabled) intact. stdlib-only — no third-party deepmerge.
+    """
+    for key, ov_val in override.items():
+        base_val = base.get(key)
+        if isinstance(base_val, dict) and isinstance(ov_val, dict):
+            _deep_merge(base_val, ov_val)
+        else:
+            base[key] = ov_val
+    return base
 
 
 def _stage_local_no_puppet(dest: Path, supervisor_src: str,

@@ -138,6 +138,14 @@ CentralHost = MachineManifest(
     os_packages=[
         OsPackage(name="etcd-server", source="apt"),
         OsPackage(name="libsystemd0", source="apt"),
+        # Time-sync daemons forked by tsync's prebuilt Providers. central is the
+        # GPS-disciplined PTP grandmaster, so it needs the full set:
+        #   linuxptp → ptp4l (PTP) + phc2sys (PHC↔system clock)
+        #   chrony   → chronyd  (NTP fallback / system-clock discipline)
+        #   gpsd     → gpsd     (GPS receiver → the GM time source)
+        OsPackage(name="linuxptp", source="apt"),
+        OsPackage(name="chrony", source="apt"),
+        OsPackage(name="gpsd", source="apt"),
     ],
     opkg_artifacts=list(_PLATFORM_OPKG_ARTIFACTS),
 )
@@ -163,6 +171,11 @@ ComputeHost = MachineManifest(
     # compute connects to central's etcd; it does not run its own.
     os_packages=[
         OsPackage(name="libsystemd0", source="opkg"),
+        # compute is the PTP slave: ptp4l -s syncs FROM central over Ethernet.
+        # It needs linuxptp (ptp4l + phc2sys) + chrony, but NOT gpsd — no GPS
+        # receiver on the accelerator box; its time source is central's PTP.
+        OsPackage(name="linuxptp", source="apt"),
+        OsPackage(name="chrony", source="apt"),
     ],
     opkg_artifacts=list(_PLATFORM_OPKG_ARTIFACTS),
 )
@@ -323,8 +336,23 @@ _FC_HOST_MACHINE = {
 }
 _DEFAULT_FC_HOST_MACHINE = CentralHost.name
 
+# FCs that run on EVERY target machine (an instance per machine), not pinned to
+# one. tsync is the time hierarchy: central = GPS-disciplined PTP grandmaster,
+# compute = PTP slave — the SAME FC binary on both, with a per-machine config
+# override (deploy/config/<machine>/tsync.json) selecting the GM vs slave profile.
+#
+# `remote_machine` is single-valued per ServiceInstance, so "runs on both" is
+# expressed as TWO instances of the same-named service — one pinned to each
+# machine. The strict dist_manifest filter (service.json gets only instances
+# whose remote_machine == that machine) then surfaces tsync on BOTH machines'
+# service.json; the per-machine supervisor trees (CentralSoftware /
+# ComputeSoftware, each built standalone with its OWN children list) list tsync
+# under srv_sup on both. See _COMPUTE_FCS / _BOTH_FCS below + the README at
+# deploy/config/.
+_BOTH_FCS = {"tsync"}
+
 for _sm in DemoRig.service_manifests:
-    _sm.instances = [
+    _pinned = [
         dataclasses.replace(
             _i,
             remote_machine=_FC_HOST_MACHINE.get(
@@ -333,6 +361,15 @@ for _sm in DemoRig.service_manifests:
         )
         for _i in _sm.instances
     ]
+    # For every FC that runs on both machines, add a SECOND instance pinned to
+    # compute (the default pin above placed the first on central). The two
+    # instances differ only by remote_machine (+ instance_id for uniqueness).
+    _extra = [
+        dataclasses.replace(_i, remote_machine=ComputeHost.name, instance_id=1)
+        for _i in _sm.instances
+        if _i.name in _BOTH_FCS
+    ]
+    _sm.instances = _pinned + _extra
 
 # ---------------------------------------------------------------------------
 # Pin each Process to its host Machine via ProcessToMachineMapping.
@@ -526,19 +563,49 @@ from services.manifest.service import (  # noqa: E402
 )
 
 # What moves off central onto compute.
-_COMPUTE_FCS = {"shwa"}      # services moved to compute
+_COMPUTE_FCS = {"shwa"}      # services moved to compute (compute-ONLY)
 _COMPUTE_APPS = {"p3"}       # demo apps moved to compute
 
+# _BOTH_FCS (= {"tsync"}, defined above) run on EVERY machine — they stay on
+# central AND ALSO land on compute. Unlike _COMPUTE_FCS (a move/exclusion set),
+# these are additive: central keeps them, compute gains them. So the compute FC
+# slice is (compute-only ∪ both), while central keeps everything not strictly
+# compute-only (which already includes the both-FCs).
+_COMPUTE_FCS_ALL = _COMPUTE_FCS | _BOTH_FCS
+
 # --- partition the shared element lists by machine (reference-move) --------
+# central: everything not strictly compute-only (so tsync, a _BOTH_FC, stays).
 _central_fc_components = [c for c in _FC_COMPONENTS if c.name not in _COMPUTE_FCS]
 _central_fc_processes = [p for p in _FC_PROCESSES if p.name not in _COMPUTE_FCS]
-_compute_fc_components = [c for c in _FC_COMPONENTS if c.name in _COMPUTE_FCS]
-_compute_fc_processes = [p for p in _FC_PROCESSES if p.name in _COMPUTE_FCS]
+# compute: the compute-only FCs PLUS the run-everywhere FCs (tsync).
+_compute_fc_components = [c for c in _FC_COMPONENTS if c.name in _COMPUTE_FCS_ALL]
+_compute_fc_processes = [p for p in _FC_PROCESSES if p.name in _COMPUTE_FCS_ALL]
 
 _central_app_components = [c for c in DEMO_BINARIES if c.name not in _COMPUTE_APPS]
 _central_app_processes = [p for p in DEMO_PROCESSES if p.name not in _COMPUTE_APPS]
 _compute_app_components = [c for c in DEMO_BINARIES if c.name in _COMPUTE_APPS]
 _compute_app_processes = [p for p in DEMO_PROCESSES if p.name in _COMPUTE_APPS]
+
+
+def _service_manifests_for(machine: str) -> list:
+    """The service_manifests carrying only the ServiceInstances pinned to
+    *machine* (remote_machine == machine). The two-instance _BOTH_FCS (tsync)
+    surface on BOTH machines this way — each machine keeps its own instance.
+
+    A standalone per-machine spec must carry only its own instances: the
+    supervisor-tree slicer resolves a process's host from
+    ServiceInstance.remote_machine (first match), so a machine that also held
+    the OTHER machine's instance would mis-resolve and drop the FC's leaf.
+    """
+    out = []
+    for _sm in DemoRig.service_manifests:
+        local = [_i for _i in _sm.instances if _i.remote_machine == machine]
+        out.append(dataclasses.replace(_sm, instances=local))
+    return out
+
+
+_central_service_manifests = _service_manifests_for(CentralHost.name)
+_compute_service_manifests = _service_manifests_for(ComputeHost.name)
 
 _central_app_shorts = [c.name for c in _central_app_components]
 
@@ -579,7 +646,8 @@ _compute_supervisors = [
     SupervisorNode(
         name="srv_sup",
         strategy=RestartStrategy.ONE_FOR_ONE,
-        children=sorted(_COMPUTE_FCS),
+        # compute-only FCs (shwa) + run-everywhere FCs (tsync, the PTP slave).
+        children=sorted(_COMPUTE_FCS_ALL),
     ),
     SupervisorNode(
         name="app_sup",
@@ -615,7 +683,7 @@ CentralSoftware: SoftwareSpecification = SoftwareSpecification(
         Append(p) for p in (_central_fc_processes + _central_app_processes)
     }),
     service_manifests=cast(set[SetTransformTypes], {
-        Append(_sm) for _sm in DemoRig.service_manifests
+        Append(_sm) for _sm in _central_service_manifests
     }),
     supervisors=cast(set[SetTransformTypes], {
         Append(s) for s in _central_supervisors
@@ -636,7 +704,7 @@ ComputeSoftware: SoftwareSpecification = SoftwareSpecification(
         Append(p) for p in (_compute_fc_processes + _compute_app_processes)
     }),
     service_manifests=cast(set[SetTransformTypes], {
-        Append(_sm) for _sm in DemoRig.service_manifests
+        Append(_sm) for _sm in _compute_service_manifests
     }),
     supervisors=cast(set[SetTransformTypes], {
         Append(s) for s in _compute_supervisors

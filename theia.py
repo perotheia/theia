@@ -347,12 +347,35 @@ def cmd_start(args: list[str]) -> int:
         if a == "--instance" and i + 1 < len(args):
             instance = args[i + 1]
 
+    # Machine instance = the TIPC instance every node on this machine binds
+    # (central=0, compute=1, …). Resolve it from this machine's machine.json
+    # (Machine.machine_index), so the supervisor binds its ctl at supervisor:N and
+    # sets THEIA_NODE_TIPC per child shifted to N. An explicit --instance arg wins;
+    # else machine.json's index; else 0 (single-machine / legacy — unchanged).
+    machine_instance = instance
+    if instance == "0":  # no explicit override → look up the manifest
+        mname = dest.name
+        for mj in (WORKSPACE / "install" / "manifest" / mname / "machine.json",
+                   dest / "machine.json"):
+            try:
+                import json as _json
+                _m = _json.loads(mj.read_text())
+                idx = (_m.get("machine") or _m).get("machine_index")
+                if idx is not None:
+                    machine_instance = str(int(idx))
+                    break
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+
     log = dest / "supervisor.log"
     env = {
         **os.environ,
         "THEIA_SUPERVISOR_MANIFEST": "executor.json",
         "THEIA_ROOT_DIR": ".",
         "THEIA_SUPERVISOR_INSTANCE": instance,
+        # The cluster machine index — the supervisor reads it (effective_instance
+        # for its own ctl bind + the per-child THEIA_NODE_TIPC instance shift).
+        "THEIA_MACHINE_INSTANCE": machine_instance,
     }
     # Bundled shared libs the FCs link at runtime (per → libetcd-cpp-api.so). In
     # sibling-source mode the .so lives under THEIA_ROOT (not on the loader path
@@ -377,8 +400,8 @@ def cmd_start(args: list[str]) -> int:
         start_new_session=True,
     )
     pidfile.write_text(str(proc.pid) + "\n")
-    print(f"theia: supervisor up (pid {proc.pid}, instance {instance}) — "
-          f"log: {log}", file=sys.stderr)
+    print(f"theia: supervisor up (pid {proc.pid}, instance {instance}, "
+          f"machine {machine_instance}) — log: {log}", file=sys.stderr)
     # Brief liveness check: if it died immediately (bad manifest / port in use),
     # surface the tail rather than leave a stale pidfile.
     import time

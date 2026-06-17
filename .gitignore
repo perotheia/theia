@@ -121,3 +121,9 @@ core.*
 # (NOT a submodule, NOT mirrored to GitHub). Owned by its own git.
 /docs/
 services/idsm/bpf/vmlinux.h
+
+# Vendored puppetlabs-stdlib (parsejson/ensure_packages for puppet 5.5 in the
+# docker base image). 2.8M/565 files — fetched at build time, not committed.
+# Reproduce: puppet module install puppetlabs-stdlib --version 4.25.1 \
+#   --modulepath deploy/puppet/modules
+/deploy/puppet/modules/stdlib/

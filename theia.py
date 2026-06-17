@@ -749,6 +749,56 @@ def _deep_merge(base: dict, override: dict) -> dict:
     return base
 
 
+def _emit_machine_config(machine: str, mdir: Path) -> int:
+    """Emit per-FC static params into <mdir>/config/<fc>.json for one machine.
+
+    The deploy counterpart of cmd_install's step 3b: for every buildable FC in
+    THIS machine's application.json, run `gen-params <fc>.art` to write the
+    machine-generic default, then deep-merge the per-machine override
+    deploy/config/<machine>/<fc>.json (if present) on top. The result is what
+    orchestration.pp copies into /opt/theia/config/ so the containerized FC
+    boots with its REAL profile (e.g. tsync central=GPS-grandmaster vs
+    compute=PTP-slave) — not just the .art slave default.
+
+    Without this, the docker flow laid down only executor.json + binaries; the
+    per-machine tsync config (deploy/config/<machine>/tsync.json) never reached
+    the container, so both machines ran the .art slave profile. mdir is the
+    machine's manifest dir (dist/manifest/<machine>)."""
+    import json as _json
+    app = mdir / "application.json"
+    if not app.is_file():
+        return 0
+    data = _json.loads(app.read_text())
+    binaries: dict[str, str] = {}
+    for a in data.get("applications", []):
+        for c in a.get("components", []):
+            if not c.get("bazel_buildable", True):
+                continue
+            name, target = c.get("name"), c.get("bazel_target")
+            if name and target and name != "supervisor":
+                binaries[name] = target
+    cfg_dir = mdir / "config"
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    override_root = WORKSPACE / "deploy" / "config" / machine
+    for fc, target in binaries.items():
+        art = _fc_art_path(fc, target)
+        if art is None:
+            continue
+        out_json = cfg_dir / f"{fc}.json"
+        if (rc := _run([
+            "artheia", "gen-params", str(art), "--out", str(out_json),
+        ])) != 0:
+            return rc
+        ov_path = override_root / f"{fc}.json"
+        if ov_path.is_file():
+            base = _json.loads(out_json.read_text())
+            merged = _deep_merge(base, _json.loads(ov_path.read_text()))
+            out_json.write_text(_json.dumps(merged, indent=2) + "\n")
+            print(f"  {machine}: applied per-machine config override "
+                  f"{ov_path.relative_to(WORKSPACE)}", file=sys.stderr)
+    return 0
+
+
 def _stage_local_no_puppet(dest: Path, supervisor_src: str,
                            binaries: dict[str, str]) -> int:
     """Copy the supervisor + child binaries into install/<machine>/ and setcap
@@ -869,6 +919,16 @@ def cmd_manifest(args: list[str]) -> int:
         return rc
     # Read back machines.json + drop the bazel glue for `theia dist`.
     machines = json.loads((out / "machines.json").read_text())["machines"]
+    # Per-machine static FC config (gen-params default + deep-merged
+    # deploy/config/<machine>/<fc>.json override) into <machine>/config/. The
+    # docker orchestration copies this into /opt/theia/config/ so each FC boots
+    # its REAL per-machine profile (the tsync GM/slave split, …). TARGET hosts
+    # only — admin/host has no supervisor tree.
+    for m in machines:
+        if m.get("kind") == "host":
+            continue
+        if (rc := _emit_machine_config(m["name"], out / m["name"])) != 0:
+            return rc
     _emit_manifest_build_files(out, machines)
     print(f"theia manifest: {len(machines)} machines → {out}/ (+ BUILD glue)",
           file=sys.stderr)

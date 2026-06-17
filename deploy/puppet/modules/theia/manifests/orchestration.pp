@@ -21,28 +21,37 @@ class theia::orchestration (
     String $tdb_bin      = "/opt/theia/bin/tdb",
 ) {
     $executor_src = "${manifest_dir}/${machine}/executor.json"
-    $ipk_path     = "${ipk_dir}/${machine}.ipk"
+    # `theia dist` builds <machine>.deb by default (the .ipk format is the opkg
+    # hatch). Both are the SAME ar archive — dpkg installs either. Prefer the
+    # .deb (the default `theia dist` output), fall back to .ipk for an opkg build.
+    $deb_path = "${ipk_dir}/${machine}.deb"
+    $ipk_path = "${ipk_dir}/${machine}.ipk"
 
-    notice("theia::orchestration: ${machine} ← ${ipk_path} + real executor.json")
+    notice("theia::orchestration: ${machine} ← ${deb_path}|${ipk_path} + real executor.json")
 
     file { ['/opt/theia', '/opt/theia/config']:
         ensure => directory,
         mode   => '0755',
     }
 
-    # ----- 1. Install the per-machine .ipk bundle -------------------------
+    # ----- 1. Install the per-machine bundle (.deb preferred, .ipk fallback) --
     # The bundle drops every binary (supervisor + FCs) at /opt/theia/bin/<name>.
-    # dpkg handles the opkg ar+tar.gz archive; switch to provider opkg on Yocto.
-    package { "theia-${machine}":
-        ensure   => 'latest',
-        provider => 'dpkg',
-        source   => $ipk_path,
+    # dpkg handles the ar+tar.gz archive (same format as opkg's .ipk). An explicit
+    # exec (vs the package{} type) is robust against puppet's dpkg version-compare
+    # on a re-converge and lets us pick whichever artifact `theia dist` produced.
+    # PATH MUST include the sbin dirs: dpkg's postinst tooling shells out to
+    # `ldconfig` (/usr/sbin) + `start-stop-daemon` (/usr/sbin); a /usr/bin-only
+    # PATH makes dpkg abort with "expected programs not found in PATH".
+    exec { "theia::orchestration::install::${machine}":
+        command   => "/bin/sh -c 'f=\$( [ -f ${deb_path} ] && echo ${deb_path} || echo ${ipk_path} ); dpkg --install --force-overwrite \"\$f\"'",
+        path      => ['/usr/local/sbin', '/usr/local/bin', '/usr/sbin', '/usr/bin', '/sbin', '/bin'],
+        logoutput => true,
     }
 
     # ----- 2. setcap (caps clear on a fresh binary copy) ------------------
     class { 'theia::postinstall':
         root    => '/opt/theia/bin',
-        require => Package["theia-${machine}"],
+        require => Exec["theia::orchestration::install::${machine}"],
     }
 
     # ----- 3. REAL executor.json (the supervisor tree) --------------------
@@ -53,8 +62,27 @@ class theia::orchestration (
         ensure  => 'file',
         mode    => '0644',
         source  => $executor_src,
-        require => [File['/opt/theia/config'], Package["theia-${machine}"]],
+        require => [File['/opt/theia/config'], Exec["theia::orchestration::install::${machine}"]],
         notify  => Exec['theia-supervisor-reload'],
+    }
+
+    # ----- 3b. Per-FC static config (the per-machine profiles) ------------
+    # `theia manifest` emitted <machine>/config/<fc>.json (gen-params default +
+    # deep-merged deploy/config/<machine>/<fc>.json override). Copy the whole dir
+    # into /opt/theia/config/ so each FC's runtime config singleton resolves
+    # $THEIA_CONFIG_DIR/<fc>.json (THEIA_CONFIG_DIR=config under THEIA_ROOT_DIR=
+    # /opt/theia → /opt/theia/config/<fc>.json). THIS is what lands the tsync
+    # GM-on-central / slave-on-compute split in the container; without it the FC
+    # falls back to the .art slave default everywhere. recurse, but DON'T purge
+    # (executor.json above lives here too). An absent source dir is tolerated
+    # (older manifests with no config/) via the test-guarded exec, not file{}.
+    $config_src = "${manifest_dir}/${machine}/config"
+    exec { "theia::orchestration::config::${machine}":
+        command   => "/bin/sh -c 'cp -f ${config_src}/*.json /opt/theia/config/ 2>/dev/null || true'",
+        onlyif    => "/bin/sh -c 'ls ${config_src}/*.json >/dev/null 2>&1'",
+        path      => ['/usr/bin', '/bin'],
+        require   => File['/opt/theia/config'],
+        logoutput => true,
     }
 
     # ----- 4. Reload the supervisor (no blanket restart) ------------------

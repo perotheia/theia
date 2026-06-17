@@ -661,17 +661,24 @@ void ComGrpcProxy::do_start() {
     }
 
     // per (persistency) proxy link — RemoteRef → PerManager (0x80010016).
-    // Best-effort like the supervisor link: PerView RPCs return UNAVAILABLE
-    // until per is reachable. (per may be down or absent on a machine.)
-    if (!services_com::PerLink::instance().start()) {
-        std::fprintf(stderr,
-                     "[%s] WARN: persistency link (per 0x80010016) not "
-                     "reachable; PerView RPCs return UNAVAILABLE\n", kNodeName);
-    } else {
-        std::fprintf(stderr,
-                     "[%s] persistency link up (RemoteRef 0x80010016/0)\n",
-                     kNodeName);
-    }
+    // Best-effort + OFF the do_start critical path: PerLink::start() does a
+    // blocking TIPC connect (up to its retry budget, and a TIPC connect to a
+    // not-yet-accepting peer can stall longer), which would HOLD UP the :7700
+    // gRPC bind below — the whole SupervisorView/PerView server. per is optional
+    // (down/absent on a machine, or slow to bind), so connect it on a DETACHED
+    // thread; PerView RPCs return UNAVAILABLE until it links. The first
+    // PerView call after it links works; no com restart needed.
+    std::thread([] {
+        if (services_com::PerLink::instance().start())
+            std::fprintf(stderr,
+                         "[%s] persistency link up (RemoteRef 0x80010016/0)\n",
+                         kNodeName);
+        else
+            std::fprintf(stderr,
+                         "[%s] WARN: persistency link (per 0x80010016) not "
+                         "reachable; PerView RPCs return UNAVAILABLE\n",
+                         kNodeName);
+    }).detach();
 
     // Load the cluster machine manifest (index→name) once, up front, so the
     // first AccelSample's machine_name lookup is warm and the load is logged at

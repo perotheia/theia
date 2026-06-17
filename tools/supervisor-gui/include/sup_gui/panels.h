@@ -308,6 +308,12 @@ public:
     // Update one row's state. Called by MainFrame's status timer.
     void set_state(const std::string& machine_name, MachineConnState s);
 
+    // Add one machine row if it isn't already listed (idempotent). Stage 4:
+    // the central aggregator reveals peer machines (mN/) in its stream; the GUI
+    // adds them here as they appear, without a per-machine gRPC connection.
+    void add_machine(const std::string& name, const std::string& address,
+                     MachineConnState s);
+
     // Currently-focused (selected) machine, or empty when no row
     // is selected.
     std::string focused() const;

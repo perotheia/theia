@@ -97,6 +97,20 @@ void MachinesPanel::set_machines(std::vector<MachineRow> rows) {
 }
 
 
+void MachinesPanel::add_machine(const std::string& name,
+                                const std::string& address,
+                                MachineConnState s) {
+    for (const auto& r : rows_)
+        if (r.name == name) return;          // already listed — idempotent
+    MachineRow r;
+    r.name    = name;
+    r.address = address;
+    r.state   = s;
+    rows_.push_back(std::move(r));
+    redraw();
+}
+
+
 void MachinesPanel::set_state(const std::string& machine_name,
                                 MachineConnState s) {
     bool changed = false;

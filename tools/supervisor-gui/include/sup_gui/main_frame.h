@@ -15,6 +15,7 @@
 #include <atomic>
 #include <chrono>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -53,6 +54,12 @@ private:
                                  uint16_t tag,
                                  std::string payload);
 
+    // Stage 4 demux helpers (see main_frame.cpp): fan one frame out to every
+    // panel, and register a newly-seen machine in the left panel.
+    void dispatch_to_panels(const std::string& machine_name,
+                            uint16_t tag, const std::string& payload);
+    void note_machine(const std::string& machine_name);
+
     wxNotebook*              notebook_{nullptr};
     MachinesPanel*           machines_panel_{nullptr};
     SystemPanel*             system_panel_{nullptr};
@@ -65,6 +72,14 @@ private:
 
     std::vector<std::unique_ptr<GrpcClient>> clients_;
     std::atomic<std::chrono::steady_clock::rep> last_heartbeat_{0};
+
+    // Stage 4 — the GUI connects to ONE com (central, the cluster aggregator).
+    // local_name_ is that machine's name (the instance-0 / unprefixed nodes in
+    // the aggregated TreeSnapshot). seen_machines_ accumulates every machine the
+    // aggregated stream reveals (local + each mN/ peer) so the left panel
+    // auto-populates without a per-machine connection.
+    std::string                  local_name_;
+    std::set<std::string>        seen_machines_;
 
     wxTimer*                 status_timer_{nullptr};
 

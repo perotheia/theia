@@ -60,6 +60,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -348,15 +349,19 @@ public:
                             system_supervisor::ControlReply* reply) override {
         const auto& gs = req->spec();
         services_com::SupChildSpec spec;
-        spec.name              = gs.name();
-        spec.parent_supervisor = gs.parent_supervisor();
+        // Route to the machine that owns the new child (mN/ on the name); the
+        // parent_supervisor shares the same machine, so strip its prefix too.
+        std::string parent_bare;
+        auto& link = route_target(gs.name(), spec.name);
+        (void)route_target(gs.parent_supervisor(), parent_bare);
+        spec.parent_supervisor = parent_bare;
         spec.restart           = gs.restart();
         spec.shutdown          = gs.shutdown();
         spec.type              = gs.type();
         for (const auto& a : gs.start_cmd()) spec.start_cmd.push_back(a);
         for (const auto& m : gs.modules())   spec.modules.push_back(m);
         services_com::SupReply r;
-        if (!services_com::SupLink::instance().start_child(spec, r))
+        if (!link.start_child(spec, r))
             return unavailable();
         fill(reply, r);
         return grpc::Status::OK;
@@ -383,9 +388,10 @@ public:
             grpc::ServerContext*,
             const services::com::LogLevelCall* req,
             system_supervisor::ControlReply* reply) override {
+        std::string bare;
+        auto& link = route_target(req->target_node(), bare);
         services_com::SupReply r;
-        if (!services_com::SupLink::instance().configure_log_level(
-                req->target_node(), req->level(), r))
+        if (!link.configure_log_level(bare, req->level(), r))
             return unavailable();
         fill(reply, r);
         return grpc::Status::OK;
@@ -399,9 +405,10 @@ public:
             grpc::ServerContext*,
             const services::com::TraceConfigRequest* req,
             system_supervisor::ControlReply* reply) override {
+        std::string bare;
+        auto& link = route_target(req->target_node(), bare);
         services_com::SupReply r;
-        if (!services_com::SupLink::instance().configure_trace(
-                req->target_node(), req->msg_type(), req->enabled(),
+        if (!link.configure_trace(bare, req->msg_type(), req->enabled(),
                 req->kind(), r))   // #403: trace-kind selector → node
             return unavailable();
         fill(reply, r);
@@ -469,8 +476,10 @@ public:
             grpc::ServerContext*,
             const services::com::GetTombstoneCall* req,
             services::com::GetTombstoneReply* out) override {
+        std::string bare;
+        auto& link = route_target(req->child_name(), bare);
         services_com::SupReply r;
-        if (!services_com::SupLink::instance().get_tombstone(req->child_name(), r))
+        if (!link.get_tombstone(bare, r))
             return unavailable();
         out->set_found(r.tomb_found);
         out->set_path(r.tomb_path);
@@ -485,6 +494,34 @@ private:
         return grpc::Status(grpc::StatusCode::UNAVAILABLE,
                             "supervisor control link unavailable / timeout");
     }
+    // Route a control op to the supervisor that OWNS the target. The aggregated
+    // tree tags non-local nodes "mN/<name>" (Stage 3); a control op on such a
+    // node must reach machine N's supervisor (SupLink::for_instance(N)), NOT the
+    // local one. Strip the prefix → (link, bare name). No prefix → instance 0
+    // (the local supervisor, unchanged). A real node name never contains '/'.
+    static services_com::SupLink& route_target(const std::string& target,
+                                               std::string& bare) {
+        if (target.size() > 1 && target[0] == 'm') {
+            auto slash = target.find('/');
+            if (slash != std::string::npos && slash >= 1) {
+                bool digits = true;
+                for (size_t i = 1; i < slash; ++i)
+                    if (!std::isdigit((unsigned char)target[i])) { digits = false; break; }
+                if (digits) {
+                    uint32_t inst = (uint32_t)std::strtoul(
+                        target.substr(1, slash - 1).c_str(), nullptr, 10);
+                    bare = target.substr(slash + 1);
+                    auto& link = services_com::SupLink::for_instance(inst);
+                    // Lazily connect a peer link the first time a control op
+                    // targets it (tree fan-out may not have touched it yet).
+                    if (!link.connected()) link.start(/*timeout_ms=*/1500);
+                    return link;
+                }
+            }
+        }
+        bare = target;
+        return services_com::SupLink::instance();   // local (instance 0)
+    }
     static void fill(::system_supervisor::ControlReply* out,
                      const services_com::SupReply& r) {
         out->set_status(r.status);
@@ -495,8 +532,10 @@ private:
     }
     grpc::Status name_op(uint32_t op_kind, const std::string& name,
                          ::system_supervisor::ControlReply* reply) {
+        std::string bare;
+        auto& link = route_target(name, bare);     // mN/ → that machine's sup
         services_com::SupReply r;
-        if (!services_com::SupLink::instance().name_op(op_kind, name, r))
+        if (!link.name_op(op_kind, bare, r))
             return unavailable();
         fill(reply, r);
         return grpc::Status::OK;

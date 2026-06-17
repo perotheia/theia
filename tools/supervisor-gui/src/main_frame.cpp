@@ -146,7 +146,7 @@ MainFrame::MainFrame(std::vector<MachineEndpoint> machines)
 
         auto* machines_menu = new wxMenu();
         machines_menu->Append(ID_MENU_CONNECT_HOST,
-                              "&Connect…\tCtrl+N",
+                              "&Connect...\tCtrl+N",
                               "Connect to a com aggregator at host:port "
                               "(switches the hub)");
         machines_menu->AppendSeparator();
@@ -193,7 +193,7 @@ MainFrame::MainFrame(std::vector<MachineEndpoint> machines)
 
     // --- status bar (3 fields: connected count + focused machine + hb age)
     CreateStatusBar(3);
-    SetStatusText("starting…", 0);
+    SetStatusText("starting...", 0);
     SetStatusText("",          1);
     SetStatusText("",          2);
 
@@ -417,8 +417,8 @@ void MainFrame::switch_hub(const std::string& host_port) {
             post_frame_from_thread(mn, tag, std::move(payload));
         }));
     clients_.back()->start();
-    SetStatusText(wxString::Format("connecting to %s…", host_port.c_str()), 0);
-    wxLogStatus(this, "Hub → %s", host_port.c_str());
+    SetStatusText(wxString::Format("connecting to %s...", host_port.c_str()), 0);
+    wxLogStatus(this, "Hub -> %s", host_port.c_str());
 }
 
 GrpcClient* MainFrame::client_for_focus() {
@@ -612,7 +612,7 @@ void MainFrame::on_menu(wxCommandEvent& evt) {
             wxTextEntryDialog dlg(this,
                 "Connect to a com aggregator (host:port).\n"
                 "The hub aggregates its whole cluster; the GUI demuxes per machine.",
-                "Connect…", def);
+                "Connect...", def);
             if (dlg.ShowModal() != wxID_OK) return;
             std::string hp = dlg.GetValue().Trim().Trim(false).ToStdString();
             if (hp.empty()) return;

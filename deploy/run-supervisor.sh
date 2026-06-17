@@ -62,6 +62,23 @@ if [[ -f "$_exec_json" ]]; then
     log "logger policy=${THEIA_LOGGER_POLICY} (from manifest)"
 fi
 
+# This machine's CLUSTER INDEX (central=0, compute=1) — the TIPC INSTANCE every
+# node on this machine binds: a service has a stable TIPC type and a per-machine
+# instance, so central's supervisor:0/shwa:0 and compute's supervisor:1/shwa:1
+# coexist on the SHARED host TIPC namespace (network_mode: host). Read from
+# <machine>/machine.json (Machine.machine_index). The supervisor reads
+# THEIA_MACHINE_INSTANCE as its boot knob to shift each CHILD's --tipc instance;
+# its OWN ctl address is the --tipc passed to the exec below. Default 0.
+_machine_json="/etc/theia/manifest/${MACHINE}/machine.json"
+THEIA_MACHINE_INSTANCE=0
+if [[ -f "$_machine_json" ]]; then
+    _midx="$(grep -o '"machine_index"[[:space:]]*:[[:space:]]*[0-9]*' "$_machine_json" \
+             | sed 's/.*:[[:space:]]*//')"
+    THEIA_MACHINE_INSTANCE="${_midx:-0}"
+fi
+export THEIA_MACHINE_INSTANCE
+log "machine instance=${THEIA_MACHINE_INSTANCE} (from machine.json)"
+
 puppet_apply() {  # $1 = site manifest (provisioning.pp / orchestration.pp)
     log "puppet apply $1 (machine=$MACHINE)"
     puppet apply \
@@ -85,10 +102,16 @@ converge
 attempt=0
 while true; do
     if [[ -x "$SUPERVISOR_BIN" && -f "$EXECUTOR_JSON" ]]; then
-        log "starting supervisor (machine=$MACHINE, manifest=$EXECUTOR_JSON)"
+        log "starting supervisor (machine=$MACHINE, manifest=$EXECUTOR_JSON, instance=$THEIA_MACHINE_INSTANCE)"
         export THEIA_SUPERVISOR_MANIFEST="$EXECUTOR_JSON"
         export THEIA_ROOT_DIR="/opt/theia"
-        "$SUPERVISOR_BIN"
+        # The supervisor's own SupervisorCtl binds at this machine's instance via
+        # --tipc (instance-only ":N" keeps the compiled type 0x80020001). central
+        # (:0) omits it (compiled default); compute (:1) passes it.
+        _sup_args=()
+        [[ "$THEIA_MACHINE_INSTANCE" != "0" ]] && \
+            _sup_args+=("--tipc=supervisor_ctl=:${THEIA_MACHINE_INSTANCE}")
+        "$SUPERVISOR_BIN" "${_sup_args[@]}"
         rc=$?
         log "supervisor exited rc=$rc"
         [[ $rc -eq 0 ]] && exit 0   # clean shutdown (docker stop)

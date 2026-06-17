@@ -89,6 +89,22 @@ if [[ -d "/etc/theia/manifest" ]]; then
     log "machine manifest root=${THEIA_MACHINE_MANIFEST} (com inherits)"
 fi
 
+# This machine's mTLS material (staged by `theia manifest` into
+# <machine>/certs/, bind-mounted read-only here). When present, com serves
+# MUTUAL TLS (requires + verifies the client cert against the CA) on all three
+# gRPC ports, and the supervisor passes these down to com via the inherited env.
+# Absent → com runs INSECURE (the no-cert dev default). rtdb/GUI use the SAME
+# ca.crt + client.{crt,key} to connect.
+_certs_dir="/etc/theia/manifest/${MACHINE}/certs"
+if [[ -f "${_certs_dir}/server.crt" && -f "${_certs_dir}/server.key" ]]; then
+    export THEIA_COM_TLS_CERT="${_certs_dir}/server.crt"
+    export THEIA_COM_TLS_KEY="${_certs_dir}/server.key"
+    [[ -f "${_certs_dir}/ca.crt" ]] && export THEIA_COM_TLS_CA="${_certs_dir}/ca.crt"
+    log "mTLS on — com serves TLS (cert=${THEIA_COM_TLS_CERT}, CA=${THEIA_COM_TLS_CA:-none})"
+else
+    log "no certs at ${_certs_dir} — com runs INSECURE"
+fi
+
 puppet_apply() {  # $1 = site manifest (provisioning.pp / orchestration.pp)
     log "puppet apply $1 (machine=$MACHINE)"
     puppet apply \

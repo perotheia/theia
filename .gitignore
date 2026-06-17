@@ -80,6 +80,11 @@ build-*/
 # Docker deploy runtime outputs.
 deploy/.staging/
 deploy/logs/
+# Dev mTLS cert set (self-signed CA + server + client), generated once by
+# `theia manifest` / tools/gen_dev_certs.sh and cached here. Throwaway dev
+# material (private keys) — never commit; regenerate per workspace. A real
+# deployment swaps in PKI certs or the crypto-FC engine slot.
+deploy/certs/
 
 # rtdb's grpc_tools.protoc output. Regenerate with:
 #   tools/rtdb/gen_protos.sh

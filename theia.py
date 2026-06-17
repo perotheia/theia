@@ -758,6 +758,45 @@ def _deep_merge(base: dict, override: dict) -> dict:
     return base
 
 
+def _stage_certs(machines: list[dict], out: Path) -> int:
+    """Stage the dev mTLS certs into each target machine's manifest dir.
+
+    com↔GUI/rtdb run MUTUAL TLS when a CA is pinned. The dev cert set (CA +
+    server + client, self-signed) lives in deploy/certs/, generated ONCE by
+    tools/gen_dev_certs.sh and cached there (regenerating would invalidate any
+    running client). We copy ca.crt + server.{crt,key} + client.{crt,key} into
+    dist/manifest/<machine>/certs/, which the deploy bind-mounts at
+    /etc/theia/manifest/<machine>/certs/; run-supervisor.sh exports THEIA_COM_TLS_*
+    from there so the supervisor's com children serve mTLS, and rtdb/GUI point at
+    the same CA + client identity.
+
+    DEV certs only (self-signed, CN/SAN=localhost+127.0.0.1 — correct for the
+    network_mode:host cluster where clients dial 127.0.0.1). A real deployment
+    swaps in PKI-issued certs (or the crypto-FC engine slot, THEIA_COM_TLS_SLOT)."""
+    certs_src = WORKSPACE / "deploy" / "certs"
+    needed = ["ca.crt", "server.crt", "server.key", "client.crt", "client.key"]
+    if not all((certs_src / f).is_file() for f in needed):
+        gen = WORKSPACE / "tools" / "gen_dev_certs.sh"
+        if not gen.is_file():
+            print("theia manifest: no deploy/certs and no gen_dev_certs.sh — "
+                  "skipping mTLS cert staging (cluster runs INSECURE).",
+                  file=sys.stderr)
+            return 0
+        certs_src.mkdir(parents=True, exist_ok=True)
+        if (rc := _run(["bash", str(gen), str(certs_src), "localhost"])) != 0:
+            return rc
+    for m in machines:
+        if m.get("kind") == "host":
+            continue
+        dst = out / m["name"] / "certs"
+        dst.mkdir(parents=True, exist_ok=True)
+        for f in needed:
+            shutil.copy2(certs_src / f, dst / f)
+    print(f"theia manifest: staged dev mTLS certs → "
+          f"dist/manifest/<machine>/certs/ (from deploy/certs/)", file=sys.stderr)
+    return 0
+
+
 def _emit_machine_config(machine: str, mdir: Path) -> int:
     """Emit per-FC static params into <mdir>/config/<fc>.json for one machine.
 
@@ -938,6 +977,9 @@ def cmd_manifest(args: list[str]) -> int:
             continue
         if (rc := _emit_machine_config(m["name"], out / m["name"])) != 0:
             return rc
+    # Stage the dev mTLS certs into each machine dir (com↔GUI mutual TLS).
+    if (rc := _stage_certs(machines, out)) != 0:
+        return rc
     _emit_manifest_build_files(out, machines)
     print(f"theia manifest: {len(machines)} machines → {out}/ (+ BUILD glue)",
           file=sys.stderr)

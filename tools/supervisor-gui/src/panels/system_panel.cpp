@@ -215,8 +215,13 @@ void SystemPanel::on_frame(const std::string& machine_name,
         mr.gpu_vals[1]->SetLabel(wxString::Format("%u%%", a.gpu_util_pct()));
         mr.gpu_vals[2]->SetLabel(a.gpu_freq_mhz()
             ? wxString::Format("%u MHz", a.gpu_freq_mhz()) : "—");
+        // The degree sign (U+00B0) must NOT live in a narrow Format() literal:
+        // wxFormatString reparses the format string and a non-ASCII byte there
+        // crashes its AsWChar() conversion (null deref). Build the number with a
+        // pure-ASCII Format, then append the unit as proper UTF-8.
         mr.gpu_vals[3]->SetLabel(a.temp_c()
-            ? wxString::Format("%u °C", a.temp_c()) : "—");
+            ? wxString::Format("%u", a.temp_c()) + wxString::FromUTF8(" °C")
+            : wxString::FromUTF8("—"));
         mr.gpu_vals[4]->SetLabel(a.power_mw()
             ? wxString::Format("%.1f W", a.power_mw() / 1000.0) : "—");
         mr.gpu_vals[5]->SetLabel(a.fan_rpm()

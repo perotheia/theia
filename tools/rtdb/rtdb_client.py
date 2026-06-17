@@ -23,23 +23,50 @@ from typing import Any, Iterator
 import grpc
 
 
+def _default_certs_dir() -> "Path | None":
+    """In-source dev default for the mTLS material: the certs `theia manifest`
+    stages under dist/manifest/<machine>/certs/. So `rtdb ps` Just Works against
+    the local mTLS cluster without exporting THEIA_COM_TLS_* by hand.
+
+    Resolves $THEIA_ROOT (env.sh exports it) else this file's workspace root,
+    then dist/manifest/<machine>/certs — preferring 'central', else the first
+    machine dir that has a ca.crt. Returns None if no dev certs exist (a plain
+    insecure local stack)."""
+    root = os.environ.get("THEIA_ROOT", "")
+    base = Path(root) if root else Path(__file__).resolve().parents[2]
+    mdir = base / "dist" / "manifest"
+    if not mdir.is_dir():
+        return None
+    for name in ("central", *sorted(p.name for p in mdir.iterdir() if p.is_dir())):
+        d = mdir / name / "certs"
+        if (d / "ca.crt").is_file():
+            return d
+    return None
+
+
 def _make_channel(target: str) -> "grpc.Channel":
     """gRPC channel to com, TLS or insecure (matches com's opt-in TLS).
 
-    TLS is OPT-IN, the same way com flips it: when THEIA_COM_TLS_CA is set
-    (the dev CA from tools/gen_dev_certs.sh, or the deploy CA), connect with
-    SSL channel creds that trust that CA; otherwise stay insecure (local-dev
-    default). THEIA_COM_TLS_CLIENT_CERT/_KEY add a client cert for mTLS (com's
-    v1 policy is REQUEST_BUT_DONT_VERIFY, so a client cert is optional)."""
-    ca_path = os.environ.get("THEIA_COM_TLS_CA", "")
-    if not ca_path:
+    TLS is OPT-IN, the same way com flips it: when a CA is available, connect
+    with SSL channel creds that trust it; otherwise stay insecure. The CA +
+    client cert/key come from THEIA_COM_TLS_CA / _CLIENT_CERT / _CLIENT_KEY when
+    set; OTHERWISE they DEFAULT to the in-source dev certs under
+    dist/manifest/<machine>/certs (so in-source `rtdb ps` needs no env). com's
+    mutual-TLS policy REQUIRES the client cert when a CA is pinned, so we present
+    it whenever the dir has one."""
+    certs = _default_certs_dir()
+    ca_path = os.environ.get("THEIA_COM_TLS_CA") \
+        or (str(certs / "ca.crt") if certs else "")
+    if not ca_path or not os.path.isfile(ca_path):
         return grpc.insecure_channel(target)
     with open(ca_path, "rb") as f:
         ca = f.read()
     client_cert = client_key = None
-    cc = os.environ.get("THEIA_COM_TLS_CLIENT_CERT", "")
-    ck = os.environ.get("THEIA_COM_TLS_CLIENT_KEY", "")
-    if cc and ck:
+    cc = os.environ.get("THEIA_COM_TLS_CLIENT_CERT") \
+        or (str(certs / "client.crt") if certs else "")
+    ck = os.environ.get("THEIA_COM_TLS_CLIENT_KEY") \
+        or (str(certs / "client.key") if certs else "")
+    if cc and ck and os.path.isfile(cc) and os.path.isfile(ck):
         with open(cc, "rb") as f:
             client_cert = f.read()
         with open(ck, "rb") as f:

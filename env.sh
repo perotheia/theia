@@ -23,6 +23,11 @@ else
 fi
 _THEIA_ROOT="$(cd "$(dirname "$_THEIA_ENV_SRC")" && pwd)"
 
+# THEIA_ROOT — the workspace root, exported so in-source tools resolve paths
+# without $PWD assumptions (rtdb defaults its dev-cert dir to
+# $THEIA_ROOT/dist/manifest/<machine>/certs; theia/tdb use it too).
+export THEIA_ROOT="$_THEIA_ROOT"
+
 # --- activate the venv ---------------------------------------------------
 if [ -f "$_THEIA_ROOT/.venv/bin/activate" ]; then
     # shellcheck disable=SC1091

@@ -54,6 +54,12 @@ public:
     virtual void on_frame(const std::string& machine_name,
                           uint16_t tag,
                           const std::string& payload) = 0;
+
+    // The GUI scopes the data panels to ONE machine (the left-dock selection).
+    // When the focus changes, MainFrame calls this so a panel that accumulates
+    // per-machine state (a box / rows per machine) can drop everything except
+    // the now-focused machine. Default: no-op (single-machine panels ignore it).
+    virtual void set_machine_filter(const std::string& /*machine_name*/) {}
 };
 
 // "System" — host + build + supervisor facts, one wxStaticBox per machine.
@@ -74,6 +80,7 @@ public:
     explicit SystemPanel(wxWindow* parent);
     void on_frame(const std::string& machine_name, uint16_t tag,
                   const std::string& payload) override;
+    void set_machine_filter(const std::string& machine_name) override;
 
 private:
     // Per-box row counts. Pre-allocated key/value wxStaticTexts updated in
@@ -242,6 +249,7 @@ public:
     ~ProcessesPanel() override;
     void on_frame(const std::string& machine_name, uint16_t tag,
                   const std::string& payload) override;
+    void set_machine_filter(const std::string& machine_name) override;
 
     // Right-click → Kill / Remove. main_frame wires this to the matching
     // machine's GrpcClient. `op` is "kill" (RestartChild) or "remove"
@@ -282,54 +290,83 @@ enum class MachineConnState {
     Down,           // was Connected, then frames stopped arriving
 };
 
-// One row in the machines side panel — keyed by name, with a status
-// glyph + the address+port so the operator can sanity-check the
-// rig config.
+// One row in a side-panel list — keyed by name, with a status glyph + an
+// address/where string. Used for BOTH the Connections list (a saved com
+// endpoint, host:port) and the Machines list (a machine discovered through the
+// connected endpoint).
 struct MachineRow {
     std::string       name;
-    std::string       address;   // host:port for display
+    std::string       address;   // host:port (connections) / "(via …)" (machines)
     MachineConnState  state{MachineConnState::Disconnected};
 };
 
-// "Machines" — left-side side panel (sibling to the notebook).
-// Lists every target machine from the loaded machines.yaml, with a
-// colored dot for connection state. Right-click for Connect /
-// Disconnect / Show in Trace. Selecting a row broadcasts the
-// machine name on EVT_MACHINE_FOCUS so other panels can scope.
+// "Connections + Machines" — the left-side dock, TWO sections in one panel:
+//
+//   Connections   — saved com endpoints (127.0.0.1, jetson, rpi4, …), each with
+//                   a connect-state glyph. ONLY ONE is connected at a time;
+//                   selecting one (or right-click → Connect) switches the hub.
+//                   Persisted to ~/.config/theia-gui/connections.json.
+//   Machines      — the machines the connected endpoint's com aggregates (the
+//                   local one + each mN/ peer). Selecting one scopes EVERY data
+//                   panel (Applications/Processes/System/Load) to that single
+//                   machine — N machines per connection can't all share the UX.
+//
+// Connection selection posts EVT_CONNECTION_SELECT (the host:port in GetString);
+// machine selection posts EVT_MACHINE_FOCUS (the machine name). Right-click on a
+// connection → Connect/Disconnect; on a machine → Show in Trace.
 class MachinesPanel : public wxPanel {
 public:
     explicit MachinesPanel(wxWindow* parent);
     ~MachinesPanel() override;
 
-    // Replace the row set wholesale (initial load + reload from the
-    // File → Refresh Machines menu).
+    // ---- Connections (top section) ---------------------------------------
+    // Replace the saved-connection rows wholesale (initial load from file).
+    void set_connections(std::vector<MachineRow> rows);
+    // Add a connection if not already listed (Connect… dialog). Idempotent.
+    void add_connection(const std::string& name, const std::string& host_port,
+                        MachineConnState s);
+    // Update one connection's state (status timer). Only the active one is
+    // Connected; the rest are Disconnected.
+    void set_connection_state(const std::string& host_port, MachineConnState s);
+    // The selected connection's host:port (or first, or empty).
+    std::string selected_connection() const;
+    // All saved connections (for persistence).
+    std::vector<MachineRow> connections() const { return conns_; }
+
+    // ---- Machines (bottom section) ---------------------------------------
+    // Replace the machine rows (called on (re)connect to reset the list).
     void set_machines(std::vector<MachineRow> rows);
-
-    // Update one row's state. Called by MainFrame's status timer.
-    void set_state(const std::string& machine_name, MachineConnState s);
-
-    // Add one machine row if it isn't already listed (idempotent). Stage 4:
-    // the central aggregator reveals peer machines (mN/) in its stream; the GUI
-    // adds them here as they appear, without a per-machine gRPC connection.
+    // Add a discovered machine if not already listed (idempotent).
     void add_machine(const std::string& name, const std::string& address,
                      MachineConnState s);
-
-    // Currently-focused (selected) machine, or empty when no row
-    // is selected.
+    void set_state(const std::string& machine_name, MachineConnState s);
+    // The selected machine name (panels scope to this), or first/empty.
     std::string focused() const;
+    // Programmatically select a machine row by name (auto-select-first).
+    void select_machine(const std::string& name);
 
 private:
-    void on_right_click(wxMouseEvent& evt);
-    void on_select(wxListEvent& evt);
-    void redraw();
+    void on_conn_right_click(wxMouseEvent& evt);
+    void on_machine_right_click(wxMouseEvent& evt);
+    void on_conn_select(wxListEvent& evt);
+    void on_machine_select(wxListEvent& evt);
+    void redraw_conns();
+    void redraw_machines();
 
-    ::wxListCtrl*           list_{nullptr};
-    std::vector<MachineRow> rows_;
+    ::wxListCtrl*           conn_list_{nullptr};
+    ::wxListCtrl*           mach_list_{nullptr};
+    std::vector<MachineRow> conns_;
+    std::vector<MachineRow> rows_;     // machines
 };
 
-// Posted whenever the selected row changes. Carries the machine
+// Posted whenever the selected MACHINE row changes. Carries the machine
 // name in GetString() — empty means "selection cleared".
 wxDECLARE_EVENT(EVT_MACHINE_FOCUS, wxCommandEvent);
+
+// Posted whenever the selected CONNECTION row changes (or a connection
+// context-menu action fires). GetString() = the connection's host:port; GetInt()
+// == 0 for a plain select, or an ID_CTX_* menu id for a context action.
+wxDECLARE_EVENT(EVT_CONNECTION_SELECT, wxCommandEvent);
 
 // "Table Viewer (etcd)" — observer's ETS-tab analogue, but the
 // backing store is etcd. Browse any key under a user-typed prefix;

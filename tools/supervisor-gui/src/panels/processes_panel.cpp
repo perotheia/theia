@@ -192,6 +192,18 @@ void ProcessesPanel::on_col_click(wxDataViewEvent& evt) {
 
 ProcessesPanel::~ProcessesPanel() = default;
 
+void ProcessesPanel::set_machine_filter(const std::string& keep) {
+    // Scope to ONE machine: drop every other machine's rows so the Processes
+    // list shows only the focused machine.
+    bool changed = false;
+    for (auto it = rows_by_machine_.begin(); it != rows_by_machine_.end(); ) {
+        if (it->first == keep) { ++it; continue; }
+        it = rows_by_machine_.erase(it);
+        changed = true;
+    }
+    if (changed) refresh_list();
+}
+
 void ProcessesPanel::on_frame(const std::string& machine_name,
                               uint16_t tag,
                               const std::string& payload) {

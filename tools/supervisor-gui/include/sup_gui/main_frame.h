@@ -86,6 +86,14 @@ private:
     std::string                  local_name_;
     std::string                  current_hub_;     // host:port of the active hub
     std::set<std::string>        seen_machines_;
+    // The single machine the data panels (System/Load/Apps/Processes) currently
+    // scope to. Empty until the first machine is auto-selected on connect.
+    std::string                  selected_machine_;
+
+    void on_connection_select(wxCommandEvent& evt);  // EVT_CONNECTION_SELECT
+    void load_connections();                          // seed + persisted file
+    void save_connections() const;
+    std::string connections_path() const;             // ~/.config/theia-gui/…
 
     wxTimer*                 status_timer_{nullptr};
 

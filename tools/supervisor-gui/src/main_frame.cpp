@@ -15,7 +15,12 @@
 #include <wx/file.h>
 #include <wx/textdlg.h>
 
+#include <sys/stat.h>      // mkdir for the connections.json config dir
+
 #include <cctype>
+#include <cstdlib>         // getenv
+#include <fstream>         // connections.json load/save
+#include <iterator>        // istreambuf_iterator
 #include <map>
 #include <set>
 #include <utility>
@@ -203,6 +208,7 @@ MainFrame::MainFrame(std::vector<MachineEndpoint> machines)
     // events that MachinesPanel posts up.
     Bind(wxEVT_MENU, &MainFrame::on_menu, this);
     Bind(EVT_MACHINE_FOCUS, &MainFrame::on_machine_focus, this);
+    Bind(EVT_CONNECTION_SELECT, &MainFrame::on_connection_select, this);
 
     status_timer_ = new wxTimer(this, ID_STATUS_TIMER);
     status_timer_->Start(500);
@@ -218,18 +224,24 @@ MainFrame::MainFrame(std::vector<MachineEndpoint> machines)
         if (m.name == "central") { hub = m; break; }
     local_name_ = hub.name;
 
-    // Seed the side panel with the hub; peers are added as the aggregated
-    // stream reveals them (note_machine).
-    {
-        std::vector<MachineRow> rows;
-        MachineRow r;
-        r.name    = hub.name;
-        r.address = hub.address + ":" + std::to_string(hub.port);
-        r.state   = MachineConnState::Connecting;
-        rows.push_back(std::move(r));
-        machines_panel_->set_machines(std::move(rows));
-        seen_machines_.insert(hub.name);
+    current_hub_ = hub.address + ":" + std::to_string(hub.port);
+
+    // Connections (top section): load the persisted set, seed any machines.json
+    // endpoints, and make sure the active hub is listed + marked Connecting. The
+    // Machines section (bottom) starts EMPTY — note_machine() fills it from the
+    // aggregated stream as peers are discovered, and auto-selects the first.
+    load_connections();
+    for (const auto& m : machines) {   // already excludes admin/host endpoints
+        machines_panel_->add_connection(
+            m.name, m.address + ":" + std::to_string(m.port),
+            MachineConnState::Disconnected);
     }
+    machines_panel_->add_connection(hub.name, current_hub_,
+                                    MachineConnState::Connecting);
+    machines_panel_->set_connection_state(current_hub_,
+                                          MachineConnState::Connecting);
+    save_connections();
+    machines_panel_->set_machines({});   // machines fill in via note_machine
 
     // #365 — wire the ApplicationsPanel's right-click ConfigureTrace
     // dialog to the matching machine's GrpcClient.
@@ -371,9 +383,8 @@ MainFrame::MainFrame(std::vector<MachineEndpoint> machines)
             return c->snapshot(label, msg);
         });
 
-    // ONE GrpcClient — to the central aggregator. The demux in on_sup_frame
-    // splits its stream per machine. Connect… (Machines menu) switches it.
-    current_hub_ = hub.address + ":" + std::to_string(hub.port);
+    // ONE GrpcClient — to the connected aggregator. The demux in on_sup_frame
+    // splits its stream per machine; the Machines section lists those.
     {
         clients_.emplace_back(new GrpcClient(
             hub.name, current_hub_,
@@ -384,32 +395,29 @@ MainFrame::MainFrame(std::vector<MachineEndpoint> machines)
     }
 }
 
-// Connect… — repoint the single aggregator hub at a new host:port. Stop the
-// current client, clear the demux's per-machine state (the new cluster may have
-// a different machine set), start a fresh client. local_name_ becomes the new
-// host (the unprefixed/instance-0 nodes from the new hub render under it).
+// Switch the active connection to a new host:port. Stop the current client,
+// reset the demux + the Machines section (the new connection may aggregate a
+// different machine set), start a fresh client. local_name_ becomes the new
+// host (its unprefixed/instance-0 nodes render under it); selected_machine_ is
+// cleared so the first machine of the new cluster auto-selects.
 void MainFrame::switch_hub(const std::string& host_port) {
     for (auto& c : clients_) if (c) c->stop();
     clients_.clear();
 
     current_hub_ = host_port;
-    // Label the hub by its host (strip the port) so the left panel reads cleanly.
     const auto colon = host_port.rfind(':');
     local_name_ = (colon == std::string::npos) ? host_port
                                                : host_port.substr(0, colon);
     seen_machines_.clear();
-    seen_machines_.insert(local_name_);
-
-    // Reset the left panel to just the new hub; peers re-appear via note_machine.
-    {
-        std::vector<MachineRow> rows;
-        MachineRow r;
-        r.name    = local_name_;
-        r.address = host_port;
-        r.state   = MachineConnState::Connecting;
-        rows.push_back(std::move(r));
-        machines_panel_->set_machines(std::move(rows));
+    selected_machine_.clear();
+    if (machines_panel_) {
+        machines_panel_->set_machines({});                 // empty until rediscovered
+        machines_panel_->add_connection(local_name_, host_port,
+                                        MachineConnState::Connecting);
+        machines_panel_->set_connection_state(host_port,
+                                              MachineConnState::Connecting);
     }
+    save_connections();
 
     clients_.emplace_back(new GrpcClient(
         local_name_, host_port,
@@ -449,17 +457,21 @@ void MainFrame::post_frame_from_thread(const std::string& machine_name,
     wxQueueEvent(this, evt);
 }
 
-// Fan one (machine_name, tag, payload) out to every panel. The panels key
-// their per-machine state by machine_name, so this is the single dispatch the
-// demux below routes into.
+// Route one (machine_name, tag, payload) to the panels. The DATA panels
+// (System / Load / Applications / Processes) scope to ONE machine — the one
+// selected in the left dock — so they only receive frames for selected_machine_;
+// N machines per connection can't all share the stacked UX. Trace is
+// cluster-wide (cross-machine by design), so it always gets every frame.
 void MainFrame::dispatch_to_panels(const std::string& machine_name,
                                    uint16_t tag,
                                    const std::string& payload) {
-    system_panel_ ->on_frame(machine_name, tag, payload);
-    load_charts_  ->on_frame(machine_name, tag, payload);
-    applications_ ->on_frame(machine_name, tag, payload);
-    processes_    ->on_frame(machine_name, tag, payload);
-    trace_        ->on_frame(machine_name, tag, payload);
+    if (machine_name == selected_machine_) {
+        system_panel_ ->on_frame(machine_name, tag, payload);
+        load_charts_  ->on_frame(machine_name, tag, payload);
+        applications_ ->on_frame(machine_name, tag, payload);
+        processes_    ->on_frame(machine_name, tag, payload);
+    }
+    trace_->on_frame(machine_name, tag, payload);   // cluster-wide
 }
 
 // Note a machine we've now seen in the aggregated stream and make sure the left
@@ -471,6 +483,13 @@ void MainFrame::note_machine(const std::string& machine_name) {
     if (machines_panel_) {
         machines_panel_->add_machine(machine_name, "(via " + local_name_ + ")",
                                      MachineConnState::Connected);
+    }
+    // Auto-select the FIRST machine discovered so the data panels aren't blank
+    // right after connecting (the local/instance-0 machine tends to arrive
+    // first). Later machines just appear in the list; the user clicks to switch.
+    if (selected_machine_.empty()) {
+        selected_machine_ = machine_name;
+        if (machines_panel_) machines_panel_->select_machine(machine_name);
     }
 }
 
@@ -532,9 +551,12 @@ void MainFrame::on_status_tick(wxTimerEvent&) {
         // Push per-row state into the side panel so its dots stay
         // current. We don't have a "down" signal from GrpcClient
         // yet — "not connected" is collapsed onto Connecting here.
+        // The single client IS the active CONNECTION; reflect its transport
+        // state on the hub's connection row (the Machines rows get their state
+        // from the aggregated stream via note_machine, not from here).
         if (machines_panel_) {
-            machines_panel_->set_state(
-                c->machine_name(),
+            machines_panel_->set_connection_state(
+                current_hub_,
                 ok ? MachineConnState::Connected
                    : MachineConnState::Connecting);
         }
@@ -638,41 +660,33 @@ void MainFrame::on_menu(wxCommandEvent& evt) {
 }
 
 void MainFrame::on_machine_focus(wxCommandEvent& evt) {
-    // EVT_MACHINE_FOCUS does double duty:
-    //  - GetInt() == 0  → row selected; GetString() = machine name
-    //                     (or "" when selection cleared)
-    //  - GetInt() == ID_CTX_*  → a context-menu action was clicked;
-    //                            GetString() = machine name
+    // EVT_MACHINE_FOCUS:
+    //  - GetInt() == 0          → machine row selected; scope the data panels
+    //  - GetInt() == ID_CTX_*   → a machine context-menu action (Show in Trace)
     const std::string name = evt.GetString().ToStdString();
     switch (evt.GetInt()) {
         case 0:
-            // Selection-changed: panels can subscribe themselves if
-            // they want machine focus. MainFrame just updates the
-            // status bar at the next tick.
-            return;
-
-        case ID_CTX_CONNECT:
-            for (auto& c : clients_) {
-                if (c && c->machine_name() == name) { c->start(); break; }
+            // Scope every DATA panel to this one machine. The panels key their
+            // internal state by machine_name; once selected_machine_ changes,
+            // dispatch_to_panels feeds only this machine's frames (the previous
+            // machine's box/rows stop updating). Live data refills within ~1s.
+            if (!name.empty() && name != selected_machine_) {
+                selected_machine_ = name;
+                // Drop the previously-shown machine from the accumulating data
+                // panels so they render ONLY this machine.
+                system_panel_->set_machine_filter(name);
+                processes_->set_machine_filter(name);
+                load_charts_->set_machine_filter(name);
+                applications_->set_machine_filter(name);
+                SetStatusText(wxString::Format("%s / %s",
+                    local_name_.c_str(), name.c_str()), 1);
+                wxLogStatus(this, "Machine -> %s", name.c_str());
             }
-            wxLogStatus(this, "Connect %s", name.c_str());
-            return;
-
-        case ID_CTX_DISCONNECT:
-            for (auto& c : clients_) {
-                if (c && c->machine_name() == name) { c->stop(); break; }
-            }
-            if (machines_panel_) {
-                machines_panel_->set_state(name,
-                    MachineConnState::Disconnected);
-            }
-            wxLogStatus(this, "Disconnect %s", name.c_str());
             return;
 
         case ID_CTX_SHOW_TRACE:
-            // Switch to the Trace tab. The trace panel doesn't yet
-            // know about machine focus (Phase 10 of the GUI plan
-            // wires this); selecting the Trace tab is enough for now.
+            // Trace is cluster-wide (cross-machine), so this just jumps to the
+            // Trace tab — the records there already carry the node/machine.
             if (notebook_) {
                 for (size_t i = 0; i < notebook_->GetPageCount(); ++i) {
                     if (notebook_->GetPageText(i) == "Trace") {
@@ -687,6 +701,98 @@ void MainFrame::on_machine_focus(wxCommandEvent& evt) {
         default:
             return;
     }
+}
+
+// EVT_CONNECTION_SELECT — the transport notion. A plain select (Int==0) or
+// Connect switches the hub to that endpoint; Disconnect stops the client.
+void MainFrame::on_connection_select(wxCommandEvent& evt) {
+    const std::string hp = evt.GetString().ToStdString();
+    if (hp.empty()) return;
+    switch (evt.GetInt()) {
+        case 0:                              // plain select → make it the hub
+        case ID_MENU_CONNECT_HOST:           // (unused here; kept for symmetry)
+            if (hp != current_hub_ || clients_.empty()) switch_hub(hp);
+            return;
+        default:
+            break;
+    }
+    // The connection context-menu Connect/Disconnect (ids from machines_panel).
+    const int id = evt.GetInt();
+    if (id == (wxID_HIGHEST + 5001)) {       // ID_MENU_CONNECT
+        if (hp != current_hub_ || clients_.empty()) switch_hub(hp);
+    } else if (id == (wxID_HIGHEST + 5002)) {  // ID_MENU_DISCONNECT
+        for (auto& c : clients_) if (c) c->stop();
+        if (machines_panel_)
+            machines_panel_->set_connection_state(hp,
+                MachineConnState::Disconnected);
+        wxLogStatus(this, "Disconnect %s", hp.c_str());
+    }
+}
+
+// ---- connection persistence ---------------------------------------------
+
+std::string MainFrame::connections_path() const {
+    const char* xdg = std::getenv("XDG_CONFIG_HOME");
+    std::string base = (xdg && *xdg) ? std::string(xdg)
+        : (std::string(std::getenv("HOME") ? std::getenv("HOME") : ".")
+           + "/.config");
+    return base + "/theia-gui/connections.json";
+}
+
+// Seed the Connections list: persisted file first, then any machines.json
+// endpoints not already saved. Minimal hand-rolled JSON (one {"name","host_port"}
+// per entry) so the GUI needs no JSON dep here.
+void MainFrame::load_connections() {
+    std::vector<MachineRow> conns;
+    auto add = [&](const std::string& name, const std::string& hp) {
+        for (auto& c : conns) if (c.address == hp) return;
+        conns.push_back({name, hp, MachineConnState::Disconnected});
+    };
+    std::ifstream f(connections_path());
+    if (f) {
+        std::string s((std::istreambuf_iterator<char>(f)),
+                       std::istreambuf_iterator<char>());
+        // crude scan for "host_port":"..." (and the preceding "name":"...").
+        size_t pos = 0;
+        while ((pos = s.find("\"host_port\"", pos)) != std::string::npos) {
+            auto q1 = s.find('"', s.find(':', pos) + 1);
+            auto q2 = (q1 == std::string::npos) ? q1 : s.find('"', q1 + 1);
+            if (q1 == std::string::npos || q2 == std::string::npos) break;
+            std::string hp = s.substr(q1 + 1, q2 - q1 - 1);
+            // name = the host part for display.
+            auto colon = hp.rfind(':');
+            std::string nm = colon == std::string::npos ? hp : hp.substr(0, colon);
+            add(nm, hp);
+            pos = q2 + 1;
+        }
+    }
+    if (machines_panel_) machines_panel_->set_connections(std::move(conns));
+}
+
+void MainFrame::save_connections() const {
+    if (!machines_panel_) return;
+    const std::string path = connections_path();
+    // mkdir -p the parent (theia-gui/).
+    auto slash = path.rfind('/');
+    if (slash != std::string::npos) {
+        const std::string dir = path.substr(0, slash);
+        std::string acc;
+        for (char ch : dir) {
+            acc += ch;
+            if (ch == '/' && acc.size() > 1) (void)::mkdir(acc.c_str(), 0755);
+        }
+        (void)::mkdir(dir.c_str(), 0755);
+    }
+    std::ofstream f(path);
+    if (!f) return;
+    f << "{\n  \"connections\": [\n";
+    const auto conns = machines_panel_->connections();
+    for (size_t i = 0; i < conns.size(); ++i) {
+        f << "    {\"name\": \"" << conns[i].name
+          << "\", \"host_port\": \"" << conns[i].address << "\"}"
+          << (i + 1 < conns.size() ? "," : "") << "\n";
+    }
+    f << "  ]\n}\n";
 }
 
 }  // namespace sup_gui

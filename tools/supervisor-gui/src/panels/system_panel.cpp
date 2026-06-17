@@ -161,6 +161,23 @@ SystemPanel::MachineRows& SystemPanel::ensure_box(const std::string& machine_nam
     return inserted.first->second;
 }
 
+// Scope to ONE machine: destroy every other machine's box so the System tab
+// shows only the focused machine (the box for `keep` is left intact; it's
+// recreated on the next frame if it wasn't built yet).
+void SystemPanel::set_machine_filter(const std::string& keep) {
+    bool changed = false;
+    for (auto it = machine_boxes_.begin(); it != machine_boxes_.end(); ) {
+        if (it->first == keep) { ++it; continue; }
+        // Detach the box's sizer from the container + destroy the wxStaticBox
+        // (which owns its child texts). The MachineRows pointers go stale with it.
+        container_->Detach(it->second.sizer);
+        if (it->second.box) it->second.box->Destroy();
+        it = machine_boxes_.erase(it);
+        changed = true;
+    }
+    if (changed) { container_->Layout(); Layout(); }
+}
+
 void SystemPanel::on_frame(const std::string& machine_name,
                            uint16_t tag,
                            const std::string& payload) {

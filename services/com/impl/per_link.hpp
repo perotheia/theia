@@ -30,6 +30,14 @@ struct PerOpReply {
     uint64_t    mod_rev = 0;
 };
 
+// One RAW config-store row (GetSnapshot), in primitives. `config` is the
+// proto-wire bytes per stores; the gRPC caller decodes it against the schema.
+struct PerStoreRow {
+    std::string config_type;
+    std::string digest;
+    std::string config;        // serialized <Node>Config (binary proto bytes)
+};
+
 // Singleton link to PerManager. Opened by ComGrpcProxy::do_start, torn down by
 // do_stop. Thread-safe.
 class PerLink {
@@ -50,6 +58,12 @@ public:
     // Snapshot(label) — trigger an operational backup of per's config keyspace.
     bool snapshot(const std::string& label, PerOpReply& out,
                   int timeout_ms = 5000);
+
+    // GetSnapshot(config_type="" → all). Fills out with the raw store rows
+    // (config_type, digest, config bytes). Returns false on transport error /
+    // timeout / not-connected.
+    bool get_snapshot(const std::string& config_type,
+                      std::vector<PerStoreRow>& out, int timeout_ms = 5000);
 
 private:
     PerLink();

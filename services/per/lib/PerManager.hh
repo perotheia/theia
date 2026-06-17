@@ -46,6 +46,8 @@ using SchemaList = system_services_per_SchemaList;
 using MigrateBulkReq = system_services_per_MigrateBulkReq;
 using SnapshotReq = system_services_per_SnapshotReq;
 using RestoreSnapshotReq = system_services_per_RestoreSnapshotReq;
+using GetStoreSnapshotReq = system_services_per_GetStoreSnapshotReq;
+using PerStoreSnapshot = system_services_per_PerStoreSnapshot;
 
 
 
@@ -136,6 +138,9 @@ public:
                                             PerManagerState& s);
 
     PerReply handle_call(const RestoreSnapshotReq& req,
+                                            PerManagerState& s);
+
+    PerStoreSnapshot handle_call(const GetStoreSnapshotReq& req,
                                             PerManagerState& s);
 
 

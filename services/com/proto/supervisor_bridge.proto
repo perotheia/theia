@@ -384,6 +384,27 @@ message PerReply {
     uint64 mod_rev = 3;
 }
 
+// ---- GetSnapshot — read per's CURRENT decoded config store --------------
+//
+// Mirrors system_services_per.{GetStoreSnapshotReq,PerStoreRow,PerStoreSnapshot}
+// field-for-field (PerLink re-encodes between the nanopb per structs and these
+// libprotobuf messages). com proxies per's live store (the /theia/config/
+// keyspace) so the GUI/rtdb can read it over com — NOT a second etcd client.
+// The rows are RAW: `config` is the proto-wire bytes per stores, decoded by the
+// CLIENT against the schema digest (same as tdb's decode_snapshot, server-side
+// per never decodes the node's config type).
+message GetSnapshotCall {
+    string config_type = 1;   // "" = ALL rows; else just that type's row
+}
+message PerStoreRow {
+    string config_type = 1;   // config owner node name (etcd key suffix)
+    string digest      = 2;   // schema digest the bytes are encoded under
+    bytes  config      = 3;   // serialized <Node>Config (client decodes)
+}
+message PerStoreSnapshot {
+    repeated PerStoreRow rows = 1;
+}
+
 service PerView {
     // The schema registry — every (config_type, digest) per knows. Backs a
     // GUI "Persistency" panel + an `rtdb schemas` verb.
@@ -391,4 +412,9 @@ service PerView {
     // Trigger an operational snapshot of per's /theia/config/ keyspace to a
     // <snapshot_dir>/<label>.persnap backup file. Returns per's PerReply.
     rpc Snapshot (SnapshotCall) returns (PerReply);
+    // Read per's CURRENT config store — the raw decoded rows of the
+    // /theia/config/ keyspace (config_type="" = all). Backs the GUI
+    // Persistency table + `rtdb snapshot`; the client decodes each row's
+    // `config` bytes against the schema. Read-only, no etcd client needed.
+    rpc GetSnapshot (GetSnapshotCall) returns (PerStoreSnapshot);
 }

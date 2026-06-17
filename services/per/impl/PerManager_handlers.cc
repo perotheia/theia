@@ -226,5 +226,45 @@ PerReply PerManager::handle_call(
     return rep;
 }
 
+// Read the CURRENT config store — the RAW /theia/config/ rows from
+// Store::scan(), no server-side decode (the caller decodes each row's `config`
+// bytes against the schema digest). config_type="" returns ALL rows; a
+// non-empty config_type returns just that node's row. Backs com's
+// PerView.GetSnapshot proxy. Truncates at PerStoreSnapshot.rows max_count
+// (16 — keeps the nanopb reply under the 48 KiB TIPC cap); the cluster has ~4
+// demo config nodes, so truncation is a defensive limit, not an expected path.
+PerStoreSnapshot PerManager::handle_call(
+        const GetStoreSnapshotReq& req,
+        PerManagerState& /*s*/) {
+    PerStoreSnapshot rep{};
+    Store* store = shared_store();
+    if (!store) {
+        this->log().warn("GetStoreSnapshot: store not ready -> 0 rows");
+        return rep;
+    }
+    const std::string filter = req.config_type;   // "" = all rows
+    const pb_size_t cap =
+        static_cast<pb_size_t>(sizeof(rep.rows) / sizeof(rep.rows[0]));
+    for (auto& [node, val] : store->scan()) {
+        if (!filter.empty() && node != filter) continue;
+        if (rep.rows_count >= cap) break;          // fixed array full; truncate
+        auto& row = rep.rows[rep.rows_count++];
+        row = system_services_per_PerStoreRow{};   // nested element type (not aliased)
+        set_str(row.config_type, node);
+        set_str(row.digest, val.digest);
+        // RAW config bytes — the client decodes against the schema. Truncate to
+        // the field cap (max_size:2048) so a larger value never overflows.
+        const std::size_t cfg_cap = sizeof(row.config.bytes);
+        const std::size_t n =
+            val.config.size() < cfg_cap ? val.config.size() : cfg_cap;
+        std::memcpy(row.config.bytes, val.config.data(), n);
+        row.config.size = static_cast<pb_size_t>(n);
+    }
+    this->log().info(std::string("GetStoreSnapshot ") +
+                     (filter.empty() ? "(all)" : filter) + " -> " +
+                     std::to_string(rep.rows_count) + " rows");
+    return rep;
+}
+
 
 }  // namespace ara::per

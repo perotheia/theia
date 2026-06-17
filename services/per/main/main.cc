@@ -243,6 +243,8 @@ int main(int argc, char** argv) {
             per_manager_cfg, per_manager);
         config_mux.register_call<RestoreSnapshotReq, PerReply>(
             per_manager_cfg, per_manager);
+        config_mux.register_call<GetStoreSnapshotReq, PerStoreSnapshot>(
+            per_manager_cfg, per_manager);
     } else {
         per_manager.log().warn("config service bind failed; live log-level "
                                  "push + signal inject disabled");

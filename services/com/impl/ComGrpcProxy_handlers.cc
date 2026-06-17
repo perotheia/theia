@@ -579,6 +579,23 @@ public:
         return grpc::Status::OK;
     }
 
+    grpc::Status GetSnapshot(
+            grpc::ServerContext*,
+            const services::com::GetSnapshotCall* req,
+            services::com::PerStoreSnapshot* out) override {
+        std::vector<services_com::PerStoreRow> rows;
+        if (!services_com::PerLink::instance().get_snapshot(
+                req ? req->config_type() : "", rows))
+            return per_unavailable();
+        for (const auto& r : rows) {
+            auto* row = out->add_rows();
+            row->set_config_type(r.config_type);
+            row->set_digest(r.digest);
+            row->set_config(r.config);   // RAW bytes — client decodes
+        }
+        return grpc::Status::OK;
+    }
+
 private:
     static grpc::Status per_unavailable() {
         return grpc::Status(grpc::StatusCode::UNAVAILABLE,

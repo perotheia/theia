@@ -127,12 +127,27 @@ message MigrateBulkReq {
 message SnapshotReq        { string label }
 message RestoreSnapshotReq { string label }
 
+// Read the CURRENT decoded config store (the /theia/config/ keyspace) — the
+// RAW rows from Store::scan(), no server-side decode. config_type="" returns
+// ALL rows; a non-empty config_type returns just that node's row. Backs com's
+// PerView.GetSnapshot proxy (GUI/rtdb reads per's store over com, not etcd).
+// The client decodes each row's `config` bytes against the schema digest, the
+// same way tdb's decode_snapshot does it client-side.
+message GetStoreSnapshotReq { string config_type }   // "" = all rows
+message PerStoreRow {
+    string config_type      // the config owner node name (etcd key suffix)
+    string digest           // schema digest the bytes are encoded under
+    bytes  config           // serialized <Node>Config (binary proto bytes)
+}
+message PerStoreSnapshot   { repeated PerStoreRow rows }
+
 interface clientServer PerManagerIf {
     operation RegisterSchema(in r: RegisterSchemaReq) returns PerReply
     operation ListSchemas(in r: ListSchemasReq)       returns SchemaList
     operation MigrateBulk(in r: MigrateBulkReq)       returns PerReply
     operation Snapshot(in r: SnapshotReq)             returns PerReply
     operation RestoreSnapshot(in r: RestoreSnapshotReq) returns PerReply
+    operation GetStoreSnapshot(in r: GetStoreSnapshotReq) returns PerStoreSnapshot
 }
 
 // ─── Nodes ───────────────────────────────────────────────────────────────

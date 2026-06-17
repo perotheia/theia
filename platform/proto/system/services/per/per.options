@@ -45,3 +45,16 @@ system_services_per.MigrateBulkReq.to_digest      max_size:64
 system_services_per.MigrateBulkReq.plugin_so      max_size:256
 system_services_per.SnapshotReq.label             max_size:96
 system_services_per.RestoreSnapshotReq.label      max_size:96
+
+# ---- GetStoreSnapshot (read the live config store, raw rows) --------------
+# config_type "" = all rows; else just that node's row.
+# PerStoreRow.config: same 2 KiB ceiling per node-config; rows capped so the
+# whole PerStoreSnapshot encodes under the 48 KiB TIPC reply cap (TipcMux
+# kReplyCap): 16 * (96 + 64 + 2048) ≈ 35 KiB worst case. The cluster has ~4
+# demo config nodes, so this is ample; a larger store would TRUNCATE at 16 rows
+# (the handler logs it). config bytes the CLIENT decodes against the schema.
+system_services_per.GetStoreSnapshotReq.config_type max_size:96
+system_services_per.PerStoreRow.config_type         max_size:96
+system_services_per.PerStoreRow.digest              max_size:64
+system_services_per.PerStoreRow.config              max_size:2048
+system_services_per.PerStoreSnapshot.rows           max_count:16

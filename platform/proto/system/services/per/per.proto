@@ -67,3 +67,17 @@ message RestoreSnapshotReq {
     string label = 1;
 }
 
+message GetStoreSnapshotReq {
+    string config_type = 1;
+}
+
+message PerStoreRow {
+    string config_type = 1;
+    string digest = 2;
+    bytes config = 3;
+}
+
+message PerStoreSnapshot {
+    repeated PerStoreRow rows = 1;
+}
+

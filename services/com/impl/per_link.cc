@@ -111,4 +111,30 @@ bool PerLink::snapshot(const std::string& label, PerOpReply& out,
     return true;
 }
 
+bool PerLink::get_snapshot(const std::string& config_type,
+                           std::vector<PerStoreRow>& out, int timeout_ms) {
+    if (!impl_->started) return false;
+    std::lock_guard<std::mutex> lk(impl_->call_mu);
+    system_services_per_GetStoreSnapshotReq req =
+        system_services_per_GetStoreSnapshotReq_init_zero;
+    set_str(req.config_type, sizeof(req.config_type), config_type);
+
+    auto result = theia::runtime::call<system_services_per_PerStoreSnapshot>(
+        impl_->ref, req, /*act=*/0, timeout_ms);
+    if (result.tag != theia::runtime::CallTag::Reply) return false;
+
+    const auto& snap = result.reply;
+    out.clear();
+    for (pb_size_t i = 0; i < snap.rows_count; ++i) {
+        const auto& r = snap.rows[i];
+        PerStoreRow row;
+        row.config_type = from_str(r.config_type);
+        row.digest      = from_str(r.digest);
+        row.config.assign(reinterpret_cast<const char*>(r.config.bytes),
+                          r.config.size);
+        out.push_back(std::move(row));
+    }
+    return true;
+}
+
 }  // namespace services_com

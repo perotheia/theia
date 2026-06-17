@@ -129,12 +129,17 @@ interface clientServer TsyncCtlIf {
 // stays box-agnostic. -s = slave-only, -m = log to stdout (drained to our log),
 // -q = don't use syslog. Absent binary (dev host) → execvp fails, supervisor
 // restarts; TsyncCtl reports UNAVAILABLE — the documented graceful-degrade.
+// The .art default is the SLAVE profile (-s); central's gen-config overrides
+// `args` to the GRANDMASTER profile (drop -s, GPS-disciplined) per the time
+// hierarchy (TSYNC-slave-GPS-master.md): central = GM, compute = slave. `enabled`
+// (default true) lets a machine without PTP turn the daemon off via gen-config.
 node prebuilt Ptp4lProvider {
     tipc type=0x80010035 instance=0
     path = "/usr/sbin/ptp4l"
     reporting = false
     params {
-        args : string = "-i ptpIf0 -s -m -q"
+        enabled : bool   = true
+        args    : string = "-i ptpIf0 -s -m -q"
     }
 }
 
@@ -148,7 +153,8 @@ node prebuilt Phc2sysProvider {
     path = "/usr/sbin/phc2sys"
     reporting = false
     params {
-        args : string = "-a -r -m -q"
+        enabled : bool   = true
+        args    : string = "-a -r -m -q"
     }
 }
 
@@ -165,7 +171,24 @@ node prebuilt ChronyProvider {
     path = "/usr/sbin/chronyd"
     reporting = false
     params {
-        args : string = "-d -s -m"
+        enabled : bool   = true
+        args    : string = "-d -s -m"
+    }
+}
+
+// gpsd — the GNSS time source on the CENTRAL board (the top of the time
+// hierarchy, TSYNC-slave-GPS-master.md): a GPS receiver's PPS disciplines the
+// PHC, which ptp4l then serves as grandmaster to the compute board. CENTRAL-only
+// — `enabled` defaults FALSE (most machines have no GPS); central's gen-config
+// flips it true. -N = don't daemonize (supervisor owns the lifetime), -n = poll
+// the GPS without a client waiting, the device path is the box's GPS tty.
+node prebuilt GpsdProvider {
+    tipc type=0x80010066 instance=0
+    path = "/usr/sbin/gpsd"
+    reporting = false
+    params {
+        enabled : bool   = false
+        args    : string = "-N -n /dev/ttyGPS0"
     }
 }
 

@@ -29,8 +29,9 @@ cc_library(
     srcs = [
         "TsyncCtl_handlers.cc",
         # Provider daemons (node prebuilt) — fully-generated fork/drain/reap of
-        # ptp4l + phc2sys (PTP) + chronyd (NTP). No _state.hh (prebuilt nodes
-        # carry no user state).
+        # gpsd (GNSS) + ptp4l + phc2sys (PTP) + chronyd (NTP). No _state.hh
+        # (prebuilt nodes carry no user state).
+        "GpsdProvider_handlers.cc",
         "Ptp4lProvider_handlers.cc",
         "Phc2sysProvider_handlers.cc",
         "ChronyProvider_handlers.cc",

@@ -19,6 +19,8 @@ cc_library(
         "Phc2sysProvider_netgraph.hh",
         "ChronyProvider.hh",
         "ChronyProvider_netgraph.hh",
+        "GpsdProvider.hh",
+        "GpsdProvider_netgraph.hh",
         "TsyncCtl.hh",
         "TsyncCtl_netgraph.hh",
         "tsync_codecs.hh",

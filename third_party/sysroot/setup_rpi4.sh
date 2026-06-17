@@ -45,12 +45,31 @@ MIRROR="http://deb.debian.org/debian"
 # The library set the supervisor + services-com link against. Match
 # names from `dpkg -l | grep -E 'libgrpc|libyaml|libprotobuf|libabsl'`
 # on a clean Debian bookworm install.
+#
+# services/per static-links etcd-cpp-apiv3 (//third_party:etcd_cpp, a foreign_cc
+# cmake build). Its CMakeLists find_package()s Boost (system/thread/random) +
+# cpprestsdk + OpenSSL — so the cross-build needs THOSE -dev packages in the
+# sysroot too, or `cmake -DCMAKE_TOOLCHAIN_FILE=…` fails at find_package(Boost).
 PACKAGES=(
     libyaml-cpp-dev
     libprotobuf-dev
     libgrpc++-dev
     libgrpc-dev
     libabsl-dev
+    # etcd-cpp-apiv3 (services/per) static-link deps — its CMakeLists
+    # find_package()s these; the grpc-chain (re2/c-ares) comes with libgrpc-dev:
+    libboost-system-dev
+    libboost-thread-dev
+    libboost-random-dev
+    libcpprest-dev
+    libssl-dev
+    # Per-FC native libs (the Linux-mapping FCs link these directly):
+    libnftables-dev    # services/fw  — nftables ruleset (libnftables.h)
+    libbpf-dev         # services/idsm — eBPF loader (bpf/libbpf.h)
+    libelf-dev         #               — libbpf's ELF dep
+    libmnl-dev         # services/nm  — minimal netlink
+    libnl-3-dev        # services/nm  — libnl link/addr
+    libnl-route-3-dev
 )
 
 err() { echo "setup_rpi4: $*" >&2; }
@@ -100,6 +119,15 @@ sudo cp /usr/bin/qemu-aarch64-static "$TARGET/usr/bin/"
 echo "==> second stage: chroot debootstrap --second-stage"
 sudo chroot "$TARGET" /debootstrap/debootstrap --second-stage
 
+# --- prefix-compat symlinks ------------------------------------------
+# Debian puts everything under /usr (/usr/include, /usr/lib). Some CMake
+# package configs (gRPC, cpprestsdk — pulled in by etcd-cpp-apiv3) bake
+# INTERFACE_INCLUDE_DIRECTORIES as "<prefix>/include"; with CMAKE_SYSROOT set
+# that resolves to "<sysroot>/include", which doesn't exist on a /usr-only
+# Debian layout → "Imported target includes non-existent path". Symlink the
+# top-level include (lib is already symlinked by debootstrap) so those configs
+# resolve. Harmless for the Bazel cc_toolchain (it uses -I"$SR/usr/include").
+sudo ln -sfn usr/include "$TARGET/include"
 # --- nanopb (not reliably in the Debian arm64 archive) --------------
 # The Theia runtime/protos #include <pb.h> and link libprotobuf-nanopb.a.
 # nanopb is 3 tiny .c files — cross-compile them into the sysroot's lib +
@@ -118,6 +146,24 @@ sudo cp "$nps"/pb.h "$nps"/pb_common.h "$nps"/pb_encode.h "$nps"/pb_decode.h \
     "$TARGET/usr/include/"
 sudo cp "$nps/libprotobuf-nanopb.a" "$TARGET/usr/lib/aarch64-linux-gnu/"
 rm -rf "$np"
+
+# --- host protoc / grpc_cpp_plugin matching the sysroot's libprotobuf ----
+# The libprotobuf-using FCs (services/com, services/per) generate .pb.{cc,h}
+# with the HOST protoc but LINK the sysroot's libprotobuf. Those MUST be the
+# same protobuf release or the generated headers `#error regenerate ... newer
+# protoc`. Debian bookworm ships protobuf 3.21.12 + grpc 1.51.1; if the host's
+# /usr/bin/protoc is older (e.g. Ubuntu 22.04 = 3.12), the cross-build of com/
+# per fails. Stage host-x86 protoc 3.21.12 + grpc_cpp_plugin 1.51.1 (+ their
+# runtime .so's) into the sysroot's bin so the cmake/genrule codegen runs them
+# on the build host while producing 3.21-compatible output:
+#   - protoc 3.21.12:    github protobuf v21.12 linux-x86_64 release zip
+#   - grpc plugin 1.51:  debian bookworm protobuf-compiler-grpc_1.51.1 amd64 +
+#                        libgrpc_plugin_support / libprotoc.so.32 (x86 runtimes)
+# (TODO: this is the one piece not yet scripted end-to-end — see
+#  docs/tasks/BACKLOG/cross-compile-rpi4.md. The codegen-tool/libprotobuf version
+#  alignment is the remaining gate for cross-building com+per to aarch64.)
+echo "==> NOTE: ensure host protoc/grpc_cpp_plugin match the sysroot protobuf" \
+     "(bookworm = 3.21.12 / grpc 1.51) before cross-building services/com+per."
 
 # --- sanity check ---------------------------------------------------
 

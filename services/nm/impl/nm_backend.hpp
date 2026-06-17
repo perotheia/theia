@@ -259,12 +259,19 @@ inline std::vector<WifiBssInfo> parse_scan(const std::string& text) {
 
     while (std::getline(in, line)) {
         std::string t = trim(line);
-        if (t.rfind("BSS ", 0) == 0) {
+        // A new AP block starts with a NON-indented "BSS <mac>(on <if>)" line.
+        // Indented capability lines like "\tBSS Load:" trim to "BSS Load:" — so
+        // gate on the original line being column-0 AND the token after "BSS "
+        // being a MAC ("(on " present), not a capability label.
+        const bool is_bss_header =
+            line.rfind("BSS ", 0) == 0 &&          // column 0 (raw, not trimmed)
+            t.find("(on ") != std::string::npos;   // "...(on wlanX)"
+        if (is_bss_header) {
             flush();
             cur = WifiBssInfo{};
             have = true;
             saw_rsn = saw_wpa = saw_sae = saw_privacy = false;
-            // "BSS aa:bb:cc:dd:ee:ff(on wlan0)" — take the MAC token.
+            // "BSS aa:bb:cc:dd:ee:ff(on wlan0) -- associated" — take the MAC.
             std::string rest = t.substr(4);
             cur.bssid = trim(rest.substr(0, rest.find('(')));
         } else if (t.rfind("SSID:", 0) == 0) {

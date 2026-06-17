@@ -96,21 +96,31 @@ class SupervisorClient:
         return cls(target)
 
     # ---- live tree --------------------------------------------------------
-    def get_tree(self, timeout: float = 2.0) -> Any:
+    def get_tree(self, timeout: float = 4.0) -> Any:
         """One TreeSnapshot. com has no unary GetTree rpc — the live tree is the
         Subscribe poll-stream (the supervisor's event firehose has no remote
-        egress). Pull a single snapshot and return it (cmd_ps reads .children).
-        cmd_ps --follow just calls this on an interval, same as tdb."""
+        egress). Pull a snapshot and return it (cmd_ps reads .children).
+        cmd_ps --follow just calls this on an interval, same as tdb.
+
+        SKIP empty snapshots: com's FIRST poll tick after a (re)connect can emit
+        an empty/partial TreeSnapshot before its SupLink GetTree to the
+        supervisor warms (or right at a subscriber attach boundary). A one-shot
+        `rtdb ps` that returned that first frame printed "(empty tree)" for a live
+        cluster. Wait (within the timeout) for the first snapshot that actually
+        has children; fall back to the last (possibly empty) one we saw."""
         stream = self._stub.Subscribe(_br.SubscribeRequest(), timeout=timeout)
+        last = _sup.TreeSnapshot()
         try:
             for obs in stream:
                 if obs.WhichOneof("kind") == "snapshot":
-                    return obs.snapshot
+                    last = obs.snapshot
+                    if len(last.children) > 0:
+                        return last        # first non-empty wins
         except grpc.RpcError:
             pass
         finally:
             stream.cancel()
-        return _sup.TreeSnapshot()        # empty → cmd_ps prints "(empty tree)"
+        return last                        # empty only if nothing arrived in time
 
     # ---- host facts -------------------------------------------------------
     def get_system_info(self, timeout: float = 2.0) -> Any:

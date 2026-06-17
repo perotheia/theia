@@ -25,16 +25,10 @@ set(NLOHMANN_JSON_INCLUDE_DIR
 find_package(wxWidgets REQUIRED COMPONENTS core base aui)
 include(${wxWidgets_USE_FILE})
 
-# etcd-cpp-apiv3 — vendored under third_party/ via repo manifest, built
-# + installed to third_party/etcd-cpp-apiv3/install/ (see that dir's
-# README). Pick it up via the CMake config exported there. If a future
-# system-wide install ever ships, CMAKE_PREFIX_PATH on the cmdline can
-# override.
-set(ETCD_CPP_PREFIX
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/etcd-cpp-apiv3/install"
-    CACHE PATH "etcd-cpp-apiv3 install prefix")
-find_package(etcd-cpp-api REQUIRED CONFIG
-    HINTS "${ETCD_CPP_PREFIX}/lib/cmake/etcd-cpp-api")
+# NOTE: the GUI no longer links etcd-cpp-apiv3. The Table Viewer reads per's
+# config store over com→per (PerView.GetSnapshot) and decodes client-side —
+# etcd lives in the DMZ and services/per is the sole etcd client. No
+# LD_LIBRARY_PATH to the etcd .so is required to run the GUI.
 
 find_program(PROTOC_EXECUTABLE protoc           REQUIRED)
 find_program(GRPC_CPP_PLUGIN   grpc_cpp_plugin  REQUIRED)
@@ -140,12 +134,6 @@ target_include_directories(supervisor-gui PRIVATE
     ${GRPCPP_INCLUDE_DIRS}
     ${NLOHMANN_JSON_INCLUDE_DIR}
     ${PROTO_GEN_DIR}
-    # etcd-cpp-api's exported targets don't carry
-    # INTERFACE_INCLUDE_DIRECTORIES (upstream config issue), so we feed
-    # the install prefix's include/ manually. Drop this when upstream
-    # fixes the target export, or when we switch to a CMake-superbuild
-    # that has full propagation.
-    ${ETCD_CPP_PREFIX}/include
 )
 
 target_link_libraries(supervisor-gui PRIVATE
@@ -153,10 +141,6 @@ target_link_libraries(supervisor-gui PRIVATE
     ${PROTOBUF_LIBRARIES}
     ${GRPCPP_LIBRARIES}
     -lgrpc -lgpr
-    # etcd-cpp-apiv3's CMake config exports targets like etcd-cpp-api;
-    # those bring along their own transitive cpprestsdk / boost / openssl
-    # link dependencies via INTERFACE_LINK_LIBRARIES.
-    etcd-cpp-api
     pthread
     # dlopen/dlsym for libtrace_decoder_ctypes.so (trace_decoder_lib.cpp).
     ${CMAKE_DL_LIBS}

@@ -376,6 +376,23 @@ MainFrame::MainFrame(std::vector<MachineEndpoint> machines)
             return c->snapshot(label, msg);
         });
 
+    // Table Viewer — read per's config store over com→per (PerView.GetSnapshot)
+    // on the FOCUSED machine's GrpcClient (NOT a direct etcd client; etcd is
+    // DMZ-only). Returns the RAW (config_type, digest, config-bytes) rows; the
+    // panel decodes config bytes client-side (TraceDecoderLib).
+    etcd_panel_->set_snapshot_callback(
+        [this](const std::string& config_type, bool* ok)
+            -> std::vector<EtcdPanel::StoreRow> {
+            GrpcClient* c = client_for_focus();
+            if (!c) { if (ok) *ok = false; return {}; }
+            std::vector<EtcdPanel::StoreRow> out;
+            bool inner_ok = false;
+            for (auto& s : c->get_store_snapshot(config_type, &inner_ok))
+                out.push_back({s.config_type, s.digest, s.config});
+            if (ok) *ok = inner_ok;
+            return out;
+        });
+
     // ONE GrpcClient — to the connected aggregator. The demux in on_sup_frame
     // splits its stream per machine; the Machines section lists those.
     {
@@ -613,9 +630,10 @@ void MainFrame::on_menu(wxCommandEvent& evt) {
             info.SetDescription(
                 "Theia supervisor / observer GUI.\n\n"
                 "Modelled on Erlang/OTP observer — System / Load Charts /\n"
-                "Applications / Processes / Table Viewer (etcd) / Trace.\n"
+                "Applications / Processes / Table Viewer / Trace.\n"
                 "Connects to one or more target machines via services/com\n"
-                "(gRPC) and reads etcd directly for the Table Viewer.");
+                "(gRPC); the Table Viewer reads per's config store over\n"
+                "com→per (no direct etcd client).");
             info.SetCopyright("(C) 2026 — Theia / robofortis.com");
             wxAboutBox(info, this);
             return;

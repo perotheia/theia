@@ -93,6 +93,15 @@ public:
     // (0 = OK) + fills msg with per's reply message; negative on RPC failure.
     int snapshot(const std::string& label, std::string* msg = nullptr);
 
+    // One row of per's current decoded config store: the (config_type, digest)
+    // identity + the RAW config proto-wire bytes (the CLIENT decodes them against
+    // the schema, e.g. via TraceDecoderLib — per never decodes). Backs the Table
+    // Viewer reading the store over com→per (NOT a direct etcd client).
+    struct StoreRow { std::string config_type; std::string digest; std::string config; };
+    // GetSnapshot(config_type="" → all rows). Empty on RPC failure (check ok).
+    std::vector<StoreRow> get_store_snapshot(const std::string& config_type,
+                                             bool* ok = nullptr);
+
     // ---- Crash forensics (Applications panel "Download tombstone") --------
     // A crashed child's tombstone bytes (capped at the supervisor under the
     // TIPC reply limit). When `truncated`, `path` is the full file's on-host

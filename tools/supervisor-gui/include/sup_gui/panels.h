@@ -370,21 +370,32 @@ wxDECLARE_EVENT(EVT_MACHINE_FOCUS, wxCommandEvent);
 // == 0 for a plain select, or an ID_CTX_* menu id for a context action.
 wxDECLARE_EVENT(EVT_CONNECTION_SELECT, wxCommandEvent);
 
-// "Table Viewer (etcd)" — observer's ETS-tab analogue, but the
-// backing store is etcd. Browse any key under a user-typed prefix;
-// optionally Watch the prefix for live updates. Operator tool only:
-// applications go through services/db (typed Put/Get with schema
-// versioning), never poke etcd directly. The GUI's role here is
-// the supervisor-gui equivalent of `etcdctl` with a mouse.
+// "Table Viewer" — observer's ETS-tab analogue over per's CONFIG STORE.
+// Reads the rows com→per (PerView.GetSnapshot) — NOT a direct etcd client:
+// etcd lives in the DMZ (unreachable off localhost) and per is the SOLE etcd
+// client by design. A Refresh button + a Current / Pending(N+1) view toggle;
+// each row is one (config_type, digest) + the RAW config proto bytes, decoded
+// CLIENT-SIDE (TraceDecoderLib) to JSON in the value pane. Read-only viewer:
+// config mutation goes through per's typed path, not a GUI poke.
 //
-// Does NOT inherit PanelBase — etcd is an independent data source,
-// not driven by the supervisor's gRPC frames. Owns its etcd client
-// + watcher; the rest of the GUI ignores it.
-class EtcdPanelImpl;  // pimpl — keeps etcd-cpp-apiv3 headers out of panels.h
+// Does NOT inherit PanelBase — it's request/response (a Refresh pull), not
+// driven by the supervisor's gRPC frame stream. main_frame wires its snapshot
+// callback to the focused machine's GrpcClient (get_store_snapshot), like the
+// Persistency panel's ListSchemas/Snapshot callbacks.
+class EtcdPanelImpl;  // pimpl — keeps wx + decoder details out of panels.h
 class EtcdPanel : public wxPanel {
 public:
     explicit EtcdPanel(wxWindow* parent);
     ~EtcdPanel() override;
+
+    // One row of per's config store: identity + RAW config proto bytes.
+    struct StoreRow { std::string config_type; std::string digest; std::string config; };
+    // (config_type="" → all rows) → rows + ok flag. Set by main_frame to the
+    // focused machine's GrpcClient::get_store_snapshot.
+    using SnapshotCallback =
+        std::function<std::vector<StoreRow>(const std::string& config_type,
+                                            bool* ok)>;
+    void set_snapshot_callback(SnapshotCallback cb);
 
 private:
     std::unique_ptr<EtcdPanelImpl> impl_;

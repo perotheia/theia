@@ -45,10 +45,9 @@ filegroup(
 # `lib_source` is a label, NOT a path — cmake() copies its contents
 # into a sandbox before running CMake, so the build is reproducible.
 #
-# `cache_entries` is the Bazel-side mirror of -D... flags. We point
-# at the etcd-cpp-apiv3 install prefix the same way the CMake build
-# does. The install lives under third_party/, which is gitignored
-# but `repo sync`'d.
+# `cache_entries` is the Bazel-side mirror of -D... flags. The GUI no longer
+# links etcd-cpp-apiv3 (the Table Viewer reads per's store over com→per, not a
+# direct etcd client), so the etcd install prefix + filegroup are gone.
 cmake(
     name = "supervisor-gui",
     lib_source = ":all_srcs",
@@ -57,7 +56,6 @@ cmake(
         # Mirror of CMakeLists's defaults. Bazel's sandbox doesn't
         # see the workspace path the CMakeLists computes from
         # ${CMAKE_CURRENT_SOURCE_DIR}, so we pass these explicitly.
-        "ETCD_CPP_PREFIX": "$$EXT_BUILD_ROOT$$/third_party/etcd-cpp-apiv3/install",
         # nlohmann/json — single-header, vendored under
         # third_party/nlohmann_json/. The sandbox sees it via the
         # filegroup in data= below.
@@ -66,11 +64,10 @@ cmake(
     # The vendored deps sit outside the sandboxed source dir, so
     # data= mounts them inside the sandbox at build time.
     data = [
-        "//third_party:etcd-cpp-apiv3-install",
         "//third_party:nlohmann_json_hdrs",
     ],
     # CMake needs to find protoc + grpc_cpp_plugin + wxWidgets +
-    # protobuf + grpc++ + cpprest + boost. All host-apt packages —
-    # Bazel doesn't sandbox /usr by default in cmake().
+    # protobuf + grpc++. All host-apt packages — Bazel doesn't
+    # sandbox /usr by default in cmake().
     targets = ["supervisor-gui"],
 )

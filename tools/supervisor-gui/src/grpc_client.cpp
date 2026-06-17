@@ -209,6 +209,30 @@ int GrpcClient::snapshot(const std::string& label, std::string* msg) {
     return static_cast<int>(rep.status());
 }
 
+std::vector<GrpcClient::StoreRow>
+GrpcClient::get_store_snapshot(const std::string& config_type, bool* ok) {
+    std::vector<StoreRow> out;
+    auto chan = grpc::CreateChannel(host_port_, channel_creds());
+    auto ci = std::static_pointer_cast< ::grpc::ChannelInterface>(chan);
+    auto stub = ::services::com::PerView::NewStub(ci);
+    ::services::com::GetSnapshotCall req;
+    req.set_config_type(config_type);
+    ::services::com::PerStoreSnapshot rep;
+    grpc::ClientContext ctx;
+    ctx.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(5));
+    auto status = stub->GetSnapshot(&ctx, req, &rep);
+    if (!status.ok()) {
+        std::fprintf(stderr, "grpc_client[%s]: GetSnapshot failed: %s\n",
+                     machine_name_.c_str(), status.error_message().c_str());
+        if (ok) *ok = false;
+        return out;
+    }
+    for (const auto& r : rep.rows())
+        out.push_back({r.config_type(), r.digest(), r.config()});
+    if (ok) *ok = true;
+    return out;
+}
+
 // ---- crash forensics: GetTombstone (Applications panel right-click) ------
 // GetTombstone on SupervisorView (:7700). com forwards to the supervisor's
 // TIPC op and returns the (capped) tombstone bytes. Synchronous unary, fresh

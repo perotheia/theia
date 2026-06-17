@@ -148,6 +148,16 @@ public:
 
     void repaint() { if (IsShownOnScreen()) Refresh(false); }
 
+    // Scope to ONE machine: drop every other machine's proc + GPU series so the
+    // dashboard renders a single machine's three zones (not 3 per machine).
+    void keep_only(const std::string& keep) {
+        std::lock_guard<std::mutex> lk(mtx_);
+        for (auto it = procs_.begin(); it != procs_.end();)
+            it = (it->first == keep) ? std::next(it) : procs_.erase(it);
+        for (auto it = gpu_.begin(); it != gpu_.end();)
+            it = (it->first == keep) ? std::next(it) : gpu_.erase(it);
+    }
+
 private:
     void on_paint(wxPaintEvent&) {
         wxAutoBufferedPaintDC dc(this);
@@ -473,6 +483,13 @@ LoadChartsPanel::LoadChartsPanel(wxWindow* parent) : PanelBase(parent) {
     // panel cleanly. We don't store a member to keep the diff small.
 }
 
+
+void LoadChartsPanel::set_machine_filter(const std::string& keep) {
+    if (!canvas_) return;
+    auto* c = static_cast<LoadChartsCanvas*>(canvas_);
+    c->keep_only(keep);   // drop other machines' series → one dashboard
+    c->repaint();
+}
 
 void LoadChartsPanel::on_frame(const std::string& machine_name,
                                 uint16_t tag,

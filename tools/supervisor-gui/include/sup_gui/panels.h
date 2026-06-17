@@ -114,6 +114,7 @@ public:
     explicit LoadChartsPanel(wxWindow* parent);
     void on_frame(const std::string& machine_name, uint16_t tag,
                   const std::string& payload) override;
+    void set_machine_filter(const std::string& machine_name) override;
 
 private:
     LoadChartsCanvas* canvas_{nullptr};
@@ -130,6 +131,7 @@ public:
     explicit ApplicationsPanel(wxWindow* parent);
     void on_frame(const std::string& machine_name, uint16_t tag,
                   const std::string& payload) override;
+    void set_machine_filter(const std::string& machine_name) override;
 
     // #365 — wire a callback the panel calls when the user clicks Apply in the
     // right-click ConfigureTrace dialog. main_frame looks up the matching

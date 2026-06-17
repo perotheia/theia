@@ -300,6 +300,15 @@ public:
         Refresh(false);
     }
 
+    // Scope to ONE machine: drop every other machine's snapshot so the panel
+    // renders a single machine's supervision tree (not one block per machine).
+    void keep_only(const std::string& keep) {
+        std::lock_guard<std::mutex> lk(mtx_);
+        for (auto it = snapshots_.begin(); it != snapshots_.end();)
+            it = (it->first == keep) ? std::next(it) : snapshots_.erase(it);
+        Refresh(false);
+    }
+
     void set_configure_callback(ConfigureCallback cb) {
         configure_cb_ = std::move(cb);
     }
@@ -572,6 +581,10 @@ void ApplicationsPanel::on_frame(const std::string& machine_name,
     system_supervisor::TreeSnapshot snap;
     if (!snap.ParseFromString(payload)) return;
     canvas_->set_snapshot(machine_name, std::move(snap));
+}
+
+void ApplicationsPanel::set_machine_filter(const std::string& keep) {
+    if (canvas_) canvas_->keep_only(keep);   // one machine's tree only
 }
 
 void ApplicationsPanel::set_configure_trace_callback(

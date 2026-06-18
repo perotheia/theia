@@ -30,6 +30,7 @@ class PersistencyPanel;
 class TracePanel;
 class LogPanel;
 class HealthPanel;
+class DiagPanel;
 class MachinesPanel;
 
 // Custom wx event posted from any GrpcClient thread when a frame
@@ -78,6 +79,7 @@ private:
     TracePanel*              trace_{nullptr};
     LogPanel*                log_panel_{nullptr};
     HealthPanel*             health_panel_{nullptr};
+    DiagPanel*               diag_panel_{nullptr};
 
     std::vector<std::unique_ptr<GrpcClient>> clients_;
     std::atomic<std::chrono::steady_clock::rep> last_heartbeat_{0};

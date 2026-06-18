@@ -511,3 +511,26 @@ service Provisioning {
     // What's already provisioned on this rig (identity + cred presence).
     rpc GetProvisionStatus (ProvisionStatusRequest) returns (ProvisionStatusReply);
 }
+
+// ---- DiagView — services/diag (ara::diag DoIP/UDS) over com gRPC ----------
+//
+// com proxies the diag FC's UDS router so the GUI / a tester can run a UDS
+// request (read a DID, read DTCs) over com without a DoIP TCP client or a TIPC
+// client. DiagLink RemoteRef-calls UdsRouter (TIPC 0x80010018, op Handle); this
+// edge translates the raw UDS bytes ↔ the libprotobuf DiagView messages. Mirrors
+// nm_link/per_link (isolated nanopb TU). v1 = operator-initiated reads (SendUds);
+// a live diag-traffic stream is a follow-up.
+message DiagUdsRequest {
+    uint32 target_addr = 1;   // the logical ECU address (0 = the gateway default)
+    bytes  uds         = 2;   // the UDS request bytes (e.g. 22 F1 90 = ReadDID VIN)
+}
+message DiagUdsReply {
+    bytes  uds    = 1;        // the UDS response bytes
+    bool   is_nrc = 2;        // true = a Negative Response (7F sid nrc)
+    bool   ok     = 3;        // false = diag link unreachable / no reply
+}
+
+service DiagView {
+    // Run one UDS request through the diag FC's router; return the response.
+    rpc SendUds (DiagUdsRequest) returns (DiagUdsReply);
+}

@@ -41,6 +41,7 @@
 #include "impl/sup_link.hpp"      // #418 control path over the standard transport
 #include "impl/per_link.hpp"      // per (persistency) proxy — ListSchemas/Snapshot
 #include "impl/nm_link.hpp"       // nm (network mgmt) proxy — GetStatus/WifiScan
+#include "impl/diag_link.hpp"     // diag (DoIP/UDS) proxy — SendUds
 #include "impl/shwa_link.hpp"     // SHWA AccelTelemetry egress receiver (GPU/host)
 #include "impl/machine_manifest.hpp"  // cluster index→name map (per-machine label)
 #include "impl/com_tls.hpp"       // shared TLS-or-insecure ServerCredentials
@@ -660,6 +661,30 @@ private:
     }
 };
 
+// ---- gRPC service: DiagView — proxy services/diag's UDS router -------------
+// com proxies one UDS request through the diag FC (read a DID, read DTCs) so the
+// GUI / a tester runs diagnostics over com — no DoIP TCP / TIPC client. DiagLink
+// RemoteRef-calls UdsRouter (TIPC 0x80010018); this edge translates the raw UDS
+// bytes ↔ the libprotobuf DiagView messages.
+class DiagViewImpl final : public services::com::DiagView::Service {
+public:
+    grpc::Status SendUds(
+            grpc::ServerContext*,
+            const services::com::DiagUdsRequest* req,
+            services::com::DiagUdsReply* out) override {
+        if (!req) return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "no request");
+        services_com::DiagUdsResult r =
+            services_com::DiagLink::instance().send_uds(req->target_addr(), req->uds());
+        if (!r.ok)
+            return grpc::Status(grpc::StatusCode::UNAVAILABLE,
+                                "diagnostic link (diag) unavailable / timeout");
+        out->set_uds(r.uds);
+        out->set_is_nrc(r.is_nrc);
+        out->set_ok(true);
+        return grpc::Status::OK;
+    }
+};
+
 // ---- gRPC service: Provisioning — rig enrollment over com -----------------
 // The centralized enrollment utility (colocated with Headscale) calls this to
 // write the rig's identity (uuid/vin) + PKI creds under
@@ -777,6 +802,7 @@ private:
 std::unique_ptr<SupervisorViewImpl>         g_sup_svc;
 std::unique_ptr<PerViewImpl>                g_per_svc;
 std::unique_ptr<NmViewImpl>                 g_nm_svc;
+std::unique_ptr<DiagViewImpl>               g_diag_svc;
 std::unique_ptr<ProvisioningImpl>           g_prov_svc;
 std::unique_ptr<grpc::Server>               g_server;
 std::atomic<bool>                           g_up{false};
@@ -863,6 +889,21 @@ void ComGrpcProxy::do_start() {
                          kNodeName);
     }).detach();
 
+    // Same detached-link treatment for diag (DoIP/UDS): DiagView.SendUds returns
+    // UNAVAILABLE until UdsRouter (0x80010018) links. diag is optional/absent on
+    // many machines; the gRPC bind must not block on it.
+    std::thread([] {
+        if (services_com::DiagLink::instance().start())
+            std::fprintf(stderr,
+                         "[%s] diagnostic link up (RemoteRef 0x80010018/0)\n",
+                         kNodeName);
+        else
+            std::fprintf(stderr,
+                         "[%s] WARN: diagnostic link (diag 0x80010018) not "
+                         "reachable; DiagView RPCs return UNAVAILABLE\n",
+                         kNodeName);
+    }).detach();
+
     // Load the cluster machine manifest (index→name) once, up front, so the
     // first AccelSample's machine_name lookup is warm and the load is logged at
     // startup (vs lazily on the recv thread). Best-effort: no manifest → "mN".
@@ -886,6 +927,7 @@ void ComGrpcProxy::do_start() {
     g_sup_svc  = std::make_unique<SupervisorViewImpl>();
     g_per_svc  = std::make_unique<PerViewImpl>();
     g_nm_svc   = std::make_unique<NmViewImpl>();
+    g_diag_svc = std::make_unique<DiagViewImpl>();
     g_prov_svc = std::make_unique<ProvisioningImpl>();
 
     const std::string listen = listen_addr();
@@ -894,6 +936,7 @@ void ComGrpcProxy::do_start() {
     b.RegisterService(g_sup_svc.get());
     b.RegisterService(g_per_svc.get());
     b.RegisterService(g_nm_svc.get());
+    b.RegisterService(g_diag_svc.get());
     b.RegisterService(g_prov_svc.get());
     g_server = b.BuildAndStart();
     if (!g_server) {
@@ -902,16 +945,18 @@ void ComGrpcProxy::do_start() {
         g_sup_svc.reset();
         g_per_svc.reset();
         g_nm_svc.reset();
+        g_diag_svc.reset();
         g_prov_svc.reset();
         services_com::SupLink::instance().stop();
         services_com::PerLink::instance().stop();
         services_com::NmLink::instance().stop();
+        services_com::DiagLink::instance().stop();
         services_com::ShwaLink::instance().stop();
         return;
     }
     std::fprintf(stderr,
-                 "[%s] gRPC SupervisorView + PerView + NmView + Provisioning "
-                 "listening on %s\n", kNodeName, listen.c_str());
+                 "[%s] gRPC SupervisorView + PerView + NmView + DiagView + "
+                 "Provisioning listening on %s\n", kNodeName, listen.c_str());
     g_up.store(true);
 }
 
@@ -943,12 +988,14 @@ void ComGrpcProxy::do_stop() {
     g_sup_svc.reset();
     g_per_svc.reset();
     g_nm_svc.reset();
+    g_diag_svc.reset();
     g_prov_svc.reset();
     g_sup_topology.stop();
     g_topology_up.store(false);
     services_com::SupLink::instance().stop();
     services_com::PerLink::instance().stop();
     services_com::NmLink::instance().stop();
+    services_com::DiagLink::instance().stop();
     services_com::ShwaLink::instance().stop();
     g_up.store(false);
 }

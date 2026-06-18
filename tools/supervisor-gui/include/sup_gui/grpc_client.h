@@ -102,6 +102,12 @@ public:
     std::vector<StoreRow> get_store_snapshot(const std::string& config_type,
                                              bool* ok = nullptr);
 
+    // SendUds — run one UDS request through the diag FC (DiagView.SendUds).
+    // `uds` = raw UDS request bytes; returns the response bytes. is_nrc set on a
+    // Negative Response; ok=false on RPC failure / diag unreachable.
+    struct UdsResult { std::string uds; bool is_nrc{false}; bool ok{false}; };
+    UdsResult send_uds(uint32_t target_addr, const std::string& uds);
+
     // ---- Crash forensics (Applications panel "Download tombstone") --------
     // A crashed child's tombstone bytes (capped at the supervisor under the
     // TIPC reply limit). When `truncated`, `path` is the full file's on-host

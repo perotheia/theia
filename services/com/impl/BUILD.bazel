@@ -209,6 +209,28 @@ cc_library(
     ],
 )
 
+# diag (DoIP/UDS) proxy link — isolated nanopb TU like nm_link. Includes the
+# NANOPB diag headers (diag_codecs.hh → diag.pb.h) for the SendUds RemoteRef-call
+# to UdsRouter (0x80010018); com_impl's gRPC edge sees only diag_link.hpp's
+# primitive DiagUdsResult surface.
+cc_library(
+    name = "diag_link",
+    srcs = ["diag_link.cc"],
+    hdrs = ["diag_link.hpp"],
+    includes = [".."],
+    copts = [
+        "-std=c++17",
+        "-Wall",
+        "-Wextra",
+        "-fPIC",
+    ],
+    deps = [
+        "//platform/runtime:runtime",
+        # nanopb diag structs (system/services/diag/diag.pb.h) + diag_codecs.hh.
+        "//services/diag/lib:diag_lib",
+    ],
+)
+
 # machine_manifest — com's read-only index→name map of the cluster machines,
 # loaded once from THEIA_MACHINE_MANIFEST (exported by the supervisor, inherited
 # by com). Used to label per-machine telemetry (the AccelSample demux) with a
@@ -274,6 +296,9 @@ cc_library(
         # ComGrpcProxy_handlers.cc's NmView only sees nm_link.hpp's primitive
         # NmStatusInfo/NmWifiScanInfo surface.
         ":nm_link",
+        # diag (DoIP/UDS) proxy link (nanopb, isolated above). DiagView only sees
+        # diag_link.hpp's primitive DiagUdsResult surface.
+        ":diag_link",
         # SHWA AccelTelemetry egress receiver (raw-bytes, isolated above).
         # ComGrpcProxy_handlers.cc folds AccelSample into the Subscribe stream.
         ":shwa_link",

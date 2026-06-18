@@ -481,4 +481,24 @@ private:
     HealthPanelImpl* impl_{nullptr};
 };
 
+// "Diag" — DoIP/UDS over com (DiagView.SendUds). A small form: a dropdown of
+// canned reads (VIN, fault-log count/entry, ReadDTC) + a raw-UDS-hex entry +
+// Send; a result box (positive vs NRC, the bytes). Request/response, not
+// frame-driven — main_frame wires send_cb to the focused machine's send_uds.
+class DiagPanelImpl;  // defined in diag_panel.cpp
+class DiagPanel : public wxPanel {
+public:
+    explicit DiagPanel(wxWindow* parent);
+    ~DiagPanel() override;
+
+    // (target_addr, uds-request-bytes) → (response-bytes, is_nrc, ok).
+    struct UdsResult { std::string uds; bool is_nrc{false}; bool ok{false}; };
+    using SendCallback =
+        std::function<UdsResult(uint32_t target_addr, const std::string& uds)>;
+    void set_send_callback(SendCallback cb);
+
+private:
+    DiagPanelImpl* impl_{nullptr};
+};
+
 }  // namespace sup_gui

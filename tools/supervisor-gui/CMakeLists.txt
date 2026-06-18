@@ -127,6 +127,7 @@ add_executable(supervisor-gui
     src/panels/trace_panel.cpp
     src/panels/log_panel.cpp
     src/panels/health_panel.cpp
+    src/panels/diag_panel.cpp
     $<TARGET_OBJECTS:supervisor_gui_proto>
 )
 

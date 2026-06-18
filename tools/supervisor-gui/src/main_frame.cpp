@@ -185,6 +185,7 @@ MainFrame::MainFrame(std::vector<MachineEndpoint> machines)
     trace_          = new TracePanel        (notebook_);
     log_panel_      = new LogPanel          (notebook_);
     health_panel_   = new HealthPanel       (notebook_);
+    diag_panel_     = new DiagPanel         (notebook_);
     notebook_->AddPage(system_panel_, "System");
     notebook_->AddPage(load_charts_,  "Load Charts");
     notebook_->AddPage(applications_, "Applications");
@@ -193,6 +194,7 @@ MainFrame::MainFrame(std::vector<MachineEndpoint> machines)
     notebook_->AddPage(trace_,        "Trace");
     notebook_->AddPage(log_panel_,    "Log");
     notebook_->AddPage(health_panel_, "Health");
+    notebook_->AddPage(diag_panel_,   "Diag");
 
     splitter->SplitVertically(machines_panel_, notebook_, 220);
 
@@ -398,6 +400,17 @@ MainFrame::MainFrame(std::vector<MachineEndpoint> machines)
                 out.push_back({s.config_type, s.digest, s.config});
             if (ok) *ok = inner_ok;
             return out;
+        });
+
+    // Diag panel — route SendUds to the FOCUSED machine's GrpcClient (com's
+    // DiagView proxies it to the diag FC's UdsRouter).
+    diag_panel_->set_send_callback(
+        [this](uint32_t target_addr, const std::string& uds)
+            -> DiagPanel::UdsResult {
+            GrpcClient* c = client_for_focus();
+            if (!c) return {};   // ok=false
+            auto r = c->send_uds(target_addr, uds);
+            return {r.uds, r.is_nrc, r.ok};
         });
 
     // ONE GrpcClient — to the connected aggregator. The demux in on_sup_frame

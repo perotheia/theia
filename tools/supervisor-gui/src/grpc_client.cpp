@@ -277,6 +277,31 @@ GrpcClient::get_store_snapshot(const std::string& config_type, bool* ok) {
     return out;
 }
 
+// ---- DiagView.SendUds — run one UDS request through the diag FC ----------
+GrpcClient::UdsResult GrpcClient::send_uds(uint32_t target_addr,
+                                          const std::string& uds) {
+    UdsResult out;
+    auto chan = grpc::CreateChannel(host_port_, channel_creds());
+    auto ci = std::static_pointer_cast< ::grpc::ChannelInterface>(chan);
+    auto stub = ::services::com::DiagView::NewStub(ci);
+    ::services::com::DiagUdsRequest req;
+    req.set_target_addr(target_addr);
+    req.set_uds(uds);
+    ::services::com::DiagUdsReply rep;
+    grpc::ClientContext ctx;
+    ctx.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(10));
+    auto status = stub->SendUds(&ctx, req, &rep);
+    if (!status.ok()) {
+        std::fprintf(stderr, "grpc_client[%s]: SendUds failed: %s\n",
+                     machine_name_.c_str(), status.error_message().c_str());
+        return out;   // ok=false
+    }
+    out.uds    = rep.uds();
+    out.is_nrc = rep.is_nrc();
+    out.ok     = rep.ok();
+    return out;
+}
+
 // ---- crash forensics: GetTombstone (Applications panel right-click) ------
 // GetTombstone on SupervisorView (:7700). com forwards to the supervisor's
 // TIPC op and returns the (capped) tombstone bytes. Synchronous unary, fresh

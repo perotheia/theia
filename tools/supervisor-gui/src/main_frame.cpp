@@ -179,6 +179,7 @@ MainFrame::MainFrame(std::vector<MachineEndpoint> machines)
     etcd_panel_     = new EtcdPanel         (notebook_);
     persistency_    = new PersistencyPanel  (notebook_);
     trace_          = new TracePanel        (notebook_);
+    log_panel_      = new LogPanel          (notebook_);
     notebook_->AddPage(system_panel_, "System");
     notebook_->AddPage(load_charts_,  "Load Charts");
     notebook_->AddPage(applications_, "Applications");
@@ -186,6 +187,7 @@ MainFrame::MainFrame(std::vector<MachineEndpoint> machines)
     notebook_->AddPage(etcd_panel_,   "Table Viewer");
     notebook_->AddPage(persistency_,  "Persistency");
     notebook_->AddPage(trace_,        "Trace");
+    notebook_->AddPage(log_panel_,    "Log");
 
     splitter->SplitVertically(machines_panel_, notebook_, 220);
 
@@ -483,6 +485,7 @@ void MainFrame::dispatch_to_panels(const std::string& machine_name,
         processes_    ->on_frame(machine_name, tag, payload);
     }
     trace_->on_frame(machine_name, tag, payload);   // cluster-wide
+    log_panel_->on_frame(machine_name, tag, payload);   // cluster-wide (tag 0x0007)
 }
 
 // Note a machine we've now seen in the aggregated stream and make sure the left

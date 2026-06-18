@@ -23,6 +23,7 @@ constexpr uint16_t kTagSnapshot    = 0x0003;
 constexpr uint16_t kTagSystemInfo  = 0x0004;   // GetSystemInfo (host + build facts)
 constexpr uint16_t kTagTraceRecord = 0x0005;   // TraceStream egress (:7710)
 constexpr uint16_t kTagAccel       = 0x0006;   // SHWA AccelSample (GPU / host monitor)
+constexpr uint16_t kTagLogRecord   = 0x0007;   // LogStream egress (:7711) — log lines
 
 std::string read_file_(const char* env) {
     const char* path = std::getenv(env);
@@ -66,6 +67,7 @@ void GrpcClient::start() {
     if (running_.exchange(true)) return;
     thread_       = std::thread([this] { run(); });
     trace_thread_ = std::thread([this] { run_trace(); });
+    log_thread_   = std::thread([this] { run_log(); });
 }
 
 void GrpcClient::stop() {
@@ -80,11 +82,15 @@ void GrpcClient::stop() {
             static_cast<grpc::ClientContext*>(sub_ctx_)->TryCancel();
         if (trace_ctx_)
             static_cast<grpc::ClientContext*>(trace_ctx_)->TryCancel();
+        if (log_ctx_)
+            static_cast<grpc::ClientContext*>(log_ctx_)->TryCancel();
     }
     channel_.reset();
     trace_channel_.reset();
+    log_channel_.reset();
     if (thread_.joinable())       thread_.join();
     if (trace_thread_.joinable()) trace_thread_.join();
+    if (log_thread_.joinable())   log_thread_.join();
 }
 
 // SupervisorView is host:7700; TraceStream (com's TraceForwarder) is host:7710.
@@ -122,6 +128,44 @@ void GrpcClient::run_trace() {
         }
         reader->Finish();
         { std::lock_guard<std::mutex> lk(ctx_mu_); trace_ctx_ = nullptr; }
+        if (running_.load())
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
+}
+
+// LogStream (com's LogForwarder) is host:7711 — same host, swapped port.
+std::string GrpcClient::log_endpoint() const {
+    if (const char* e = std::getenv("THEIA_COM_LOG_LISTEN")) return e;
+    const auto colon = host_port_.rfind(':');
+    const std::string host = (colon == std::string::npos)
+                                 ? host_port_ : host_port_.substr(0, colon);
+    return host + ":7711";
+}
+
+// LogStream egress: subscribe to com's LogForwarder and post each LogRecord to
+// the panel as tag 0x0007 — the live node LOG LINES that `tdb logcat` shows (the
+// log firehose, distinct from the message-trace stream). A separate stream + port
+// from SupervisorView/TraceStream, so its own thread + channel. Mirrors run_trace.
+void GrpcClient::run_log() {
+    const std::string endpoint = log_endpoint();
+    while (running_.load()) {
+        log_channel_ = grpc::CreateChannel(endpoint, channel_creds());
+        auto ci = std::static_pointer_cast< ::grpc::ChannelInterface>(log_channel_);
+        auto stub = ::services::com::LogStream::NewStub(ci);
+        ::services::com::LogSubscribeRequest req;   // level_min=0, all tags
+        grpc::ClientContext ctx;
+        { std::lock_guard<std::mutex> lk(ctx_mu_); log_ctx_ = &ctx; }
+        auto reader = stub->Subscribe(&ctx, req);
+
+        std::fprintf(stderr, "grpc_client[%s]: log stream subscribed to %s\n",
+                     machine_name_.c_str(), endpoint.c_str());
+        ::services::com::LogRecord rec;
+        while (running_.load() && reader->Read(&rec)) {
+            if (callback_)
+                callback_(machine_name_, kTagLogRecord, rec.SerializeAsString());
+        }
+        reader->Finish();
+        { std::lock_guard<std::mutex> lk(ctx_mu_); log_ctx_ = nullptr; }
         if (running_.load())
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }

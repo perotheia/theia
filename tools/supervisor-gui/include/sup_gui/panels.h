@@ -446,4 +446,19 @@ private:
     TracePanelImpl* impl_{nullptr};
 };
 
+// "Log" — the logcat firehose: a virtual list of live node LOG LINES
+// (TIME | NODE | LVL | LINE), level-min + node/text filter, follow-tail. Driven
+// by the LogStream egress (tag 0x0007) from com's LogForwarder (:7711) — the
+// SAME log lines `tdb logcat` shows. Answers "what is the rig actually doing".
+class LogPanelImpl;  // defined in log_panel.cpp
+class LogPanel : public PanelBase {
+public:
+    explicit LogPanel(wxWindow* parent);
+    void on_frame(const std::string& machine_name, uint16_t tag,
+                  const std::string& payload) override;
+
+private:
+    LogPanelImpl* impl_{nullptr};
+};
+
 }  // namespace sup_gui

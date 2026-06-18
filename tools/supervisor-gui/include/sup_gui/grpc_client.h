@@ -121,10 +121,13 @@ public:
 private:
     void run();          // SupervisorView Subscribe (:7700) + GetSystemInfo
     void run_trace();    // TraceStream Subscribe (:7710) — live trace records
+    void run_log();      // LogStream Subscribe (:7711) — live node log lines
 
     // Derive the trace endpoint from host_port_: same host, port 7710 (com's
     // TraceForwarder). Overridable via $THEIA_COM_TRACE_LISTEN host:port.
     std::string trace_endpoint() const;
+    // Same host, port 7711 (com's LogForwarder). $THEIA_COM_LOG_LISTEN overrides.
+    std::string log_endpoint() const;
 
     // Shared impl for restart_child / terminate_child (ChildSelector RPC).
     int child_op(const std::string& name, bool no_restart,
@@ -137,8 +140,10 @@ private:
     std::atomic<bool>       connected_{false};
     std::thread             thread_;
     std::thread             trace_thread_;
+    std::thread             log_thread_;
     std::shared_ptr<grpc::Channel> channel_;
     std::shared_ptr<grpc::Channel> trace_channel_;
+    std::shared_ptr<grpc::Channel> log_channel_;
 
     // The live stream ClientContexts, so stop() can TryCancel() a blocked
     // reader->Read() (resetting the channel shared_ptr does NOT cancel an
@@ -150,6 +155,7 @@ private:
     std::mutex              ctx_mu_;
     void*                   sub_ctx_   {nullptr};
     void*                   trace_ctx_ {nullptr};
+    void*                   log_ctx_   {nullptr};
 };
 
 }  // namespace sup_gui

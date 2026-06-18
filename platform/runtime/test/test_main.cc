@@ -630,6 +630,130 @@ static std::string case_tipc_remoteref_churn() {
     return {};
 }
 
+// NESTED cross-FC RemoteRef call: a server whose handle_call ITSELF makes a
+// blocking RemoteRef call to a SECOND server over TIPC. This is the diag-FC
+// pattern (UdsRouter's handle_call → crypto_link/phm_link RemoteRef → crypto/phm)
+// — a gen_server reaching another FC synchronously from inside a handler, each
+// peer link with its OWN TipcMux reply pump. We prove: (1) it works (the front
+// server returns the back server's value), and (2) the front node thread isn't
+// deadlocked by calling out while serving a call (the back link's pump is a
+// separate mux, so the reply lands even though the front node thread is blocked
+// in handle_call).
+namespace {
+
+// The BACK server (the "crypto/phm" analogue): a plain TIPC counter at 0xe0010005.
+// (Reuses TipcCounter's shape but a distinct address so both can run.)
+struct BackState { int32_t v = 100; };
+class BackServer : public theia::runtime::GenServer<BackServer, BackState> {
+public:
+    static constexpr const char* kNodeName = "BackServer";
+    platform_runtime_test_GetReply handle_call(const platform_runtime_test_Get&,
+                                               BackState& s) {
+        platform_runtime_test_GetReply r{};
+        r.value = ++s.v;        // 101, 102, …
+        return r;
+    }
+    void handle_cast(const platform_runtime_test_Inc&, BackState&) {}
+    void handle_info(const char*, BackState&) {}
+};
+
+// The FRONT server (the "UdsRouter" analogue): its handle_call reaches into the
+// BACK server via a process-global RemoteRef + its own pump (lazily connected),
+// exactly like crypto_link/phm_link. Returns whatever the back server replied.
+struct FrontState { int32_t last = 0; };
+struct BackLink {
+    theia::runtime::TipcMux mux;
+    theia::runtime::RemoteRef<BackServer, 0xe0010005u, 0u> ref;
+    bool up = false;
+    static BackLink& instance() { static BackLink l; return l; }
+    bool ensure() {
+        if (up) return true;
+        if (!ref.connect(1500)) return false;
+        mux.watch_remote_ref(ref);
+        mux.start();
+        up = true;
+        return true;
+    }
+    bool get(int32_t& out) {
+        if (!ensure()) return false;
+        auto r = theia::runtime::call<platform_runtime_test_GetReply>(
+            ref, platform_runtime_test_Get{}, test::CallAct{0}, /*timeout_ms=*/2000);
+        if (r.tag != theia::runtime::CallTag::Reply) return false;
+        out = r.reply.value;
+        return true;
+    }
+};
+class FrontServer : public theia::runtime::GenServer<FrontServer, FrontState> {
+public:
+    static constexpr const char* kNodeName = "FrontServer";
+    // handle_call: while serving THIS call, make a blocking cross-FC call out.
+    platform_runtime_test_GetReply handle_call(const platform_runtime_test_Get&,
+                                               FrontState& s) {
+        int32_t back = -1;
+        bool ok = BackLink::instance().get(back);   // ← the nested RemoteRef call
+        platform_runtime_test_GetReply r{};
+        r.value = ok ? back : -1;
+        s.last = r.value;
+        return r;
+    }
+    void handle_cast(const platform_runtime_test_Inc&, FrontState&) {}
+    void handle_info(const char*, FrontState&) {}
+};
+}  // namespace
+
+static std::string case_nested_remoteref_call() {
+    if (::access("/proc/sys/net/tipc", F_OK) != 0) return {};
+    namespace rt = theia::runtime;
+
+    // Back server bound at 0xe0010005.
+    BackServer back;
+    back.start();
+    rt::TipcMux back_mux;
+    auto* bb = back_mux.bind_node(back, 0xe0010005u, 0u);
+    EXPECT(bb != nullptr, "nested: bind back");
+    back_mux.register_call<platform_runtime_test_Get,
+                           platform_runtime_test_GetReply>(bb, back);
+    back_mux.start();
+
+    // Front server bound at 0xe0010004 — its handle_call calls the back server.
+    FrontServer front;
+    front.start();
+    rt::TipcMux front_mux;
+    auto* fb = front_mux.bind_node(front, 0xe0010004u, 0u);
+    EXPECT(fb != nullptr, "nested: bind front");
+    front_mux.register_call<platform_runtime_test_Get,
+                            platform_runtime_test_GetReply>(fb, front);
+    front_mux.start();
+
+    // A caller hits the FRONT server. The front node thread, while in
+    // handle_call, blocks on the BACK RemoteRef — proving a gen_server can make a
+    // synchronous cross-FC call from a handler without deadlocking itself.
+    rt::RemoteRef<FrontServer, 0xe0010004u, 0u> cref;
+    EXPECT(cref.connect(2000), "nested: caller connect");
+    front_mux.watch_remote_ref(cref);
+
+    auto r = rt::call<platform_runtime_test_GetReply>(
+        cref, platform_runtime_test_Get{}, test::CallAct{0}, /*timeout_ms=*/3000);
+    EXPECT(r.tag == rt::CallTag::Reply, "nested: front must reply");
+    // The back server started at 100 and ++'d to 101 on the first (nested) call.
+    EXPECT(r.reply.value == 101,
+           "nested: front must return the BACK server's value (got " +
+           std::to_string(r.reply.value) + ", want 101)");
+
+    // Do it again — proves the link is reusable (back → 102).
+    auto r2 = rt::call<platform_runtime_test_GetReply>(
+        cref, platform_runtime_test_Get{}, test::CallAct{0}, /*timeout_ms=*/3000);
+    EXPECT(r2.tag == rt::CallTag::Reply, "nested: 2nd front reply");
+    EXPECT(r2.reply.value == 102, "nested: 2nd nested call → back 102 (got " +
+           std::to_string(r2.reply.value) + ")");
+
+    front_mux.stop();
+    back_mux.stop();
+    front.stop();
+    back.stop();
+    return {};
+}
+
 // Cross-process trace correlation. Same fixture as the concurrent-
 // calls stress test, but with TipcCounter's tracer enabled. We capture
 // stderr and assert that:
@@ -1205,6 +1329,7 @@ int main() {
     CASE(stat, tipc_3process_generated) { return case_tipc_3process_generated(); });
     CASE(stat, tipc_concurrent_calls)   { return case_tipc_concurrent_calls(); });
     CASE(stat, tipc_remoteref_churn)    { return case_tipc_remoteref_churn(); });
+    CASE(stat, nested_remoteref_call)   { return case_nested_remoteref_call(); });
     CASE(stat, tipc_trace_correlation)  { return case_tipc_trace_correlation(); });
     CASE(stat, tracer_runtime_toggle)   { return case_tracer_runtime_toggle(); });
     CASE(stat, tracer_msg_type_filter)  { return case_tracer_msg_type_filter(); });

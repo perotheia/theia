@@ -12,6 +12,13 @@ system_services_fw.FwConfig.default_policy  max_size:16
 # Per-FC egress policy "fc=cidr,cidr;fc2=cidr" — grows with the FC set + CIDRs.
 system_services_fw.FwConfig.egress_policy   max_size:1024
 system_services_fw.FwConfig.egress_slice    max_size:64
+# ---- FW.d custom policy ----------------------------------------------------
+# Source-network allow-list for the DMZ ports — a list of CIDRs, grows like
+# egress_policy.
+system_services_fw.FwConfig.grpc_client_cidrs  max_size:512
+system_services_fw.FwConfig.vpn_iface          max_size:32
+system_services_fw.FwConfig.forward_policy     max_size:16
+system_services_fw.FwConfig.output_policy      max_size:16
 
 # ---- Status / reload — message carries nft apply diagnostics ---------------
 system_services_fw.FwStatusMsg.message      max_size:192

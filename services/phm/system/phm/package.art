@@ -64,6 +64,28 @@ message PhmConfig {
     // A logical/state checkpoint violation trips this level immediately
     // (default DEGRADED=2 — an illegal transition is never just a warning).
     uint32 checkpoint_level = 2
+
+    // ---- PER-ENTITY policy overrides (custom supervision policy) -----------
+    // The fields above are the DEFAULTS. A monitored entity (FC/worker name)
+    // listed here gets its OWN thresholds — a critical FC (e.g. "sm") tolerates
+    // fewer restarts before FAILED than a demo app, and can declare its Function
+    // Group so the SM escalation targets the right FG. Lookup is by exact
+    // `entity` name; an entity not listed uses the global defaults. A zero field
+    // in an override means "inherit the global default for this field" (so a
+    // policy can override just restart_fail and leave the rest global).
+    repeated PhmEntityPolicy entity_policies
+}
+
+// A custom supervision policy for ONE monitored entity. Zero fields inherit the
+// PhmConfig global default (so you override only what differs).
+message PhmEntityPolicy {
+    string entity           // the FC/worker name this policy applies to
+    uint32 restart_warn     // 0 = inherit global
+    uint32 restart_degrade  // 0 = inherit
+    uint32 restart_fail     // 0 = inherit
+    uint32 deadline_degrade // 0 = inherit
+    uint32 checkpoint_level // 0 = inherit
+    uint32 fg               // Function Group id for this entity (0 = Machine)
 }
 
 // ─── Supervision inputs (the four types) ────────────────────────────────────

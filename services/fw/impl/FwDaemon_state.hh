@@ -25,6 +25,14 @@ struct FwDaemonState {
     std::string egress_slice   = "theia.slice";
     std::string cgroup_root    = "/sys/fs/cgroup";
 
+    // ---- FW.d custom policy (layered onto the comm-matrix baseline) --------
+    std::string grpc_client_cidrs;        // "" = DMZ ports global; else saddr-restrict
+    std::string vpn_iface;                // "" = no VPN allow; else `iif "<if>" accept`
+    std::string forward_policy;           // "" = no forward chain; "drop" = default-drop
+    std::string output_policy;            // "" = egress open; "drop" = default-drop output
+    bool        log_drops      = false;   // log+count dropped inbound for idsm/phm
+    uint32_t    log_drops_rate = 5;       // per-second cap on the FW_DROP log line
+
     // Last apply result — the snapshot GetFirewallStatus serves.
     int         state          = F_UNKNOWN;
     uint32_t    rule_count     = 0;

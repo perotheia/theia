@@ -45,6 +45,36 @@ message FwConfig {
     // foreign flush (another tool clobbering nft) self-heals. 0 = apply once.
     uint32 reassert_ms    = 0
 
+    // ---- CUSTOM POLICY (FW.d) — layered ONTO the comm-matrix baseline -------
+    // These config fields express the deployment's site policy; they COMBINE
+    // with the .art-derived baseline (default-drop + established/related + lo +
+    // the DMZ dports), they do not replace it. See docs/tasks/.../FW.d.md.
+    //
+    // Source-network restriction on the DMZ ports. When set (comma-separated
+    // CIDRs, e.g. "10.20.0.0/16,10.30.0.0/16"), the dport allow becomes
+    // `ip saddr { <cidrs> } tcp dport { <ports> } accept` — only those networks
+    // reach gRPC, instead of exposing the ports globally. Empty = global (today).
+    string grpc_client_cidrs = ""
+    // Management-via-VPN: an interface (e.g. "wg0") that is fully trusted inbound
+    // (`iif "wg0" accept`), so ssh/puppet/monitoring/diagnostics must arrive
+    // through the VPN. Empty = no VPN allow rule.
+    string vpn_iface         = ""
+    // FORWARD chain policy for a routing/DMZ host. "" = no forward chain (the
+    // default — a leaf host doesn't route). "drop" emits a default-drop forward
+    // chain (established/related accept) so the host won't relay traffic.
+    string forward_policy    = ""
+    // OUTPUT (egress) chain default policy when no per-FC egress_policy is set.
+    // "" / "accept" = unrestricted egress (today). "drop" emits a default-drop
+    // output chain (established/related + lo + DNS/NTP/PTP/VPN/backend allow via
+    // the egress_policy CIDRs) — the FW.d "explicit egress" production pattern.
+    string output_policy     = ""
+    // Log + count dropped inbound packets for idsm/phm (probe detection). When
+    // true the input chain ends with a rate-limited
+    // `limit rate <N>/second log prefix "FW_DROP: " counter drop`. Default off
+    // (a chatty DMZ floods the log); a deployment enables it for forensics.
+    bool   log_drops         = false
+    uint32 log_drops_rate    = 5   // per-second cap on the FW_DROP log line
+
     // ---- per-FC EGRESS enforcement (cgroup v2, over osi's theia.slice) ----
     // Generates an `output` chain matching each FC's cgroup via
     // `socket cgroupv2 level 2 "<slice>/<fc>"` and allow-listing its egress

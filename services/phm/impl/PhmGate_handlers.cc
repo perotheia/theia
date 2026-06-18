@@ -89,7 +89,8 @@ void PhmGate::on_config_update(
         this->log().info("PhmConfig updated: window_ms=" +
             std::to_string(s.config.restart_window_ms) + " degrade=" +
             std::to_string(s.config.restart_degrade) + " fail=" +
-            std::to_string(s.config.restart_fail));
+            std::to_string(s.config.restart_fail) + " entity_overrides=" +
+            std::to_string(s.config.entity_policies_count));
     } else {
         this->log().warn("ConfigUpdated: PhmConfig decode failed; keeping prior");
     }
@@ -109,6 +110,39 @@ EntityFault& tracker_for(PhmGateState& s, const std::string& entity,
         e.deadline_count  = 0;
     }
     return e;
+}
+
+// The thresholds in effect for ONE entity: the PhmConfig global defaults, with
+// any PhmEntityPolicy override for this entity applied field-by-field (a zero
+// override field inherits the global — so a policy overrides only what differs).
+// `fg` defaults to 0 (Machine) unless the override names a Function Group.
+struct Thresholds {
+    uint32_t restart_warn;
+    uint32_t restart_degrade;
+    uint32_t restart_fail;
+    uint32_t deadline_degrade;
+    uint32_t checkpoint_level;
+    uint32_t fg;
+};
+
+Thresholds effective_thresholds(const PhmGateState& s, const std::string& entity) {
+    const auto& g = s.config;
+    Thresholds t{ g.restart_warn, g.restart_degrade, g.restart_fail,
+                  g.deadline_degrade, g.checkpoint_level, 0 };
+    // Linear scan of the override table (≤32 entries, max_count); exact name
+    // match. nanopb stores the repeated message as a fixed array + _count.
+    for (pb_size_t i = 0; i < g.entity_policies_count; ++i) {
+        const auto& p = g.entity_policies[i];
+        if (entity != p.entity) continue;
+        if (p.restart_warn)     t.restart_warn     = p.restart_warn;
+        if (p.restart_degrade)  t.restart_degrade  = p.restart_degrade;
+        if (p.restart_fail)     t.restart_fail     = p.restart_fail;
+        if (p.deadline_degrade) t.deadline_degrade = p.deadline_degrade;
+        if (p.checkpoint_level) t.checkpoint_level = p.checkpoint_level;
+        t.fg = p.fg;
+        break;
+    }
+    return t;
 }
 }  // namespace
 
@@ -134,20 +168,23 @@ void PhmGate::handle_cast(const SupervisionEvent& msg, PhmGateState& s) {
     EntityFault& e = tracker_for(s, entity, now, window_ns);
     e.restart_count += 1;
 
+    // Per-entity thresholds (custom policy) — falls back to the global defaults.
+    const Thresholds th = effective_thresholds(s, entity);
+
     std::fprintf(stderr,
         "[%s] SupervisionEvent kind=%u entity=%s restarts=%u/%u(degrade) "
         "%u(fail)\n", kNodeName, msg.kind, entity.c_str(), e.restart_count,
-        s.config.restart_degrade, s.config.restart_fail);
+        th.restart_degrade, th.restart_fail);
 
     // FAILED budget blown → escalate twice (drive OK/WARNING/DEGRADED→FAILED).
-    if (e.restart_count >= s.config.restart_fail) {
+    if (e.restart_count >= th.restart_fail) {
         e.level = 3;  // FAILED
         forward_to_fsm(kNodeName, "FaultEscalate(fail)", FaultEscalate{});
         forward_to_fsm(kNodeName, "FaultEscalate(fail)", FaultEscalate{});
-    } else if (e.restart_count >= s.config.restart_degrade) {
+    } else if (e.restart_count >= th.restart_degrade) {
         e.level = 2;  // DEGRADED
         forward_to_fsm(kNodeName, "FaultEscalate(degrade)", FaultEscalate{});
-    } else if (e.restart_count >= s.config.restart_warn) {
+    } else if (e.restart_count >= th.restart_warn) {
         if (e.level < 1) e.level = 1;  // WARNING
         forward_to_fsm(kNodeName, "FaultObserved(warn)", FaultObserved{});
     }
@@ -189,13 +226,16 @@ void PhmGate::handle_cast(const SendTimeoutReport& msg, PhmGateState& s) {
     EntityFault& e = tracker_for(s, entity, now, window_ns);
     e.deadline_count += 1;
 
+    // Per-entity thresholds (custom policy) — falls back to the global defaults.
+    const Thresholds th = effective_thresholds(s, entity);
+
     std::fprintf(stderr,
         "[%s] SendTimeoutReport %s→%s %s.%s budget=%ums observed=%ums "
         "count=%u/%u\n", kNodeName, msg.caller_node, msg.callee_node,
         msg.iface, msg.method, msg.budget_ms, msg.observed_ms,
-        e.deadline_count, s.config.deadline_degrade);
+        e.deadline_count, th.deadline_degrade);
 
-    if (e.deadline_count >= s.config.deadline_degrade) {
+    if (e.deadline_count >= th.deadline_degrade) {
         e.level = 2;  // DEGRADED
         forward_to_fsm(kNodeName, "FaultEscalate(deadline)", FaultEscalate{});
     } else {
@@ -225,7 +265,9 @@ void PhmGate::handle_cast(const PhmCheckpoint& msg, PhmGateState& s) {
     const uint64_t window_ns =
         static_cast<uint64_t>(s.config.restart_window_ms) * 1000000ull;
     EntityFault& e = tracker_for(s, entity, now, window_ns);
-    e.level = (s.config.checkpoint_level >= 2u) ? 2u : 1u;
+    // Per-entity checkpoint_level (custom policy) — falls back to the global.
+    const Thresholds th = effective_thresholds(s, entity);
+    e.level = (th.checkpoint_level >= 2u) ? 2u : 1u;
 
     std::fprintf(stderr,
         "[%s] PhmCheckpoint VIOLATION entity=%s checkpoint=%s kind=%u → escalate\n",

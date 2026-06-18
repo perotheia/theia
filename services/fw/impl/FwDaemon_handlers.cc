@@ -45,9 +45,17 @@ void apply_now(FwDaemon& self, FwDaemonState& s) {
         self.log().info(s.message);
     } else {
         int rules = 0, overrides = 0, egress_fcs = 0;
+        // FW.d custom site policy, layered onto the comm-matrix baseline.
+        FwPolicy custom;
+        custom.grpc_client_cidrs = s.grpc_client_cidrs;
+        custom.vpn_iface         = s.vpn_iface;
+        custom.forward_policy    = s.forward_policy;
+        custom.output_policy     = s.output_policy;
+        custom.log_drops         = s.log_drops;
+        custom.log_drops_rate    = s.log_drops_rate;
         std::string ruleset = build_ruleset(
             s.dmz_tcp_ports, s.default_policy, s.fw_d_dir,
-            s.egress_policy, s.egress_slice, s.cgroup_root,
+            s.egress_policy, s.egress_slice, s.cgroup_root, custom,
             rules, overrides, egress_fcs);
         ApplyResult r = apply_ruleset(ruleset, rules, overrides);
         s.rule_count = static_cast<uint32_t>(r.rule_count);
@@ -113,10 +121,23 @@ void FwDaemon::on_config_update(
     s.reassert_ms    = c.reassert_ms;
     s.egress_policy  = c.egress_policy;
     if (c.egress_slice[0]) s.egress_slice = c.egress_slice;
+    // FW.d custom policy. These are pass-through (empty clears the rule), so copy
+    // unconditionally — a deployment turns a knob off by sending "".
+    s.grpc_client_cidrs = c.grpc_client_cidrs;
+    s.vpn_iface         = c.vpn_iface;
+    s.forward_policy    = c.forward_policy;
+    s.output_policy     = c.output_policy;
+    s.log_drops         = c.log_drops;
+    s.log_drops_rate    = c.log_drops_rate ? c.log_drops_rate : 5;
     log().info(std::string("config: enabled=") + (s.enabled ? "1" : "0") +
         " policy=" + s.default_policy + " dmz=" + s.dmz_tcp_ports +
         " fw.d=" + s.fw_d_dir + " reassert_ms=" + std::to_string(s.reassert_ms) +
-        " egress='" + s.egress_policy + "'");
+        " egress='" + s.egress_policy + "'" +
+        " saddr='" + s.grpc_client_cidrs + "'" +
+        (s.vpn_iface.empty() ? "" : " vpn=" + s.vpn_iface) +
+        (s.forward_policy.empty() ? "" : " fwd=" + s.forward_policy) +
+        (s.output_policy.empty() ? "" : " out=" + s.output_policy) +
+        (s.log_drops ? " log_drops=1" : ""));
     apply_now(*this, s);
     // If reassert was off and is now on, kick the tick (init's may have ended).
     if (!was_ticking && s.reassert_ms)

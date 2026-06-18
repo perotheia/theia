@@ -5,6 +5,11 @@
 # pb_callback_t; pinning it to a fixed char[] makes it a plain member
 # (strncpy-able, trace-decodable).
 
+# per-entity policy override table (PhmConfig). Cap the table so PhmConfig
+# encodes under the etcd/per config-blob ceiling; an `entity` name fits 64.
+system_services_phm.PhmConfig.entity_policies   max_count:32
+system_services_phm.PhmEntityPolicy.entity      max_size:64
+
 # logical/state checkpoint report (PhmReportIf)
 system_services_phm.PhmCheckpoint.entity        max_size:64
 system_services_phm.PhmCheckpoint.checkpoint    max_size:64

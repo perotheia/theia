@@ -25,6 +25,17 @@ message PhmConfig {
     uint32 restart_fail = 4;
     uint32 deadline_degrade = 5;
     uint32 checkpoint_level = 6;
+    repeated PhmEntityPolicy entity_policies = 7;
+}
+
+message PhmEntityPolicy {
+    string entity = 1;
+    uint32 restart_warn = 2;
+    uint32 restart_degrade = 3;
+    uint32 restart_fail = 4;
+    uint32 deadline_degrade = 5;
+    uint32 checkpoint_level = 6;
+    uint32 fg = 7;
 }
 
 message PhmCheckpoint {

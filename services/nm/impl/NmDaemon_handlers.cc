@@ -188,6 +188,31 @@ WifiScanReply NmDaemon::handle_call(
     return reply;
 }
 
+// WifiConnect — DRIVE wpa_supplicant to associate to an SSID (the connect path).
+// NM issues the wpa_cli add/set/enable/select sequence + a DHCP lease; the FSM
+// then observes the resulting assoc/addr edges and climbs the ladder. The request
+// `interface` wins; "" → the monitored wifi link / first wireless. This is the
+// manual entry point (tdb/rtdb `wifi connect`); the auto_connect POLICY in
+// NmPoller calls the same backend. NM never performs 802.11 — wpa does.
+WifiConnectReply NmDaemon::handle_call(
+        const WifiConnectReq& req,
+        ::theia::runtime::GenStateMHolder<NmDaemonState, NmDaemonData>& h) {
+    std::string want = req.interface[0] ? std::string(req.interface)
+                                        : std::string(h.data.interface);
+    std::string iface = wifi_iface(want);
+
+    ConnectResult cr = wifi_connect(iface, req.ssid, req.psk);
+
+    WifiConnectReply reply = system_services_nm_WifiConnectReply_init_zero;
+    reply.ok = cr.ok;
+    std::strncpy(reply.interface, iface.c_str(), sizeof(reply.interface) - 1);
+    std::strncpy(reply.message, cr.note.c_str(), sizeof(reply.message) - 1);
+    this->log().info(std::string("WifiConnect iface=") +
+        (iface.empty() ? "(none)" : iface) + " ssid='" + std::string(req.ssid) +
+        "' ok=" + (cr.ok ? "1" : "0") + " — " + cr.note);
+    return reply;
+}
+
 // on_config_update — keep the FSM's advertised interface NAME in step with
 // config so the status snapshot + log reflect the monitored link. The cadence +
 // require_address gate are honored poller-side (NmPoller reads the same config).

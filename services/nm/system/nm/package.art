@@ -49,6 +49,17 @@ enum NetState {
 //
 // `config NmConfig` binds this; services/per stores it in etcd; on_config_update
 // applies it live.
+
+// A known WiFi network NM may connect to (the CONNECT path, not just observe).
+// NM drives wpa_supplicant (via wpa_cli — the Buildroot-portable control
+// interface) to associate; psk "" = an open network. When the policy must pick a
+// wifi link, it chooses the highest-priority profile whose SSID is in range.
+message WifiProfile {
+    string ssid          // network name
+    string psk           // WPA2 passphrase ("" = open)
+    uint32 priority      // higher wins when several known SSIDs are visible
+}
+
 message NmConfig {
     // The interface(s) to monitor (comma-separated, e.g. "eth0,eth1"). "" = the
     // first non-loopback link with carrier (auto).
@@ -66,6 +77,14 @@ message NmConfig {
     // "tailscale0"). NM reads `tailscale status`/the iface state; it never brings
     // the tunnel up itself (tailscaled does). "" → auto ("tailscale0").
     string vpn_interface = ""
+    // Let NM DRIVE the connection (not just observe): when no usable link is up,
+    // pick Ethernet if it has carrier, else auto-connect the highest-priority
+    // known WiFi profile that's in range (via wpa_cli). false (default) = pure
+    // observe (some other agent owns the connection). The Ethernet-preferred,
+    // known-WiFi-fallback policy.
+    bool   auto_connect = false
+    // The known WiFi networks NM may auto-connect (the CONNECT path).
+    repeated WifiProfile wifi_profiles
 }
 
 // ─── FSM events (posted by NmPoller into the FSM in-process) ───────────────
@@ -127,6 +146,22 @@ message WifiScanReply {
     repeated WifiBss bss           // APs visible in the latest scan
 }
 
+// ─── WiFi connect wire types (the DRIVE path via wpa_cli) ──────────────────
+//
+// WifiConnect(ssid, psk) → drive wpa_supplicant to associate `iface` to `ssid`.
+// NM never embeds 802.11 — it issues wpa_cli add/set/enable/select + a DHCP
+// lease, then the FSM observes the resulting assoc/addr edges. psk "" = open.
+message WifiConnectReq {
+    string interface     // "" = the first wireless interface
+    string ssid          // the network to join
+    string psk           // WPA2 passphrase ("" = open network)
+}
+message WifiConnectReply {
+    bool   ok            // the wpa_cli select succeeded (association is async)
+    string interface     // the wifi link driven
+    string message       // human detail ("associating to …" / the failure)
+}
+
 // ─── Interfaces ────────────────────────────────────────────────────────────
 
 // Readiness broadcast — senderReceiver pub/sub. NmDaemon is the SENDER; SM (and
@@ -149,10 +184,12 @@ interface senderReceiver NmEventIn {
 }
 
 // Status query — GetNetworkStatus returns the current readiness snapshot;
-// WifiScan returns the visible AP list + association snapshot (tdb/rtdb `wifi`).
+// WifiScan returns the visible AP list + association snapshot (tdb/rtdb `wifi`);
+// WifiConnect drives wpa_supplicant to join an SSID (the connect path).
 interface clientServer NmCtlIf {
     operation GetNetworkStatus(in r: NetStatusReq) returns NmStatusMsg
     operation WifiScan(in r: WifiScanReq)          returns WifiScanReply
+    operation WifiConnect(in r: WifiConnectReq)    returns WifiConnectReply
 }
 
 // ─── Nodes ─────────────────────────────────────────────────────────────────

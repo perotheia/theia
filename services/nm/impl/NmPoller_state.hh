@@ -10,6 +10,9 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
+
+#include "impl/nm_backend.hpp"   // WifiProfileInfo (the connect-policy profiles)
 
 namespace ara::nm {
 
@@ -30,6 +33,18 @@ struct NmPollerState {
     bool        require_address = true;
     bool        require_vpn = false;     // gate NETWORK_OPERATIONAL on the tunnel
     std::string vpn_interface;           // "" = auto ("tailscale0")
+
+    // Connect policy (NM DRIVES wpa_supplicant when no usable link is up).
+    bool        auto_connect = false;
+    std::vector<WifiProfileInfo> wifi_profiles;   // known networks, priority-ranked
+    // Throttle: only attempt a connect every N ticks so a failing associate
+    // doesn't hammer wpa every poll. Counts ticks since the last attempt.
+    uint32_t    connect_cooldown = 0;
+
+    // ── Roaming / PHM degradation: count consecutive failed associate/DHCP
+    // attempts. After a threshold the poller emits a health event (→ PHM via the
+    // supervisor watchdog today) and backs off harder.
+    uint32_t    connect_failures = 0;
 };
 
 }  // namespace ara::nm

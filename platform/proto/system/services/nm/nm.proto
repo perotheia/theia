@@ -14,12 +14,20 @@ enum NetState {
     NetState_DEGRADED = 3;
 }
 
+message WifiProfile {
+    string ssid = 1;
+    string psk = 2;
+    uint32 priority = 3;
+}
+
 message NmConfig {
     string interfaces = 1;
     uint32 poll_ms = 2;
     bool require_address = 3;
     bool require_vpn = 4;
     string vpn_interface = 5;
+    bool auto_connect = 6;
+    repeated WifiProfile wifi_profiles = 7;
 }
 
 message LinkUp {
@@ -89,5 +97,17 @@ message WifiScanReply {
     string assoc_ssid = 3;
     string assoc_bssid = 4;
     repeated WifiBss bss = 5;
+}
+
+message WifiConnectReq {
+    string interface = 1;
+    string ssid = 2;
+    string psk = 3;
+}
+
+message WifiConnectReply {
+    bool ok = 1;
+    string interface = 2;
+    string message = 3;
 }
 

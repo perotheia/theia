@@ -9,6 +9,17 @@ system_services_nm.NmConfig.interfaces   max_size:64
 system_services_nm.NmConfig.vpn_interface   max_size:32
 system_services_nm.NmStatusMsg.interface   max_size:64
 
+# WiFi connect path. ssid ≤ 32 octets per 802.11 + NUL; psk ≤ 63 + NUL (WPA2).
+# A handful of known profiles is plenty for a fleet rig.
+system_services_nm.WifiProfile.ssid           max_size:33
+system_services_nm.WifiProfile.psk            max_size:64
+system_services_nm.NmConfig.wifi_profiles     max_count:8
+system_services_nm.WifiConnectReq.interface   max_size:16
+system_services_nm.WifiConnectReq.ssid        max_size:33
+system_services_nm.WifiConnectReq.psk         max_size:64
+system_services_nm.WifiConnectReply.interface max_size:16
+system_services_nm.WifiConnectReply.message   max_size:128
+
 # WiFi scan wire types. ssid ≤ 32 octets per 802.11 + NUL; bssid "aa:bb:..:ff"
 # = 17 + NUL; security a short tag. bss rows capped so the whole WifiScanReply
 # encodes under the 48 KiB TIPC reply cap (TipcMux) — 48 APs is plenty for a

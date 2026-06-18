@@ -27,6 +27,19 @@ using namespace ara::nm;
 int main(int argc, char** argv) {
     const std::string want = argc > 1 ? argv[1] : "";   // optional iface hint
 
+    // Connect mode: `nm_backend_live <iface> connect <ssid> [psk]` drives the
+    // wpa_cli sequence (the DRIVE path) instead of just observing.
+    if (argc >= 4 && std::string(argv[2]) == "connect") {
+        std::string iface = wifi_iface(want);
+        std::string ssid = argv[3];
+        std::string psk = argc > 4 ? argv[4] : "";
+        std::printf("=== wifi_connect('%s', '%s', psk=%s) ===\n",
+                    iface.c_str(), ssid.c_str(), psk.empty() ? "(open)" : "***");
+        ConnectResult cr = wifi_connect(iface, ssid, psk);
+        std::printf("connect: ok=%d — %s\n", cr.ok, cr.note.c_str());
+        return cr.ok ? 0 : 1;
+    }
+
     std::printf("=== NM backend live observation ===\n");
 
     // 1. Link/address (netlink) — the wired/base rung.

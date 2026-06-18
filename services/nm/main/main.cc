@@ -140,6 +140,8 @@ int main(int argc, char** argv) {
             nm_daemon_cfg, nm_daemon);
         config_mux.register_call<WifiScanReq, WifiScanReply>(
             nm_daemon_cfg, nm_daemon);
+        config_mux.register_call<WifiConnectReq, WifiConnectReply>(
+            nm_daemon_cfg, nm_daemon);
     } else {
         nm_daemon.log().warn("config service bind failed; live log-level "
                                  "push + signal inject disabled");

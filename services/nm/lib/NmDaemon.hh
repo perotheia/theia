@@ -65,6 +65,8 @@ using VpnDown = system_services_nm_VpnDown;
 using NetStatusReq = system_services_nm_NetStatusReq;
 using WifiScanReq = system_services_nm_WifiScanReq;
 using WifiScanReply = system_services_nm_WifiScanReply;
+using WifiConnectReq = system_services_nm_WifiConnectReq;
+using WifiConnectReply = system_services_nm_WifiConnectReply;
 
 
 using NmDaemonData = NmStatusMsg;
@@ -365,6 +367,8 @@ public:
 NmStatusMsg handle_call(const NetStatusReq& req,
                                             ::theia::runtime::GenStateMHolder<NmDaemonState, NmDaemonData>& h);
 WifiScanReply handle_call(const WifiScanReq& req,
+                                            ::theia::runtime::GenStateMHolder<NmDaemonState, NmDaemonData>& h);
+WifiConnectReply handle_call(const WifiConnectReq& req,
                                             ::theia::runtime::GenStateMHolder<NmDaemonState, NmDaemonData>& h);
 
 

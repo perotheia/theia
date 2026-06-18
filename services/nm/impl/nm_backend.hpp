@@ -420,4 +420,113 @@ inline bool vpn_observe(const std::string& want, VpnObservation& obs) {
     return false;   // no VPN mechanism at all
 }
 
+// ─── WiFi CONNECT path (drive wpa_supplicant + DHCP) ───────────────────────
+//
+// NM does NOT embed 802.11 — it DRIVES the standard Linux wifi stack. The
+// BUILDROOT-portable lowest common denominator is `wpa_cli` (the wpa_supplicant
+// control interface, present on Buildroot/Debian/the Pi alike) for association +
+// a DHCP client (udhcpc on Buildroot, dhclient on Debian) for the lease. NOT
+// nmcli/NetworkManager — that's a desktop/Debian convenience, not the deployment
+// target. wpa_supplicant must already be running with a control socket on the
+// iface (the standard Buildroot init does this; `wpa_cli` finds it under
+// /var/run/wpa_supplicant/<iface>).
+
+struct WifiProfileInfo {
+    std::string ssid;
+    std::string psk;        // WPA2 passphrase ("" = open network)
+    uint32_t    priority = 0;
+};
+
+struct ConnectResult {
+    bool        ok = false;
+    std::string note;
+};
+
+// Pick the best profile to connect: the highest-priority configured profile whose
+// SSID is currently VISIBLE in the scan. Returns the index into `profiles`, or -1
+// if none of the known SSIDs are in range. (Ethernet-preferred policy is decided
+// by the caller — it only reaches here when there's no usable wired link.)
+inline int pick_wifi_profile(const std::vector<WifiProfileInfo>& profiles,
+                             const std::vector<WifiBssInfo>& visible) {
+    int best = -1;
+    uint32_t best_prio = 0;
+    for (size_t i = 0; i < profiles.size(); ++i) {
+        bool in_range = false;
+        for (const auto& b : visible)
+            if (b.ssid == profiles[i].ssid) { in_range = true; break; }
+        if (!in_range) continue;
+        if (best < 0 || profiles[i].priority > best_prio) {
+            best = static_cast<int>(i);
+            best_prio = profiles[i].priority;
+        }
+    }
+    return best;
+}
+
+// Run a DHCP client to acquire a lease on `iface`. Tries udhcpc (Buildroot) then
+// dhclient (Debian); one-shot, short timeout. Best-effort — the poller's netlink
+// observation is what actually confirms the address landed.
+inline bool dhcp_acquire(const std::string& iface) {
+    using namespace nm_detail;
+    std::string out;
+    // udhcpc -i <if> -n (exit if lease fails) -q (exit after obtaining) -t 3.
+    if (run_capture("command -v udhcpc", out) && !trim(out).empty()) {
+        run_capture("udhcpc -i " + iface + " -n -q -t 3 -T 2", out);
+        return true;
+    }
+    if (run_capture("command -v dhclient", out) && !trim(out).empty()) {
+        run_capture("dhclient -1 -timeout 8 " + iface, out);
+        return true;
+    }
+    return false;   // no DHCP client — a static-IP deployment handles addressing
+}
+
+// Associate `iface` to `ssid` (WPA2 if psk non-empty, else open) by driving
+// wpa_cli, then kick a DHCP lease. The wpa_cli sequence is the canonical one:
+//   add_network → set_network ssid/psk/key_mgmt → enable_network → select_network
+// Returns ok on a successful wpa_cli select (association completes asynchronously;
+// the poller observes the resulting assoc + addr edges).
+inline ConnectResult wifi_connect(const std::string& iface,
+                                  const std::string& ssid,
+                                  const std::string& psk) {
+    using namespace nm_detail;
+    ConnectResult r;
+    if (iface.empty() || ssid.empty()) { r.note = "no iface/ssid"; return r; }
+    const std::string wc = "wpa_cli -i " + iface + " ";
+
+    std::string out;
+    if (!run_capture(wc + "status", out) || out.empty()) {
+        r.note = "wpa_supplicant not reachable (no control socket on " + iface + ")";
+        return r;
+    }
+
+    // A fresh network slot. wpa_cli prints the new network id on add_network.
+    std::string id_s;
+    if (!run_capture(wc + "add_network", id_s)) { r.note = "add_network failed"; return r; }
+    const std::string id = trim(id_s);
+    if (id.empty() || id == "FAIL") { r.note = "add_network → FAIL"; return r; }
+
+    // SSID must be quoted in wpa_cli set_network.
+    run_capture(wc + "set_network " + id + " ssid '\"" + ssid + "\"'", out);
+    if (psk.empty()) {
+        run_capture(wc + "set_network " + id + " key_mgmt NONE", out);   // open
+    } else {
+        run_capture(wc + "set_network " + id + " psk '\"" + psk + "\"'", out);
+    }
+    run_capture(wc + "enable_network " + id, out);
+    std::string sel;
+    run_capture(wc + "select_network " + id, sel);
+    if (trim(sel).find("OK") == std::string::npos) {
+        r.note = "select_network → " + trim(sel);
+        return r;
+    }
+    // Persist the running config so the association survives a wpa restart.
+    run_capture(wc + "save_config", out);
+
+    dhcp_acquire(iface);   // best-effort lease; poller confirms the address edge.
+    r.ok = true;
+    r.note = "associating to '" + ssid + "' (id " + id + ")";
+    return r;
+}
+
 }  // namespace ara::nm

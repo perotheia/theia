@@ -92,6 +92,47 @@ void NmPoller::handle_info(const char* info, NmPollerState& s) {
         if (wifi_assoc_probe(want, w)) wifi_assoc = w.associated;
     }
 
+    // ── CONNECT POLICY (NM drives wpa_supplicant) ──────────────────────────
+    // When auto_connect is on and there's NO usable link (no address yet), drive
+    // the connection: prefer Ethernet (a wired link with carrier just needs DHCP,
+    // handled by the kernel/networkd — nothing to do here), else auto-associate
+    // the highest-priority known WiFi profile that's in range. Throttled so a
+    // failing associate doesn't hammer wpa every tick.
+    if (s.auto_connect && !addr && !s.wifi_profiles.empty()) {
+        if (s.connect_cooldown > 0) {
+            --s.connect_cooldown;
+        } else if (obs.has_carrier && !nm_detail::is_wireless(want)) {
+            // A wired link has carrier but no address yet — leave DHCP to the
+            // system; don't drive wifi while ethernet is the live link.
+        } else {
+            // No usable wired link → pick a wifi profile that's visible and join.
+            std::string wif = wifi_iface(want);
+            if (!wif.empty()) {
+                WifiObservation scan = wifi_observe(wif);
+                int idx = pick_wifi_profile(s.wifi_profiles, scan.bss);
+                if (idx >= 0 && !scan.associated) {
+                    const auto& p = s.wifi_profiles[idx];
+                    ConnectResult cr = wifi_connect(wif, p.ssid, p.psk);
+                    log().info(std::string("auto-connect → '") + p.ssid + "' on " +
+                        wif + ": " + (cr.ok ? "ok" : "FAILED") + " (" + cr.note + ")");
+                    if (!cr.ok) {
+                        if (++s.connect_failures % 5 == 0)
+                            log().warn(std::string("wifi auto-connect failing (") +
+                                std::to_string(s.connect_failures) +
+                                " attempts) — health-degrade signal for PHM");
+                    } else {
+                        s.connect_failures = 0;
+                    }
+                    // Back off ~5 ticks to let association + DHCP settle.
+                    s.connect_cooldown = 5;
+                } else if (idx < 0) {
+                    // No known SSID in range — note once per cooldown window.
+                    s.connect_cooldown = 5;
+                }
+            }
+        }
+    }
+
     // VPN rung. Only meaningful once an address is up (the tunnel rides on the
     // LAN). When require_vpn=false the rung is SKIPPED — we treat it as trivially
     // satisfied (vpn_up == addr) so IP_ACQUIRED promotes straight to
@@ -171,12 +212,27 @@ void NmPoller::on_config_update(
     s.require_address = c.require_address;
     s.require_vpn     = c.require_vpn;
     s.vpn_interface   = c.vpn_interface;
+    s.auto_connect    = c.auto_connect;
+
+    // Known WiFi profiles (the connect-policy candidates).
+    s.wifi_profiles.clear();
+    for (pb_size_t i = 0; i < c.wifi_profiles_count; ++i) {
+        WifiProfileInfo p;
+        p.ssid     = c.wifi_profiles[i].ssid;
+        p.psk      = c.wifi_profiles[i].psk;
+        p.priority = c.wifi_profiles[i].priority;
+        s.wifi_profiles.push_back(std::move(p));
+    }
+    s.connect_cooldown = 0;   // allow an immediate connect attempt under the new policy
+
     // Re-prime so the next tick re-emits edges against the new interface/gate.
     s.primed = false;
     log().info(std::string("config: interfaces='") + c.interfaces +
         "' poll_ms=" + std::to_string(s.poll_ms) +
         " require_address=" + (s.require_address ? "true" : "false") +
         " require_vpn=" + (s.require_vpn ? "true" : "false") +
+        " auto_connect=" + (s.auto_connect ? "true" : "false") +
+        " profiles=" + std::to_string(s.wifi_profiles.size()) +
         " vpn_iface='" + s.vpn_interface + "'");
 }
 

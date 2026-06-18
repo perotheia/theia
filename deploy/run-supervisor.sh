@@ -1,39 +1,32 @@
 #!/usr/bin/env bash
-# deploy/run-supervisor.sh — container entrypoint + puppet convergence driver.
+# deploy/run-supervisor.sh — container entrypoint + Mender-style bring-up driver.
 #
-# Puppet is the always-on lifecycle agent. On a real host systemd runs it; in
-# docker this entrypoint runs it on each (re)start:
+# PUPPET IS GONE. The on-device UCM agent (services/ucm) is the always-on update
+# lifecycle agent (release-dir install/switch/rollback + config). This entrypoint
+# owns only FIRST-BOOT bring-up + crash re-exec:
 #
-#   1. puppet apply theia::provisioning   — etcd (one per cluster) + EMPTY
-#                                            executor.json (supervisor can boot).
-#   2. puppet apply theia::orchestration  — install the per-machine .ipk
-#                                            (supervisor + FCs) + the REAL
-#                                            executor.json + setcap.
-#   3. exec /opt/theia/bin/supervisor with the (real) executor.json.
+#   1. THIN provisioning (the 3 independent steps run IN PARALLEL — Mender-style,
+#      replacing the old serial puppet provision→orchestrate):
+#        (a) stage the current release tree + current symlink,
+#        (b) executor.json + per-FC config → /opt/theia/config/,
+#        (c) setcap the cap-needing binaries.
+#   2. exec /opt/theia/bin/supervisor (forks the FCs INCLUDING the UCM agent).
+#   3. first-boot config seed (per all-FC defaults → etcd) once per/etcd are up.
+#   4. on abnormal supervisor exit, re-provision + re-exec (bounded) — a transient
+#      config/binary issue self-heals; deliberate updates are the UCM agent's job.
 #
-# If the supervisor exits abnormally, we FALL BACK to puppet (re-converge:
-# re-run orchestration, then re-exec) rather than just dying — a transient
-# config/binary issue self-heals on the next pass.
-#
-# $machine = $HOSTNAME (compose sets central / compute). Manifests are
-# machine-generic: provisioning/orchestration read <machine>/{machine,
-# application,execution,executor}.json. No per-host .pp.
+# $machine = $HOSTNAME (compose sets central / compute). Inputs are
+# machine-generic: read <machine>/{machine,execution,executor}.json + config/.
 
 set -uo pipefail
 
 log() { echo "[run-supervisor] $*" >&2; }
 
 MACHINE="${HOSTNAME:-$(hostname)}"
-PUPPET_MODULES="/etc/puppet/modules"
-PUPPET_SITE="/etc/puppet"
-HIERA="/etc/puppet/hiera.yaml"
 SUPERVISOR_BIN="/opt/theia/bin/supervisor"
 EXECUTOR_JSON="/opt/theia/config/executor.json"
 
-# Puppet needs writable working dirs (the bind-mounted /etc/puppet is read-only).
-mkdir -p /var/lib/puppet/code /var/lib/puppet/var /var/lib/puppet/conf
-
-# $machine reaches the machine-generic classes via FACTER_theia_machine.
+# $machine reaches machine-generic reads via this fact (kept for compatibility).
 export FACTER_theia_machine="$MACHINE"
 
 # Bundled shared libs (e.g. libetcd-cpp-api.so for per) land at /opt/theia/lib
@@ -105,24 +98,90 @@ else
     log "no certs at ${_certs_dir} — com runs INSECURE"
 fi
 
-puppet_apply() {  # $1 = site manifest (provisioning.pp / orchestration.pp)
-    log "puppet apply $1 (machine=$MACHINE)"
-    puppet apply \
-        --confdir=/var/lib/puppet/conf \
-        --codedir=/var/lib/puppet/code \
-        --vardir=/var/lib/puppet/var \
-        --modulepath="$PUPPET_MODULES" \
-        --hiera_config="$HIERA" \
-        "$PUPPET_SITE/$1"
+# ── Mender-style THIN provisioning (replaces the Puppet converge) ───────────
+#
+# Puppet is gone. The on-device UCM agent (services/ucm) owns deliberate updates
+# (release-dir install/switch/rollback + config). This entrypoint owns only
+# first-boot BRING-UP + crash re-exec. The prep splits into INDEPENDENT steps run
+# in PARALLEL (provision ∥, not the old serial provision→orchestrate):
+#   (a) stage the current release tree:  /opt/theia/releases/<ver> + current→it,
+#       /opt/theia/bin → current/bin (so a UCM switch re-aims the platform).
+#   (b) stage executor.json + per-FC config into /opt/theia/config/.
+#   (c) setcap the cap-needing binaries (fw/nm/idsm/supervisor).
+# etcd is provided by the compose `etcd` service (FACTER_theia_etcd_external).
+THEIA_VERSION="${THEIA_VERSION:-1.0.0}"
+RELEASES="/opt/theia/releases"
+CURRENT="/opt/theia/current"
+
+provision_release() {            # (a) release-dir tree + current symlink
+    local rel="$RELEASES/$THEIA_VERSION"
+    mkdir -p "$rel"/{bin,lib,config,migrations,hooks}
+    # The .ipk / compose mount lands binaries at /opt/theia/bin + libs at /lib.
+    # Mirror them into the release (cp -al = hardlink, cheap) so `current` is the
+    # source of truth the UCM agent switches.
+    [[ -d /opt/theia/bin ]] && cp -aln /opt/theia/bin/.  "$rel/bin/"  2>/dev/null || true
+    [[ -d /opt/theia/lib ]] && cp -aln /opt/theia/lib/.  "$rel/lib/"  2>/dev/null || true
+    # Atomically point current → this release (rename of a temp symlink).
+    ln -sfn "$rel" "$CURRENT.tmp" && mv -Tf "$CURRENT.tmp" "$CURRENT"
+    log "provision(a): release $THEIA_VERSION staged, current → $rel"
+}
+
+provision_config() {             # (b) executor.json + per-FC config
+    local src="/etc/theia/manifest/${MACHINE}"
+    mkdir -p /opt/theia/config
+    [[ -f "$src/executor.json" ]] && cp -f "$src/executor.json" /opt/theia/config/
+    if [[ -d "$src/config" ]]; then
+        cp -f "$src"/config/*.json /opt/theia/config/ 2>/dev/null || true
+        log "provision(b): executor.json + $(ls "$src"/config/*.json 2>/dev/null | wc -l) FC config(s) staged"
+    else
+        log "provision(b): executor.json staged (no per-FC config dir)"
+    fi
+}
+
+provision_caps() {               # (c) setcap the cap-needing binaries
+    command -v setcap >/dev/null || { log "provision(c): no setcap — skip"; return 0; }
+    for b in supervisor fw nm idsm; do
+        [[ -x "/opt/theia/bin/$b" ]] && \
+            setcap cap_net_admin,cap_net_raw,cap_sys_nice+ep "/opt/theia/bin/$b" 2>/dev/null || true
+    done
+    log "provision(c): setcap applied (best-effort)"
 }
 
 converge() {
-    puppet_apply provisioning.pp  || log "WARN: provisioning had errors"
-    puppet_apply orchestration.pp || log "WARN: orchestration had errors"
+    # Run the three independent provisioning steps IN PARALLEL, wait for all.
+    provision_release & provision_config & provision_caps &
+    wait
+    log "thin provisioning complete (parallel) — no puppet"
 }
 
-# 1+2. Provision then orchestrate.
+# 1. Provision (parallel, Mender-style — replaces puppet provision→orchestrate).
 converge
+
+# 2. First-boot config seed (background): once per/etcd are up, push EVERY FC's
+#    declared config defaults into etcd (the PREP-B all-FC seeder). Only the
+#    etcd-host machine seeds (central); idempotent + best-effort + bounded retry
+#    (per is forked by the supervisor a few seconds in). NOT on the critical
+#    path — the supervisor boots regardless.
+seed_config() {
+    local tool="/opt/theia/migration/seed.py"
+    local defs="/opt/theia/config/seed_defaults.json"
+    local schema="/opt/theia/config/seed_schema.json"
+    [[ -f "$tool" && -f "$defs" ]] || { log "seed: no seeder/defaults — skip"; return 0; }
+    export THEIA_ROOT="/opt/theia"
+    for _ in $(seq 1 7); do
+        sleep 3
+        if python3 "$tool" defaults --defaults "$defs" --schema "$schema" \
+               >/dev/null 2>&1; then
+            log "seed: all-FC config defaults seeded into etcd (idempotent)"
+            return 0
+        fi
+    done
+    log "seed: defaults did not land within ~20s (per slow?) — non-fatal"
+}
+# Only the etcd host seeds (one writer per cluster). central declares etcd.
+if [[ "${FACTER_theia_etcd_external:-0}" == "1" || -f "/opt/theia/config/seed_defaults.json" ]]; then
+    seed_config &
+fi
 
 # 3. Run the supervisor; on abnormal exit, re-converge and retry (bounded).
 attempt=0
@@ -149,7 +208,7 @@ while true; do
         log "FATAL: supervisor failed to stay up after $attempt converge attempts"
         exit 1
     fi
-    log "re-converging (attempt $attempt) — puppet fallback"
+    log "re-provisioning (attempt $attempt) — thin re-converge + re-exec"
     sleep 3
     converge
 done

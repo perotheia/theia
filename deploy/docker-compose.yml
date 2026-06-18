@@ -84,20 +84,20 @@ services:
       - NET_RAW
       - NET_ADMIN
     volumes:
-      # Puppet drives provisioning/orchestration in-container (run-supervisor.sh).
-      # It needs: the puppet module tree + site manifests, the per-machine JSON
-      # manifests, and the built .ipk bundles. All read-only — puppet copies out
-      # of them into /opt/theia.
-      - ./puppet:/etc/puppet:ro
+      # NO PUPPET. run-supervisor.sh does thin in-container provisioning (stage
+      # the release tree + executor.json + per-FC config, setcap) directly. It
+      # needs the per-machine JSON manifests + the built .ipk bundles, read-only.
       - ../dist/manifest:/etc/theia/manifest:ro
       - ../bazel-bin/dist/manifest:/opt/theia/ipk:ro
+      # The VUCM artifact repo (theia-package.tar.zst + a campaign script). The
+      # self-hosted `vucm` service writes here; the UCM agent downloads from it.
+      - ./artifacts:/opt/theia/artifacts
       - ./logs/central:/var/log/theia
     environment:
       - HOSTNAME=central
       - TZ=UTC
-      # etcd is provided by the compose `etcd` service (not apt-installed into
-      # this minimal container); provisioning reads FACTER_theia_etcd_external and
-      # skips the in-image etcd install while honouring machine.json's etcd decl.
+      # etcd is provided by the compose `etcd` service; central is the etcd host
+      # (one writer per cluster) so it runs the first-boot all-FC config seed.
       - FACTER_theia_etcd_external=1
     restart: unless-stopped
 
@@ -115,10 +115,10 @@ services:
       - NET_RAW
       - NET_ADMIN
     volumes:
-      # Same puppet-driven provisioning inputs as central (compute has no etcd).
-      - ./puppet:/etc/puppet:ro
+      # Same thin-provisioning inputs as central (compute has no etcd, no seed).
       - ../dist/manifest:/etc/theia/manifest:ro
       - ../bazel-bin/dist/manifest:/opt/theia/ipk:ro
+      - ./artifacts:/opt/theia/artifacts
       - ./logs/compute:/var/log/theia
     environment:
       - HOSTNAME=compute
@@ -131,4 +131,30 @@ services:
       # here — run-supervisor.sh reads it from the manifest
       # (<machine>/execution.json.supervisor_instance, set by the rig's
       # SoftwareSpecification.supervisor). Manifest-driven, no hardcoded env.
+    restart: unless-stopped
+
+  # ── VUCM — the self-hosted fleet / Mender-server role ──────────────────────
+  # AUTOSAR VUCM = fleet campaign management (vs UCM = the on-device agent). In
+  # this self-hosted demo it's a thin sidecar: it OWNS the artifact repo
+  # (theia-package.tar.zst under ./artifacts, shared with central/compute) + a
+  # campaign script (deploy/vucm/campaign.sh) that triggers an update by reaching
+  # the on-device UCM agent through services/com gRPC (UcmView — the
+  # PerView/SupervisorView-style proxy) or, for the minimal demo, the artheia
+  # probe driving UcmDaemon.RequestUpdate. Idle by default (no auto-rollout);
+  # `docker compose exec vucm /opt/theia/vucm/campaign.sh <pkg>` pushes one.
+  vucm:
+    image: theia-central:latest          # reuse the framework image (has probe + python)
+    container_name: theia-vucm
+    network_mode: host
+    profiles: ["vucm"]                    # opt-in: docker compose --profile vucm up
+    depends_on: [central]
+    volumes:
+      - ./artifacts:/opt/theia/artifacts  # the artifact repo (release packages)
+      - ./vucm:/opt/theia/vucm:ro         # the campaign script
+      - ../dist/manifest:/etc/theia/manifest:ro
+    environment:
+      - HOSTNAME=vucm
+      - TZ=UTC
+    # No supervisor here — VUCM is a control sidecar. Stay alive for `exec`.
+    entrypoint: ["sleep", "infinity"]
     restart: unless-stopped

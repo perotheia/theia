@@ -1,7 +1,12 @@
 package system.services.ucm
 
 
+// The UCM agent process: the ctl front (UcmDaemon) + the {Gate;Fsm} update
+// state machine (UcmGate ingress/executor + UcmFsm). UcmTester is probe-only
+// (NOT a composition member). Mirrors sm (SmGate+SmDaemon) / phm (PhmGate+PhmFsm).
 composition Ucm {
     prototype UcmDaemon ucm_daemon
+    prototype UcmGate   ucm_gate
+    prototype UcmFsm    ucm_fsm
 }
 

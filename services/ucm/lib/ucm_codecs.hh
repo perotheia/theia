@@ -26,8 +26,20 @@
 #include "RemoteCodec.hh"   // THEIA_DECLARE_REMOTE_CODEC
 #include "system/services/ucm/ucm.pb.h"
 
+#include "system/services/phm/phm.pb.h"
 
 
 
-THEIA_DECLARE_REMOTE_CODEC(system_services_ucm_UcmRequest)
+THEIA_DECLARE_REMOTE_CODEC(system_services_ucm_UcmProgress)
+THEIA_DECLARE_REMOTE_CODEC(system_services_ucm_EvStartUpdate)
+THEIA_DECLARE_REMOTE_CODEC(system_services_ucm_EvDownloaded)
+THEIA_DECLARE_REMOTE_CODEC(system_services_ucm_EvValidated)
+THEIA_DECLARE_REMOTE_CODEC(system_services_ucm_EvStaged)
+THEIA_DECLARE_REMOTE_CODEC(system_services_ucm_EvInstalled)
+THEIA_DECLARE_REMOTE_CODEC(system_services_ucm_EvRestarted)
+THEIA_DECLARE_REMOTE_CODEC(system_services_ucm_EvVerified)
+THEIA_DECLARE_REMOTE_CODEC(system_services_ucm_EvFailed)
+THEIA_DECLARE_REMOTE_CODEC(system_services_ucm_EvRolledBack)
+THEIA_DECLARE_REMOTE_CODEC(system_services_phm_PhmHealthStatus)
+THEIA_DECLARE_REMOTE_CODEC(system_services_ucm_PackageManifest)
 THEIA_DECLARE_REMOTE_CODEC(system_services_ucm_UcmReply)

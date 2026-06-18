@@ -13,6 +13,10 @@ package(default_visibility = ["//visibility:public"])
 cc_library(
     name = "ucm_lib",
     hdrs = [
+        "UcmFsm.hh",
+        "UcmFsm_netgraph.hh",
+        "UcmGate.hh",
+        "UcmGate_netgraph.hh",
         "UcmDaemon.hh",
         "UcmDaemon_netgraph.hh",
         "ucm_codecs.hh",

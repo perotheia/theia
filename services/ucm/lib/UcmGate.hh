@@ -4,7 +4,7 @@
 // Lib slice — message wiring + class declaration for ONE node. An FC
 // may declare several nodes; each gets its own <Node>.hh (this file).
 // Regenerated on every gen-app run. User edits land in
-// impl/UcmDaemon_handlers.cc.
+// impl/UcmGate_handlers.cc.
 
 #pragma once
 
@@ -18,7 +18,7 @@
 // Included at GLOBAL scope (the header opens its own `namespace
 // system_services_ucm`) so it isn't nested under this file's
 // namespace block — bound as the GenServer State type below.
-#include "impl/UcmDaemon_state.hh"
+#include "impl/UcmGate_state.hh"
 
 #include <algorithm>
 #include <cstdint>
@@ -33,18 +33,26 @@
 namespace ara::ucm {
 
 
-// ---- UcmDaemon ----------------------------------------------------------
+// ---- UcmGate ----------------------------------------------------------
 
 // Local-namespace aliases over the nanopb C structs. The nanopb
 // generator prefixes types with the libc-safe proto package
 // (system_services_ucm_*); aliasing them here keeps callers'
 // signatures readable.
-using PackageManifest = system_services_ucm_PackageManifest;
-using UcmReply = system_services_ucm_UcmReply;
+using EvStartUpdate = system_services_ucm_EvStartUpdate;
+using EvDownloaded = system_services_ucm_EvDownloaded;
+using EvValidated = system_services_ucm_EvValidated;
+using EvStaged = system_services_ucm_EvStaged;
+using EvInstalled = system_services_ucm_EvInstalled;
+using EvRestarted = system_services_ucm_EvRestarted;
+using EvVerified = system_services_ucm_EvVerified;
+using EvFailed = system_services_ucm_EvFailed;
+using EvRolledBack = system_services_ucm_EvRolledBack;
+using PhmHealthStatus = system_services_phm_PhmHealthStatus;
 
 // statem block declared in .art — see the corresponding StateMBase
 // header produced by `artheia gen-cpp-stubs`. The daemon below
-// derives from UcmDaemonStateMBase (gen_statem-shaped); without
+// derives from UcmGateStateMBase (gen_statem-shaped); without
 // statem it would derive directly from GenServer.
 //
 // (The StateMBase emission is gen-cpp-stubs's job, not gen-app's;
@@ -55,10 +63,10 @@ using UcmReply = system_services_ucm_UcmReply;
 // gRPC. Subscribers MUST be best-effort.
 
 
-class UcmDaemon : public ::theia::runtime::GenServer<UcmDaemon, UcmDaemonState> {
+class UcmGate : public ::theia::runtime::GenServer<UcmGate, UcmGateState> {
 public:
-    static constexpr const char* kNodeName = "ucm_daemon";
-    static constexpr uint32_t kTipcType     = 0x8001000Eu;
+    static constexpr const char* kNodeName = "ucm_gate";
+    static constexpr uint32_t kTipcType     = 0x8001003Eu;
     static constexpr uint32_t kTipcInstance = 0u;
 
     // AUTOSAR Reporting / Non-Reporting flag (per .art `reporting`
@@ -74,7 +82,7 @@ public:
     // overload by name, so register_cast<LogLevelPush> wouldn't
     // resolve. This using-decl keeps both visible; overload resolution
     // then picks the right one per message type.
-    using ::theia::runtime::GenServer<UcmDaemon, UcmDaemonState>::handle_cast;
+    using ::theia::runtime::GenServer<UcmGate, UcmGateState>::handle_cast;
 
     // ---- Trace config (reporting=true only) -----------------------
     //
@@ -113,7 +121,7 @@ public:
     // delivered as untyped bytes. Cross-node traffic is exclusively typed
     // cast/call. The only handle_info is the LOCAL string clause below
     // (post_info / self-tick).
-    void terminate(const char* /*reason*/, UcmDaemonState& /*s*/) noexcept {}
+    void terminate(const char* /*reason*/, UcmGateState& /*s*/) noexcept {}
 
     // ---- handle_cast / handle_call — declared here, body in impl
     //
@@ -123,26 +131,54 @@ public:
     // gets emitted once. handle_call/handle_cast dispatch by
     // request type, not by port.
 
+    void handle_cast(const EvStartUpdate& msg, UcmGateState& s);
 
-    UcmReply handle_call(const PackageManifest& req,
-                                            UcmDaemonState& s);
+    void handle_cast(const EvDownloaded& msg, UcmGateState& s);
+
+    void handle_cast(const EvValidated& msg, UcmGateState& s);
+
+    void handle_cast(const EvStaged& msg, UcmGateState& s);
+
+    void handle_cast(const EvInstalled& msg, UcmGateState& s);
+
+    void handle_cast(const EvRestarted& msg, UcmGateState& s);
+
+    void handle_cast(const EvVerified& msg, UcmGateState& s);
+
+    void handle_cast(const EvFailed& msg, UcmGateState& s);
+
+    void handle_cast(const EvRolledBack& msg, UcmGateState& s);
+
+    void handle_cast(const PhmHealthStatus& msg, UcmGateState& s);
 
 
-    // ---- OTP init/1 — body in impl (UcmDaemon_handlers.cc) ----------
+
+    // ---- OTP init/1 — body in impl (UcmGate_handlers.cc) ----------
     //
     // Called ONCE by the runtime on this node's thread after start(),
     // before the first mailbox item (GenServer::dispatch_init_). A
     // self-driving node bootstraps its work loop here (e.g.
     // ::theia::runtime::post_info(*this, "tick")); a passive node leaves it
     // empty. Emitted for every node so the hook is always visible.
-    void init(UcmDaemonState& s);
+    void init(UcmGateState& s);
 
     // ---- string handle_info — body in impl ----------------------------
     //
     // The post_info()/send_after() string-message path (timer loops,
     // internal ticks). LOCAL-ONLY opaque signal — never crosses the wire.
     // Declared so a node can override the GenServer base no-op in its impl.
-    void handle_info(const char* info, UcmDaemonState& s);
+    void handle_info(const char* info, UcmGateState& s);
+
+    // ---- config update — body in impl (UcmGate_handlers.cc) -------
+    //
+    // This node binds `config UcmConfig`. services/per casts a
+    // platform.runtime.ConfigUpdated when the etcd-backed config changes; the
+    // GenServer base decodes the envelope + logs, then calls this hook. Declared
+    // (shadowing the base no-op) so the node can apply its typed config LIVE —
+    // ParseFromString cfg.config into UcmConfig and honor the changed mask.
+    // A node that only reads config at boot leaves the impl body empty.
+    void on_config_update(const platform_runtime_ConfigUpdated& cfg,
+                          UcmGateState& s);
 
     // ---- send helpers — bodies in impl (the broadcast fan-out)
 

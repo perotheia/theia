@@ -16,6 +16,9 @@ cc_library(
     name = "ucm_state",
     hdrs = [
         "UcmDaemon_state.hh",
+        "UcmGate_state.hh",
+        # UcmFsm is a statem node — its "state" is the FSM enum/data in the lib,
+        # not a hand-owned _state.hh (gen-app emits none for statem nodes).
     ],
     # The lib #includes these as "impl/<Node>_state.hh", so the include
     # root is the FC out_dir (one above impl/).
@@ -28,6 +31,8 @@ cc_library(
     name = "ucm_impl",
     srcs = [
         "UcmDaemon_handlers.cc",
+        "UcmGate_handlers.cc",
+        "UcmFsm_handlers.cc",
     ],
     copts = [
         "-std=c++17",

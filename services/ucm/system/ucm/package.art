@@ -1,62 +1,239 @@
-// Ucm (UCM) — Adaptive Platform Functional Cluster.
+// Ucm (UCM) — AUTOSAR-Adaptive Update & Configuration Management FC.
 //
-// Implementation:
-//   OTA update agent. UcmDaemon talks to a local puppet agent to
-//   trigger / report on package updates; the customer fleet manager
-//   reaches us through services/com (gRPC).
+// The ON-DEVICE update agent (the Mender `mender-update` analogue). It applies
+// Software Packages (binaries/libs/assets, via release directories) and
+// Configuration Packages (etcd config + props), with health-gated rollback —
+// NOT A/B partitions: `/opt/theia/releases/<ver>` + `current`/`previous`
+// symlinks, atomic switch + rollback in seconds. The FLEET side (VUCM / a
+// self-hosted Mender-like server) reaches this agent through services/com gRPC.
+// Replaces the Puppet provision/orchestrate driver. See
+// docs/tasks/PROGRESS/{UCM-VUCM,puppet-provision-orchestrate}.md.
 //
-// Communication shape:
-//   `UpdateCtl` is a clientServer for external Update Clients (the
-//   GUI / fleet manager forward `RequestUpdate` via services/com).
-//   UcmDaemon SUBSCRIBES to SmStateStream so it can pause updates
-//   when the platform is not in RUNNING, and it PERSISTS update
-//   progress via per. It emits log records.
+// Shape: the {Gate; Fsm} split used by services/sm and services/phm —
+//   - UcmFsm  : the agent state machine (IDLE→…→ACTIVE/ROLLBACK), takes NO
+//               external messages; UcmGate post_event()s into it in-process.
+//   - UcmGate : the ONLY TIPC-reachable surface. Owns the release-dir ops,
+//               drives the supervisor (partial), SM (full UPDATE mode), crypto
+//               (signature verify), per (persist), and gates on PHM health.
+//   - UcmDaemon: the ctl front (UpdateCtl.RequestUpdate) — parses a package
+//               manifest + post_event's EvStartUpdate into UcmFsm.
 
 package system.services.ucm
 
-interface senderReceiver SmStateStream { }  // from system.services.sm
-interface clientServer   PersistencyIf { }  // from system.services.per
+// Pull PHM's real PhmHealthStatus into scope so UcmGate's from_phm receiver
+// decodes it (the health gate before VERIFYING→ACTIVE). Same mechanism SM's
+// FgGate uses: import materializes the MESSAGE, then we re-declare the carrier
+// interface locally (the service_id keys on the message's defining package, so
+// the wire id matches phm's sender).
+import system.services.phm.*
+// phm transitively imports system.supervisor.*; pull it here too so phm's
+// supervisor-typed references (SupervisionEvent/HeartbeatReport) resolve during
+// gen-app's cross-ref scan (the 2-hop ucm→phm→supervisor case). Also gives us
+// the real SupervisorControlIf for the to_sup edge.
+import system.supervisor.*
+
+// ─── Cross-FC forward-decls (materialized from the imported packages) ───────
+interface senderReceiver SmStateStream   { }  // from system.services.sm
+interface clientServer   PersistencyIf   { }  // from system.services.per
+interface clientServer   StateMgmtCtl    { }  // from system.services.sm — RequestMode(UPDATE)
+interface clientServer   CryptoProviderIf { } // from system.services.crypto — verify sig
+interface clientServer   SupervisorCtl   { }  // from system.supervisor — Start/Terminate child
+
+// PHM health carrier — re-declared locally with phm's real PhmHealthStatus (from
+// the import), exactly as SM does. UcmGate's from_phm receives a DEGRADED/FAILED
+// verdict on the FC under test and turns it into EvFailed → ROLLBACK.
+interface senderReceiver PhmHealthStream { data PhmHealthStatus health }
+
+// ─── The AUTOSAR SW/config split + update scope ─────────────────────────────
+
+// Software Package (binaries/libs/assets) vs Configuration Package (etcd config
+// + secrets/calibration/props) — versioned + applied separately.
+enum UpdateKind  { UK_SOFTWARE = 0   UK_CONFIG = 1 }
+// Whole-platform (symlink switch + SM UPDATE mode) vs one FC (stop/swap/start,
+// no platform restart) — the partial upgrade is the important embedded case.
+enum UpdateScope { US_FULL = 0       US_PARTIAL = 1 }
+
+// The package manifest (manifest.json inside theia-package.tar.zst), on the wire.
+message PackageManifest {
+    string  name           // "theia" (full) or an FC name (partial), e.g. "phm"
+    string  version        // target release version, e.g. "1.2.0"
+    UpdateKind  kind
+    UpdateScope scope
+    string  artifact_path  // staged tar.zst path the download landed at
+    string  signature      // detached signature, verified via to_crypto pre-install
+    repeated string requires  // dependency constraints ("runtime>=1.3")
+    repeated string fcs       // FCs touched (partial: the one FC; full: all)
+    bool    has_migrations    // run migrations (per MigrateBulk / package hooks/) after switch
+}
+
+// ─── ctl front (external Update Clients / com → UCM) ────────────────────────
 
 message UcmRequest { string package_id    string version }
 message UcmReply   { uint32 status }
 
-// UCM → SM "ask for UPDATE mode" (per sm.md §3.B: "UCM must ask SM
-// to enter Update Mode to stop non-essential apps before flashing").
-// Reverses the direction of most cooperation arrows — UCM is a
-// client of SM's StateMgmtCtl, not the other way around. The .art
-// captures the contract by way of UCM's outbound client port to SM.
-message UpdateModeRequest {
-    string  package_id
-    bool    enter            // true = "enter UPDATE", false = "leave"
-}
-
-// Forward decl of SM's mode control. The actual interface lives in
-// system.services.sm; this re-declares the type so UCM's `to_sm`
-// client port can `requires` it without depending on the loader
-// resolving cross-package interfaces (artheia handles cross-package
-// refs but the per-FC codegen is happier with local decls).
-interface clientServer StateMgmtCtl { }
-
-// crypto edge — UCM verifies a software cluster's signature BEFORE install
-// (ucm.md §3, crypto.md §6: "UCM verifies the digital signature of software
-// clusters before installation"). CALL: UCM drives a VERIFIER context
-// (CreateCtx/CtxStart/CtxUpdate/CtxFinish) and blocks for the verdict. Empty
-// forward-decl; the real messages live in system.services.crypto.
-interface clientServer CryptoProviderIf { }  // from system.services.crypto
-
+// RequestUpdate carries the full manifest (com forwards the fleet campaign).
 interface clientServer UpdateCtl {
-    operation RequestUpdate(in r:UcmRequest) returns UcmReply
+    operation RequestUpdate(in r:PackageManifest) returns UcmReply
 }
 
+// ─── Agent FSM events (post_event'd IN-PROCESS by UcmGate into UcmFsm) ───────
+//
+// One message per event (GenStateM per-event overload dispatch, the PhmFsm
+// FaultObserved/FaultEscalate idiom). Never carried over the wire — UcmGate is
+// the only ingress; the statem takes no external messages.
+message EvStartUpdate  { }   // RequestUpdate landed + manifest parsed — begin
+message EvDownloaded   { }   // artifact present locally
+message EvValidated    { }   // crypto signature verdict OK
+message EvStaged       { }   // release dir materialised under releases/<ver>
+message EvInstalled    { }   // symlink switched (full) / binary swapped (partial)
+message EvRestarted    { }   // supervisor brought the FC(s) back on the new release
+message EvVerified     { }   // PHM health gate passed within the verify budget
+message EvFailed       { }   // any step failed OR health gate failed → ROLLBACK
+message EvRolledBack   { }   // previous restored + restarted clean
+
+// ─── Progress (FSM data = persisted progress = broadcast payload) ───────────
+//
+// Mirrors SmStateMsg / PhmHealthStatus: the FSM `data`, the broadcast on every
+// transition, and what per persists. UcmState ordinals are the agent lifecycle.
+enum UcmState {
+    IDLE        = 0
+    DOWNLOADED  = 1
+    VALIDATED   = 2
+    STAGED      = 3
+    INSTALLING  = 4
+    RESTARTING  = 5
+    VERIFYING   = 6
+    ACTIVE      = 7
+    ROLLBACK    = 8
+}
+message UcmProgress {
+    UcmState    state
+    string      version        // target version in flight
+    UpdateKind  kind
+    UpdateScope scope
+    string      detail         // human note (last step / error)
+    uint64      ts_ns
+}
+
+interface senderReceiver UcmProgressStream { data UcmProgress progress }
+
+// The gate's in-process FSM ingress (the probe/UcmDaemon post these; the FSM is
+// never driven directly off the wire — the statem-takes-no-external rule).
+interface senderReceiver UcmLifecycleIn {
+    data EvStartUpdate start
+    data EvDownloaded  downloaded
+    data EvValidated   validated
+    data EvStaged      staged
+    data EvInstalled   installed
+    data EvRestarted   restarted
+    data EvVerified    verified
+    data EvFailed      failed
+    data EvRolledBack  rolled_back
+}
+
+// ─── Runtime config (etcd-backed via services/per) ──────────────────────────
+
+message UcmConfig {
+    // The release-tree root. `current`/`previous` symlinks + releases/<ver>/
+    // live here. Defaults to the deployed prefix.
+    string releases_root  = "/opt/theia/releases"
+    // How long (ms) UcmFsm stays in VERIFYING watching PHM health before it
+    // commits to ACTIVE. A non-OK verdict inside the window → ROLLBACK.
+    uint32 verify_budget_ms = 30000
+    // How many committed releases to keep (older ones pruned after ACTIVE).
+    uint32 retain_releases  = 3
+}
+
+// ─── Nodes — the {Gate; Fsm} split ──────────────────────────────────────────
+
+// The agent state machine. tipc 0x8001001E. Broadcasts UcmProgress on every
+// transition (→ com UcmView / fleet) + persists via per. Takes NO external
+// messages — UcmGate post_event()s into it (sm/phm gate→fsm idiom).
+node atomic UcmFsm {
+    tipc type=0x8001001E instance=0
+    tag = "UCMF"
+    ports {
+        sender progress provides UcmProgressStream
+    }
+    statem {
+        states  [IDLE, DOWNLOADED, VALIDATED, STAGED, INSTALLING,
+                 RESTARTING, VERIFYING, ACTIVE, ROLLBACK]
+        initial IDLE
+        data    UcmProgress
+
+        on IDLE:
+            event EvStartUpdate → DOWNLOADED
+
+        on DOWNLOADED:
+            event EvValidated   → VALIDATED
+            event EvFailed      → ROLLBACK
+
+        on VALIDATED:
+            event EvStaged      → STAGED
+            event EvFailed      → ROLLBACK
+
+        on STAGED:
+            event EvInstalled   → INSTALLING
+            event EvFailed      → ROLLBACK
+
+        on INSTALLING:
+            event EvRestarted   → RESTARTING
+            event EvFailed      → ROLLBACK
+
+        on RESTARTING:
+            event EvVerified    → VERIFYING
+            event EvFailed      → ROLLBACK
+
+        on VERIFYING:
+            event EvVerified    → ACTIVE       // PHM-gated commit
+            event EvFailed      → ROLLBACK
+
+        on ACTIVE:
+            event EvStartUpdate → DOWNLOADED    // next campaign
+
+        on ROLLBACK:
+            event EvRolledBack  → IDLE
+    }
+}
+
+// The agent ingress + executor. tipc 0x8001003E. The ONLY TIPC-reachable UCM
+// surface: receives the lifecycle events, runs the release-dir ops, drives the
+// supervisor (partial), SM (full UPDATE mode), crypto (verify), per (persist),
+// and gates on PHM health before commit. requires_timers for the verify window.
+node atomic UcmGate {
+    tipc type=0x8001003E instance=0
+    requires_timers
+    tag = "UCMG"
+    config UcmConfig
+    ports {
+        receiver lifecycle requires UcmLifecycleIn   // in-process FSM events
+        receiver from_phm  requires PhmHealthStream  // health gate before commit
+        client   to_sup    requires SupervisorCtl    // partial: stop/start one child
+        client   to_sm     requires StateMgmtCtl     // full: ask SM for UPDATE mode
+        client   to_per    requires PersistencyIf    // persist UcmProgress
+        client   to_crypto requires CryptoProviderIf // verify package signature pre-install
+    }
+}
+
+// The ctl front (external Update Clients / com forward RequestUpdate here).
+// tipc 0x8001000E (the FC's historic slot). Parses the PackageManifest, persists
+// it, and post_event's EvStartUpdate into UcmFsm via a LocalRef<UcmFsm>.
 node atomic UcmDaemon {
     tipc type=0x8001000E instance=0
     tag = "UCM"
     ports {
         server   ctl     provides UpdateCtl
-        receiver from_sm requires SmStateStream
-        client   to_sm   requires StateMgmtCtl
+        receiver from_sm requires SmStateStream      // pause updates outside RUNNING
         client   to_per  requires PersistencyIf
-        // crypto edge: verify a package signature before flashing. CALL.
-        client   to_crypto requires CryptoProviderIf
+    }
+}
+
+// Test-only probe driver. Posts the Ev* lifecycle events at UcmGate to drive the
+// agent FSM standalone (services/ucm/test), like SmTester/PhmTester. NOT deployed.
+node atomic UcmTester {
+    tipc type=0x8001009E instance=0
+    tag = "UCMT"
+    ports {
+        sender to_gate provides UcmLifecycleIn
     }
 }

@@ -4,6 +4,40 @@
 syntax = "proto3";
 package system_services_ucm;
 
+enum UpdateKind {
+    UpdateKind_UK_SOFTWARE = 0;
+    UpdateKind_UK_CONFIG = 1;
+}
+
+enum UpdateScope {
+    UpdateScope_US_FULL = 0;
+    UpdateScope_US_PARTIAL = 1;
+}
+
+enum UcmState {
+    UcmState_IDLE = 0;
+    UcmState_DOWNLOADED = 1;
+    UcmState_VALIDATED = 2;
+    UcmState_STAGED = 3;
+    UcmState_INSTALLING = 4;
+    UcmState_RESTARTING = 5;
+    UcmState_VERIFYING = 6;
+    UcmState_ACTIVE = 7;
+    UcmState_ROLLBACK = 8;
+}
+
+message PackageManifest {
+    string name = 1;
+    string version = 2;
+    UpdateKind kind = 3;
+    UpdateScope scope = 4;
+    string artifact_path = 5;
+    string signature = 6;
+    repeated string requires = 7;
+    repeated string fcs = 8;
+    bool has_migrations = 9;
+}
+
 message UcmRequest {
     string package_id = 1;
     string version = 2;
@@ -13,8 +47,54 @@ message UcmReply {
     uint32 status = 1;
 }
 
-message UpdateModeRequest {
-    string package_id = 1;
-    bool enter = 2;
+message EvStartUpdate {
+    // empty body
+}
+
+message EvDownloaded {
+    // empty body
+}
+
+message EvValidated {
+    // empty body
+}
+
+message EvStaged {
+    // empty body
+}
+
+message EvInstalled {
+    // empty body
+}
+
+message EvRestarted {
+    // empty body
+}
+
+message EvVerified {
+    // empty body
+}
+
+message EvFailed {
+    // empty body
+}
+
+message EvRolledBack {
+    // empty body
+}
+
+message UcmProgress {
+    UcmState state = 1;
+    string version = 2;
+    UpdateKind kind = 3;
+    UpdateScope scope = 4;
+    string detail = 5;
+    uint64 ts_ns = 6;
+}
+
+message UcmConfig {
+    string releases_root = 1;
+    uint32 verify_budget_ms = 2;
+    uint32 retain_releases = 3;
 }
 

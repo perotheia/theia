@@ -16,7 +16,7 @@
 // derived from the .art), so the struct lives in a WRITE-ONCE impl header
 // (seeded empty, never clobbered without --force) that the user fills in.
 // Included at GLOBAL scope (the header opens its own `namespace
-// ara::sm`) so it isn't nested under this file's
+// system_services_sm`) so it isn't nested under this file's
 // namespace block — bound as the GenServer State type below.
 #include "impl/FgGate_state.hh"
 

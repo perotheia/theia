@@ -23,6 +23,7 @@
 
 #include <cstring>
 #include <string>
+#include <vector>
 
 // The supervisor control types crossing the wire need a RemoteCodec so RemoteRef
 // dispatches them to the same service_id the supervisor's register_call uses.
@@ -77,14 +78,38 @@ struct SmSupLink {
     }
 };
 
-// FG id → the supervision sub-tree it maps to (State-Management.md §1). v1:
-// MachineFG(0) drives app_sup (stop non-essential apps on degrade; the safety/
-// platform FGs stay up). A multi-FG build extends this map.
+// The Function Groups SM manages, each mapped to a supervisor supervision
+// sub-tree (State-Management.md §1). MULTI-FG: FgGate tracks per-FG state +
+// drives each FG's sub-tree independently. MachineFG is the whole machine
+// (root); the rest are layer FGs. Keep the ids stable — PhmHealthStatus.fg +
+// the FgLifecycleIn events address an FG by this ordinal.
+enum FgId : uint32_t {
+    FG_MACHINE  = 0,   // the whole machine (root) — used by the demo MachineFG FSM
+    FG_PLATFORM = 1,   // core_sup — the platform layer (com/per/sm/crypto/…)
+    FG_NETWORK  = 2,   // network_sup — nm/osi/idsm/diag/tsync
+    FG_HOSTSVC  = 3,   // host_svc_sup
+    FG_APP      = 4,   // app_sup — the vendor application layer
+};
+
+// FG id → the supervision sub-tree it maps to. An unknown id falls back to
+// app_sup (the safest thing to stop on an unrecognised degrade).
 inline std::string fg_subtree(uint32_t fg) {
     switch (fg) {
-        case 0:  return "app_sup";       // MachineFG → the application layer
-        default: return "app_sup";
+        case FG_MACHINE:  return "root";
+        case FG_PLATFORM: return "core_sup";
+        case FG_NETWORK:  return "network_sup";
+        case FG_HOSTSVC:  return "host_svc_sup";
+        case FG_APP:      return "app_sup";
+        default:          return "app_sup";
     }
+}
+
+// The FGs SM brings up/down as a set (for the broadcast-all-FGs paths). Excludes
+// FG_MACHINE (that's the aggregate, not a stoppable sub-tree on its own).
+inline const std::vector<uint32_t>& managed_fgs() {
+    static const std::vector<uint32_t> v = {
+        FG_PLATFORM, FG_NETWORK, FG_HOSTSVC, FG_APP };
+    return v;
 }
 
 }  // namespace ara::sm

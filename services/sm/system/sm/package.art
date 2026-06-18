@@ -106,14 +106,18 @@ enum FgState {
 // multi-instance fan-out address each group.
 message FgStatusMsg { uint32 fg    FgState state    uint64 ts_ns }
 
-// FG FSM-internal events (post_event()'d in-process by FgGate, same split as the
-// machine FSM). Distinct types → GenStateM per-event overload dispatch.
-message FgStart    { }   // SM machine-mode → bring this FG up (Off → Startup)
-message FgStarted  { }   // every mapped child reported alive (Startup → Running)
-message FgStop     { }   // SM machine-mode → bring this FG down (→ Shutdown)
-message FgStopped  { }   // every mapped child confirmed stopped (Shutdown → Off)
-message FgDegraded { }   // PHM health: this FG is failing → recover (→ Restart)
-message FgRetry    { }   // recovery hold-off elapsed (Restart → Startup)
+// FG lifecycle events. Each carries `fg` — the Function Group id it targets — so
+// FgGate routes it to the right per-FG state (MULTI-FG: the gate tracks a
+// per-FG state map and drives each FG's mapped sub-tree independently). The
+// FunctionGroupSm statem reference node ignores `fg` (it's the MachineFG=0
+// template); the gate is the per-FG authority. Distinct types → GenStateM /
+// gate per-event overload dispatch.
+message FgStart    { uint32 fg }   // SM machine-mode → bring this FG up (Off → Startup)
+message FgStarted  { uint32 fg }   // every mapped child reported alive (Startup → Running)
+message FgStop     { uint32 fg }   // SM machine-mode → bring this FG down (→ Shutdown)
+message FgStopped  { uint32 fg }   // every mapped child confirmed stopped (Shutdown → Off)
+message FgDegraded { uint32 fg }   // PHM health: this FG is failing → recover (→ Restart)
+message FgRetry    { uint32 fg }   // recovery hold-off elapsed (Restart → Startup)
 
 interface senderReceiver FgLifecycleIn {
     data FgStart    fg_start

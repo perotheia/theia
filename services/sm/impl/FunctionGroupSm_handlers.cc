@@ -15,7 +15,6 @@
 // observable. Replace with real behaviour as the FC matures.
 
 #include "lib/FunctionGroupSm.hh"
-#include "impl/sm_sup_link.hpp"   // SM→EM execute: stop/start a sub-tree via supervisor
 
 #include "NodeRef.hh"   // theia::runtime::LocalRef — publish self to FgGate
 
@@ -71,35 +70,12 @@ void FunctionGroupSm::on_enter(FunctionGroupSmState new_s,
     // the lock + invokes outside it, so a slow subscriber can't stall the FSM.
     broadcast_broadcast_fg_state(d);
 
-    // SM→EM EXECUTE (State-Management.md §4): SM DECIDED the desired FG state;
-    // drive the supervisor (Theia's Execution Management) to REALISE it by
-    // stopping/starting the FG's mapped supervision sub-tree. We reuse the
-    // supervisor's TerminateChild(no_restart) / StartChild over a RemoteRef
-    // (sm_sup_link) — the nested cross-FC call from a handler is safe + proven
-    // (runtime case_nested_remoteref_call). A single targeted call (not a
-    // fan-out), so a brief block on the FSM thread here is acceptable; the
-    // supervisor replies in ms. crash-recovery stays the supervisor's job —
-    // no_restart=true keeps SM's desired-OFF from fighting an autonomous restart.
-    const std::string subtree = fg_subtree(d.fg);
-    switch (new_s) {
-    case FunctionGroupSmState::FG_RESTART:    // PHM degraded → stop non-essential
-    case FunctionGroupSmState::FG_SHUTDOWN:   // SM mode → bring the FG down
-        if (SmSupLink::instance().stop_subtree(subtree))
-            this->log().info(std::string("SM→EM: stopped sub-tree '") + subtree +
-                "' (FG desired-OFF)");
-        else
-            this->log().warn(std::string("SM→EM: stop '") + subtree +
-                "' did not land (supervisor reachable?)");
-        break;
-    case FunctionGroupSmState::FG_RUNNING:    // FG up + healthy → ensure started
-    case FunctionGroupSmState::FG_STARTUP:    // SM mode → bring the FG up
-        if (SmSupLink::instance().start_subtree(subtree))
-            this->log().info(std::string("SM→EM: started sub-tree '") + subtree +
-                "' (FG desired-ON)");
-        break;
-    default:
-        break;   // FG_OFF: the stop already happened in FG_SHUTDOWN
-    }
+    // NOTE: the SM→EM EXECUTE drive (stop/start the FG's sub-tree via the
+    // supervisor) now lives in FgGate — the MULTI-FG authority — which tracks a
+    // per-FG state map + drives each FG's sub-tree by msg.fg. This statem node is
+    // the MachineFG(0) REFERENCE FSM: it owns the canonical STATEM trace + the
+    // FgStateStream broadcast, but no longer drives EM itself (the gate does, so
+    // we don't double stop/start). See FgGate_handlers.cc fg_transition().
 }
 
 }  // namespace ara::sm

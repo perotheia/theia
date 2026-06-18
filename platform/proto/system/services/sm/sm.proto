@@ -69,26 +69,26 @@ message FgStatusMsg {
 }
 
 message FgStart {
-    // empty body
+    uint32 fg = 1;
 }
 
 message FgStarted {
-    // empty body
+    uint32 fg = 1;
 }
 
 message FgStop {
-    // empty body
+    uint32 fg = 1;
 }
 
 message FgStopped {
-    // empty body
+    uint32 fg = 1;
 }
 
 message FgDegraded {
-    // empty body
+    uint32 fg = 1;
 }
 
 message FgRetry {
-    // empty body
+    uint32 fg = 1;
 }
 

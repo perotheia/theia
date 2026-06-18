@@ -187,6 +187,28 @@ cc_library(
     ],
 )
 
+# nm (network management) proxy link — isolated nanopb TU like per_link. Includes
+# the NANOPB nm headers (nm_codecs.hh → nm.pb.h) for the GetNetworkStatus/WifiScan
+# RemoteRef-calls to NmDaemon (0x8001002E); com_impl's gRPC edge sees only
+# nm_link.hpp's primitive NmStatusInfo/NmWifiScanInfo surface.
+cc_library(
+    name = "nm_link",
+    srcs = ["nm_link.cc"],
+    hdrs = ["nm_link.hpp"],
+    includes = [".."],
+    copts = [
+        "-std=c++17",
+        "-Wall",
+        "-Wextra",
+        "-fPIC",
+    ],
+    deps = [
+        "//platform/runtime:runtime",
+        # nanopb nm structs (system/services/nm/nm.pb.h) + nm_codecs.hh, via nm_lib.
+        "//services/nm/lib:nm_lib",
+    ],
+)
+
 # machine_manifest — com's read-only index→name map of the cluster machines,
 # loaded once from THEIA_MACHINE_MANIFEST (exported by the supervisor, inherited
 # by com). Used to label per-machine telemetry (the AccelSample demux) with a
@@ -248,6 +270,10 @@ cc_library(
         # ComGrpcProxy_handlers.cc's PerView only sees per_link.hpp's
         # primitive PerSchema/PerOpReply surface.
         ":per_link",
+        # nm (network management) proxy link (nanopb, isolated above).
+        # ComGrpcProxy_handlers.cc's NmView only sees nm_link.hpp's primitive
+        # NmStatusInfo/NmWifiScanInfo surface.
+        ":nm_link",
         # SHWA AccelTelemetry egress receiver (raw-bytes, isolated above).
         # ComGrpcProxy_handlers.cc folds AccelSample into the Subscribe stream.
         ":shwa_link",

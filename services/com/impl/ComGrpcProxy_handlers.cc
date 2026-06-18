@@ -40,6 +40,7 @@
 
 #include "impl/sup_link.hpp"      // #418 control path over the standard transport
 #include "impl/per_link.hpp"      // per (persistency) proxy — ListSchemas/Snapshot
+#include "impl/nm_link.hpp"       // nm (network mgmt) proxy — GetStatus/WifiScan
 #include "impl/shwa_link.hpp"     // SHWA AccelTelemetry egress receiver (GPU/host)
 #include "impl/machine_manifest.hpp"  // cluster index→name map (per-machine label)
 #include "impl/com_tls.hpp"       // shared TLS-or-insecure ServerCredentials
@@ -603,6 +604,59 @@ private:
     }
 };
 
+// ---- gRPC service: NmView — proxy services/nm's readiness + wifi -----------
+// com proxies nm's GetNetworkStatus (the ladder) + WifiScan (visible APs) over
+// gRPC so the GUI/rtdb get a wifi view without a TIPC client. NmLink RemoteRef-
+// calls NmDaemon (TIPC 0x8001002E); this edge translates nm's primitive
+// NmStatusInfo/NmWifiScanInfo ↔ the libprotobuf NmView messages.
+class NmViewImpl final : public services::com::NmView::Service {
+public:
+    grpc::Status GetStatus(
+            grpc::ServerContext*,
+            const services::com::NmStatusCall*,
+            services::com::NmStatus* out) override {
+        services_com::NmStatusInfo s;
+        if (!services_com::NmLink::instance().get_status(s))
+            return nm_unavailable();
+        out->set_state(s.state);
+        out->set_interface(s.interface);
+        out->set_has_carrier(s.has_carrier);
+        out->set_has_address(s.has_address);
+        out->set_vpn_up(s.vpn_up);
+        out->set_ts_ns(s.ts_ns);
+        return grpc::Status::OK;
+    }
+
+    grpc::Status WifiScan(
+            grpc::ServerContext*,
+            const services::com::WifiScanCall* req,
+            services::com::NmWifiScan* out) override {
+        services_com::NmWifiScanInfo r;
+        if (!services_com::NmLink::instance().wifi_scan(
+                req ? req->interface() : "", r))
+            return nm_unavailable();
+        out->set_interface(r.interface);
+        out->set_associated(r.associated);
+        out->set_assoc_ssid(r.assoc_ssid);
+        out->set_assoc_bssid(r.assoc_bssid);
+        for (const auto& b : r.bss) {
+            auto* row = out->add_bss();
+            row->set_ssid(b.ssid);
+            row->set_bssid(b.bssid);
+            row->set_signal_dbm(b.signal_dbm);
+            row->set_freq_mhz(b.freq_mhz);
+            row->set_security(b.security);
+        }
+        return grpc::Status::OK;
+    }
+
+private:
+    static grpc::Status nm_unavailable() {
+        return grpc::Status(grpc::StatusCode::UNAVAILABLE,
+                            "network-management link (nm) unavailable / timeout");
+    }
+};
+
 // ---- File-static runnable state (one ComGrpcProxy per process) -----------
 // Held here rather than as ComGrpcProxy members so lib/ComGrpcProxy.hh stays
 // byte-stable against gen-app. do_start builds them; do_stop tears them down.
@@ -610,6 +664,7 @@ private:
 // no ComDaemon cast-sink wiring — Subscribe pulls on an interval.
 std::unique_ptr<SupervisorViewImpl>         g_sup_svc;
 std::unique_ptr<PerViewImpl>                g_per_svc;
+std::unique_ptr<NmViewImpl>                 g_nm_svc;
 std::unique_ptr<grpc::Server>               g_server;
 std::atomic<bool>                           g_up{false};
 
@@ -680,6 +735,21 @@ void ComGrpcProxy::do_start() {
                          kNodeName);
     }).detach();
 
+    // Same detached-link treatment for nm (network management): NmView RPCs
+    // return UNAVAILABLE until NmDaemon (0x8001002E) links. Optional/absent on a
+    // machine with no NM; the gRPC bind must not block on it.
+    std::thread([] {
+        if (services_com::NmLink::instance().start())
+            std::fprintf(stderr,
+                         "[%s] network-mgmt link up (RemoteRef 0x8001002E/0)\n",
+                         kNodeName);
+        else
+            std::fprintf(stderr,
+                         "[%s] WARN: network-mgmt link (nm 0x8001002E) not "
+                         "reachable; NmView RPCs return UNAVAILABLE\n",
+                         kNodeName);
+    }).detach();
+
     // Load the cluster machine manifest (index→name) once, up front, so the
     // first AccelSample's machine_name lookup is warm and the load is logged at
     // startup (vs lazily on the recv thread). Best-effort: no manifest → "mN".
@@ -702,25 +772,29 @@ void ComGrpcProxy::do_start() {
 
     g_sup_svc = std::make_unique<SupervisorViewImpl>();
     g_per_svc = std::make_unique<PerViewImpl>();
+    g_nm_svc  = std::make_unique<NmViewImpl>();
 
     const std::string listen = listen_addr();
     grpc::ServerBuilder b;
     b.AddListeningPort(listen, services_com::make_server_creds(kNodeName));
     b.RegisterService(g_sup_svc.get());
     b.RegisterService(g_per_svc.get());
+    b.RegisterService(g_nm_svc.get());
     g_server = b.BuildAndStart();
     if (!g_server) {
         std::fprintf(stderr, "[%s] gRPC server failed to start on %s\n",
                      kNodeName, listen.c_str());
         g_sup_svc.reset();
         g_per_svc.reset();
+        g_nm_svc.reset();
         services_com::SupLink::instance().stop();
         services_com::PerLink::instance().stop();
+        services_com::NmLink::instance().stop();
         services_com::ShwaLink::instance().stop();
         return;
     }
     std::fprintf(stderr,
-                 "[%s] gRPC SupervisorView + PerView listening on %s\n",
+                 "[%s] gRPC SupervisorView + PerView + NmView listening on %s\n",
                  kNodeName, listen.c_str());
     g_up.store(true);
 }
@@ -752,10 +826,12 @@ void ComGrpcProxy::do_stop() {
     }
     g_sup_svc.reset();
     g_per_svc.reset();
+    g_nm_svc.reset();
     g_sup_topology.stop();
     g_topology_up.store(false);
     services_com::SupLink::instance().stop();
     services_com::PerLink::instance().stop();
+    services_com::NmLink::instance().stop();
     services_com::ShwaLink::instance().stop();
     g_up.store(false);
 }

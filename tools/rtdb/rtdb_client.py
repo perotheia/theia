@@ -213,6 +213,47 @@ class PerClient:
         self._channel.close()
 
 
+class NmClient:
+    """gRPC client for com's NmView service — proxies services/nm's readiness
+    snapshot (GetStatus) + visible-AP scan (WifiScan) over the SAME :7700
+    endpoint. The gRPC mirror of tdb's TIPC `wifi`."""
+
+    # NetState ordinal → label (mirrors the nm .art ladder).
+    STATE = {
+        0: "NETWORK_OFF", 1: "LINK_AVAILABLE", 4: "WIFI_ASSOCIATED",
+        2: "IP_ACQUIRED", 5: "VPN_ESTABLISHED", 6: "NETWORK_OPERATIONAL",
+        3: "DEGRADED",
+    }
+
+    def __init__(self, target: str = _DEFAULT_TARGET) -> None:
+        self._channel = _make_channel(target)
+        self._stub = _brg.NmViewStub(self._channel)
+
+    def get_status(self, timeout: float = 4.0):
+        rep = self._stub.GetStatus(_br.NmStatusCall(), timeout=timeout)
+        return {
+            "state": rep.state, "state_name": self.STATE.get(rep.state, rep.state),
+            "interface": rep.interface, "has_carrier": rep.has_carrier,
+            "has_address": rep.has_address, "vpn_up": rep.vpn_up, "ts_ns": rep.ts_ns,
+        }
+
+    def wifi_scan(self, interface: str = "", timeout: float = 8.0):
+        rep = self._stub.WifiScan(
+            _br.WifiScanCall(interface=interface), timeout=timeout)
+        return {
+            "interface": rep.interface, "associated": rep.associated,
+            "assoc_ssid": rep.assoc_ssid, "assoc_bssid": rep.assoc_bssid,
+            "bss": [
+                {"ssid": b.ssid, "bssid": b.bssid, "signal_dbm": b.signal_dbm,
+                 "freq_mhz": b.freq_mhz, "security": b.security}
+                for b in rep.bss
+            ],
+        }
+
+    def stop(self) -> None:
+        self._channel.close()
+
+
 # ---------------------------------------------------------------------------
 # trace (tracecat) — gRPC TraceStream, adapted to tdb's record shape
 # ---------------------------------------------------------------------------

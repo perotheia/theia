@@ -418,3 +418,45 @@ service PerView {
     // `config` bytes against the schema. Read-only, no etcd client needed.
     rpc GetSnapshot (GetSnapshotCall) returns (PerStoreSnapshot);
 }
+
+// ---- NmView — services/nm (Network Management) over com gRPC -------------
+//
+// com proxies nm's GetNetworkStatus (the readiness ladder) + WifiScan (the
+// visible APs) so the GUI / rtdb get a wifi view without a TIPC client (tdb
+// already has it over TIPC). Mirrors system_services_nm.{NmStatusMsg,WifiBss,
+// WifiScanReply} field-for-field; NmLink re-encodes between the nanopb nm
+// structs and these libprotobuf messages (the bridge can't import nm's package).
+message NmStatus {
+    uint32 state       = 1;   // NetState ordinal (0 OFF..6 OPERATIONAL, 3 DEGRADED)
+    string interface   = 2;   // the monitored link
+    bool   has_carrier = 3;
+    bool   has_address = 4;
+    bool   vpn_up      = 5;
+    uint64 ts_ns       = 6;
+}
+message NmStatusCall { }      // GetNetworkStatus has no args
+
+message NmWifiBss {
+    string ssid       = 1;
+    string bssid      = 2;
+    int32  signal_dbm = 3;
+    uint32 freq_mhz   = 4;
+    string security   = 5;
+}
+message WifiScanCall {
+    string interface = 1;     // "" = the first wireless interface nm monitors
+}
+message NmWifiScan {
+    string interface    = 1;
+    bool   associated   = 2;
+    string assoc_ssid   = 3;
+    string assoc_bssid  = 4;
+    repeated NmWifiBss bss = 5;
+}
+
+service NmView {
+    // The network-readiness snapshot (the ladder state + carrier/addr/vpn).
+    rpc GetStatus (NmStatusCall) returns (NmStatus);
+    // The visible AP list + association snapshot (`rtdb wifi`). Read-only `iw`.
+    rpc WifiScan (WifiScanCall) returns (NmWifiScan);
+}

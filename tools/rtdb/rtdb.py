@@ -38,7 +38,9 @@ from pathlib import Path
 # rtdb_client + the shared command layer.
 sys.path.insert(0, str(Path(__file__).resolve().parent))           # rtdb_client
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tdb"))  # tdb_commands
-from rtdb_client import SupervisorClient, TraceClient, PerClient, LogClient  # noqa: E402
+from rtdb_client import (  # noqa: E402
+    SupervisorClient, TraceClient, PerClient, LogClient, NmClient,
+)
 from tdb_commands import _COMMANDS as _SHARED_COMMANDS, _HELP, _g  # noqa: E402
 import shlex  # noqa: E402,F811  (re-import safe; used by repl)
 
@@ -80,10 +82,44 @@ def cmd_snapshot(args, sup, _tf) -> int:
         pc.stop()
 
 
-# rtdb's command map = the shared verbs + the PerView-only schemas/snapshot.
+def cmd_wifi(args, sup, _tf) -> int:
+    """wifi [<iface>] [--status] — nm's wifi view via com NmView gRPC.
+
+    Default: the visible APs + association (strongest first, * = associated).
+    --status: just the readiness ladder snapshot (state + carrier/addr/vpn)."""
+    target = getattr(sup, "_target", _DEFAULT_TARGET)
+    nc = NmClient(target)
+    try:
+        if "--status" in args:
+            st = nc.get_status(timeout=4.0)
+            print(f"state={st['state_name']} iface={st['interface'] or '(auto)'} "
+                  f"carrier={int(st['has_carrier'])} addr={int(st['has_address'])} "
+                  f"vpn={int(st['vpn_up'])}")
+            return 0
+        iface = next((a for a in args if not a.startswith("-")), "")
+        rep = nc.wifi_scan(iface, timeout=8.0)
+        name = rep["interface"] or "(no wireless iface)"
+        if rep["associated"]:
+            print(f"{name}: associated → {rep['assoc_ssid'] or '(hidden)'} "
+                  f"[{rep['assoc_bssid']}]")
+        else:
+            print(f"{name}: not associated")
+        bss = sorted(rep["bss"], key=lambda b: b["signal_dbm"], reverse=True)
+        for b in bss:
+            star = "*" if (rep["associated"] and b["bssid"] == rep["assoc_bssid"]) else " "
+            print(f" {star} {(b['ssid'] or '(hidden)'):<22} {b['bssid']:<18} "
+                  f"{b['signal_dbm']:>4}d {b['freq_mhz']:>5}MHz  {b['security']}")
+        return 0
+    finally:
+        nc.stop()
+
+
+# rtdb's command map = the shared verbs + the PerView-only schemas/snapshot +
+# the NmView `wifi` verb (tdb has wifi over TIPC; rtdb reaches it through com).
 _COMMANDS = dict(_SHARED_COMMANDS)
 _COMMANDS["schemas"]  = cmd_schemas
 _COMMANDS["snapshot"] = cmd_snapshot
+_COMMANDS["wifi"]     = cmd_wifi
 
 # rtdb's help is the shared one with the tdb-specific intro line swapped + the
 # transport note. We just print the shared body (verb list is identical).

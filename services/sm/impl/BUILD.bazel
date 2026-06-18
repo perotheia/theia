@@ -33,6 +33,11 @@ cc_library(
         "FunctionGroupSm_handlers.cc",
         "FgGate_handlers.cc",
     ],
+    # sm_sup_link.hpp = FunctionGroupSm's RemoteRef to the supervisor (the SM→EM
+    # execute path), #included as "impl/sm_sup_link.hpp" — FC root is the include
+    # root. Header-only; pulls supervisor.pb.h via the lib's platform_protos dep.
+    hdrs = ["sm_sup_link.hpp"],
+    includes = [".."],
     copts = [
         "-std=c++17",
         "-Wall",

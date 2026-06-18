@@ -15,8 +15,18 @@
 namespace ara::ucm {
 
 struct UcmGateState {
-    // Add app fields here, e.g.:
-    //   int32_t counter = 0;
+    // Applied UcmConfig (etcd-backed; on_config_update refreshes it).
+    std::string releases_root    = "/opt/theia/releases";
+    uint32_t    verify_budget_ms = 30000;
+    uint32_t    retain_releases  = 3;
+
+    // The in-flight update being driven through the FSM. Copied from the pending
+    // manifest on EvStartUpdate so a later RequestUpdate can't mutate it
+    // mid-flight. `verifying` guards the one-shot VERIFYING timer.
+    std::string version;        // target version of the update in flight
+    uint32_t    kind  = 0;      // UpdateKind (0=SOFTWARE, 1=CONFIG)
+    uint32_t    scope = 0;      // UpdateScope (0=FULL, 1=PARTIAL)
+    bool        verifying = false;
 };
 
 }  // namespace ara::ucm

@@ -34,6 +34,10 @@ cc_library(
         "UcmGate_handlers.cc",
         "UcmFsm_handlers.cc",
     ],
+    # release_dir.hpp is the release-directory model (A/B replacement) UcmGate
+    # #includes as "impl/release_dir.hpp" — FC root is the include root.
+    hdrs = ["release_dir.hpp"],
+    includes = [".."],
     copts = [
         "-std=c++17",
         "-Wall",

@@ -15,8 +15,20 @@
 namespace ara::diag {
 
 struct UdsRouterState {
-    // Add app fields here, e.g.:
-    //   int32_t counter = 0;
+    // ---- UDS session (0x10 DiagnosticSessionControl) -----------------------
+    // 0x01 default, 0x02 programming, 0x03 extended. Non-default sessions gate
+    // the security-protected services + revert on the S3 timer.
+    uint8_t  session = 0x01;
+
+    // ---- UDS security (0x27 SecurityAccess) --------------------------------
+    bool     security_unlocked = false;   // a passed 0x27 unlocks write/program
+    bool     seed_pending      = false;   // requestSeed sent, awaiting sendKey
+    uint32_t security_attempts = 0;       // bad-key counter (NRC 0x36 at the cap)
+    std::string last_seed;                // the seed bytes the key is checked against
+
+    // ---- applied DiagConfig ------------------------------------------------
+    uint32_t session_timeout_ms = 5000;
+    std::string security_key_slot = "diag_tester_cert";
 };
 
 }  // namespace ara::diag

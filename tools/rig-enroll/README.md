@@ -2,17 +2,20 @@
 
 The theia-native analog of mosaic's `moz orchestrate cloud_provision`
 (`up/mosaic-eng-ref/.../provision/cloud_provision.py`). A **centralized**
-enrollment utility — colocated with Headscale in the cloud (on **dalek**) —
-provisions a rig's identity (UUID/VIN) + PKI creds + an optional Headscale VPN
-preauth key. mosaic does this over nested SSH through a ground station; **we do
-it over com gRPC** (`:7700`), so it's not a local debug tool (that's rtdb) — it
-runs where the fleet manager + Headscale live.
+enrollment utility provisions a rig's identity (UUID/VIN) + PKI creds + an
+optional Tailscale VPN auth key. mosaic does this over nested SSH through a
+ground station; **we do it over com gRPC** (`:7700`), so it's not a local debug
+tool (that's rtdb) — it runs where the fleet manager lives.
 
 ```
-Enrollment utility (on dalek)
-   ├── gRPC  ──> com on the rig (:7700)   Provision(uuid, vin, pki, authkey)
-   └── REST  ──> Headscale (local :8080)   mint preauth key, create user
+Enrollment utility
+   ├── gRPC  ───> com on the rig (:7700)        Provision(uuid, vin, pki, authkey)
+   └── HTTPS ───> Tailscale API (api.tailscale.com)  mint a device auth key
 ```
+
+We use the real **Tailscale SaaS** (not a self-hosted Headscale): rig-enroll
+mints a per-rig auth key via the Tailscale API and ships it as `vpn.authkey`; the
+rig runs `tailscale up --authkey <key>` against the **default** login server.
 
 com writes the files on the rig under `/etc/theia/manifest/<machine>/`:
 
@@ -23,7 +26,7 @@ com writes the files on the rig under `/etc/theia/manifest/<machine>/`:
 | `certs/client.key` | **0600** | `clientKey` |
 | `certs/client.crt` | 0644 | `clientCert` |
 | `certs/server_ca.crt` | 0644 | `serverCaTrustChain` |
-| `certs/vpn.authkey` | **0600** | minted Headscale preauth key |
+| `certs/vpn.authkey` | **0600** | auth key minted via the Tailscale API |
 
 These are the SAME paths com TLS + the supervisor read, so a provisioned rig can
 immediately serve mutual-TLS com and join the VPN.
@@ -31,11 +34,11 @@ immediately serve mutual-TLS com and join the VPN.
 ## Usage
 
 ```sh
-export HEADSCALE_API_KEY=$(ssh dalek 'cd /opt/headscale && \
-    sudo docker compose exec -T headscale headscale apikeys create --expiration 90d' | tail -1)
-export HEADSCALE_URL=http://10.0.0.99:8080
+# A Tailscale API access token (admin → Settings → Keys → Generate access token).
+export TS_API_TOKEN=tskey-api-...
+# optional: TS_TAILNET (defaults to '-', the token's own tailnet)
 
-# enroll over the eth path
+# enroll over the eth path (mints a Tailscale auth key + provisions over com)
 python3 tools/rig-enroll/rig_enroll.py enroll  enroll.json
 
 # what a rig already has (idempotency / verify)
@@ -47,8 +50,17 @@ python3 tools/rig-enroll/rig_enroll.py recover enroll.json
 ```
 
 Config: see `enroll.example.json`. PKI fields are optional (omit to skip cert
-provisioning); `vpn.enroll=true` mints a Headscale preauth key and ships it as
-`vpn.authkey`.
+provisioning); `vpn.enroll=true` mints a Tailscale auth key (via `TS_API_TOKEN`)
+and ships it as `vpn.authkey`.
+
+## On the rig (after provisioning)
+
+```sh
+curl -fsSL https://tailscale.com/install.sh | sh        # once
+tailscale up --authkey "$(cat /etc/theia/manifest/<machine>/certs/vpn.authkey)"
+# NO --login-server — the real Tailscale SaaS. NM's vpn_observe() then sees the
+# tunnel and drives the VPN_ESTABLISHED readiness rung.
+```
 
 ## The recovery model
 
@@ -68,5 +80,6 @@ rig whose eth link died can still be re-provisioned / recovered over wifi.
 - The proto: `Provisioning` service in `services/com/proto/supervisor_bridge.proto`
   (`Provision` + `GetProvisionStatus`). com handler: `ProvisioningImpl` in
   `services/com/impl/ComGrpcProxy_handlers.cc` (pure file I/O, no TIPC link).
-- `headscale_client.py` is a thin REST client for the Headscale mgmt API
-  (`/api/v1`): users, preauth keys, list/expire/delete nodes, set routes.
+- `tailscale_client.py` is a thin client for the Tailscale API
+  (`api.tailscale.com/api/v2`): mint auth keys, list keys, list/delete/expire
+  devices, set routes.

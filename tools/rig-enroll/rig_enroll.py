@@ -2,15 +2,18 @@
 """theia rig-enroll — centralized rig enrollment over com.
 
 The theia-native analog of mosaic's `moz orchestrate cloud_provision`: a fleet
-manager (colocated with Headscale, e.g. on dalek) provisions a rig's identity
-(UUID/VIN) + PKI creds + an optional Headscale VPN preauth key — but over com
-gRPC (:7700) instead of nested SSH. com writes the files under
-/etc/theia/manifest/<machine>/ on the rig; the rig can then serve mutual-TLS com
-and join the VPN.
+manager provisions a rig's identity (UUID/VIN) + PKI creds + an optional Tailscale
+VPN auth key — but over com gRPC (:7700) instead of nested SSH. com writes the
+files under /etc/theia/manifest/<machine>/ on the rig; the rig can then serve
+mutual-TLS com and join the VPN.
 
-  Enrollment utility ──gRPC──> com on the rig   (Provision: uuid/vin/pki/authkey)
+  Enrollment utility ──gRPC──────> com on the rig  (Provision: uuid/vin/pki/authkey)
         │
-        └──REST──> Headscale (local)            (mint preauth key, create user)
+        └──HTTPS──> Tailscale API (api.tailscale.com)  (mint a device auth key)
+
+We use the real Tailscale SaaS (not a self-hosted Headscale): rig-enroll mints a
+per-rig auth key via the Tailscale API (TS_API_TOKEN) and ships it as vpn.authkey;
+the rig runs `tailscale up --authkey <key>` against the DEFAULT login server.
 
 Config (enroll.json), mirroring mosaic's cloud_provision config:
   {
@@ -21,8 +24,10 @@ Config (enroll.json), mirroring mosaic's cloud_provision config:
     "clientKey":   "-----BEGIN PRIVATE KEY-----\n...",   # optional → omit to skip
     "clientCert":  "-----BEGIN CERTIFICATE-----\n...",
     "serverCaTrustChain": "-----BEGIN CERTIFICATE-----\n...",
-    "vpn": { "enroll": true, "user": "rig", "expiration": "24h" }   # optional
+    "vpn": { "enroll": true, "reusable": true }   # optional; mint via TS_API_TOKEN
   }
+
+Env: TS_API_TOKEN (Tailscale API access token) for VPN key minting.
 
 Usage:
   rig_enroll.py enroll  enroll.json [--no-vpn]
@@ -69,26 +74,29 @@ def _load(cfg_path: str) -> dict:
 
 
 def _maybe_mint_vpn_key(cfg: dict, do_vpn: bool) -> str:
-    """If the config asks for VPN enrollment, mint a Headscale preauth key."""
+    """If the config asks for VPN enrollment, mint a Tailscale auth key via the
+    Tailscale API (TS_API_TOKEN). The rig runs `tailscale up --authkey <key>`
+    against the DEFAULT login server — no self-hosted control plane."""
     vpn = cfg.get("vpn") or {}
     if not do_vpn or not vpn.get("enroll"):
         return ""
     try:
-        from headscale_client import HeadscaleClient
+        from tailscale_client import TailscaleClient
     except ImportError:
-        print("  ! headscale_client unavailable / requests missing — skipping VPN key")
+        print("  ! tailscale_client unavailable / requests missing — skipping VPN key")
         return ""
     try:
-        hs = HeadscaleClient()
-        key = hs.create_preauthkey(
-            user=vpn.get("user", "rig"),
+        ts = TailscaleClient()
+        key = ts.create_authkey(
             reusable=vpn.get("reusable", True),
-            expiration=vpn.get("expiration", "24h"),
+            ephemeral=vpn.get("ephemeral", False),
+            tags=vpn.get("tags") or [],
+            description=vpn.get("description", "theia-rig-enroll"),
         )
-        print(f"  minted Headscale preauth key (user={vpn.get('user', 'rig')})")
+        print("  minted Tailscale auth key via the API")
         return key
     except Exception as e:  # noqa: BLE001
-        print(f"  ! Headscale key mint failed: {e}")
+        print(f"  ! Tailscale key mint failed: {e}")
         return ""
 
 

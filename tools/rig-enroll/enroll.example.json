@@ -9,8 +9,9 @@
   "serverCaTrustChain": "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----\n",
   "vpn": {
     "enroll": true,
-    "user": "rig",
     "reusable": true,
-    "expiration": "24h"
+    "ephemeral": false,
+    "tags": [],
+    "description": "theia-rig-enroll"
   }
 }

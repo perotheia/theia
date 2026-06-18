@@ -152,11 +152,33 @@ void UcmGate::handle_cast(const EvStaged& /*msg*/, UcmGateState& s) {
     to_fsm("EvInstalled", EvInstalled{});
 }
 
-// EvInstalled — the ATOMIC SWITCH. FULL: current→releases/<ver> (previous set
-// first). PARTIAL: swap one FC's binary + symlink (supervisor restarts just it
-// — the to_sup edge is wired in a later step). Then RESTARTING.
+// EvInstalled — APPLY the update. The path forks on UpdateKind:
+//   UK_CONFIG: NO binary swap — populate etcd config (+ props) from the package.
+//   UK_SOFTWARE FULL:    current→releases/<ver> atomic symlink switch.
+//   UK_SOFTWARE PARTIAL: swap one FC's binary (supervisor restarts just it).
+// Then trigger RESTARTING.
 void UcmGate::handle_cast(const EvInstalled& /*msg*/, UcmGateState& s) {
     ReleaseLayout l(s.releases_root);
+
+    if (s.kind == 1u /*UK_CONFIG*/) {
+        // Configuration Package: push the package's config/ into etcd via per
+        // (the SOLE etcd client) + drop static props into the release's config/.
+        // Reuses the PREP-B seed path (migration/seed.py defaults → per
+        // PutConfig); per fans the change to FCs as ConfigUpdated casts LIVE — no
+        // binary switch, no platform restart. A digest bump runs the
+        // gen-transform plugin via per MigrateBulk (the migration tooling).
+        if (!apply_config_package(l, s.version)) {
+            this->log().warn("config apply failed — rolling back");
+            to_fsm("EvFailed", EvFailed{});
+            return;
+        }
+        this->log().info(std::string("config v") + s.version +
+            " applied to etcd (per → ConfigUpdated casts, live)");
+        to_fsm("EvRestarted", EvRestarted{});
+        return;
+    }
+
+    // Software Package.
     const bool full = (s.scope == 0u /*US_FULL*/);
     if (full) {
         if (!switch_full(l, s.version)) {

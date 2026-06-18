@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -135,6 +136,43 @@ inline bool rollback_full(const ReleaseLayout& l) {
         return false;
     }
     return atomic_symlink(prev, l.current);
+}
+
+// Apply a Configuration Package (kind=UK_CONFIG): push the staged release's
+// config/ into etcd via per + drop static props into the release's config/.
+// REUSES the PREP-B seed path (migration/seed.py defaults → per PutConfig), so
+// the SAME all-FC seeder that runs at first boot also applies a config-package
+// update — per fans the change to FCs as ConfigUpdated casts (live, no restart).
+// Best-effort: the package's own config/seed_defaults.json (if present) is the
+// source; absent → a no-op success (a props-only package). Shells the seeder
+// (the doc explicitly allows config/migration hooks to shell).
+inline bool apply_config_package(const ReleaseLayout& l,
+                                 const std::string& version) {
+    std::error_code ec;
+    ucm_fs::path rel = l.release_of(version);
+    ucm_fs::path defs = rel / "config" / "seed_defaults.json";
+    ucm_fs::path schema = rel / "config" / "seed_schema.json";
+    if (!ucm_fs::is_regular_file(defs, ec)) {
+        std::fprintf(stderr,
+            "[ucm] config package v%s has no config/seed_defaults.json — "
+            "props-only (nothing to push to etcd)\n", version.c_str());
+        return true;   // props-only package is a valid no-op
+    }
+    // migration/seed.py defaults --defaults <defs> --schema <schema> PutConfig's
+    // each FC's value through per. THEIA_ROOT locates the workspace/seed tool.
+    std::string root_env;
+    if (const char* tr = ::getenv("THEIA_ROOT")) root_env = tr;
+    std::string seed_py = (root_env.empty() ? std::string(".")
+                                            : root_env) + "/migration/seed.py";
+    std::string cmd = "python3 " + seed_py + " defaults --defaults " +
+        defs.string() + " --schema " + schema.string() + " >&2";
+    int rc = std::system(cmd.c_str());
+    if (rc != 0) {
+        std::fprintf(stderr, "[ucm] config seed failed (rc=%d): %s\n",
+                     rc, cmd.c_str());
+        return false;
+    }
+    return true;
 }
 
 // Prune releases beyond `keep`, never removing the current/previous targets.

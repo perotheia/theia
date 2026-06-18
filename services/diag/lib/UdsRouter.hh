@@ -41,6 +41,7 @@ namespace ara::diag {
 // signatures readable.
 using UdsRequest = system_services_diag_UdsRequest;
 using UdsReply = system_services_diag_UdsReply;
+using PhmFaultEvent = system_services_phm_PhmFaultEvent;
 
 
 
@@ -116,6 +117,8 @@ public:
     // TraceControl) the handler signature is identical and only
     // gets emitted once. handle_call/handle_cast dispatch by
     // request type, not by port.
+
+    void handle_cast(const PhmFaultEvent& msg, UdsRouterState& s);
 
 
     UdsReply handle_call(const UdsRequest& req,

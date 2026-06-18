@@ -26,8 +26,10 @@
 #include "RemoteCodec.hh"   // THEIA_DECLARE_REMOTE_CODEC
 #include "system/services/diag/diag.pb.h"
 
+#include "system/services/phm/phm.pb.h"
 
 
 
 THEIA_DECLARE_REMOTE_CODEC(system_services_diag_UdsRequest)
 THEIA_DECLARE_REMOTE_CODEC(system_services_diag_UdsReply)
+THEIA_DECLARE_REMOTE_CODEC(system_services_phm_PhmFaultEvent)

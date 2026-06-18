@@ -19,6 +19,5 @@ message DiagConfig {
     uint32 doip_port = 1;
     uint32 ecu_address = 2;
     uint32 session_timeout_ms = 3;
-    string security_key_slot = 4;
 }
 

@@ -11,24 +11,31 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace ara::diag {
 
 struct UdsRouterState {
     // ---- UDS session (0x10 DiagnosticSessionControl) -----------------------
-    // 0x01 default, 0x02 programming, 0x03 extended. Non-default sessions gate
-    // the security-protected services + revert on the S3 timer.
+    // 0x01 default, 0x02 programming, 0x03 extended. Reverts on the S3 timer.
     uint8_t  session = 0x01;
-
-    // ---- UDS security (0x27 SecurityAccess) --------------------------------
-    bool     security_unlocked = false;   // a passed 0x27 unlocks write/program
-    bool     seed_pending      = false;   // requestSeed sent, awaiting sendKey
-    uint32_t security_attempts = 0;       // bad-key counter (NRC 0x36 at the cap)
-    std::string last_seed;                // the seed bytes the key is checked against
 
     // ---- applied DiagConfig ------------------------------------------------
     uint32_t session_timeout_ms = 5000;
-    std::string security_key_slot = "diag_tester_cert";
+
+    // ---- running fault LOG (fed by phm's PhmDtcStream) ---------------------
+    // Each PhmFaultEvent phm casts is appended here; 0x22 fault-log DIDs read by
+    // index (0xFD00 + idx → the Nth record), and 0x19 reports them as DTCs. The
+    // "fault idx" the diag config exposes over UDS. Capped (ring) so a long run
+    // doesn't grow unbounded.
+    struct FaultRec {
+        std::string entity;   // the FC/worker the fault is about
+        uint32_t    level = 0;   // HealthLevel (0 OK..3 FAILED)
+        uint32_t    kind  = 0;   // SupervisionKind
+        uint64_t    ts_ns = 0;
+    };
+    std::vector<FaultRec> fault_log;
+    static constexpr size_t kMaxFaults = 64;
 };
 
 }  // namespace ara::diag

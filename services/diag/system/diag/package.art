@@ -26,16 +26,22 @@ package system.services.diag
 // the wire service_id on the message's defining package, so it matches the real
 // server. phm transitively imports supervisor (the 2-hop case).
 import system.services.per.*
-import system.services.crypto.*
 import system.services.phm.*
+// phm transitively imports system.supervisor.*; pull it so phm's PhmFaultEvent
+// (referenced by the local PhmDtcStream re-decl below) resolves in the 2-hop scan.
+import system.supervisor.*
 
 // ─── Cross-FC interface forward-decls (materialized from the imports) ───────
 // The com/idsm idiom: re-declare the required interface locally; the per-FC
 // codegen binds the stub + keys the wire service_id on the message's defining
 // package, so it matches the real server.
 interface clientServer   PerClientIf      { }  // from system.services.per — Get/PutConfig
-interface clientServer   CryptoOneShotIf  { }  // from system.services.crypto — Verify/Hash
 interface clientServer   PhmCtlIf         { }  // from system.services.phm — GetHealthStatus
+// The phm fault-event stream — re-declared locally with phm's real PhmFaultEvent
+// (from the import), like SM re-declares PhmHealthStream. UdsRouter subscribes to
+// build a running fault LOG that 0x22 fault-log DIDs read by index, and 0x19
+// reports as DTCs.
+interface senderReceiver PhmDtcStream     { data PhmFaultEvent fault }
 
 // ─── UDS request/reply on the TIPC hop (DoipServer → UdsRouter) ─────────────
 //
@@ -63,13 +69,12 @@ interface clientServer UdsIf {
 message DiagConfig {
     // The DoIP TCP listen port (ISO 13400 default 13400).
     uint32 doip_port        = 13400
-    // Our ECU logical address (the DoIP target the tester addresses). 0x0001.
+    // The SINGLE logical ECU address for the whole gateway (the DoIP target the
+    // tester addresses). One address terminates UDS at Theia for all FCs. 0x0001.
     uint32 ecu_address      = 1
-    // UDS session S3 timeout (ms): a non-default session reverts to default (and
-    // RE-LOCKS security) if the tester goes quiet this long.
+    // UDS session S3 timeout (ms): a non-default session reverts to default if
+    // the tester goes quiet this long.
     uint32 session_timeout_ms = 5000
-    // The crypto key-slot the 0x27 sendKey signature is verified against.
-    string security_key_slot  = "diag_tester_cert"
 }
 
 // ─── Nodes ──────────────────────────────────────────────────────────────────
@@ -96,9 +101,8 @@ node atomic UdsRouter {
     ports {
         server ctl       provides UdsIf            // DoipServer → UDS dispatch
         client to_per    requires PerClientIf       // 0x22/0x2E DID (per Get/PutConfig)
-        client to_crypto requires CryptoOneShotIf   // 0x27 seed/key (crypto Verify)
-        client to_phm    requires PhmCtlIf           // 0x19 DTC (phm GetHealthStatus)
-        // dtc_in (PhmDtcStream fault events) is added in Phase 4.
+        client to_phm    requires PhmCtlIf           // 0x19 DTC summary (phm GetHealthStatus)
+        receiver dtc_in  requires PhmDtcStream       // running fault LOG (0x22 fault DIDs + 0x19)
     }
 }
 

@@ -194,6 +194,7 @@ int main(int argc, char** argv) {
         // ops → register_call; senderReceiver `in` data → register_cast.
         config_mux.register_call<UdsRequest, UdsReply>(
             uds_router_cfg, uds_router);
+        config_mux.register_cast<PhmFaultEvent>(uds_router_cfg, uds_router);
     } else {
         uds_router.log().warn("config service bind failed; live log-level "
                                  "push + signal inject disabled");

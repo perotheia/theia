@@ -177,7 +177,11 @@ MainFrame::MainFrame(std::vector<MachineEndpoint> machines)
     applications_   = new ApplicationsPanel (notebook_);
     processes_      = new ProcessesPanel    (notebook_);
     etcd_panel_     = new EtcdPanel         (notebook_);
-    persistency_    = new PersistencyPanel  (notebook_);
+    // Persistency was merged INTO Table Viewer: its small schema/snapshot card
+    // is a child of etcd_panel_, mounted at the top (attach_persistency). No
+    // standalone Persistency tab anymore.
+    persistency_    = new PersistencyPanel  (etcd_panel_);
+    etcd_panel_->attach_persistency(persistency_);
     trace_          = new TracePanel        (notebook_);
     log_panel_      = new LogPanel          (notebook_);
     health_panel_   = new HealthPanel       (notebook_);
@@ -186,7 +190,6 @@ MainFrame::MainFrame(std::vector<MachineEndpoint> machines)
     notebook_->AddPage(applications_, "Applications");
     notebook_->AddPage(processes_,    "Processes");
     notebook_->AddPage(etcd_panel_,   "Table Viewer");
-    notebook_->AddPage(persistency_,  "Persistency");
     notebook_->AddPage(trace_,        "Trace");
     notebook_->AddPage(log_panel_,    "Log");
     notebook_->AddPage(health_panel_, "Health");

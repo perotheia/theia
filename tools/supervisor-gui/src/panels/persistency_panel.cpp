@@ -51,31 +51,31 @@ PersistencyPanel::PersistencyPanel(wxWindow* parent)
     : wxPanel(parent), impl_(new PersistencyPanelImpl()) {
     auto* sizer = new wxBoxSizer(wxVERTICAL);
 
-    auto* hint = new wxStaticText(this, wxID_ANY,
-        "Persistency (services/per via com's PerView) — the schema registry "
-        "and config snapshots. The raw etcd KV is in the Table Viewer tab.");
-    sizer->Add(hint, 0, wxALL, 8);
-
-    // Controls row: Refresh + a snapshot label + Snapshot.
+    // Compact: this card now rides at the top of the Table Viewer tab, so a
+    // one-line label + the controls + a short schema list (the long explanation
+    // lived on the standalone tab that was merged away).
     auto* ctl = new wxBoxSizer(wxHORIZONTAL);
+    ctl->Add(new wxStaticText(this, wxID_ANY, "Persistency (per):"),
+             0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
     auto* refresh_btn = new wxButton(this, wxID_ANY, "Refresh schemas");
     ctl->Add(refresh_btn, 0, wxRIGHT, 8);
     ctl->Add(new wxStaticText(this, wxID_ANY, "snapshot label:"),
              0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
-    impl_->label_input = new wxTextCtrl(this, wxID_ANY, "gui");
+    impl_->label_input = new wxTextCtrl(this, wxID_ANY, "gui",
+        wxDefaultPosition, wxSize(120, -1));
     ctl->Add(impl_->label_input, 0, wxRIGHT, 8);
     auto* snap_btn = new wxButton(this, wxID_ANY, "Snapshot");
-    ctl->Add(snap_btn, 0);
-    sizer->Add(ctl, 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
-
+    ctl->Add(snap_btn, 0, wxRIGHT, 12);
     impl_->status = new wxStaticText(this, wxID_ANY, "");
-    sizer->Add(impl_->status, 0, wxLEFT | wxBOTTOM, 8);
+    ctl->Add(impl_->status, 1, wxALIGN_CENTER_VERTICAL);
+    sizer->Add(ctl, 0, wxEXPAND | wxALL, 4);
 
+    // A short schema list (capped height so the card stays "small" on top).
     impl_->list = new wxListCtrl(this, wxID_ANY, wxDefaultPosition,
-                                 wxDefaultSize, wxLC_REPORT | wxLC_SINGLE_SEL);
+                                 wxSize(-1, 110), wxLC_REPORT | wxLC_SINGLE_SEL);
     impl_->list->AppendColumn("Config type", wxLIST_FORMAT_LEFT, 360);
     impl_->list->AppendColumn("Digest",      wxLIST_FORMAT_LEFT, 320);
-    sizer->Add(impl_->list, 1, wxEXPAND | wxALL, 8);
+    sizer->Add(impl_->list, 0, wxEXPAND | wxALL, 4);
 
     SetSizer(sizer);
 

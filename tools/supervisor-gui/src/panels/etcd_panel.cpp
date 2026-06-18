@@ -36,6 +36,7 @@
 #include <wx/splitter.h>
 #include <wx/textctrl.h>
 #include <wx/clipbrd.h>
+#include <wx/statline.h>
 
 #include <cstdarg>
 #include <cstdio>
@@ -163,8 +164,18 @@ public:
         refresh_rows();   // first show: pull as soon as we're wired
     }
 
+    // Prepend the merged-in Persistency card above the Table Viewer toolbar,
+    // separated by a thin static line so the two sections read distinctly.
+    void attach_persistency(wxWindow* pers) {
+        if (!main_ || !pers) return;
+        main_->Prepend(new wxStaticLine(outer_), 0, wxEXPAND | wxALL, 2);
+        main_->Prepend(pers, 0, wxEXPAND | wxALL, 2);   // 0 = its natural (small) height
+        outer_->Layout();
+    }
+
 private:
     EtcdPanel*                      outer_;
+    wxBoxSizer*                     main_{nullptr};
     EtcdPanel::SnapshotCallback     snapshot_cb_;
     std::vector<EtcdPanel::StoreRow> rows_;
     TraceDecoderLib                 decoder_;   // config proto→JSON
@@ -228,10 +239,12 @@ private:
         split->SplitVertically(list_, rightPanel, 460);
 
         // --- assemble ---------------------------------------------------
-        auto* main = new wxBoxSizer(wxVERTICAL);
-        main->Add(top,   0, wxEXPAND | wxALL, 6);
-        main->Add(split, 1, wxEXPAND);
-        outer_->SetSizer(main);
+        // main_ kept so attach_persistency() can Prepend the Persistency card
+        // above the Table Viewer toolbar after construction (the merged tab).
+        main_ = new wxBoxSizer(wxVERTICAL);
+        main_->Add(top,   0, wxEXPAND | wxALL, 6);
+        main_->Add(split, 1, wxEXPAND);
+        outer_->SetSizer(main_);
 
         // --- handlers ---------------------------------------------------
         refresh_->Bind(wxEVT_BUTTON,   &EtcdPanelImpl::on_refresh,     this);
@@ -368,6 +381,10 @@ EtcdPanel::EtcdPanel(wxWindow* parent)
       impl_(std::make_unique<EtcdPanelImpl>(this)) {}
 
 EtcdPanel::~EtcdPanel() = default;
+
+void EtcdPanel::attach_persistency(wxWindow* pers) {
+    impl_->attach_persistency(pers);
+}
 
 void EtcdPanel::set_snapshot_callback(SnapshotCallback cb) {
     impl_->set_snapshot_callback(std::move(cb));

@@ -397,6 +397,11 @@ public:
                                             bool* ok)>;
     void set_snapshot_callback(SnapshotCallback cb);
 
+    // Mount a PersistencyPanel as a compact section at the TOP of this tab (the
+    // Persistency tab was merged in — its small schema/snapshot card rides above
+    // the config-store table). `pers` must already be a child of this EtcdPanel.
+    void attach_persistency(wxWindow* pers);
+
 private:
     std::unique_ptr<EtcdPanelImpl> impl_;
 };

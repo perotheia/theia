@@ -31,6 +31,7 @@ import system.services.fw.*
 import system.services.idsm.*
 import system.services.shwa.*
 import system.services.nm.*
+import system.services.ucm.*
 
 // ---- extern peers (materialized from the imports) ------------------------
 //
@@ -65,6 +66,10 @@ extern node atomic FwDaemon { }
 // idsm's IDS-manager node (tipc 0x8001000F) — system.services.idsm.
 // GetIdsStatus (detector state / event + escalation counters).
 extern node atomic IdsmDaemon { }
+
+// ucm's update-agent ctl node (tipc 0x8001000E) — system.services.ucm.
+// RequestUpdate(PackageManifest) — the VUCM campaign edge (tdb/rtdb + the demo).
+extern node atomic UcmDaemon { }
 
 // nm's network-readiness node (tipc 0x8001002E) — system.services.nm.
 // GetNetworkStatus (readiness snapshot) / WifiScan (visible APs + assoc).
@@ -151,6 +156,17 @@ node atomic TdbNm {
     tipc type=0x80020108 instance=0
     ports {
         client nm_ctl  requires system.services.nm.NmCtlIf
+    }
+}
+
+// ucm client: drives UpdateCtl.RequestUpdate(PackageManifest) — the VUCM
+// campaign edge for `tdb update` + the docker-compose demo (a distinct SOURCE
+// address so the caller doesn't impersonate UcmDaemon's own — TIPC self-connect
+// load-balances onto the target's own bound port otherwise).
+node atomic TdbUcm {
+    tipc type=0x80020109 instance=0
+    ports {
+        client ucm_ctl  requires system.services.ucm.UpdateCtl
     }
 }
 

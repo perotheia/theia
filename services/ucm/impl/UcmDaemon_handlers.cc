@@ -13,20 +13,23 @@
 
 #include "lib/UcmDaemon.hh"
 #include "lib/UcmFsm.hh"        // the agent FSM we post_event into
+#include "lib/UcmGate.hh"       // the executor gate we cast EvStartUpdate to
 
 #include "GenStateM.hh"         // theia::runtime::post_event
-#include "NodeRef.hh"           // theia::runtime::LocalRef
+#include "NodeRef.hh"           // theia::runtime::LocalRef + cast
 
 #include <cstring>
 #include <string>
 
 namespace ara::ucm {
 
-// The agent FSM peer. IMPL-OWNED shared singleton, DEFINED in UcmGate_handlers.cc
-// (UcmGate is the gate that drives every other lifecycle event into it).
-// UcmFsm::on_enter publishes *this into it on first entry, so by the time a
-// RequestUpdate lands the ref is valid. Forward-declared here.
+// The agent FSM + gate peers. IMPL-OWNED shared singletons, DEFINED in
+// UcmGate_handlers.cc. UcmFsm::on_enter / UcmGate::init publish *this on first
+// entry, so by the time a RequestUpdate lands both refs are valid. EvStartUpdate
+// goes to BOTH: the FSM (IDLE→DOWNLOADED state + broadcast) AND the gate (which
+// does the download work + drives the rest of the chain). Forward-declared here.
 theia::runtime::LocalRef<UcmFsm>& ucm_fsm_ref();
+theia::runtime::LocalRef<UcmGate>& ucm_gate_ref();
 
 // The most recent manifest accepted by RequestUpdate — UcmGate reads it to know
 // what to download/stage. IMPL-owned, defined in UcmGate_handlers.cc. (Nanopb C
@@ -61,15 +64,19 @@ UcmReply UcmDaemon::handle_call(
         " scope=" + (req.scope == system_services_ucm_UpdateScope_UpdateScope_US_PARTIAL
                      ? "PARTIAL" : "FULL"));
 
-    // Hand the manifest to UcmGate (the executor) + start the FSM.
+    // Hand the manifest to UcmGate (the executor) + start the update: advance
+    // the FSM (IDLE→DOWNLOADED) AND kick the gate (do the download + drive the
+    // chain). Both must be wired (published on their first node entry).
     ucm_pending_manifest() = req;
-    auto& ref = ucm_fsm_ref();
-    if (!ref.valid()) {
-        this->log().warn("RequestUpdate: UcmFsm not wired yet — try again shortly");
+    auto& fsm = ucm_fsm_ref();
+    auto& gate = ucm_gate_ref();
+    if (!fsm.valid() || !gate.valid()) {
+        this->log().warn("RequestUpdate: agent not wired yet — try again shortly");
         reply.status = 2;   // not-ready
         return reply;
     }
-    theia::runtime::post_event(ref.target(), EvStartUpdate{});
+    theia::runtime::post_event(fsm.target(), EvStartUpdate{});  // state → DOWNLOADED
+    theia::runtime::cast(gate, EvStartUpdate{});                // gate does the work
     reply.status = 0;       // accepted
     return reply;
 }

@@ -27,18 +27,28 @@
 
 namespace ara::ucm {
 
-// ---- IMPL-owned shared singletons (the gate→fsm wiring) -------------------
+// ---- IMPL-owned shared singletons (the daemon→gate→fsm wiring) ------------
 // The agent FSM peer. UcmFsm::on_enter publishes itself here on first entry;
-// UcmDaemon (RequestUpdate) + UcmGate (every lifecycle step) post_event into it.
+// the gate post_event's the .art transition triggers into it for the STATE +
+// the UcmProgress broadcast.
 theia::runtime::LocalRef<UcmFsm>& ucm_fsm_ref() {
     static theia::runtime::LocalRef<UcmFsm> ref;
     return ref;
 }
 
+// The gate peer. UcmGate::init publishes itself here. UcmDaemon (RequestUpdate)
+// posts EvStartUpdate into the GATE (not the FSM) so the gate does the WORK; the
+// gate then advances the FSM (broadcast) AND re-posts the next event to ITSELF
+// to drive the chain. Mailbox-posted (cross-thread-safe), so each step runs on
+// the gate's own thread without re-entrancy.
+theia::runtime::LocalRef<UcmGate>& ucm_gate_ref() {
+    static theia::runtime::LocalRef<UcmGate> ref;
+    return ref;
+}
+
 // The in-flight package manifest UcmDaemon accepted. UcmGate reads it to know
-// what to download/stage/switch. One update in flight at a time. (Use the
-// nanopb C type directly — the PackageManifest alias lives in UcmDaemon.hh, not
-// UcmGate's lib, since the gate's ports don't carry it.)
+// what to download/stage/switch. One update in flight at a time. (Nanopb C type
+// directly — the PackageManifest alias lives in UcmDaemon.hh, not UcmGate's lib.)
 system_services_ucm_PackageManifest& ucm_pending_manifest() {
     static system_services_ucm_PackageManifest m =
         system_services_ucm_PackageManifest_init_zero;
@@ -46,8 +56,7 @@ system_services_ucm_PackageManifest& ucm_pending_manifest() {
 }
 
 namespace {
-// Post an Ev* into the agent FSM if it's wired (first ticks can race the FSM's
-// initial-entry publish — dropping then is harmless; the step re-fires).
+// Advance the FSM (→ UcmProgress broadcast for that state).
 template <typename Evt>
 void to_fsm(const char* name, Evt evt) {
     auto& ref = ucm_fsm_ref();
@@ -57,10 +66,26 @@ void to_fsm(const char* name, Evt evt) {
     }
     theia::runtime::post_event(ref.target(), std::move(evt));
 }
+// Drive the NEXT gate step (enqueue onto the gate's own mailbox — runs after the
+// current handler returns, so the chain is a sequence of mailbox steps, not deep
+// recursion).
+template <typename Evt>
+void to_gate(Evt evt) {
+    auto& ref = ucm_gate_ref();
+    if (ref.valid()) cast(ref, std::move(evt));
+}
+// Advance BOTH: the FSM (state+broadcast) and the gate (do the next state's work).
+template <typename Evt>
+void step(const char* name, Evt evt) {
+    to_fsm(name, evt);
+    to_gate(evt);
+}
 }  // namespace
 
-// ---- OTP init/1 — runs once on the node thread after start().
+// ---- OTP init/1 — publish self to the gate ref so the daemon can post into us.
 void UcmGate::init(UcmGateState& /*s*/) {
+    if (!ucm_gate_ref().valid())
+        ucm_gate_ref() = theia::runtime::LocalRef<UcmGate>(*this);
     this->log().info("ucm gate up — release-dir executor + health gate ready");
 }
 
@@ -120,7 +145,7 @@ void UcmGate::handle_cast(const EvStartUpdate& /*msg*/, UcmGateState& s) {
     s.verifying = false;
     this->log().info(std::string("update begin: ") + m.name + " v" + m.version +
         " (downloaded)");
-    to_fsm("EvValidated", EvValidated{});   // DOWNLOADED → VALIDATED
+    step("EvValidated", EvValidated{});     // DOWNLOADED → VALIDATED (+drive gate)
 }
 
 // EvDownloaded — declared on UcmLifecycleIn for completeness, but the .art FSM
@@ -135,7 +160,7 @@ void UcmGate::handle_cast(const EvDownloaded& /*msg*/, UcmGateState& /*s*/) {
 // pending the crypto edge — never silently bypassed.) Then trigger STAGED.
 void UcmGate::handle_cast(const EvValidated& /*msg*/, UcmGateState& s) {
     // TODO(crypto edge): call to_crypto Verify(signature); post EvFailed on !ok.
-    to_fsm("EvStaged", EvStaged{});         // VALIDATED → STAGED
+    step("EvStaged", EvStaged{});           // VALIDATED → STAGED (+drive gate)
     (void)s;
 }
 
@@ -145,11 +170,11 @@ void UcmGate::handle_cast(const EvStaged& /*msg*/, UcmGateState& s) {
     ReleaseLayout l(s.releases_root);
     if (!ensure_release_skeleton(l, s.version)) {
         this->log().warn("stage failed — rolling back");
-        to_fsm("EvFailed", EvFailed{});
+        step("EvFailed", EvFailed{});
         return;
     }
     this->log().info(std::string("staged release ") + l.release_of(s.version));
-    to_fsm("EvInstalled", EvInstalled{});
+    step("EvInstalled", EvInstalled{});
 }
 
 // EvInstalled — APPLY the update. The path forks on UpdateKind:
@@ -169,12 +194,12 @@ void UcmGate::handle_cast(const EvInstalled& /*msg*/, UcmGateState& s) {
         // gen-transform plugin via per MigrateBulk (the migration tooling).
         if (!apply_config_package(l, s.version)) {
             this->log().warn("config apply failed — rolling back");
-            to_fsm("EvFailed", EvFailed{});
+            step("EvFailed", EvFailed{});
             return;
         }
         this->log().info(std::string("config v") + s.version +
             " applied to etcd (per → ConfigUpdated casts, live)");
-        to_fsm("EvRestarted", EvRestarted{});
+        step("EvRestarted", EvRestarted{});
         return;
     }
 
@@ -183,7 +208,7 @@ void UcmGate::handle_cast(const EvInstalled& /*msg*/, UcmGateState& s) {
     if (full) {
         if (!switch_full(l, s.version)) {
             this->log().warn("switch failed — rolling back");
-            to_fsm("EvFailed", EvFailed{});
+            step("EvFailed", EvFailed{});
             return;
         }
         this->log().info(std::string("switched current → ") + s.version);
@@ -194,7 +219,7 @@ void UcmGate::handle_cast(const EvInstalled& /*msg*/, UcmGateState& s) {
         this->log().info(std::string("partial install for ") + s.version +
             " (per-FC swap via supervisor — to_sup edge follows)");
     }
-    to_fsm("EvRestarted", EvRestarted{});
+    step("EvRestarted", EvRestarted{});
 }
 
 // EvRestarted — the FC(s) are back on the new release (FULL: SM restarts FGs;
@@ -252,7 +277,7 @@ void UcmGate::handle_cast(const PhmHealthStatus& msg, UcmGateState& s) {
         this->log().warn(std::string("PHM ") +
             (msg.level >= 3u ? "FAILED" : "DEGRADED") + " on " + msg.entity +
             " during verify — aborting update");
-        to_fsm("EvFailed", EvFailed{});
+        step("EvFailed", EvFailed{});
     }
 }
 

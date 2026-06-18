@@ -1,0 +1,9 @@
+package system.services.diag
+
+// The diag FC process: the DoIP socket server (DoipServer) + the UDS router
+// (UdsRouter). DiagTester is probe-only (NOT a composition member). Mirrors com
+// (the runnable + its TIPC peer in one process).
+composition Diag {
+    prototype DoipServer doip_server
+    prototype UdsRouter  uds_router
+}

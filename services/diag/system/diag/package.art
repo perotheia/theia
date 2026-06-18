@@ -1,0 +1,114 @@
+// Diag (DIA / ara::diag) — AUTOSAR-Adaptive Diagnostics FC.
+//
+// The tester-facing diagnostic gateway: an external diagnostic tester (or OEM
+// backend) connects over DoIP (ISO 13400, TCP/13400), and we decode UDS
+// (ISO 14229) requests and route them to internal Theia FCs over TIPC. The
+// inbound edge for diagnostics the same way services/com is the inbound edge for
+// gRPC — a socket server that decodes a protocol and routes over TIPC. There is
+// NO production-grade OSS ara::diag+DoIP stack (diagnostics is OEM-controlled
+// IP), so this ASSEMBLES a DoIP TCP layer + a minimal UDS router. See
+// docs/tasks/.../Diagnostics.md.
+//
+// Two nodes (the services/com runnable+TIPC-bridge shape):
+//   - DoipServer : a `runnable` owning the TCP/13400 socket (DoIP framing +
+//                  entity discovery + routing-activation handshake). Decodes a
+//                  DoIP diagnostic message to raw UDS + RemoteRef-calls UdsRouter.
+//   - UdsRouter  : an `atomic` gen_server — dispatches by UDS service id, tracks
+//                  session + security state, calls per (DID) / crypto (0x27) /
+//                  phm (0x19), returns UDS responses incl. negative responses.
+
+package system.services.diag
+
+// Pull the backend FC message types into scope (per GetConfigReq/ConfigSnapshot/
+// PutConfigReq, crypto VerifyReq/HashReq + replies, phm PhmStatusReq/Msg +
+// PhmFaultEvent). The required INTERFACES are re-declared as local forward-decl
+// stubs below (the com/idsm idiom) — the per-FC codegen binds the stub + keys
+// the wire service_id on the message's defining package, so it matches the real
+// server. phm transitively imports supervisor (the 2-hop case).
+import system.services.per.*
+import system.services.crypto.*
+import system.services.phm.*
+
+// ─── Cross-FC interface forward-decls (materialized from the imports) ───────
+// The com/idsm idiom: re-declare the required interface locally; the per-FC
+// codegen binds the stub + keys the wire service_id on the message's defining
+// package, so it matches the real server.
+interface clientServer   PerClientIf      { }  // from system.services.per — Get/PutConfig
+interface clientServer   CryptoOneShotIf  { }  // from system.services.crypto — Verify/Hash
+interface clientServer   PhmCtlIf         { }  // from system.services.phm — GetHealthStatus
+
+// ─── UDS request/reply on the TIPC hop (DoipServer → UdsRouter) ─────────────
+//
+// The DoIP layer has already stripped its header; UdsRouter sees raw UDS bytes
+// (service id + data) + the DoIP source/target logical addresses (for routing /
+// the response frame). The reply is the UDS response bytes (positive or a
+// negative-response `7F sid nrc`).
+message UdsRequest {
+    uint32 source_addr   // DoIP tester logical address
+    uint32 target_addr   // DoIP ECU logical address (us)
+    bytes  uds           // raw UDS payload: service id + data
+}
+message UdsReply {
+    bytes  uds           // UDS response payload (positive, or 7F sid nrc)
+    bool   is_nrc        // true if the response is a negative-response code
+}
+
+// The DoIP→UDS bridge interface. DoipServer is the CLIENT (forwards each decoded
+// UDS request), UdsRouter the SERVER (dispatches + replies).
+interface clientServer UdsIf {
+    operation Handle(in r: UdsRequest) returns UdsReply
+}
+
+// ─── Runtime config (etcd-backed via services/per) ──────────────────────────
+message DiagConfig {
+    // The DoIP TCP listen port (ISO 13400 default 13400).
+    uint32 doip_port        = 13400
+    // Our ECU logical address (the DoIP target the tester addresses). 0x0001.
+    uint32 ecu_address      = 1
+    // UDS session S3 timeout (ms): a non-default session reverts to default (and
+    // RE-LOCKS security) if the tester goes quiet this long.
+    uint32 session_timeout_ms = 5000
+    // The crypto key-slot the 0x27 sendKey signature is verified against.
+    string security_key_slot  = "diag_tester_cert"
+}
+
+// ─── Nodes ──────────────────────────────────────────────────────────────────
+
+// The DoIP server. tipc 0x80010017. A `runnable` (owns its TCP socket + thread,
+// no watchdog heartbeat — reporting=false), like com's ComGrpcProxy. do_start
+// binds TCP/13400 + the UDP discovery socket; do_loop accepts + frames DoIP,
+// decodes the UDS payload, RemoteRef-calls UdsRouter.Handle, re-frames the reply.
+node runnable DoipServer {
+    tipc type=0x80010017 instance=0
+    reporting = false
+    tag = "DOIP"
+}
+
+// The UDS router. tipc 0x80010018. An atomic gen_server: handle_call(UdsRequest)
+// dispatches by service id (0x10/0x22/0x2E/0x27/0x19), tracks session + security
+// state, and reaches the backend FCs via its client ports. requires_timers for
+// the S3 session timeout.
+node atomic UdsRouter {
+    tipc type=0x80010018 instance=0
+    requires_timers
+    tag = "UDSR"
+    config DiagConfig
+    ports {
+        server ctl       provides UdsIf            // DoipServer → UDS dispatch
+        client to_per    requires PerClientIf       // 0x22/0x2E DID (per Get/PutConfig)
+        client to_crypto requires CryptoOneShotIf   // 0x27 seed/key (crypto Verify)
+        client to_phm    requires PhmCtlIf           // 0x19 DTC (phm GetHealthStatus)
+        // dtc_in (PhmDtcStream fault events) is added in Phase 4.
+    }
+}
+
+// Test-only probe. tipc 0x80010019. Drives UdsRouter.Handle directly over TIPC
+// (isolated from the DoIP TCP layer) for fast unit coverage of the UDS dispatch
+// + NRCs. NOT deployed (in no composition).
+node atomic DiagTester {
+    tipc type=0x80010019 instance=0
+    tag = "DIAGT"
+    ports {
+        client uds_ctl requires UdsIf
+    }
+}

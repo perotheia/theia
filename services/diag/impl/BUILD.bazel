@@ -1,0 +1,49 @@
+# FIRST-TIME-ONLY (regenerated with --force). source: system/services/diag/package.art
+#
+# Impl slice — handler bodies. The user owns this BUILD.bazel after
+# first emit (you may want to add per-FC test_*.cc files; gen-app
+# won't reach in and squash that).
+
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+# State structs (write-once, app-owned). A leaf header-only target so
+# BOTH the lib (which #includes "impl/<Node>_state.hh" as the GenServer
+# State type) and the impl can depend on it WITHOUT a lib<->impl cycle:
+#   diag_state  ←  lib  ←  impl
+cc_library(
+    name = "diag_state",
+    hdrs = [
+        "DoipServer_state.hh",
+        "UdsRouter_state.hh",
+        "DiagTester_state.hh",
+    ],
+    # The lib #includes these as "impl/<Node>_state.hh", so the include
+    # root is the FC out_dir (one above impl/).
+    includes = [".."],
+    copts = ["-std=c++17", "-fPIC"],
+    deps = ["//platform/runtime:runtime"],
+)
+
+cc_library(
+    name = "diag_impl",
+    srcs = [
+        "DoipServer_handlers.cc",
+        "UdsRouter_handlers.cc",
+        "DiagTester_handlers.cc",
+    ],
+    # doip.hpp = the DoIP (ISO 13400) wire model, #included as "impl/doip.hpp"
+    # (FC root is the include root). Header-only, unit-tested standalone.
+    hdrs = ["doip.hpp"],
+    includes = [".."],
+    copts = [
+        "-std=c++17",
+        "-Wall",
+        "-Wextra",
+        "-fPIC",
+    ],
+    deps = [
+        "//services/diag/lib:diag_lib",
+    ],
+)

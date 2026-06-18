@@ -1,0 +1,13 @@
+# nanopb field-size constraints for system.services.diag wire messages.
+# HAND-MAINTAINED (gen-app does not emit this; re-add after a regen). A bytes/
+# string field without max_size becomes a pb_callback_t; pinning it to a fixed
+# byte[]/char[] makes it a plain member (memcpy-able, readable in a handler).
+
+# The UDS payload carried DoipServer→UdsRouter and back. A UDS message is small
+# (service id + a DID record / DTC list); 4 KiB is generous and stays under the
+# TIPC reply cap.
+system_services_diag.UdsRequest.uds   max_size:4096
+system_services_diag.UdsReply.uds     max_size:4096
+
+# DiagConfig — the crypto key-slot name (0x27 verify).
+system_services_diag.DiagConfig.security_key_slot   max_size:64

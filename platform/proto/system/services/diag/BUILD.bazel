@@ -1,0 +1,22 @@
+# Generated nanopb sources for the system.services.diag package.
+# .pb.{c,h} are produced by the genrule from diag.proto; not committed.
+
+package(default_visibility = ["//visibility:public"])
+
+genrule(
+    name = "diag_pb",
+    srcs = ["diag.proto"],
+    outs = [
+        "diag.pb.c",
+        "diag.pb.h",
+    ],
+    cmd = "set -e;"
+        + " in_dir=$$(dirname $(location diag.proto));"
+        + " out_dir=$$(dirname $(location diag.pb.c));"
+        + " nanopb_generator -I $$in_dir -D $$out_dir diag.proto;",
+    local = True,
+)
+
+filegroup(name = "diag_pb_c", srcs = ["diag.pb.c"])
+filegroup(name = "diag_pb_h", srcs = ["diag.pb.h"])
+filegroup(name = "diag_proto", srcs = ["diag.proto"])

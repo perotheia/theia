@@ -62,6 +62,44 @@ def _render_tree(rows) -> str:
     return "\n".join(out) if out else "(empty tree)"
 
 
+def _render_ps(rows) -> str:
+    """Linux-`ps`-style FLAT list (the GUI Processes panel): one row per WORKER
+    (an OS process — PID) followed by one indented row per THREAD it owns (TID +
+    comm), from ChildState.threads_detail. Columns kept close to `ps`:
+
+        PID    TID   NAME              STATE     CPU%   RSS      UP        THR
+
+    Workers are kind=0; their `threads_detail` carry per-thread tid/comm/cpu.
+    A worker with no thread detail still shows its process row + thread count."""
+    workers = [r for r in rows if _g(r, "kind") == 0]
+    # Stable, ps-like order: by pid (then name) so the list doesn't reshuffle.
+    workers.sort(key=lambda r: (_g(r, "pid", 0) or 0, _g(r, "name", "")))
+
+    hdr = (f"{'PID':>7} {'TID':>7}  {'NAME':<20} {'STATE':<9} {'CPU%':>5} "
+           f"{'RSS':>9} {'UP':>9} {'THR':>4}")
+    out = [hdr]
+    for w in workers:
+        pid = _g(w, "pid", -1)
+        pidstr = str(pid) if pid and pid > 0 else "—"
+        state = _STATE.get(_g(w, "state", 0), str(_g(w, "state")))
+        out.append(
+            f"{pidstr:>7} {'—':>7}  {_g(w, 'name', ''):<20.20} {state:<9} "
+            f"{_g(w, 'cpu_pct', 0) / 100.0:>5.1f} {_fmt_kb(_g(w, 'rss_kb', 0)):>9} "
+            f"{_fmt_uptime_ms(_g(w, 'uptime_ms', 0)):>9} {_g(w, 'threads', 0):>4}")
+        # Per-thread rows (TID + comm), strongest-cpu first for the heavy ones.
+        threads = list(_g(w, "threads_detail", []) or [])
+        threads.sort(key=lambda t: _g(t, "cpu_pct", 0), reverse=True)
+        for t in threads:
+            tid = _g(t, "tid", 0)
+            comm = _g(t, "comm", "") or "?"
+            cpu = _g(t, "cpu_pct", 0) / 100.0
+            last = _g(t, "last_cpu", 0)
+            out.append(
+                f"{pidstr:>7} {tid:>7}  {('  ' + comm):<20.20} "
+                f"{('cpu' + str(last)):<9} {cpu:>5.1f} {'':>9} {'':>9} {'':>4}")
+    return "\n".join(out) if len(out) > 1 else "(no processes)"
+
+
 # ---------------------------------------------------------------------------
 # command handlers — each takes (args: list[str], sup, trace_factory)
 # ---------------------------------------------------------------------------
@@ -101,13 +139,15 @@ def _find_child(reply, name: str):
     return None
 
 
-def cmd_ps(args, sup, _tf) -> int:
-    # `ps`                  — the whole supervisor tree
-    # `ps <name>`           — metrics for one process/node (uptime/cpu/mem/...)
-    # `ps --follow [int]`   — poll the tree on an interval (pull model: the
+def cmd_apps(args, sup, _tf) -> int:
+    # `apps`                — the whole supervisor TREE (hierarchy; the GUI
+    #                         "Applications" view). Renamed from `ps` so `ps`
+    #                         can be the flat Linux-ps-style process/thread list.
+    # `apps <name>`         — metrics for one process/node (uptime/cpu/mem/...)
+    # `apps --follow [int]` — poll the tree on an interval (pull model: the
     #                         supervisor firehose has no remote egress; GetTree
     #                         is the live source. com's gRPC Subscribe mirrors it)
-    # `ps <name> --follow`  — poll one process's metrics
+    # `apps <name> --follow` — poll one process's metrics
     follow = "--follow" in args or "-f" in args
     positional = [a for a in args if not a.startswith("-")]
     # A non-numeric positional is a process NAME (numeric = the follow interval).
@@ -123,6 +163,43 @@ def cmd_ps(args, sup, _tf) -> int:
                 return f"no process/node named {name!r} in the supervisor tree"
             return _render_proc(ch)
         return _render_tree(list(_g(reply, "children", []) or []))
+
+    if not follow:
+        print(render())
+        return 0
+    label = f"apps {name}" if name else "apps"
+    try:
+        while True:
+            sys.stdout.write("\x1b[2J\x1b[H")   # clear + home
+            print(f"tdb {label} --follow  (every {interval}s, Ctrl-C to stop)\n")
+            print(render())
+            sys.stdout.flush()
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        return 0
+
+
+def cmd_ps(args, sup, _tf) -> int:
+    # `ps`               — flat Linux-`ps`-style list: one row per WORKER (an OS
+    #                      process, PID) and one row per THREAD under it (TID +
+    #                      comm), with cpu/rss/state. The GUI "Processes" panel
+    #                      shows the same. (The hierarchical tree moved to `apps`.)
+    # `ps <name>`        — the key/value detail for one process/node.
+    # `ps [<name>] --follow [int]` — poll on an interval.
+    follow = "--follow" in args or "-f" in args
+    positional = [a for a in args if not a.startswith("-")]
+    name = next((a for a in positional if not _is_number(a)), None)
+    nums = [a for a in positional if _is_number(a)]
+    interval = float(nums[0]) if nums else 1.0
+
+    def render() -> str:
+        reply = sup.get_tree(timeout=3.0)
+        if name:
+            ch = _find_child(reply, name)
+            if ch is None:
+                return f"no process/node named {name!r} in the supervisor tree"
+            return _render_proc(ch)
+        return _render_ps(list(_g(reply, "children", []) or []))
 
     if not follow:
         print(render())
@@ -651,7 +728,8 @@ _NETSTATE = {0: "DOWN", 1: "LINK_UP", 2: "READY", 3: "DEGRADED", 4: "WIFI_ASSOCI
 
 
 _COMMANDS = {
-    "ps": cmd_ps,
+    "apps": cmd_apps,         # the supervisor TREE (hierarchy; GUI Applications)
+    "ps": cmd_ps,             # flat Linux-ps list: PID/TID/name (GUI Processes)
     "supervisor": cmd_supervisor,
     "sup": cmd_supervisor,
     "info": cmd_info,
@@ -666,7 +744,10 @@ _COMMANDS = {
 }
 
 _HELP = """tdb — Theia Debug Bridge. commands:
-  ps                       list the supervisor tree
+  apps                     the supervisor tree (hierarchy; GUI Applications)
+  apps <name>              one process/node's metrics
+  ps                       flat Linux-ps list: PID/TID/name/cpu/rss (GUI Processes)
+  ps <name>                one process/node's metrics
   supervisor               supervisor host facts
   info                     host facts + running build (git sha / ts) + start time
   trace                    list every node with an active trace + its kinds

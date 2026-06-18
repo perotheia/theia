@@ -13,7 +13,8 @@ All transport is probe-backed (tools/tdb/system/tdb.art via artheia.probe) —
 no raw TIPC. See feedback-clients-via-art-probe.
 
 adb-shaped verbs:
-  ps                       list nodes from the supervisor tree
+  apps                     the supervisor tree (hierarchy; GUI Applications)
+  ps                       flat Linux-ps list: PID/TID/name (GUI Processes)
   supervisor               supervisor host facts (GetSystemInfo)
   info                     host facts + running build (git sha/ts) + start time
   trace [off] <node> [mt]  ConfigureTrace node on/off (msgtype "" = all kinds)

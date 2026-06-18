@@ -16,7 +16,8 @@ Two modes, like tdb / adb:
   2. REPL:       rtdb                           (no command)
 
 Verbs (identical to tdb, minus get-snapshot which is TIPC/per-only):
-  ps [--follow [s]]        live supervisor tree (Subscribe poll)
+  apps [--follow [s]]      the supervisor tree (hierarchy; GUI Applications)
+  ps [--follow [s]]        flat Linux-ps list: PID/TID/name (GUI Processes)
   supervisor / info        host facts (GetSystemInfo)
   trace ...                ConfigureTrace (control path: rtdb → com → supervisor)
   trace-config             stored trace config (GetTraceConfig)

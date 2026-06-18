@@ -9,6 +9,7 @@
 #include "lib/UdsRouter.hh"
 #include "impl/uds.hpp"           // UDS sids / NRCs / framing
 #include "impl/crypto_link.hpp"   // 0x27 seed/key via services/crypto
+#include "impl/phm_link.hpp"      // 0x19 ReadDTC via services/phm
 
 #include <pb_decode.h>
 
@@ -192,6 +193,47 @@ uds::Bytes svc_security(const uds::Bytes& req, UdsRouterState& s,
     return uds::negative(uds::SID_SecurityAccess, uds::NRC_SubFunctionNotSupported);
 }
 
+// 0x19 ReadDTCInformation. v1 sub-functions:
+//   0x02 reportDTCByStatusMask: query phm health; if worst >= DEGRADED emit one
+//        aggregate DTC (code 0xD10000 "platform degraded") with the testFailed +
+//        confirmed status bits, else an empty list. Format: report-type echo +
+//        status-availability-mask + [DTC(3B) + status(1B)]*.
+//   0x0A reportSupportedDTC: the static set of DTCs this ECU can report.
+uds::Bytes svc_read_dtc(const uds::Bytes& req) {
+    if (req.size() < 2) return uds::negative(uds::SID_ReadDTCInformation,
+                                             uds::NRC_IncorrectMessageLength);
+    const uint8_t sub = req[1];
+    // status availability mask (which status bits this ECU supports): testFailed
+    // (0x01) | confirmedDTC (0x08) | testFailedSinceLastClear (0x20).
+    constexpr uint8_t kStatusAvail = 0x29;
+    // The one platform DTC v1 reports: 0xD1 0x00 0x00.
+    const uint8_t dtc[3] = { 0xD1, 0x00, 0x00 };
+
+    if (sub == uds::DTC_ReportByStatusMask) {
+        uint32_t worst = 0, n_ent = 0, n_deg = 0;
+        bool ok = PhmLink::instance().health(worst, n_ent, n_deg);
+        uds::Bytes data = { sub, kStatusAvail };
+        if (ok && worst >= 2u /*DEGRADED*/) {
+            // status = testFailed(0x01) | confirmedDTC(0x08) [| testFailedSince…].
+            uint8_t status = 0x09;
+            if (worst >= 3u /*FAILED*/) status |= 0x20;
+            data.push_back(dtc[0]); data.push_back(dtc[1]); data.push_back(dtc[2]);
+            data.push_back(status);
+        }
+        return uds::positive(uds::SID_ReadDTCInformation, data);
+    }
+
+    if (sub == uds::DTC_ReportSupported) {
+        // report-type echo + status-availability + the supported DTC list (status
+        // 0x00 = "supported, currently inactive").
+        uds::Bytes data = { sub, kStatusAvail,
+                            dtc[0], dtc[1], dtc[2], 0x00 };
+        return uds::positive(uds::SID_ReadDTCInformation, data);
+    }
+
+    return uds::negative(uds::SID_ReadDTCInformation, uds::NRC_SubFunctionNotSupported);
+}
+
 }  // namespace
 
 // The single inbound. Dispatch by service id; unknown → serviceNotSupported.
@@ -217,9 +259,7 @@ UdsReply UdsRouter::handle_call(
     case uds::SID_WriteDataByIdentifier:    resp = svc_write_did(in, s); break;
     case uds::SID_SecurityAccess:
         resp = svc_security(in, s, s.security_key_slot);  break;
-    case uds::SID_ReadDTCInformation:       // Phase 4
-        resp = uds::negative(sid, uds::NRC_ServiceNotSupported);
-        break;
+    case uds::SID_ReadDTCInformation:       resp = svc_read_dtc(in);    break;
     default:
         resp = uds::negative(sid, uds::NRC_ServiceNotSupported);
         break;

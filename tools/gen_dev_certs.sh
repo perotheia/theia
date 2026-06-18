@@ -9,13 +9,19 @@
 # and rtdb/GUI at:
 #   THEIA_COM_TLS_CA=<out>/ca.crt        # so the client trusts the dev CA
 #
-# Usage: tools/gen_dev_certs.sh [out_dir] [server_cn]
-#   out_dir    default ./dev-certs
-#   server_cn  default localhost  (must match the host clients dial)
+# Usage: tools/gen_dev_certs.sh [out_dir] [server_cn] [extra_sans]
+#   out_dir     default ./dev-certs
+#   server_cn   default localhost  (must match the host clients dial)
+#   extra_sans  extra SAN entries (comma list of "DNS:x"/"IP:x"), so ONE cert set
+#               works for GUI dev (localhost/127.0.0.1) AND test rigs by IP, e.g.
+#               tools/gen_dev_certs.sh dist/manifest/central/certs localhost \
+#                   "IP:10.0.0.22,IP:192.168.50.213,DNS:rig1-central"
+#               Or set THEIA_DEV_CERT_SANS in the env (same comma format).
 set -euo pipefail
 
 OUT="${1:-dev-certs}"
 CN="${2:-localhost}"
+EXTRA_SANS="${3:-${THEIA_DEV_CERT_SANS:-}}"
 DAYS=825   # < 825 keeps macOS/modern clients happy; dev anyway
 
 mkdir -p "$OUT"
@@ -34,8 +40,11 @@ openssl req -x509 -new -nodes -key ca.key -sha256 -days "$DAYS" \
 openssl genrsa -out server.key 4096 2>/dev/null
 openssl req -new -key server.key -subj "/O=Theia Dev/CN=$CN" -out server.csr 2>/dev/null
 
+# SAN = the CN + localhost/127.0.0.1 (GUI dev dials those) + any extra rig SANs
+# (so the SAME cert validates when rtdb/GUI dial a test rig by IP). A trailing
+# ", $EXTRA_SANS" only when extras were given.
 cat > server.ext <<EXT
-subjectAltName = DNS:$CN, DNS:localhost, IP:127.0.0.1
+subjectAltName = DNS:$CN, DNS:localhost, IP:127.0.0.1${EXTRA_SANS:+, $EXTRA_SANS}
 extendedKeyUsage = serverAuth
 EXT
 

@@ -87,6 +87,7 @@ def cmd_wifi(args, sup, _tf) -> int:
 
     Default: the visible APs + association (strongest first, * = associated).
     --status: just the readiness ladder snapshot (state + carrier/addr/vpn)."""
+    import grpc  # local import — only the wifi verb needs the error type
     target = getattr(sup, "_target", _DEFAULT_TARGET)
     nc = NmClient(target)
     try:
@@ -110,6 +111,14 @@ def cmd_wifi(args, sup, _tf) -> int:
             print(f" {star} {(b['ssid'] or '(hidden)'):<22} {b['bssid']:<18} "
                   f"{b['signal_dbm']:>4}d {b['freq_mhz']:>5}MHz  {b['security']}")
         return 0
+    except grpc.RpcError as e:
+        # nm (NmDaemon) not up / not yet linked → com's NmView returns UNAVAILABLE.
+        # A clean message, not a traceback.
+        code = e.code().name if hasattr(e, "code") else "?"
+        print(f"wifi: {code} — {e.details() if hasattr(e, 'details') else e}")
+        print("  (is nm running on the target, and com linked to it? com links nm "
+              "at startup — restart com if nm came up later.)")
+        return 1
     finally:
         nc.stop()
 

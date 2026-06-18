@@ -35,7 +35,7 @@ cc_library(
     ],
     # doip.hpp = the DoIP (ISO 13400) wire model, #included as "impl/doip.hpp"
     # (FC root is the include root). Header-only, unit-tested standalone.
-    hdrs = ["doip.hpp", "uds.hpp"],
+    hdrs = ["doip.hpp", "uds.hpp", "crypto_link.hpp"],
     includes = [".."],
     copts = [
         "-std=c++17",

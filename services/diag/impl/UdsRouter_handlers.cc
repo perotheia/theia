@@ -8,9 +8,11 @@
 
 #include "lib/UdsRouter.hh"
 #include "impl/uds.hpp"           // UDS sids / NRCs / framing
+#include "impl/crypto_link.hpp"   // 0x27 seed/key via services/crypto
 
 #include <pb_decode.h>
 
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <map>
@@ -139,6 +141,57 @@ uds::Bytes svc_write_did(const uds::Bytes& req, UdsRouterState& s) {
     return uds::positive(uds::SID_WriteDataByIdentifier, data);
 }
 
+// 0x27 SecurityAccess. odd sub-function = requestSeed (return a seed); even =
+// sendKey (the tester's signature over the seed) → crypto Verify. FAIL-CLOSED: a
+// transport/verify failure leaves the session LOCKED. An exceeded attempt count
+// returns NRC 0x36.
+uds::Bytes svc_security(const uds::Bytes& req, UdsRouterState& s,
+                        const std::string& key_slot) {
+    if (req.size() < 2) return uds::negative(uds::SID_SecurityAccess,
+                                             uds::NRC_IncorrectMessageLength);
+    const uint8_t sub = req[1];
+
+    if (sub == uds::SA_RequestSeed) {
+        if (s.security_unlocked) {     // already unlocked → seed of zeros (ISO)
+            uds::Bytes data = { sub, 0, 0, 0, 0 };
+            return uds::positive(uds::SID_SecurityAccess, data);
+        }
+        // A 4-byte seed derived from a monotonic clock (v1; a real build pulls
+        // crypto-strong randomness). Stash it for the sendKey check.
+        uint64_t t = static_cast<uint64_t>(
+            std::chrono::steady_clock::now().time_since_epoch().count());
+        uint8_t seed[4] = { uint8_t(t), uint8_t(t >> 8), uint8_t(t >> 16),
+                            uint8_t(t >> 24) };
+        s.last_seed.assign(reinterpret_cast<char*>(seed), 4);
+        s.seed_pending = true;
+        uds::Bytes data = { sub, seed[0], seed[1], seed[2], seed[3] };
+        return uds::positive(uds::SID_SecurityAccess, data);
+    }
+
+    if (sub == uds::SA_SendKey) {
+        if (!s.seed_pending)
+            return uds::negative(uds::SID_SecurityAccess, uds::NRC_ConditionsNotCorrect);
+        if (s.security_attempts >= uds::kMaxSecurityAttempts)
+            return uds::negative(uds::SID_SecurityAccess,
+                                 uds::NRC_ExceededNumberOfAttempts);
+        std::string key(req.begin() + 2, req.end());
+        bool valid = false;
+        bool ok = CryptoLink::instance().verify(key_slot, s.last_seed, key, valid);
+        s.seed_pending = false;
+        if (ok && valid) {             // crypto confirmed the signature
+            s.security_unlocked = true;
+            s.security_attempts = 0;
+            uds::Bytes data = { sub };
+            return uds::positive(uds::SID_SecurityAccess, data);
+        }
+        // FAIL-CLOSED: transport error OR invalid key → stay locked, count it.
+        s.security_attempts += 1;
+        return uds::negative(uds::SID_SecurityAccess, uds::NRC_InvalidKey);
+    }
+
+    return uds::negative(uds::SID_SecurityAccess, uds::NRC_SubFunctionNotSupported);
+}
+
 }  // namespace
 
 // The single inbound. Dispatch by service id; unknown → serviceNotSupported.
@@ -162,7 +215,8 @@ UdsReply UdsRouter::handle_call(
     case uds::SID_DiagnosticSessionControl: resp = svc_session(in, s);  break;
     case uds::SID_ReadDataByIdentifier:     resp = svc_read_did(in);    break;
     case uds::SID_WriteDataByIdentifier:    resp = svc_write_did(in, s); break;
-    case uds::SID_SecurityAccess:           // Phase 3
+    case uds::SID_SecurityAccess:
+        resp = svc_security(in, s, s.security_key_slot);  break;
     case uds::SID_ReadDTCInformation:       // Phase 4
         resp = uds::negative(sid, uds::NRC_ServiceNotSupported);
         break;

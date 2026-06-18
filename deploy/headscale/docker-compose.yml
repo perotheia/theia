@@ -1,16 +1,24 @@
 # Headscale — self-hosted Tailscale control plane for the engineering fleet.
-# Runs on dalek (10.0.0.99). The rig (taycann/Orin) runs the tailscale client and
+# Runs on dalek (10.0.0.99). The rig (rpi4/Orin) runs the tailscale client and
 # enrolls against this control server; NM observes the resulting tunnel and drives
 # its VPN_ESTABLISHED readiness rung. See docs/tasks/PROGRESS/VPN.md.
 #
 #   Server URL the clients use:  http://10.0.0.99:8080
+#   Admin web UI:                http://10.0.0.99:8081  (headscale-admin)
 #   gRPC/metrics (local only):   127.0.0.1:9090
 #   DERP/STUN (NAT traversal):   udp/3478
 #
+# Headscale itself has NO web UI (by design — it's a control server; / is a stub,
+# /api/v1 needs an API key). The admin UI below is a SEPARATE third-party static
+# frontend (goodieshq/headscale-admin) that drives the same REST /api/v1 with an
+# API key — it's optional; the headscale CLI + tools/rig-enroll automate the rest.
+#
 # Bring up:   cd /opt/headscale && docker compose up -d
+# Mint an API key for the admin UI + tools/rig-enroll:
+#   docker compose exec headscale headscale apikeys create --expiration 90d
 # Enroll a node (on the server):
 #   docker compose exec headscale headscale users create rig
-#   docker compose exec headscale headscale preauthkeys create -u rig --reusable --expiration 24h
+#   docker compose exec headscale headscale preauthkeys create -u 1 --reusable --expiration 24h
 # Client (on the rig):  tailscale up --login-server http://10.0.0.99:8080 --authkey <key>
 
 services:
@@ -26,3 +34,34 @@ services:
       - "8080:8080"          # HTTP API + the client login/control endpoint
       - "127.0.0.1:9090:9090"  # metrics/gRPC — loopback only (admin)
       - "3478:3478/udp"      # embedded DERP STUN (NAT traversal)
+
+  # headscale-admin — the OPTIONAL web UI. A static SPA (Caddy file-server) that
+  # talks to Headscale's REST /api/v1 from the BROWSER. NOT published directly:
+  # the browser must reach the SPA and the API on the SAME ORIGIN (Headscale 0.29
+  # emits no CORS headers, so a cross-origin :8081→:8080 call is blocked). The
+  # `ui-proxy` front below unifies them. Internal only (no host port).
+  headscale-admin:
+    image: goodieshq/headscale-admin:latest
+    container_name: headscale-admin
+    restart: unless-stopped
+    expose:
+      - "80"
+
+  # ui-proxy — a tiny Caddy reverse proxy that serves the admin UI and the
+  # Headscale API under ONE origin (http://10.0.0.99:8081), so the SPA's
+  # /api/v1 calls are same-origin (no CORS). Routes:
+  #   /admin/*  → headscale-admin (the SPA)
+  #   /api/*    → headscale:8080  (the REST mgmt API the SPA + rig-enroll use)
+  #   /*        → headscale:8080  (so the Tailscale control endpoints still work
+  #              if a client is pointed at :8081 — handy single front)
+  # The admin UI is then reached at http://10.0.0.99:8081/admin/ and configured
+  # to use "/" (same origin) as its Headscale URL + an API key (stored browser-side).
+  ui-proxy:
+    image: caddy:2-alpine
+    container_name: headscale-ui-proxy
+    restart: unless-stopped
+    depends_on: [headscale, headscale-admin]
+    ports:
+      - "8081:8081"          # the unified admin origin → http://10.0.0.99:8081/admin/
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro

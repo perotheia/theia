@@ -20,6 +20,7 @@ struct NmPollerState {
     bool has_carrier = false;
     bool has_address = false;
     bool wifi_assoc  = false;   // last observed wifi-association state (edge base)
+    bool vpn_up      = false;   // last observed VPN-rung state (edge base)
     bool primed      = false;
 
     // Applied config (the poller reads the same etcd NmConfig as NmDaemon via
@@ -27,6 +28,8 @@ struct NmPollerState {
     std::string interfaces;          // "" = auto (first carrier link)
     uint32_t    poll_ms = 1000;
     bool        require_address = true;
+    bool        require_vpn = false;     // gate NETWORK_OPERATIONAL on the tunnel
+    std::string vpn_interface;           // "" = auto ("tailscale0")
 };
 
 }  // namespace ara::nm

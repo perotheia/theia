@@ -38,11 +38,13 @@ namespace ara::nm {
 // order. Underlying type is uint8_t to match the gen_statem template
 // + minimize per-event payload overhead.
 enum class NmDaemonState : uint8_t {
-    DOWN = 0,
-    LINK_UP = 1,
+    NETWORK_OFF = 0,
+    LINK_AVAILABLE = 1,
     WIFI_ASSOCIATED = 2,
-    READY = 3,
-    DEGRADED = 4
+    IP_ACQUIRED = 3,
+    VPN_ESTABLISHED = 4,
+    NETWORK_OPERATIONAL = 5,
+    DEGRADED = 6
 };
 
 // Local-namespace aliases over the nanopb C structs. The nanopb
@@ -56,7 +58,10 @@ using WifiAssociated = system_services_nm_WifiAssociated;
 using AddrAcquired = system_services_nm_AddrAcquired;
 using LinkDown = system_services_nm_LinkDown;
 using WifiDisassociated = system_services_nm_WifiDisassociated;
+using VpnUp = system_services_nm_VpnUp;
 using AddrLost = system_services_nm_AddrLost;
+using Operational = system_services_nm_Operational;
+using VpnDown = system_services_nm_VpnDown;
 using NetStatusReq = system_services_nm_NetStatusReq;
 using WifiScanReq = system_services_nm_WifiScanReq;
 using WifiScanReply = system_services_nm_WifiScanReply;
@@ -79,9 +84,9 @@ class NmDaemon;
 //
 // Generated members:
 //   - init(NmDaemonData&) returns the initial state
-//     (NmDaemonState::DOWN)
+//     (NmDaemonState::NETWORK_OFF)
 //   - one handle_event overload per declared event type
-//     (LinkUp, WifiAssociated, AddrAcquired, LinkDown, AddrAcquired, WifiDisassociated, LinkDown, AddrLost, WifiDisassociated, LinkDown, AddrAcquired, WifiAssociated, LinkUp, LinkDown)
+//     (LinkUp, WifiAssociated, AddrAcquired, LinkDown, AddrAcquired, WifiDisassociated, LinkDown, VpnUp, AddrLost, WifiDisassociated, LinkDown, Operational, VpnDown, AddrLost, WifiDisassociated, LinkDown, VpnDown, AddrLost, WifiDisassociated, LinkDown, VpnUp, AddrAcquired, WifiAssociated, LinkUp, LinkDown)
 //   - handle_event for ::theia::runtime::StateTimeoutMsg<NmDaemonState>
 //     covering states with `timeout → ...` rules
 //   - subscribe/unsubscribe/broadcast helpers for sender ports
@@ -102,10 +107,12 @@ public:
     // not just the bare ordinal — what `tdb tracecat` / the GUI / rf assert on.
     static const char* state_name(NmDaemonState s) {
         switch (s) {
-        case NmDaemonState::DOWN: return "DOWN";
-        case NmDaemonState::LINK_UP: return "LINK_UP";
+        case NmDaemonState::NETWORK_OFF: return "NETWORK_OFF";
+        case NmDaemonState::LINK_AVAILABLE: return "LINK_AVAILABLE";
         case NmDaemonState::WIFI_ASSOCIATED: return "WIFI_ASSOCIATED";
-        case NmDaemonState::READY: return "READY";
+        case NmDaemonState::IP_ACQUIRED: return "IP_ACQUIRED";
+        case NmDaemonState::VPN_ESTABLISHED: return "VPN_ESTABLISHED";
+        case NmDaemonState::NETWORK_OPERATIONAL: return "NETWORK_OPERATIONAL";
         case NmDaemonState::DEGRADED: return "DEGRADED";
         }
         return "?";
@@ -145,7 +152,7 @@ public:
 
 
     NmDaemonState init(NmDaemonData& /*d*/) {
-        return NmDaemonState::DOWN;
+        return NmDaemonState::NETWORK_OFF;
     }
 
     // Keep base-class handle_event(StateTimeoutMsg) visible — derived
@@ -157,26 +164,26 @@ public:
 
 
 
-    // LinkUp — handled from: DOWN → LINK_UP | DEGRADED → LINK_UP
+    // LinkUp — handled from: NETWORK_OFF → LINK_AVAILABLE | DEGRADED → LINK_AVAILABLE
     ::theia::runtime::EventResult<NmDaemonState> handle_event(
             NmDaemonState s, const LinkUp& /*e*/,
             NmDaemonData& /*d*/) {
-        if (s == NmDaemonState::DOWN) {
+        if (s == NmDaemonState::NETWORK_OFF) {
             return ::theia::runtime::transition_to<NmDaemonState>(
-                NmDaemonState::LINK_UP);
+                NmDaemonState::LINK_AVAILABLE);
         }
         if (s == NmDaemonState::DEGRADED) {
             return ::theia::runtime::transition_to<NmDaemonState>(
-                NmDaemonState::LINK_UP);
+                NmDaemonState::LINK_AVAILABLE);
         }
         return ::theia::runtime::keep_state<NmDaemonState>();
     }
 
-    // WifiAssociated — handled from: LINK_UP → WIFI_ASSOCIATED | DEGRADED → WIFI_ASSOCIATED
+    // WifiAssociated — handled from: LINK_AVAILABLE → WIFI_ASSOCIATED | DEGRADED → WIFI_ASSOCIATED
     ::theia::runtime::EventResult<NmDaemonState> handle_event(
             NmDaemonState s, const WifiAssociated& /*e*/,
             NmDaemonData& /*d*/) {
-        if (s == NmDaemonState::LINK_UP) {
+        if (s == NmDaemonState::LINK_AVAILABLE) {
             return ::theia::runtime::transition_to<NmDaemonState>(
                 NmDaemonState::WIFI_ASSOCIATED);
         }
@@ -187,68 +194,133 @@ public:
         return ::theia::runtime::keep_state<NmDaemonState>();
     }
 
-    // AddrAcquired — handled from: LINK_UP → READY | WIFI_ASSOCIATED → READY | DEGRADED → READY
+    // AddrAcquired — handled from: LINK_AVAILABLE → IP_ACQUIRED | WIFI_ASSOCIATED → IP_ACQUIRED | DEGRADED → IP_ACQUIRED
     ::theia::runtime::EventResult<NmDaemonState> handle_event(
             NmDaemonState s, const AddrAcquired& /*e*/,
             NmDaemonData& /*d*/) {
-        if (s == NmDaemonState::LINK_UP) {
+        if (s == NmDaemonState::LINK_AVAILABLE) {
             return ::theia::runtime::transition_to<NmDaemonState>(
-                NmDaemonState::READY);
+                NmDaemonState::IP_ACQUIRED);
         }
         if (s == NmDaemonState::WIFI_ASSOCIATED) {
             return ::theia::runtime::transition_to<NmDaemonState>(
-                NmDaemonState::READY);
+                NmDaemonState::IP_ACQUIRED);
         }
         if (s == NmDaemonState::DEGRADED) {
             return ::theia::runtime::transition_to<NmDaemonState>(
-                NmDaemonState::READY);
+                NmDaemonState::IP_ACQUIRED);
         }
         return ::theia::runtime::keep_state<NmDaemonState>();
     }
 
-    // LinkDown — handled from: LINK_UP → DOWN | WIFI_ASSOCIATED → DOWN | READY → DEGRADED | DEGRADED → DOWN
+    // LinkDown — handled from: LINK_AVAILABLE → NETWORK_OFF | WIFI_ASSOCIATED → NETWORK_OFF | IP_ACQUIRED → DEGRADED | VPN_ESTABLISHED → DEGRADED | NETWORK_OPERATIONAL → DEGRADED | DEGRADED → NETWORK_OFF
     ::theia::runtime::EventResult<NmDaemonState> handle_event(
             NmDaemonState s, const LinkDown& /*e*/,
             NmDaemonData& /*d*/) {
-        if (s == NmDaemonState::LINK_UP) {
+        if (s == NmDaemonState::LINK_AVAILABLE) {
             return ::theia::runtime::transition_to<NmDaemonState>(
-                NmDaemonState::DOWN);
+                NmDaemonState::NETWORK_OFF);
         }
         if (s == NmDaemonState::WIFI_ASSOCIATED) {
             return ::theia::runtime::transition_to<NmDaemonState>(
-                NmDaemonState::DOWN);
+                NmDaemonState::NETWORK_OFF);
         }
-        if (s == NmDaemonState::READY) {
+        if (s == NmDaemonState::IP_ACQUIRED) {
+            return ::theia::runtime::transition_to<NmDaemonState>(
+                NmDaemonState::DEGRADED);
+        }
+        if (s == NmDaemonState::VPN_ESTABLISHED) {
+            return ::theia::runtime::transition_to<NmDaemonState>(
+                NmDaemonState::DEGRADED);
+        }
+        if (s == NmDaemonState::NETWORK_OPERATIONAL) {
             return ::theia::runtime::transition_to<NmDaemonState>(
                 NmDaemonState::DEGRADED);
         }
         if (s == NmDaemonState::DEGRADED) {
             return ::theia::runtime::transition_to<NmDaemonState>(
-                NmDaemonState::DOWN);
+                NmDaemonState::NETWORK_OFF);
         }
         return ::theia::runtime::keep_state<NmDaemonState>();
     }
 
-    // WifiDisassociated — handled from: WIFI_ASSOCIATED → LINK_UP | READY → DEGRADED
+    // WifiDisassociated — handled from: WIFI_ASSOCIATED → LINK_AVAILABLE | IP_ACQUIRED → DEGRADED | VPN_ESTABLISHED → DEGRADED | NETWORK_OPERATIONAL → DEGRADED
     ::theia::runtime::EventResult<NmDaemonState> handle_event(
             NmDaemonState s, const WifiDisassociated& /*e*/,
             NmDaemonData& /*d*/) {
         if (s == NmDaemonState::WIFI_ASSOCIATED) {
             return ::theia::runtime::transition_to<NmDaemonState>(
-                NmDaemonState::LINK_UP);
+                NmDaemonState::LINK_AVAILABLE);
         }
-        if (s == NmDaemonState::READY) {
+        if (s == NmDaemonState::IP_ACQUIRED) {
+            return ::theia::runtime::transition_to<NmDaemonState>(
+                NmDaemonState::DEGRADED);
+        }
+        if (s == NmDaemonState::VPN_ESTABLISHED) {
+            return ::theia::runtime::transition_to<NmDaemonState>(
+                NmDaemonState::DEGRADED);
+        }
+        if (s == NmDaemonState::NETWORK_OPERATIONAL) {
             return ::theia::runtime::transition_to<NmDaemonState>(
                 NmDaemonState::DEGRADED);
         }
         return ::theia::runtime::keep_state<NmDaemonState>();
     }
 
-    // AddrLost — handled from: READY → DEGRADED
+    // VpnUp — handled from: IP_ACQUIRED → VPN_ESTABLISHED | DEGRADED → VPN_ESTABLISHED
+    ::theia::runtime::EventResult<NmDaemonState> handle_event(
+            NmDaemonState s, const VpnUp& /*e*/,
+            NmDaemonData& /*d*/) {
+        if (s == NmDaemonState::IP_ACQUIRED) {
+            return ::theia::runtime::transition_to<NmDaemonState>(
+                NmDaemonState::VPN_ESTABLISHED);
+        }
+        if (s == NmDaemonState::DEGRADED) {
+            return ::theia::runtime::transition_to<NmDaemonState>(
+                NmDaemonState::VPN_ESTABLISHED);
+        }
+        return ::theia::runtime::keep_state<NmDaemonState>();
+    }
+
+    // AddrLost — handled from: IP_ACQUIRED → DEGRADED | VPN_ESTABLISHED → DEGRADED | NETWORK_OPERATIONAL → DEGRADED
     ::theia::runtime::EventResult<NmDaemonState> handle_event(
             NmDaemonState s, const AddrLost& /*e*/,
             NmDaemonData& /*d*/) {
-        if (s == NmDaemonState::READY) {
+        if (s == NmDaemonState::IP_ACQUIRED) {
+            return ::theia::runtime::transition_to<NmDaemonState>(
+                NmDaemonState::DEGRADED);
+        }
+        if (s == NmDaemonState::VPN_ESTABLISHED) {
+            return ::theia::runtime::transition_to<NmDaemonState>(
+                NmDaemonState::DEGRADED);
+        }
+        if (s == NmDaemonState::NETWORK_OPERATIONAL) {
+            return ::theia::runtime::transition_to<NmDaemonState>(
+                NmDaemonState::DEGRADED);
+        }
+        return ::theia::runtime::keep_state<NmDaemonState>();
+    }
+
+    // Operational — handled from: VPN_ESTABLISHED → NETWORK_OPERATIONAL
+    ::theia::runtime::EventResult<NmDaemonState> handle_event(
+            NmDaemonState s, const Operational& /*e*/,
+            NmDaemonData& /*d*/) {
+        if (s == NmDaemonState::VPN_ESTABLISHED) {
+            return ::theia::runtime::transition_to<NmDaemonState>(
+                NmDaemonState::NETWORK_OPERATIONAL);
+        }
+        return ::theia::runtime::keep_state<NmDaemonState>();
+    }
+
+    // VpnDown — handled from: VPN_ESTABLISHED → IP_ACQUIRED | NETWORK_OPERATIONAL → DEGRADED
+    ::theia::runtime::EventResult<NmDaemonState> handle_event(
+            NmDaemonState s, const VpnDown& /*e*/,
+            NmDaemonData& /*d*/) {
+        if (s == NmDaemonState::VPN_ESTABLISHED) {
+            return ::theia::runtime::transition_to<NmDaemonState>(
+                NmDaemonState::IP_ACQUIRED);
+        }
+        if (s == NmDaemonState::NETWORK_OPERATIONAL) {
             return ::theia::runtime::transition_to<NmDaemonState>(
                 NmDaemonState::DEGRADED);
         }

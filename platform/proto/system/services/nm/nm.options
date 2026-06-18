@@ -6,6 +6,7 @@
 # `[max_size:N]` option.
 
 system_services_nm.NmConfig.interfaces   max_size:64
+system_services_nm.NmConfig.vpn_interface   max_size:32
 system_services_nm.NmStatusMsg.interface   max_size:64
 
 # WiFi scan wire types. ssid ≤ 32 octets per 802.11 + NUL; bssid "aa:bb:..:ff"

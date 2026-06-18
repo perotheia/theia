@@ -5,10 +5,12 @@ syntax = "proto3";
 package system_services_nm;
 
 enum NetState {
-    NetState_DOWN = 0;
-    NetState_LINK_UP = 1;
+    NetState_NETWORK_OFF = 0;
+    NetState_LINK_AVAILABLE = 1;
     NetState_WIFI_ASSOCIATED = 4;
-    NetState_READY = 2;
+    NetState_IP_ACQUIRED = 2;
+    NetState_VPN_ESTABLISHED = 5;
+    NetState_NETWORK_OPERATIONAL = 6;
     NetState_DEGRADED = 3;
 }
 
@@ -16,6 +18,8 @@ message NmConfig {
     string interfaces = 1;
     uint32 poll_ms = 2;
     bool require_address = 3;
+    bool require_vpn = 4;
+    string vpn_interface = 5;
 }
 
 message LinkUp {
@@ -42,12 +46,25 @@ message WifiDisassociated {
     // empty body
 }
 
+message VpnUp {
+    // empty body
+}
+
+message VpnDown {
+    // empty body
+}
+
+message Operational {
+    // empty body
+}
+
 message NmStatusMsg {
     NetState state = 1;
     string interface = 2;
     bool has_carrier = 3;
     bool has_address = 4;
-    uint64 ts_ns = 5;
+    bool vpn_up = 5;
+    uint64 ts_ns = 6;
 }
 
 message NetStatusReq {

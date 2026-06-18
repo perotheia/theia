@@ -1,0 +1,28 @@
+# Headscale — self-hosted Tailscale control plane for the engineering fleet.
+# Runs on dalek (10.0.0.99). The rig (taycann/Orin) runs the tailscale client and
+# enrolls against this control server; NM observes the resulting tunnel and drives
+# its VPN_ESTABLISHED readiness rung. See docs/tasks/PROGRESS/VPN.md.
+#
+#   Server URL the clients use:  http://10.0.0.99:8080
+#   gRPC/metrics (local only):   127.0.0.1:9090
+#   DERP/STUN (NAT traversal):   udp/3478
+#
+# Bring up:   cd /opt/headscale && docker compose up -d
+# Enroll a node (on the server):
+#   docker compose exec headscale headscale users create rig
+#   docker compose exec headscale headscale preauthkeys create -u rig --reusable --expiration 24h
+# Client (on the rig):  tailscale up --login-server http://10.0.0.99:8080 --authkey <key>
+
+services:
+  headscale:
+    image: headscale/headscale:0.29.0
+    container_name: headscale
+    restart: unless-stopped
+    command: serve
+    volumes:
+      - ./config:/etc/headscale
+      - ./data:/var/lib/headscale
+    ports:
+      - "8080:8080"          # HTTP API + the client login/control endpoint
+      - "127.0.0.1:9090:9090"  # metrics/gRPC — loopback only (admin)
+      - "3478:3478/udp"      # embedded DERP STUN (NAT traversal)

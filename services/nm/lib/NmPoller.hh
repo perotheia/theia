@@ -16,7 +16,7 @@
 // derived from the .art), so the struct lives in a WRITE-ONCE impl header
 // (seeded empty, never clobbered without --force) that the user fills in.
 // Included at GLOBAL scope (the header opens its own `namespace
-// system_services_nm`) so it isn't nested under this file's
+// ara::nm`) so it isn't nested under this file's
 // namespace block — bound as the GenServer State type below.
 #include "impl/NmPoller_state.hh"
 
@@ -45,6 +45,8 @@ using AddrAcquired = system_services_nm_AddrAcquired;
 using AddrLost = system_services_nm_AddrLost;
 using WifiAssociated = system_services_nm_WifiAssociated;
 using WifiDisassociated = system_services_nm_WifiDisassociated;
+using VpnUp = system_services_nm_VpnUp;
+using VpnDown = system_services_nm_VpnDown;
 
 // statem block declared in .art — see the corresponding StateMBase
 // header produced by `artheia gen-cpp-stubs`. The daemon below
@@ -69,6 +71,10 @@ using EventsWifi_associatedSubscriber =
     std::function<void(const WifiAssociated&)>;
 using EventsWifi_disassociatedSubscriber =
     std::function<void(const WifiDisassociated&)>;
+using EventsVpn_upSubscriber =
+    std::function<void(const VpnUp&)>;
+using EventsVpn_downSubscriber =
+    std::function<void(const VpnDown&)>;
 
 
 class NmPoller : public ::theia::runtime::GenServer<NmPoller, NmPollerState> {
@@ -148,6 +154,16 @@ public:
         EventsWifi_disassociatedSubscriber s);
     void     unsubscribe_events_wifi_disassociated(uint32_t id);
 
+    // events.vpn_up broadcast subscribers.
+    uint32_t subscribe_events_vpn_up(
+        EventsVpn_upSubscriber s);
+    void     unsubscribe_events_vpn_up(uint32_t id);
+
+    // events.vpn_down broadcast subscribers.
+    uint32_t subscribe_events_vpn_down(
+        EventsVpn_downSubscriber s);
+    void     unsubscribe_events_vpn_down(uint32_t id);
+
 
     // ---- GenServer plumbing: terminate default
     //
@@ -212,6 +228,10 @@ public:
 
     void broadcast_events_wifi_disassociated(const WifiDisassociated& msg);
 
+    void broadcast_events_vpn_up(const VpnUp& msg);
+
+    void broadcast_events_vpn_down(const VpnDown& msg);
+
 
 private:
 
@@ -268,6 +288,24 @@ private:
     uint32_t events_wifi_disassociated_next_id_{1};
     std::vector<EventsWifi_disassociatedEntry>
         events_wifi_disassociated_subs_;
+
+    struct EventsVpn_upEntry {
+        uint32_t id;
+        EventsVpn_upSubscriber fn;
+    };
+    std::mutex events_vpn_up_mu_;
+    uint32_t events_vpn_up_next_id_{1};
+    std::vector<EventsVpn_upEntry>
+        events_vpn_up_subs_;
+
+    struct EventsVpn_downEntry {
+        uint32_t id;
+        EventsVpn_downSubscriber fn;
+    };
+    std::mutex events_vpn_down_mu_;
+    uint32_t events_vpn_down_next_id_{1};
+    std::vector<EventsVpn_downEntry>
+        events_vpn_down_subs_;
 
 };
 
@@ -455,6 +493,68 @@ inline void NmPoller::broadcast_events_wifi_disassociated(const WifiDisassociate
         catch (...) {
             std::fprintf(stderr,
                 "[%s] subscriber %u threw on events.wifi_disassociated — dropping\n",
+                kNodeName, e.id);
+        }
+    }
+}
+
+inline uint32_t NmPoller::subscribe_events_vpn_up(
+        EventsVpn_upSubscriber s) {
+    std::lock_guard<std::mutex> lk(events_vpn_up_mu_);
+    uint32_t id = events_vpn_up_next_id_++;
+    events_vpn_up_subs_.push_back({id, std::move(s)});
+    return id;
+}
+
+inline void NmPoller::unsubscribe_events_vpn_up(uint32_t id) {
+    std::lock_guard<std::mutex> lk(events_vpn_up_mu_);
+    auto& v = events_vpn_up_subs_;
+    v.erase(std::remove_if(v.begin(), v.end(),
+              [id](const auto& e) { return e.id == id; }), v.end());
+}
+
+inline void NmPoller::broadcast_events_vpn_up(const VpnUp& msg) {
+    std::vector<EventsVpn_upEntry> snap;
+    {
+        std::lock_guard<std::mutex> lk(events_vpn_up_mu_);
+        snap = events_vpn_up_subs_;
+    }
+    for (const auto& e : snap) {
+        try { e.fn(msg); }
+        catch (...) {
+            std::fprintf(stderr,
+                "[%s] subscriber %u threw on events.vpn_up — dropping\n",
+                kNodeName, e.id);
+        }
+    }
+}
+
+inline uint32_t NmPoller::subscribe_events_vpn_down(
+        EventsVpn_downSubscriber s) {
+    std::lock_guard<std::mutex> lk(events_vpn_down_mu_);
+    uint32_t id = events_vpn_down_next_id_++;
+    events_vpn_down_subs_.push_back({id, std::move(s)});
+    return id;
+}
+
+inline void NmPoller::unsubscribe_events_vpn_down(uint32_t id) {
+    std::lock_guard<std::mutex> lk(events_vpn_down_mu_);
+    auto& v = events_vpn_down_subs_;
+    v.erase(std::remove_if(v.begin(), v.end(),
+              [id](const auto& e) { return e.id == id; }), v.end());
+}
+
+inline void NmPoller::broadcast_events_vpn_down(const VpnDown& msg) {
+    std::vector<EventsVpn_downEntry> snap;
+    {
+        std::lock_guard<std::mutex> lk(events_vpn_down_mu_);
+        snap = events_vpn_down_subs_;
+    }
+    for (const auto& e : snap) {
+        try { e.fn(msg); }
+        catch (...) {
+            std::fprintf(stderr,
+                "[%s] subscriber %u threw on events.vpn_down — dropping\n",
                 kNodeName, e.id);
         }
     }

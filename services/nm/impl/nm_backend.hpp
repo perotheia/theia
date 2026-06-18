@@ -359,4 +359,65 @@ inline WifiObservation wifi_observe(const std::string& want) {
     return obs;
 }
 
+// ─── VPN tunnel observation (Headscale/Tailscale) ──────────────────────────
+//
+// NM OBSERVES the remote tunnel; tailscaled (driven by Headscale) does the
+// WireGuard handshake. The cheap per-tick probe asks `tailscale status --json`
+// for the backend state — "Running" with a Self.Online tunnel means the rig has
+// remote connectivity. Falls back to checking the wg interface is up + has a
+// peer (`wg show <if> latest-handshakes`) when the tailscale CLI is absent.
+// Returns false only when there's no VPN mechanism present at all.
+struct VpnObservation {
+    std::string interface;   // the tunnel iface ("tailscale0" / wg iface), "" if none
+    bool        up = false;  // tunnel established (remote connectivity available)
+    std::string note;        // human detail for the status line
+};
+
+// Probe the Tailscale/WireGuard tunnel. `want` = the configured vpn_interface
+// ("" → "tailscale0"). `up` is true when tailscaled reports BackendState
+// "Running" (the tunnel is established).
+inline bool vpn_observe(const std::string& want, VpnObservation& obs) {
+    using namespace nm_detail;
+    obs.interface = want.empty() ? "tailscale0" : want;
+
+    // Primary: the tailscale backend state. We don't pull a JSON parser into the
+    // FC for one field — grep the line `"BackendState": "Running"`. tailscale
+    // prints it whether or not jq is present.
+    std::string out;
+    if (run_capture("tailscale status --json", out) && !out.empty()) {
+        const bool running = out.find("\"BackendState\": \"Running\"") != std::string::npos
+                          || out.find("\"BackendState\":\"Running\"")  != std::string::npos;
+        // "Running" + at least one Self address means the tunnel is up.
+        const bool has_self = out.find("\"TailscaleIPs\"") != std::string::npos;
+        obs.up = running && has_self;
+        obs.note = obs.up ? "tailscale Running" : "tailscale not Running";
+        return true;
+    }
+
+    // Fallback: a raw wg interface with a recent handshake (non-zero epoch).
+    if (run_capture("wg show " + obs.interface + " latest-handshakes", out) &&
+        !out.empty()) {
+        // Any peer line with a non-"0" handshake timestamp → tunnel up.
+        bool handshook = false;
+        size_t pos = 0;
+        while (pos < out.size()) {
+            size_t nl = out.find('\n', pos);
+            std::string line = out.substr(pos, nl == std::string::npos ? std::string::npos : nl - pos);
+            pos = (nl == std::string::npos) ? out.size() : nl + 1;
+            // "<pubkey>\t<epoch>"; up if the trailing number is > 0.
+            size_t tab = line.find_last_of(" \t");
+            if (tab != std::string::npos) {
+                std::string ts = trim(line.substr(tab + 1));
+                if (!ts.empty() && ts != "0") { handshook = true; break; }
+            }
+        }
+        obs.up = handshook;
+        obs.note = handshook ? "wg handshake present" : "wg no handshake";
+        return true;
+    }
+
+    obs.note = "no tailscale/wg present";
+    return false;   // no VPN mechanism at all
+}
+
 }  // namespace ara::nm

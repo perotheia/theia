@@ -18,8 +18,12 @@ from artheia.gen_server.probe import ArtheiaContext  # noqa: E402
 ART = REPO / "system/services/nm/package.art"
 PROTO = REPO / "platform/proto"
 
-# NetState enum (mirrors the .art) for a readable print.
-_STATE = {0: "DOWN", 1: "LINK_UP", 2: "READY", 3: "DEGRADED"}
+# NetState enum (mirrors the .art ladder) for a readable print.
+_STATE = {
+    0: "NETWORK_OFF", 1: "LINK_AVAILABLE", 4: "WIFI_ASSOCIATED",
+    2: "IP_ACQUIRED", 5: "VPN_ESTABLISHED", 6: "NETWORK_OPERATIONAL",
+    3: "DEGRADED",
+}
 
 
 def main() -> int:
@@ -34,9 +38,11 @@ def main() -> int:
         print(f"  state={_STATE.get(st, st)} "
               f"iface={rep.get('interface') or '(auto)'} "
               f"carrier={rep.get('has_carrier')} addr={rep.get('has_address')}")
-        # On this dev host enp0s31f6 has carrier + a global addr → READY.
-        ok = st in (_STATE_OK := {1, 2})   # LINK_UP or READY = the FSM advanced
-        print("  smoke:", "OK (FSM advanced past DOWN)" if ok else "DOWN (no link?)")
+        # On this dev host the wired link has carrier + a global addr, so the FSM
+        # reaches IP_ACQUIRED (or NETWORK_OPERATIONAL if VPN not required → skipped).
+        # Any state past NETWORK_OFF means the FSM advanced.
+        ok = st != 0   # advanced past NETWORK_OFF
+        print("  smoke:", "OK (FSM advanced past NETWORK_OFF)" if ok else "NETWORK_OFF (no link?)")
         return 0 if ok else 1
     finally:
         probe.stop()

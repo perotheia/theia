@@ -43,43 +43,51 @@ uint64_t now_ns_() {
         std::chrono::duration_cast<std::chrono::nanoseconds>(now).count());
 }
 
-// Map the C++ FSM state (its own DENSE enum: DOWN=0,LINK_UP=1,WIFI_ASSOCIATED=2,
-// READY=3,DEGRADED=4) to the WIRE NetState (DOWN=0,LINK_UP=1,WIFI_ASSOCIATED=4,
-// READY=2,DEGRADED=3). The two enums DON'T share values — never cast one to the
-// other; switch explicitly.
+// Map the C++ FSM state (its own DENSE enum, in `states [...]` order:
+// NETWORK_OFF=0, LINK_AVAILABLE=1, WIFI_ASSOCIATED=2, IP_ACQUIRED=3,
+// VPN_ESTABLISHED=4, NETWORK_OPERATIONAL=5, DEGRADED=6) to the WIRE NetState
+// (NETWORK_OFF=0, LINK_AVAILABLE=1, WIFI_ASSOCIATED=4, IP_ACQUIRED=2,
+// VPN_ESTABLISHED=5, NETWORK_OPERATIONAL=6, DEGRADED=3). The two enums DON'T
+// share values — never cast one to the other; switch explicitly.
 system_services_nm_NetState wire_state_(NmDaemonState s) {
     // nanopb names enum constants <pkg>_<EnumName>_<ValueName>; the proto enum is
     // `NetState` with values `NetState_*`, so the C constant doubles the name:
-    // system_services_nm_NetState_NetState_DOWN, etc.
+    // system_services_nm_NetState_NetState_NETWORK_OFF, etc.
     switch (s) {
-    case NmDaemonState::DOWN:            return system_services_nm_NetState_NetState_DOWN;
-    case NmDaemonState::LINK_UP:         return system_services_nm_NetState_NetState_LINK_UP;
-    case NmDaemonState::WIFI_ASSOCIATED: return system_services_nm_NetState_NetState_WIFI_ASSOCIATED;
-    case NmDaemonState::READY:           return system_services_nm_NetState_NetState_READY;
-    case NmDaemonState::DEGRADED:        return system_services_nm_NetState_NetState_DEGRADED;
+    case NmDaemonState::NETWORK_OFF:         return system_services_nm_NetState_NetState_NETWORK_OFF;
+    case NmDaemonState::LINK_AVAILABLE:      return system_services_nm_NetState_NetState_LINK_AVAILABLE;
+    case NmDaemonState::WIFI_ASSOCIATED:     return system_services_nm_NetState_NetState_WIFI_ASSOCIATED;
+    case NmDaemonState::IP_ACQUIRED:         return system_services_nm_NetState_NetState_IP_ACQUIRED;
+    case NmDaemonState::VPN_ESTABLISHED:     return system_services_nm_NetState_NetState_VPN_ESTABLISHED;
+    case NmDaemonState::NETWORK_OPERATIONAL: return system_services_nm_NetState_NetState_NETWORK_OPERATIONAL;
+    case NmDaemonState::DEGRADED:            return system_services_nm_NetState_NetState_DEGRADED;
     }
-    return system_services_nm_NetState_NetState_DOWN;
+    return system_services_nm_NetState_NetState_NETWORK_OFF;
 }
 
-// Derive the carrier/address truth the snapshot advertises from the readiness
+// Derive the carrier/address/vpn truth the snapshot advertises from the readiness
 // state. The poller drives the EDGES; the FSM state is the authoritative
 // readiness level, so the booleans follow it (rather than threading raw poller
 // observations through every event payload).
 void stamp_snapshot_(NmDaemonState s, NmStatusMsg& d) {
     d.state = wire_state_(s);
     switch (s) {
-    case NmDaemonState::DOWN:
-        d.has_carrier = false; d.has_address = false; break;
-    case NmDaemonState::LINK_UP:
-        d.has_carrier = true;  d.has_address = false; break;
+    case NmDaemonState::NETWORK_OFF:
+        d.has_carrier = false; d.has_address = false; d.vpn_up = false; break;
+    case NmDaemonState::LINK_AVAILABLE:
+        d.has_carrier = true;  d.has_address = false; d.vpn_up = false; break;
     case NmDaemonState::WIFI_ASSOCIATED:
         // Wifi carrier + AP association, awaiting DHCP. Carrier yes, addr not yet.
-        d.has_carrier = true;  d.has_address = false; break;
-    case NmDaemonState::READY:
-        d.has_carrier = true;  d.has_address = true;  break;
+        d.has_carrier = true;  d.has_address = false; d.vpn_up = false; break;
+    case NmDaemonState::IP_ACQUIRED:
+        d.has_carrier = true;  d.has_address = true;  d.vpn_up = false; break;
+    case NmDaemonState::VPN_ESTABLISHED:
+    case NmDaemonState::NETWORK_OPERATIONAL:
+        // Tunnel rung reached (or VPN trivially satisfied) — full connectivity.
+        d.has_carrier = true;  d.has_address = true;  d.vpn_up = true;  break;
     case NmDaemonState::DEGRADED:
-        // Recoverable: link or address was lost. Advertise neither as guaranteed.
-        d.has_carrier = false; d.has_address = false; break;
+        // Recoverable: a rung was lost. Advertise nothing as guaranteed.
+        d.has_carrier = false; d.has_address = false; d.vpn_up = false; break;
     }
     d.ts_ns = now_ns_();
 }
@@ -104,7 +112,7 @@ void NmDaemon::on_enter(NmDaemonState new_s,
     stamp_snapshot_(new_s, d);
 
     // state_name() is generated in NmDaemon.hh — single source of truth for the
-    // state labels (covers WIFI_ASSOCIATED, unlike a hand-kept local array).
+    // state labels (covers the full ladder, unlike a hand-kept local array).
     this->log().info(std::string("→ ") + NmDaemon::state_name(new_s) +
         " iface=" + (d.interface[0] ? d.interface : "(auto)") +
         " @ " + std::to_string(d.ts_ns));
@@ -114,6 +122,17 @@ void NmDaemon::on_enter(NmDaemonState new_s,
     // subscribers under the lock + invokes outside it, so a slow subscriber
     // can't stall the FSM thread.
     broadcast_broadcast_status(d);
+
+    // VPN_ESTABLISHED self-advances to NETWORK_OPERATIONAL: the tunnel rung is the
+    // last gate, and "operational" is the steady terminal state SM gates on. Post
+    // the internal Operational event to self (it is NOT in NmEventIn — the poller
+    // never emits it). post_event enqueues onto our own mailbox, so this returns
+    // immediately and the promotion runs as the next event. Idempotent: from
+    // NETWORK_OPERATIONAL there's no Operational transition, so a stray one is a
+    // no-op.
+    if (new_s == NmDaemonState::VPN_ESTABLISHED) {
+        theia::runtime::post_event(*this, Operational{});
+    }
 }
 
 // GetNetworkStatus — serve the current readiness snapshot straight from the FSM
@@ -186,7 +205,8 @@ void NmDaemon::on_config_update(
     h.data.interface[sizeof(h.data.interface) - 1] = '\0';
     this->log().info(std::string("config: interfaces='") + c.interfaces +
         "' poll_ms=" + std::to_string(c.poll_ms) +
-        " require_address=" + (c.require_address ? "true" : "false"));
+        " require_address=" + (c.require_address ? "true" : "false") +
+        " require_vpn=" + (c.require_vpn ? "true" : "false"));
 }
 
 }  // namespace ara::nm

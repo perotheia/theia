@@ -17,19 +17,32 @@ package system.services.nm
 
 // ─── Readiness state ───────────────────────────────────────────────────────
 
-// The network-readiness level — a SM input. "operational" mode can gate on READY.
+// The network-readiness ladder — a SM input. "operational" mode gates on
+// NETWORK_OPERATIONAL. The automotive readiness rungs (NETWORK_OFF →
+// LINK_AVAILABLE → WIFI_ASSOCIATED → IP_ACQUIRED → VPN_ESTABLISHED →
+// NETWORK_OPERATIONAL), each a strictly-higher level of usable connectivity:
 //
-// WIFI_ASSOCIATED sits on the WIRELESS readiness ladder between carrier and
-// address: a wifi link reports carrier (LINK_UP) the moment the NIC is up, but
-// is not usable until wpa_supplicant/iwd ASSOCIATES with an AP. NM only OBSERVES
-// the association (via `iw dev <if> link`); iwd/wpa does the 802.11 work. Wired
-// links skip this rung (LINK_UP → READY directly on address).
+//   NETWORK_OFF         no monitored link has carrier
+//   LINK_AVAILABLE      a monitored link has carrier (L1/L2 up), no usable addr
+//   WIFI_ASSOCIATED     wifi carrier + associated to an AP, no addr yet (wireless
+//                       only — a wired link skips this rung)
+//   IP_ACQUIRED         a routable address is up — the LAN is usable
+//   VPN_ESTABLISHED     the remote tunnel (Headscale/Tailscale) is up — REMOTE
+//                       connectivity available (only when VPN is required)
+//   NETWORK_OPERATIONAL fully ready: IP (+ VPN when required) — apps may run
+//
+// NM only OBSERVES each rung (netlink for link/addr, `iw` for wifi assoc,
+// `tailscale status` for the tunnel); iwd/wpa/systemd-networkd/tailscaled do the
+// actual work. When VPN is NOT required (NmConfig.require_vpn=false), IP_ACQUIRED
+// advances straight to NETWORK_OPERATIONAL (the VPN rung is skipped).
 enum NetState {
-    DOWN            = 0   // no monitored link has carrier
-    LINK_UP         = 1   // a monitored link has carrier, no usable address yet
-    WIFI_ASSOCIATED = 4   // wifi link carrier + associated to an AP, no addr yet
-    READY           = 2   // link up + address acquired — operational network
-    DEGRADED        = 3   // was READY, lost carrier/address/association (recoverable)
+    NETWORK_OFF         = 0   // no monitored link has carrier
+    LINK_AVAILABLE      = 1   // a monitored link has carrier, no usable address yet
+    WIFI_ASSOCIATED     = 4   // wifi link carrier + associated to an AP, no addr yet
+    IP_ACQUIRED         = 2   // routable address up — LAN usable (VPN not yet up)
+    VPN_ESTABLISHED     = 5   // remote tunnel up — remote connectivity available
+    NETWORK_OPERATIONAL = 6   // fully ready (IP + VPN-when-required) — apps may run
+    DEGRADED            = 3   // was operational, lost a rung (recoverable)
 }
 
 // ─── Runtime config (etcd-backed via services/per) ─────────────────────────
@@ -42,8 +55,17 @@ message NmConfig {
     string interfaces = ""
     // Poll cadence (ms) — how often NmPoller re-reads `ip` link/addr state.
     uint32 poll_ms    = 1000
-    // Require a routable address (not just link-up) before READY.
+    // Require a routable address (not just link-up) before IP_ACQUIRED.
     bool   require_address = true
+    // Require the VPN tunnel up before NETWORK_OPERATIONAL. false (default) →
+    // IP_ACQUIRED advances straight to NETWORK_OPERATIONAL (no VPN rung). true →
+    // the rig must also bring up the Headscale/Tailscale tunnel (VPN_ESTABLISHED)
+    // before operational — the remote-fleet case. SM/policy flips this per mode.
+    bool   require_vpn = false
+    // The VPN tunnel interface NM observes (Tailscale's wg interface, e.g.
+    // "tailscale0"). NM reads `tailscale status`/the iface state; it never brings
+    // the tunnel up itself (tailscaled does). "" → auto ("tailscale0").
+    string vpn_interface = ""
 }
 
 // ─── FSM events (posted by NmPoller into the FSM in-process) ───────────────
@@ -58,6 +80,15 @@ message AddrLost     { }   // the routable address went away
 // actual 802.11 association; NM only watches it cross the LINK_UP↔associated line.
 message WifiAssociated    { }   // a monitored wifi link associated to an AP
 message WifiDisassociated { }   // the wifi link dropped its AP association
+// VPN tunnel edges — observed via `tailscale status` (the Headscale-controlled
+// Tailscale/WireGuard tunnel). tailscaled does the handshake; NM watches the
+// tunnel cross the up↔down line and drives the VPN_ESTABLISHED rung.
+message VpnUp   { }   // the remote tunnel came up (BackendState Running + peers)
+message VpnDown { }   // the remote tunnel went down
+// Internal self-advance: VPN_ESTABLISHED → NETWORK_OPERATIONAL. on_enter posts it
+// to itself once the tunnel rung is reached (the standard statem promote idiom —
+// the gate never emits it; it's not in NmEventIn).
+message Operational { }   // promote VPN_ESTABLISHED → NETWORK_OPERATIONAL
 
 // ─── Status wire types ─────────────────────────────────────────────────────
 
@@ -67,6 +98,7 @@ message NmStatusMsg {
     string   interface     // the monitored link, "" if none
     bool     has_carrier
     bool     has_address
+    bool     vpn_up        // the remote VPN tunnel is up
     uint64   ts_ns
 }
 
@@ -112,6 +144,8 @@ interface senderReceiver NmEventIn {
     data AddrLost          addr_lost
     data WifiAssociated    wifi_associated
     data WifiDisassociated wifi_disassociated
+    data VpnUp             vpn_up
+    data VpnDown           vpn_down
 }
 
 // Status query — GetNetworkStatus returns the current readiness snapshot;
@@ -123,9 +157,11 @@ interface clientServer NmCtlIf {
 
 // ─── Nodes ─────────────────────────────────────────────────────────────────
 
-// The network-readiness FSM. tipc 0x8001002E. Broadcasts NmStatusMsg on every
-// transition; serves GetNetworkStatus. Takes NO external messages — NmPoller
-// post_event()s into it in-process (like sm's gate→daemon split).
+// The network-readiness FSM. tipc 0x8001002E. Walks the automotive ladder
+// NETWORK_OFF → LINK_AVAILABLE → WIFI_ASSOCIATED → IP_ACQUIRED → VPN_ESTABLISHED
+// → NETWORK_OPERATIONAL; broadcasts NmStatusMsg on every transition; serves
+// GetNetworkStatus. Takes NO external messages — NmPoller observes link/addr/
+// wifi/vpn and post_event()s into it in-process (like sm's gate→daemon split).
 node atomic NmDaemon {
     tipc type=0x8001002E instance=0
     tag = "NMX"
@@ -135,36 +171,62 @@ node atomic NmDaemon {
         server ctl       provides NmCtlIf
     }
     statem {
-        states  [DOWN, LINK_UP, WIFI_ASSOCIATED, READY, DEGRADED]
-        initial DOWN
+        states  [NETWORK_OFF, LINK_AVAILABLE, WIFI_ASSOCIATED, IP_ACQUIRED,
+                 VPN_ESTABLISHED, NETWORK_OPERATIONAL, DEGRADED]
+        initial NETWORK_OFF
         data    NmStatusMsg
 
-        on DOWN:
-            event LinkUp        → LINK_UP
+        // NETWORK_OFF: no carrier. A monitored link gaining carrier → LINK_AVAILABLE.
+        on NETWORK_OFF:
+            event LinkUp        → LINK_AVAILABLE
 
-        // LINK_UP: carrier present. A WIRED link goes straight to READY on
-        // address; a WIRELESS link must associate to an AP first.
-        on LINK_UP:
+        // LINK_AVAILABLE: carrier present (L1/L2). A WIRELESS link must associate
+        // to an AP first (→ WIFI_ASSOCIATED); a WIRED link gets an address
+        // directly (→ IP_ACQUIRED) — it never emits WifiAssociated.
+        on LINK_AVAILABLE:
             event WifiAssociated → WIFI_ASSOCIATED
-            event AddrAcquired   → READY
-            event LinkDown       → DOWN
+            event AddrAcquired   → IP_ACQUIRED
+            event LinkDown       → NETWORK_OFF
 
         // WIFI_ASSOCIATED: wifi carrier + AP association, awaiting DHCP/addr.
         on WIFI_ASSOCIATED:
-            event AddrAcquired      → READY
-            event WifiDisassociated → LINK_UP
-            event LinkDown          → DOWN
+            event AddrAcquired      → IP_ACQUIRED
+            event WifiDisassociated → LINK_AVAILABLE
+            event LinkDown          → NETWORK_OFF
 
-        on READY:
+        // IP_ACQUIRED: a routable address is up — the LAN is usable. If VPN is
+        // required, wait for the tunnel (VpnUp → VPN_ESTABLISHED); otherwise the
+        // poller emits VpnUp immediately so we advance to NETWORK_OPERATIONAL
+        // (the VPN rung is skipped when require_vpn=false).
+        on IP_ACQUIRED:
+            event VpnUp             → VPN_ESTABLISHED
             event AddrLost          → DEGRADED
             event WifiDisassociated → DEGRADED
             event LinkDown          → DEGRADED
 
+        // VPN_ESTABLISHED: tunnel up (or VPN not required) — promote to fully
+        // operational. on_enter emits the internal Operational edge.
+        on VPN_ESTABLISHED:
+            event Operational       → NETWORK_OPERATIONAL
+            event VpnDown           → IP_ACQUIRED
+            event AddrLost          → DEGRADED
+            event WifiDisassociated → DEGRADED
+            event LinkDown          → DEGRADED
+
+        // NETWORK_OPERATIONAL: fully ready. Losing any lower rung → DEGRADED.
+        on NETWORK_OPERATIONAL:
+            event VpnDown           → DEGRADED
+            event AddrLost          → DEGRADED
+            event WifiDisassociated → DEGRADED
+            event LinkDown          → DEGRADED
+
+        // DEGRADED: recover to the highest rung the re-observed edges imply.
         on DEGRADED:
-            event AddrAcquired   → READY
+            event VpnUp          → VPN_ESTABLISHED
+            event AddrAcquired   → IP_ACQUIRED
             event WifiAssociated → WIFI_ASSOCIATED
-            event LinkUp         → LINK_UP
-            event LinkDown       → DOWN
+            event LinkUp         → LINK_AVAILABLE
+            event LinkDown       → NETWORK_OFF
     }
 }
 

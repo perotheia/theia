@@ -92,22 +92,41 @@ void NmPoller::handle_info(const char* info, NmPollerState& s) {
         if (wifi_assoc_probe(want, w)) wifi_assoc = w.associated;
     }
 
-    // Edge ORDER matters: the FSM ladder is LINK_UP → WIFI_ASSOCIATED → READY, so
-    // emit LinkUp before WifiAssociated before AddrAcquired; on teardown reverse.
+    // VPN rung. Only meaningful once an address is up (the tunnel rides on the
+    // LAN). When require_vpn=false the rung is SKIPPED — we treat it as trivially
+    // satisfied (vpn_up == addr) so IP_ACQUIRED promotes straight to
+    // NETWORK_OPERATIONAL. When require_vpn=true we OBSERVE the tunnel
+    // (`tailscale status`) and only report up once it's actually established.
+    bool vpn_up = false;
+    if (addr) {
+        if (!s.require_vpn) {
+            vpn_up = true;                       // no VPN needed → rung satisfied
+        } else {
+            VpnObservation v;
+            if (vpn_observe(s.vpn_interface, v)) vpn_up = v.up;
+        }
+    }
+
+    // Edge ORDER matters: the ladder is LINK_AVAILABLE → WIFI_ASSOCIATED →
+    // IP_ACQUIRED → VPN_ESTABLISHED, so emit LinkUp → WifiAssociated →
+    // AddrAcquired → VpnUp; on teardown reverse (VpnDown first).
     if (!s.primed) {
-        // First observation: emit the edges that take the FSM from its DOWN
-        // initial state up to the observed level.
+        // First observation: emit the edges that take the FSM from its
+        // NETWORK_OFF initial state up to the observed level.
         s.primed = true;
         if (obs.has_carrier) post_edge(kNodeName, "LinkUp", LinkUp{});
         if (wifi_assoc)      post_edge(kNodeName, "WifiAssociated", WifiAssociated{});
         if (addr)            post_edge(kNodeName, "AddrAcquired", AddrAcquired{});
+        if (vpn_up)          post_edge(kNodeName, "VpnUp", VpnUp{});
         log().info(std::string("primed: iface=") +
             (obs.interface.empty() ? "(none)" : obs.interface) +
             " carrier=" + (obs.has_carrier ? "1" : "0") +
             " wifi_assoc=" + (wifi_assoc ? "1" : "0") +
-            " addr=" + (addr ? "1" : "0"));
+            " addr=" + (addr ? "1" : "0") +
+            " vpn=" + (vpn_up ? "1" : "0") +
+            (s.require_vpn ? " (vpn required)" : ""));
     } else {
-        // Steady state: only emit on a CHANGE.
+        // Steady state: only emit on a CHANGE. Build-up forward, teardown reverse.
         if (obs.has_carrier != s.has_carrier) {
             if (obs.has_carrier) post_edge(kNodeName, "LinkUp", LinkUp{});
             else                 post_edge(kNodeName, "LinkDown", LinkDown{});
@@ -120,10 +139,15 @@ void NmPoller::handle_info(const char* info, NmPollerState& s) {
             if (addr) post_edge(kNodeName, "AddrAcquired", AddrAcquired{});
             else      post_edge(kNodeName, "AddrLost", AddrLost{});
         }
+        if (vpn_up != s.vpn_up) {
+            if (vpn_up) post_edge(kNodeName, "VpnUp", VpnUp{});
+            else        post_edge(kNodeName, "VpnDown", VpnDown{});
+        }
     }
     s.has_carrier = obs.has_carrier;
     s.has_address = addr;
     s.wifi_assoc  = wifi_assoc;
+    s.vpn_up      = vpn_up;
 
     uint32_t ms = s.poll_ms ? s.poll_ms : 1000;
     ::theia::runtime::send_after(::theia::runtime::process_timers(), ms,
@@ -145,11 +169,15 @@ void NmPoller::on_config_update(
     s.interfaces      = c.interfaces;
     s.poll_ms         = c.poll_ms ? c.poll_ms : 1000;
     s.require_address = c.require_address;
+    s.require_vpn     = c.require_vpn;
+    s.vpn_interface   = c.vpn_interface;
     // Re-prime so the next tick re-emits edges against the new interface/gate.
     s.primed = false;
     log().info(std::string("config: interfaces='") + c.interfaces +
         "' poll_ms=" + std::to_string(s.poll_ms) +
-        " require_address=" + (s.require_address ? "true" : "false"));
+        " require_address=" + (s.require_address ? "true" : "false") +
+        " require_vpn=" + (s.require_vpn ? "true" : "false") +
+        " vpn_iface='" + s.vpn_interface + "'");
 }
 
 }  // namespace ara::nm

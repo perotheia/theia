@@ -1,0 +1,66 @@
+# Headscale config for the dalek control plane (v0.29.x).
+# Minimal, self-hosted, embedded-DERP. See the upstream reference for every knob:
+# https://github.com/juanfont/headscale/blob/main/config-example.yaml
+
+# The URL clients are told to talk to. MUST be reachable from the rig — dalek is
+# 10.0.0.99 on the lab net. (Its other NIC is 192.168.50.84; the rig is on 10.0.0.x.)
+server_url: http://10.0.0.99:8080
+
+# Bind the HTTP API/control endpoint on all interfaces inside the container.
+listen_addr: 0.0.0.0:8080
+# gRPC (CLI/admin) — loopback only; the compose maps it to 127.0.0.1:9090 on the host.
+grpc_listen_addr: 0.0.0.0:9090
+grpc_allow_insecure: false
+
+# Node private key + noise protocol key live under the data volume.
+private_key_path: /var/lib/headscale/private.key
+noise:
+  private_key_path: /var/lib/headscale/noise_private.key
+
+# The Tailnet address pools handed to enrolled nodes (CGNAT + ULA, the Tailscale
+# defaults). The rig gets a 100.64.0.0/10 address it advertises as its VPN IP.
+prefixes:
+  v4: 100.64.0.0/10
+  v6: fd7a:115c:a1e0::/48
+  allocation: sequential
+
+# Embedded DERP relay for NAT traversal (no external DERP map needed for a LAN
+# fleet; nodes still prefer direct WireGuard when reachable).
+derp:
+  server:
+    enabled: true
+    region_id: 999
+    region_code: "dalek"
+    region_name: "Dalek Embedded DERP"
+    stun_listen_addr: "0.0.0.0:3478"
+    private_key_path: /var/lib/headscale/derp_server_private.key
+  urls: []
+  paths: []
+  auto_update_enabled: true
+  update_frequency: 24h
+
+# No automatic node expiry churn for a small lab fleet; re-key on demand.
+node:
+  ephemeral:
+    inactivity_timeout: 30m
+
+# SQLite is plenty for an engineering fleet (one file under the data volume).
+database:
+  type: sqlite
+  sqlite:
+    path: /var/lib/headscale/db.sqlite
+
+# Local DNS for the tailnet. MagicDNS gives each node a name; base_domain must NOT
+# overlap server_url's host.
+dns:
+  magic_dns: true
+  base_domain: rig.theia
+  nameservers:
+    global:
+      - 1.1.1.1
+      - 8.8.8.8
+
+# Logging.
+log:
+  level: info
+  format: text

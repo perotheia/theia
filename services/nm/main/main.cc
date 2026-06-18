@@ -109,7 +109,7 @@ int main(int argc, char** argv) {
     {
         char _tipc[96];
         std::snprintf(_tipc, sizeof(_tipc),
-                      "up — TIPC type=0x%x instance=%u; statem initial=DOWN",
+                      "up — TIPC type=0x%x instance=%u; statem initial=NETWORK_OFF",
                       nm_daemon_type, nm_daemon_inst);
         nm_daemon.log().info(_tipc);
     }

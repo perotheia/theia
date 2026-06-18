@@ -1,0 +1,16 @@
+{
+  "machine": "rig1-central",
+  "target": "10.0.0.22:7700",
+  "recover_target": "192.168.50.213:7700",
+  "vehicleUuid": "fe67f300-6751-4f21-b787-ab966ee0eba1",
+  "vehicleVin": "WP0ZZZ99ZTS392124",
+  "clientKey": "-----BEGIN PRIVATE KEY-----\n... (PEM; omit to skip PKI) ...\n-----END PRIVATE KEY-----\n",
+  "clientCert": "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----\n",
+  "serverCaTrustChain": "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----\n",
+  "vpn": {
+    "enroll": true,
+    "user": "rig",
+    "reusable": true,
+    "expiration": "24h"
+  }
+}

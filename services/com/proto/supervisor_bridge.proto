@@ -460,3 +460,54 @@ service NmView {
     // The visible AP list + association snapshot (`rtdb wifi`). Read-only `iw`.
     rpc WifiScan (WifiScanCall) returns (NmWifiScan);
 }
+
+// ---- Provisioning — rig enrollment over com (NOT SupervisorView) ----------
+//
+// The CENTRALIZED enrollment utility (colocated with Headscale in the cloud /
+// on dalek) calls this over com gRPC (:7700) to provision a rig's identity +
+// PKI — the theia-native analog of mosaic's `cloud_provision` (which used nested
+// SSH; we use com). A separate service from SupervisorView because enrollment is
+// a distinct fleet-management concern with its own authz, not a debug/control op.
+//
+// com writes the files on the rig under /etc/theia/manifest/<machine>/:
+//   uuid, vin            (the rig identity)
+//   certs/client.key     (the rig's private key — 0600)
+//   certs/client.crt     (the rig's cert)
+//   certs/server_ca.crt  (the fleet CA trust chain)
+// These are the SAME paths com TLS + the supervisor read, so a provisioned rig
+// can immediately serve mutual-TLS com. PEM bodies are carried inline (the link
+// is already TLS when a cert is deployed; first-enrollment is over the LAN).
+message ProvisionRequest {
+    string machine     = 1;   // the machine name (manifest dir), e.g. "rig1-central"
+    string uuid        = 2;   // rig UUID (→ <dir>/uuid)
+    string vin         = 3;   // rig VIN  (→ <dir>/vin)
+    string client_key  = 4;   // PEM private key (→ certs/client.key, 0600)
+    string client_cert = 5;   // PEM cert       (→ certs/client.crt)
+    string ca_chain    = 6;   // PEM CA chain   (→ certs/server_ca.crt)
+    string vpn_authkey = 7;   // OPTIONAL Headscale preauth key (→ certs/vpn.authkey)
+}
+message ProvisionReply {
+    bool   ok       = 1;
+    string message  = 2;      // human detail / the failure
+    repeated string written = 3;   // the absolute paths actually written
+}
+
+// Report what a rig already has provisioned (idempotency / verify). Returns the
+// identity + which cred files are present (NOT their contents).
+message ProvisionStatusRequest { }
+message ProvisionStatusReply {
+    string machine        = 1;
+    string uuid           = 2;
+    string vin            = 3;
+    bool   has_client_key = 4;
+    bool   has_client_cert = 5;
+    bool   has_ca_chain   = 6;
+    bool   has_vpn_authkey = 7;
+}
+
+service Provisioning {
+    // Write the rig's identity (uuid/vin) + PKI creds + optional VPN authkey.
+    rpc Provision (ProvisionRequest) returns (ProvisionReply);
+    // What's already provisioned on this rig (identity + cred presence).
+    rpc GetProvisionStatus (ProvisionStatusRequest) returns (ProvisionStatusReply);
+}

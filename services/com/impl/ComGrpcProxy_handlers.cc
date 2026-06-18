@@ -66,11 +66,14 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <fstream>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
 #include <unordered_map>
+
+#include <sys/stat.h>   // mkdir/chmod for the provisioning creds dir
 #include <vector>
 
 namespace ara::com {
@@ -657,6 +660,115 @@ private:
     }
 };
 
+// ---- gRPC service: Provisioning — rig enrollment over com -----------------
+// The centralized enrollment utility (colocated with Headscale) calls this to
+// write the rig's identity (uuid/vin) + PKI creds under
+// /etc/theia/manifest/<machine>/ — the theia-native analog of mosaic's
+// cloud_provision (SSH → com here). Pure file I/O on the rig; no TIPC link.
+class ProvisioningImpl final : public services::com::Provisioning::Service {
+public:
+    grpc::Status Provision(
+            grpc::ServerContext*,
+            const services::com::ProvisionRequest* req,
+            services::com::ProvisionReply* out) override {
+        if (!req) return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "no request");
+        const std::string machine = req->machine().empty()
+            ? this_machine() : req->machine();
+        const std::string base = manifest_dir(machine);
+        const std::string certs = base + "/certs";
+
+        if (!ensure_dir(base) || !ensure_dir(certs)) {
+            out->set_ok(false);
+            out->set_message("cannot create manifest dir " + base +
+                             " (run com with write access / as the deploy user)");
+            return grpc::Status::OK;
+        }
+
+        std::vector<std::string> written;
+        auto put = [&](const std::string& path, const std::string& body,
+                       bool secret) -> bool {
+            if (body.empty()) return true;   // optional field omitted
+            if (!write_file(path, body, secret)) {
+                out->set_ok(false);
+                out->set_message("write failed: " + path);
+                return false;
+            }
+            written.push_back(path);
+            return true;
+        };
+
+        if (!put(base + "/uuid", req->uuid(), false)) return grpc::Status::OK;
+        if (!put(base + "/vin",  req->vin(),  false)) return grpc::Status::OK;
+        if (!put(certs + "/client.key",    req->client_key(),  true))  return grpc::Status::OK;
+        if (!put(certs + "/client.crt",    req->client_cert(), false)) return grpc::Status::OK;
+        if (!put(certs + "/server_ca.crt", req->ca_chain(),    false)) return grpc::Status::OK;
+        if (!put(certs + "/vpn.authkey",   req->vpn_authkey(), true))  return grpc::Status::OK;
+
+        out->set_ok(true);
+        out->set_message("provisioned " + machine + " (" +
+                         std::to_string(written.size()) + " files)");
+        for (const auto& w : written) out->add_written(w);
+        std::fprintf(stderr, "[%s] provisioned machine=%s uuid=%s (%zu files)\n",
+                     ComGrpcProxy::kNodeName, machine.c_str(),
+                     req->uuid().c_str(), written.size());
+        return grpc::Status::OK;
+    }
+
+    grpc::Status GetProvisionStatus(
+            grpc::ServerContext*,
+            const services::com::ProvisionStatusRequest*,
+            services::com::ProvisionStatusReply* out) override {
+        const std::string machine = this_machine();
+        const std::string base = manifest_dir(machine);
+        const std::string certs = base + "/certs";
+        out->set_machine(machine);
+        out->set_uuid(read_file(base + "/uuid"));
+        out->set_vin(read_file(base + "/vin"));
+        out->set_has_client_key(exists(certs + "/client.key"));
+        out->set_has_client_cert(exists(certs + "/client.crt"));
+        out->set_has_ca_chain(exists(certs + "/server_ca.crt"));
+        out->set_has_vpn_authkey(exists(certs + "/vpn.authkey"));
+        return grpc::Status::OK;
+    }
+
+private:
+    static std::string this_machine() {
+        const char* m = std::getenv("THEIA_MACHINE");
+        return m && *m ? m : "central";
+    }
+    static std::string manifest_dir(const std::string& machine) {
+        const char* root = std::getenv("THEIA_MACHINE_MANIFEST");
+        std::string base = (root && *root) ? root : "/etc/theia/manifest";
+        return base + "/" + machine;
+    }
+    static bool ensure_dir(const std::string& d) {
+        if (::mkdir(d.c_str(), 0755) == 0) return true;
+        return errno == EEXIST;
+    }
+    static bool write_file(const std::string& path, const std::string& body,
+                           bool secret) {
+        std::ofstream f(path, std::ios::binary | std::ios::trunc);
+        if (!f) return false;
+        f.write(body.data(), static_cast<std::streamsize>(body.size()));
+        f.close();
+        if (!f) return false;
+        ::chmod(path.c_str(), secret ? 0600 : 0644);
+        return true;
+    }
+    static std::string read_file(const std::string& path) {
+        std::ifstream f(path, std::ios::binary);
+        if (!f) return "";
+        std::string s((std::istreambuf_iterator<char>(f)),
+                      std::istreambuf_iterator<char>());
+        while (!s.empty() && (s.back() == '\n' || s.back() == '\r')) s.pop_back();
+        return s;
+    }
+    static bool exists(const std::string& path) {
+        struct stat st{};
+        return ::stat(path.c_str(), &st) == 0;
+    }
+};
+
 // ---- File-static runnable state (one ComGrpcProxy per process) -----------
 // Held here rather than as ComGrpcProxy members so lib/ComGrpcProxy.hh stays
 // byte-stable against gen-app. do_start builds them; do_stop tears them down.
@@ -665,6 +777,7 @@ private:
 std::unique_ptr<SupervisorViewImpl>         g_sup_svc;
 std::unique_ptr<PerViewImpl>                g_per_svc;
 std::unique_ptr<NmViewImpl>                 g_nm_svc;
+std::unique_ptr<ProvisioningImpl>           g_prov_svc;
 std::unique_ptr<grpc::Server>               g_server;
 std::atomic<bool>                           g_up{false};
 
@@ -770,9 +883,10 @@ void ComGrpcProxy::do_start() {
                      kNodeName);
     }
 
-    g_sup_svc = std::make_unique<SupervisorViewImpl>();
-    g_per_svc = std::make_unique<PerViewImpl>();
-    g_nm_svc  = std::make_unique<NmViewImpl>();
+    g_sup_svc  = std::make_unique<SupervisorViewImpl>();
+    g_per_svc  = std::make_unique<PerViewImpl>();
+    g_nm_svc   = std::make_unique<NmViewImpl>();
+    g_prov_svc = std::make_unique<ProvisioningImpl>();
 
     const std::string listen = listen_addr();
     grpc::ServerBuilder b;
@@ -780,6 +894,7 @@ void ComGrpcProxy::do_start() {
     b.RegisterService(g_sup_svc.get());
     b.RegisterService(g_per_svc.get());
     b.RegisterService(g_nm_svc.get());
+    b.RegisterService(g_prov_svc.get());
     g_server = b.BuildAndStart();
     if (!g_server) {
         std::fprintf(stderr, "[%s] gRPC server failed to start on %s\n",
@@ -787,6 +902,7 @@ void ComGrpcProxy::do_start() {
         g_sup_svc.reset();
         g_per_svc.reset();
         g_nm_svc.reset();
+        g_prov_svc.reset();
         services_com::SupLink::instance().stop();
         services_com::PerLink::instance().stop();
         services_com::NmLink::instance().stop();
@@ -794,8 +910,8 @@ void ComGrpcProxy::do_start() {
         return;
     }
     std::fprintf(stderr,
-                 "[%s] gRPC SupervisorView + PerView + NmView listening on %s\n",
-                 kNodeName, listen.c_str());
+                 "[%s] gRPC SupervisorView + PerView + NmView + Provisioning "
+                 "listening on %s\n", kNodeName, listen.c_str());
     g_up.store(true);
 }
 
@@ -827,6 +943,7 @@ void ComGrpcProxy::do_stop() {
     g_sup_svc.reset();
     g_per_svc.reset();
     g_nm_svc.reset();
+    g_prov_svc.reset();
     g_sup_topology.stop();
     g_topology_up.store(false);
     services_com::SupLink::instance().stop();

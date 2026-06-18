@@ -149,14 +149,11 @@ CentralHost = MachineManifest(
     os_packages=[
         OsPackage(name="etcd-server", source="apt"),
         OsPackage(name="libsystemd0", source="apt"),
-        # Time-sync daemons forked by tsync's prebuilt Providers. central is the
-        # GPS-disciplined PTP grandmaster, so it needs the full set:
-        #   linuxptp → ptp4l (PTP) + phc2sys (PHC↔system clock)
-        #   chrony   → chronyd  (NTP fallback / system-clock discipline)
-        #   gpsd     → gpsd     (GPS receiver → the GM time source)
+        # PTP distribution daemons forked by tsync's prebuilt Providers. central
+        # is the GPS-disciplined grandmaster: linuxptp → ptp4l (PTP) + phc2sys
+        # (PHC↔system clock). NO gpsd / chrony — the GNSS time source is now an
+        # in-process tsync driver (bazel-selectable RTK/NMEA/Fake), and NTP is gone.
         OsPackage(name="linuxptp", source="apt"),
-        OsPackage(name="chrony", source="apt"),
-        OsPackage(name="gpsd", source="apt"),
     ],
     opkg_artifacts=list(_PLATFORM_OPKG_ARTIFACTS),
 )
@@ -183,10 +180,9 @@ ComputeHost = MachineManifest(
     os_packages=[
         OsPackage(name="libsystemd0", source="opkg"),
         # compute is the PTP slave: ptp4l -s syncs FROM central over Ethernet.
-        # It needs linuxptp (ptp4l + phc2sys) + chrony, but NOT gpsd — no GPS
-        # receiver on the accelerator box; its time source is central's PTP.
+        # It needs only linuxptp (ptp4l + phc2sys); no GNSS (no receiver on the
+        # accelerator box — its time source is central's PTP) and no chrony/NTP.
         OsPackage(name="linuxptp", source="apt"),
-        OsPackage(name="chrony", source="apt"),
     ],
     opkg_artifacts=list(_PLATFORM_OPKG_ARTIFACTS),
 )

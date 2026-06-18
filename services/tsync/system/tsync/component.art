@@ -3,13 +3,14 @@ package system.services.tsync
 
 // The Time-Sync FC, standard {Provider; Controller} shape (same as composition
 // Rds): the linuxptp daemons run as supervisor-owned `node prebuilt` children +
-// the atomic TsyncCtl wraps them with the service API. All three prototypes land
-// in ONE process (one composition = one executable; no `on process` split) — the
-// time providers share the tsync process, threads under one supervised child.
+// the atomic TsyncCtl wraps them with the service API. All prototypes land in ONE
+// process (one composition = one executable; no `on process` split) — they share
+// the tsync process, threads under one supervised child. The GNSS time SOURCE is
+// NOT a prototype here: it's an in-process driver compiled INTO TsyncCtl (a
+// bazel-selectable backend .cc, like shwa_host/shwa_jetson), so only the linuxptp
+// distribution pair are prebuilt nodes. No gpsd, no chronyd.
 composition Tsync {
-    prototype GpsdProvider    gpsd        // GNSS — central GM source (enabled per machine)
     prototype Ptp4lProvider   ptp4l       // PTP — grandmaster (central) / slave (compute)
     prototype Phc2sysProvider phc2sys     // PTP — slew system clock to the PHC
-    prototype ChronyProvider  chrony      // NTP — the fallback time source
-    prototype TsyncCtl         tsync_ctl  // the ara::tsync wrapper API
+    prototype TsyncCtl         tsync_ctl  // ara::tsync API + GNSS driver + clock discipline
 }

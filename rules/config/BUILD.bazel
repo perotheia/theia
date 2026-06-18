@@ -81,3 +81,18 @@ config_setting(
     name = "jetson_on",
     values = {"define": "jetson=on"},
 )
+
+# GNSS time-source driver variant for services/tsync. The default (no --define)
+# compiles the synthetic FakeGPS driver (gps_fake.cc) so the dev/CI box builds +
+# runs clean without GPS hardware. The real receivers are opt-in:
+#   --define gps=rtk   → gps_rtk.cc   (u-blox UBX-NAV-PVT off /dev/serial0, ZED-F9R)
+#   --define gps=nmea  → gps_nmea.cc  ($GxRMC/$GxGGA UTC off a serial tty)
+config_setting(
+    name = "gps_rtk",
+    values = {"define": "gps=rtk"},
+)
+
+config_setting(
+    name = "gps_nmea",
+    values = {"define": "gps=nmea"},
+)

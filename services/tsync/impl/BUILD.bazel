@@ -16,6 +16,9 @@ cc_library(
     name = "tsync_state",
     hdrs = [
         "TsyncCtl_state.hh",
+        # The GNSS driver seam (GnssFix) — shared by lib + impl without a cycle,
+        # the same way shwa_backend.hpp rides on shwa_state.
+        "gps_backend.hpp",
     ],
     # The lib #includes these as "impl/<Node>_state.hh", so the include
     # root is the FC out_dir (one above impl/).
@@ -28,18 +31,29 @@ cc_library(
     name = "tsync_impl",
     srcs = [
         "TsyncCtl_handlers.cc",
-        # Provider daemons (node prebuilt) — fully-generated fork/drain/reap of
-        # gpsd (GNSS) + ptp4l + phc2sys (PTP) + chronyd (NTP). No _state.hh
-        # (prebuilt nodes carry no user state).
-        "GpsdProvider_handlers.cc",
+        # PTP distribution daemons (node prebuilt) — fully-generated fork/drain/
+        # reap of ptp4l + phc2sys. No _state.hh (prebuilt nodes carry no user
+        # state). gpsd + chronyd are GONE: GNSS is now an in-process driver below,
+        # and NTP is dropped.
         "Ptp4lProvider_handlers.cc",
         "Phc2sysProvider_handlers.cc",
-        "ChronyProvider_handlers.cc",
+    ] + select({
+        # The GNSS time-source driver — exactly ONE variant compiled in (module
+        # inclusion, NOT #ifdef), the same seam as shwa's host/jetson backend:
+        #   bazel build //services/tsync/... --define gps=rtk   → UBX-NAV-PVT (ZED-F9R)
+        #   bazel build //services/tsync/... --define gps=nmea  → $GxRMC/$GxGGA
+        #   (default, no --define)                              → synthetic FakeGPS
+        "//rules/config:gps_rtk": ["gps_rtk.cc"],
+        "//rules/config:gps_nmea": ["gps_nmea.cc"],
+        "//conditions:default": ["gps_fake.cc"],
+    }),
+    # The ptp4l poller (pmc CLI) + the GNSS driver seam, isolated behind headers
+    # so the gen_server TU stays clean. `..` resolves `#include "impl/*.hpp"` from
+    # the services/tsync/ root.
+    hdrs = [
+        "ptp_backend.hpp",
+        "gps_backend.hpp",
     ],
-    # The Linux time-sync poller (ptp4l/chrony CLI queries) isolated behind one
-    # header so the gen_server TU stays clean. `..` so it resolves
-    # `#include "impl/ptp_backend.hpp"` from the services/tsync/ root.
-    hdrs = ["ptp_backend.hpp"],
     includes = [".."],
     copts = [
         "-std=c++17",

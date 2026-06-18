@@ -1,18 +1,21 @@
 // Time Synchronization (ara::tsync / TSY) — Adaptive Platform Functional Cluster.
 //
-// A THIN control plane over Linux time-sync, NOT a reimplementation: the FC
-// manages linuxptp (ptp4l + phc2sys) / chrony and EXPOSES the sync status; the
-// kernel + the PTP daemons do the actual clock discipline. The FC never sits in
-// the time data path. See docs/tasks/PROGRESS/AUTOSAR-LINUX-mapping.md.
+// A THIN control plane: the FC ACQUIRES time from a custom in-process GNSS
+// driver (the central GM source) and DISTRIBUTES it via linuxptp (ptp4l +
+// phc2sys, run as supervisor-owned prebuilt daemons). No gpsd, no chronyd/NTP:
+// GNSS is a built-in driver (bazel-selectable RTK/NMEA/Fake variant), PTP is the
+// distribution layer. The FC never touches ptp4l's API.
+// See docs/tasks/BACKLOG/TSYNC-cluster-whide.md, AUTOSAR-LINUX-mapping.md.
 //
 // Role (AUTOSAR TSY): a global time reference + deterministic timestamp
 // alignment across the platform — the clock the trace/log `ts_ns` and sensor
 // pipelines align to. Loss-of-lock is a health event (→ PHM).
 //
-// v1 backend: query ptp4l/phc2sys (pmc / status) when present; GRACEFULLY
-// DEGRADE to the system wall clock + report UNAVAILABLE when they aren't (the
-// dev host has no linuxptp). Real PTP lock needs a host with the daemons + NIC
-// hardware timestamping.
+// Time flow: GNSS driver → clock_settime(CLOCK_REALTIME) on central (gated by
+// config.discipline_clock) → phc2sys → PHC → ptp4l (grandmaster) → Ethernet →
+// compute's ptp4l (slave) → phc2sys → CLOCK_REALTIME. GRACEFULLY DEGRADES to the
+// system wall clock + reports UNAVAILABLE when no GPS fix / no ptp4l (the dev
+// host has neither; FakeGPS keeps the status path exercised without a clock step).
 
 package system.services.tsync
 
@@ -30,8 +33,8 @@ enum SyncState {
 // The time source backing the global reference.
 enum TimeSource {
     SYSTEM = 0   // CLOCK_REALTIME (no discipline) — the degrade fallback
-    PTP    = 1   // ptp4l + phc2sys (IEEE 1588, NIC PHC)
-    NTP    = 2   // chrony / NTP
+    PTP    = 1   // ptp4l + phc2sys (IEEE 1588, NIC PHC) — distributes time
+    GPS    = 2   // the in-process GNSS driver (RTK/NMEA/Fake) — acquires UTC
 }
 
 // ─── Runtime config (etcd-backed via services/per) ─────────────────────────
@@ -44,12 +47,21 @@ message TsyncConfig {
     string ptp_interface = ""
     // IEEE 1588 PTP domain number.
     uint32 ptp_domain    = 0
-    // Preferred source: "ptp" | "ntp" | "system" (the degrade order anchor).
+    // Preferred source: "gps" | "ptp" | "system" (the degrade order anchor).
+    // central (GM) = "gps" (the in-process GNSS driver disciplines the clock);
+    // compute (slave) = "ptp" (locks to central over Ethernet).
     string source        = "ptp"
-    // Status poll cadence (ms) — how often the FC re-reads ptp4l/phc2sys.
+    // Status poll cadence (ms) — how often the FC re-reads the GPS driver / ptp4l.
     uint32 poll_ms       = 1000
     // Offset (ns) above which LOCKED degrades to UNLOCKED (lock quality gate).
     uint32 lock_offset_ns = 100000
+    // Whether this node may STEP CLOCK_REALTIME from a GPS fix (clock_settime).
+    // FALSE by default so a dev/CI box (FakeGPS) never touches the host clock;
+    // central's gen-config flips it true (the GM owns the system clock). Even
+    // when true, an EPERM (no CAP_SYS_TIME) degrades gracefully.
+    bool discipline_clock = false
+    // No GPS fix within this many ms → GPS source goes HOLDOVER (free-run).
+    uint32 gps_fix_timeout_ms = 3000
 }
 
 // ─── Status wire types ─────────────────────────────────────────────────────
@@ -119,6 +131,12 @@ interface clientServer TsyncCtlIf {
 // `node atomic` TsyncCtl reads their status + serves the service API. Apps never
 // touch ptp4l/phc2sys; they call ara::tsync GetSyncStatus. We run, not reimplement,
 // the proven Linux daemons (run-and-wrap, never embed their source).
+//
+// The GNSS time SOURCE is NOT a prebuilt daemon (no gpsd, no chronyd): it's a
+// CUSTOM in-process driver compiled into TsyncCtl, with a bazel-selectable
+// variant (RTK / NMEA / FakeGPS — see impl/gps_backend.hpp). So there are only
+// TWO prebuilt nodes — the linuxptp pair that DISTRIBUTES time; acquisition +
+// clock discipline live inside TsyncCtl.
 
 // ptp4l — the IEEE-1588 PTP engine: disciplines the NIC's PHC (hardware clock)
 // to the grandmaster. A supervisor-managed daemon (reporting=false: a 3rd-party
@@ -158,47 +176,15 @@ node prebuilt Phc2sysProvider {
     }
 }
 
-// chronyd — the NTP source (TimeSource.NTP), the fallback when there's no PTP
-// grandmaster / NIC hardware timestamping. Same supervisor-owned prebuilt
-// treatment as the linuxptp pair, so all three time sources are managed
-// uniformly (no systemd split). -d = run in the foreground (don't daemonize —
-// the supervisor owns the lifetime), -s = set the system clock from the RTC at
-// start, -m = log to stdout (drained to our node log). A deployment runs EITHER
-// the PTP pair OR chronyd (per TsyncConfig.source); the unused one's binary may
-// be absent → execvp fails → graceful-degrade, same as the PTP path.
-node prebuilt ChronyProvider {
-    tipc type=0x80010055 instance=0
-    path = "/usr/sbin/chronyd"
-    reporting = false
-    params {
-        enabled : bool   = true
-        args    : string = "-d -s -m"
-    }
-}
-
-// gpsd — the GNSS time source on the CENTRAL board (the top of the time
-// hierarchy, TSYNC-slave-GPS-master.md): a GPS receiver's PPS disciplines the
-// PHC, which ptp4l then serves as grandmaster to the compute board. CENTRAL-only
-// — `enabled` defaults FALSE (most machines have no GPS); central's gen-config
-// flips it true. -N = don't daemonize (supervisor owns the lifetime), -n = poll
-// the GPS without a client waiting, the device path is the box's GPS tty.
-node prebuilt GpsdProvider {
-    tipc type=0x80010066 instance=0
-    path = "/usr/sbin/gpsd"
-    reporting = false
-    params {
-        enabled : bool   = false
-        args    : string = "-N -n /dev/ttyGPS0"
-    }
-}
-
-// The Time-Sync control node. tipc 0x80010005. An atomic gen_server: polls the
-// PTP/chrony backend on a self-scheduled tick (handle_info), holds the latest
-// SyncStatus in State, serves GetSyncStatus, and emits a status line (loss-of-
-// lock → a health event for PHM). Never disciplines the clock itself — it reads
-// the status of the Provider daemons the supervisor now owns (pmc speaks to the
-// running ptp4l over its UDS). On a host without the daemons it degrades to
-// UNAVAILABLE / the system wall clock, exactly as before.
+// The Time-Sync control node. tipc 0x80010005. An atomic gen_server: on a self-
+// scheduled tick (handle_info) it polls the in-process GNSS driver
+// (impl/gps_backend.hpp — RTK/NMEA/Fake, chosen at build time) AND the ptp4l
+// backend (pmc), fuses them into the latest SyncStatus held in State, serves
+// GetSyncStatus, and emits a status line (loss-of-lock → a health event for PHM).
+// On central (config.discipline_clock=true) it STEPS CLOCK_REALTIME from a GPS
+// fix (clock_settime); phc2sys then carries that into the PHC ptp4l serves as
+// grandmaster. EPERM (no CAP_SYS_TIME) or no GPS/no ptp4l → graceful-degrade to
+// the system wall clock / UNAVAILABLE.
 node atomic TsyncCtl {
     tipc type=0x80010005 instance=0
     requires_timers

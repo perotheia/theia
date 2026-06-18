@@ -7,8 +7,6 @@
 
 #include "lib/Ptp4lProvider.hh"
 #include "lib/Phc2sysProvider.hh"
-#include "lib/ChronyProvider.hh"
-#include "lib/GpsdProvider.hh"
 #include "lib/TsyncCtl.hh"
 
 #include "lib/Log.hh"    // per-node MakeContextLogger(tag) — tagged + $THEIA_LOGGER sink
@@ -179,76 +177,6 @@ int main(int argc, char** argv) {
 
 
 
-    ChronyProvider chrony;
-    // Per-node logger: tagged [#chrony] (kNodeName, matches `tdb ps`),
-    // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so do_start/init
-    // log through it. The FIRST node's logger also backs process_logger() — the
-    // ConfigureLogLevel-push fallback target + any process_logger() caller.
-    {
-        auto chrony_log = MakeContextLogger(ChronyProvider::kNodeName);
-        chrony_log->set_level(boot_level);
-        chrony.set_logger(std::move(chrony_log));
-    }
-    chrony.start();
-    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (the supervisor
-    // sets it from the rig's NodeToCPUMapping). No-op when unset / no entry for
-    // this node; soft-fails (logs) on EPERM. Applied AFTER start() — the thread
-    // exists now.
-    ::theia::runtime::apply_node_affinity(chrony.native_handle(),
-        ChronyProvider::kNodeName, std::getenv("THEIA_NODE_CFG"));
-    // Resolve this node's TIPC address from the --tipc arg the supervisor built
-    // from executor.json (per node, instance machine-shifted), so the BINARY is
-    // address-agnostic — same binary on every machine. Falls back to the compiled
-    // kTipcType/kTipcInstance (the .art instance) for a standalone run.
-    uint32_t chrony_type, chrony_inst;
-    ::theia::runtime::resolve_node_tipc(ChronyProvider::kNodeName,
-        ChronyProvider::kTipcType, ChronyProvider::kTipcInstance,
-        chrony_type, chrony_inst);
-    {
-        char _tipc[64];
-        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
-                      chrony_type, chrony_inst);
-        chrony.log().info(_tipc);
-    }
-
-
-
-
-    GpsdProvider gpsd;
-    // Per-node logger: tagged [#gpsd] (kNodeName, matches `tdb ps`),
-    // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so do_start/init
-    // log through it. The FIRST node's logger also backs process_logger() — the
-    // ConfigureLogLevel-push fallback target + any process_logger() caller.
-    {
-        auto gpsd_log = MakeContextLogger(GpsdProvider::kNodeName);
-        gpsd_log->set_level(boot_level);
-        gpsd.set_logger(std::move(gpsd_log));
-    }
-    gpsd.start();
-    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (the supervisor
-    // sets it from the rig's NodeToCPUMapping). No-op when unset / no entry for
-    // this node; soft-fails (logs) on EPERM. Applied AFTER start() — the thread
-    // exists now.
-    ::theia::runtime::apply_node_affinity(gpsd.native_handle(),
-        GpsdProvider::kNodeName, std::getenv("THEIA_NODE_CFG"));
-    // Resolve this node's TIPC address from the --tipc arg the supervisor built
-    // from executor.json (per node, instance machine-shifted), so the BINARY is
-    // address-agnostic — same binary on every machine. Falls back to the compiled
-    // kTipcType/kTipcInstance (the .art instance) for a standalone run.
-    uint32_t gpsd_type, gpsd_inst;
-    ::theia::runtime::resolve_node_tipc(GpsdProvider::kNodeName,
-        GpsdProvider::kTipcType, GpsdProvider::kTipcInstance,
-        gpsd_type, gpsd_inst);
-    {
-        char _tipc[64];
-        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
-                      gpsd_type, gpsd_inst);
-        gpsd.log().info(_tipc);
-    }
-
-
-
-
     TsyncCtl tsync_ctl;
     // Per-node logger: tagged [#tsync_ctl] (kNodeName, matches `tdb ps`),
     // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so do_start/init
@@ -348,10 +276,6 @@ int main(int argc, char** argv) {
     ptp4l.stop("signal");
 
     phc2sys.stop("signal");
-
-    chrony.stop("signal");
-
-    gpsd.stop("signal");
 
     tsync_ctl.stop("signal");
 

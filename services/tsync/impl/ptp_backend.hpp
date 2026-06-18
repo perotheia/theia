@@ -1,13 +1,13 @@
-// ptp_backend — queries the Linux time-sync stack (linuxptp / chrony) for the
-// current discipline status. The FC NEVER disciplines the clock; it reads what
-// the daemons report and normalizes it into a SyncSnapshot.
+// ptp_backend — queries linuxptp (ptp4l) for the current PTP discipline status.
+// This is the DISTRIBUTION side: on the compute (slave) board ptp4l locks to the
+// central grandmaster, and this reports that lock. The ACQUISITION side (GNSS) is
+// gps_backend.hpp. NTP/chrony is gone — the time source is GPS, not NTP.
 //
 // v1 strategy (graceful degrade — the dev host has no linuxptp):
 //   1. PTP:  `pmc` (ptp4l management client) → port state + offset + GM identity.
-//   2. NTP:  `chronyc tracking` → sync state + offset (fallback source).
-//   3. else: SYSTEM / UNAVAILABLE — the wall clock, undisciplined.
-// Each query is a short popen of the daemon's own CLI (no library/data-path
-// coupling); absence of the binary just degrades the source.
+//   2. else: SYSTEM / UNAVAILABLE — the wall clock, undisciplined.
+// The query is a short popen of ptp4l's own CLI (no library/data-path coupling);
+// absence of the binary just degrades the source.
 //
 // SyncState / TimeSource ordinals MUST match the .art enums.
 
@@ -22,8 +22,8 @@ namespace ara::tsync {
 
 // SyncState ordinals (.art): 0=UNAVAILABLE 1=UNLOCKED 2=HOLDOVER 3=LOCKED.
 enum SState : int { S_UNAVAILABLE = 0, S_UNLOCKED = 1, S_HOLDOVER = 2, S_LOCKED = 3 };
-// TimeSource ordinals (.art): 0=SYSTEM 1=PTP 2=NTP.
-enum TSource : int { T_SYSTEM = 0, T_PTP = 1, T_NTP = 2 };
+// TimeSource ordinals (.art): 0=SYSTEM 1=PTP 2=GPS.
+enum TSource : int { T_SYSTEM = 0, T_PTP = 1, T_GPS = 2 };
 
 struct SyncSnapshot {
     int         state  = S_UNAVAILABLE;
@@ -36,18 +36,14 @@ struct SyncSnapshot {
 
 class PtpBackend {
 public:
-    // Poll the time-sync stack. `iface` is the preferred PTP NIC (may be empty),
-    // `prefer` is "ptp"|"ntp"|"system", `lock_offset_ns` is the LOCKED quality
-    // gate. Tries the preferred source first, then degrades.
+    // Poll ptp4l. `iface` is the preferred PTP NIC (may be empty), `prefer` is
+    // "system" to skip PTP entirely (e.g. central, where GPS is the source),
+    // else PTP is tried and we degrade to the wall clock if there's no daemon.
     static SyncSnapshot poll(const std::string& iface,
                              const std::string& prefer,
                              uint32_t lock_offset_ns) {
-        if (prefer != "ntp" && prefer != "system") {
-            SyncSnapshot s = poll_ptp_(iface, lock_offset_ns);
-            if (s.state != S_UNAVAILABLE) return s;
-        }
         if (prefer != "system") {
-            SyncSnapshot s = poll_ntp_();
+            SyncSnapshot s = poll_ptp_(iface, lock_offset_ns);
             if (s.state != S_UNAVAILABLE) return s;
         }
         return degrade_();
@@ -97,28 +93,11 @@ private:
         return s;
     }
 
-    // chrony via `chronyc tracking`: Leap/Stratum + "System time" offset.
-    static SyncSnapshot poll_ntp_() {
-        SyncSnapshot s;
-        std::string t = run_("chronyc tracking");
-        if (t.empty()) { s.state = S_UNAVAILABLE; return s; }
-        s.source = T_NTP;
-        // "System time : 0.000000123 seconds slow of NTP time"
-        double secs = parse_double_(t, "System time");
-        s.offset_ns = (long long)(secs * 1e9);
-        // "Leap status : Normal" → synced.
-        std::string leap = parse_after_(t, "Leap status");
-        s.state = (leap.find("Normal") != std::string::npos) ? S_LOCKED : S_UNLOCKED;
-        s.grandmaster = parse_after_(t, "Reference ID");
-        s.message = "chrony leap=" + leap;
-        return s;
-    }
-
     static SyncSnapshot degrade_() {
         SyncSnapshot s;
         s.state   = S_UNAVAILABLE;
         s.source  = T_SYSTEM;
-        s.message = "no ptp4l/chrony — system wall clock (undisciplined)";
+        s.message = "no ptp4l — system wall clock (undisciplined)";
         return s;
     }
 
@@ -127,14 +106,6 @@ private:
         auto p = blob.find(key);
         if (p == std::string::npos) return 0;
         return ::strtoll(blob.c_str() + p + key.size(), nullptr, 10);
-    }
-    static double parse_double_(const std::string& blob, const std::string& key) {
-        auto p = blob.find(key);
-        if (p == std::string::npos) return 0.0;
-        // skip to first digit/sign after the key.
-        const char* c = blob.c_str() + p + key.size();
-        while (*c && (*c < '0' || *c > '9') && *c != '-' && *c != '.') ++c;
-        return ::strtod(c, nullptr);
     }
     static std::string parse_word_(const std::string& blob, const std::string& key) {
         auto p = blob.find(key);
@@ -145,16 +116,6 @@ private:
         while (j < blob.size() && blob[j] != ' ' && blob[j] != '\n' &&
                blob[j] != '\t') ++j;
         return blob.substr(i, j - i);
-    }
-    static std::string parse_after_(const std::string& blob, const std::string& key) {
-        auto p = blob.find(key);
-        if (p == std::string::npos) return "";
-        size_t colon = blob.find(':', p);
-        if (colon == std::string::npos) return "";
-        size_t eol = blob.find('\n', colon);
-        std::string v = blob.substr(colon + 1, eol - colon - 1);
-        size_t s = v.find_first_not_of(" \t");
-        return s == std::string::npos ? "" : v.substr(s);
     }
 };
 

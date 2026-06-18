@@ -461,4 +461,19 @@ private:
     LogPanelImpl* impl_{nullptr};
 };
 
+// "Health" — the at-a-glance rig-health card: a cluster summary (red/amber/green
+// dot + active/total workers + restarts + tombstones from HealthBeacon tag 0x0002)
+// + a per-FC list sorted unhealthy-first (state · restart-count · uptime · cpu/rss
+// from TreeSnapshot/ChildState tag 0x0003). Makes a crash-loop obvious.
+class HealthPanelImpl;  // defined in health_panel.cpp
+class HealthPanel : public PanelBase {
+public:
+    explicit HealthPanel(wxWindow* parent);
+    void on_frame(const std::string& machine_name, uint16_t tag,
+                  const std::string& payload) override;
+
+private:
+    HealthPanelImpl* impl_{nullptr};
+};
+
 }  // namespace sup_gui

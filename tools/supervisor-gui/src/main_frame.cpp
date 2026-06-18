@@ -180,6 +180,7 @@ MainFrame::MainFrame(std::vector<MachineEndpoint> machines)
     persistency_    = new PersistencyPanel  (notebook_);
     trace_          = new TracePanel        (notebook_);
     log_panel_      = new LogPanel          (notebook_);
+    health_panel_   = new HealthPanel       (notebook_);
     notebook_->AddPage(system_panel_, "System");
     notebook_->AddPage(load_charts_,  "Load Charts");
     notebook_->AddPage(applications_, "Applications");
@@ -188,6 +189,7 @@ MainFrame::MainFrame(std::vector<MachineEndpoint> machines)
     notebook_->AddPage(persistency_,  "Persistency");
     notebook_->AddPage(trace_,        "Trace");
     notebook_->AddPage(log_panel_,    "Log");
+    notebook_->AddPage(health_panel_, "Health");
 
     splitter->SplitVertically(machines_panel_, notebook_, 220);
 
@@ -483,6 +485,7 @@ void MainFrame::dispatch_to_panels(const std::string& machine_name,
         load_charts_  ->on_frame(machine_name, tag, payload);
         applications_ ->on_frame(machine_name, tag, payload);
         processes_    ->on_frame(machine_name, tag, payload);
+        health_panel_ ->on_frame(machine_name, tag, payload);   // 0x0002+0x0003
     }
     trace_->on_frame(machine_name, tag, payload);   // cluster-wide
     log_panel_->on_frame(machine_name, tag, payload);   // cluster-wide (tag 0x0007)

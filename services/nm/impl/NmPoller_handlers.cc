@@ -82,14 +82,17 @@ void NmPoller::handle_info(const char* info, NmPollerState& s) {
     // FSM reaches READY on carrier without waiting for a routable address.
     const bool addr = s.require_address ? obs.has_address : obs.has_carrier;
 
-    // WiFi association: a CHEAP `iw dev <if> link` probe (no radio scan) ONLY for
-    // a wireless monitored interface. Wired links report assoc=false and skip the
-    // WIFI_ASSOCIATED rung. The full scan is on-demand via the WifiScan op, never
-    // per-tick. assoc is only meaningful while carrier is up.
+    // WiFi association: a CHEAP `iw dev <if> link` probe (no radio scan) ONLY when
+    // the MONITORED link is itself wireless. A wired monitored link (eth0) skips
+    // the WIFI_ASSOCIATED rung entirely — it must NOT report another box's wlan0
+    // association. The monitored iface is obs.interface (probe_link resolved the
+    // actual link, incl. auto-pick); only treat assoc when THAT link is wireless.
+    // The full scan is on-demand via WifiScan, never per-tick.
     bool wifi_assoc = false;
-    if (obs.has_carrier) {
+    const std::string mon_iface = obs.interface;   // the link actually monitored
+    if (obs.has_carrier && nm_detail::is_wireless(mon_iface)) {
         WifiObservation w;
-        if (wifi_assoc_probe(want, w)) wifi_assoc = w.associated;
+        if (wifi_assoc_probe(mon_iface, w)) wifi_assoc = w.associated;
     }
 
     // ── CONNECT POLICY (NM drives wpa_supplicant) ──────────────────────────

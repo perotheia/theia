@@ -183,18 +183,38 @@ MainFrame::MainFrame(std::vector<MachineEndpoint> machines)
     persistency_    = new PersistencyPanel  (etcd_panel_);
     etcd_panel_->attach_persistency(persistency_);
     trace_          = new TracePanel        (notebook_);
-    log_panel_      = new LogPanel          (notebook_);
-    health_panel_   = new HealthPanel       (notebook_);
-    diag_panel_     = new DiagPanel         (notebook_);
+
+    // --- the composite "Diagnostic" tab -----------------------------------
+    // Layout: a vertical splitter — TOP = a horizontal splitter (Health left |
+    // Diag right), BOTTOM = the Log firehose (full width).
+    //   ┌───────────────┬──────────────┐
+    //   │  Health card  │  Diag panel  │   (top row)
+    //   ├───────────────┴──────────────┤
+    //   │       Log panel (logcat)     │   (bottom, full width)
+    //   └──────────────────────────────┘
+    auto* diag_tab   = new wxPanel(notebook_);
+    auto* vsplit     = new wxSplitterWindow(diag_tab, wxID_ANY, wxDefaultPosition,
+                            wxDefaultSize, wxSP_LIVE_UPDATE | wxSP_BORDER);
+    auto* top_split  = new wxSplitterWindow(vsplit, wxID_ANY, wxDefaultPosition,
+                            wxDefaultSize, wxSP_LIVE_UPDATE | wxSP_BORDER);
+    health_panel_   = new HealthPanel       (top_split);
+    diag_panel_     = new DiagPanel         (top_split);
+    log_panel_      = new LogPanel          (vsplit);
+    top_split->SetMinimumPaneSize(180);
+    top_split->SplitVertically(health_panel_, diag_panel_, 520);   // Health | Diag
+    vsplit->SetMinimumPaneSize(140);
+    vsplit->SplitHorizontally(top_split, log_panel_, 320);         // top row / Log
+    auto* diag_sz = new wxBoxSizer(wxVERTICAL);
+    diag_sz->Add(vsplit, 1, wxEXPAND);
+    diag_tab->SetSizer(diag_sz);
+
     notebook_->AddPage(system_panel_, "System");
     notebook_->AddPage(load_charts_,  "Load Charts");
     notebook_->AddPage(applications_, "Applications");
     notebook_->AddPage(processes_,    "Processes");
     notebook_->AddPage(etcd_panel_,   "Table Viewer");
     notebook_->AddPage(trace_,        "Trace");
-    notebook_->AddPage(log_panel_,    "Log");
-    notebook_->AddPage(health_panel_, "Health");
-    notebook_->AddPage(diag_panel_,   "Diag");
+    notebook_->AddPage(diag_tab,      "Diagnostic");
 
     splitter->SplitVertically(machines_panel_, notebook_, 220);
 

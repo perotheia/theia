@@ -462,18 +462,51 @@ def _seed_defaults() -> None:
     import tempfile
     import time
 
-    art = WORKSPACE / "system" / "demo" / "package.art"
-    if not art.exists():
+    import json as _json
+
+    # Seed EVERY config-bearing node's declared defaults into etcd — not just the
+    # demo nodes. gen-config-defaults/gen-schema resolve compositions per-PACKAGE
+    # (the cluster forward-decl stubs in system/system.art carry no prototypes),
+    # so we run them over EACH FC's package.art (canonical symlink path — needed
+    # for cross-package imports) + the demo, then MERGE. gen-config-defaults emits
+    # art_package+proto_type per config so seed.py resolves each FC's proto class
+    # dynamically via the probe codec. (Was a single system/demo/package.art →
+    # FwConfig/PhmConfig/NmConfig/… never reached etcd.)
+    arts = sorted((WORKSPACE / "system" / "services").glob("*/package.art"))
+    demo_art = WORKSPACE / "system" / "demo" / "package.art"
+    if demo_art.exists():
+        arts.append(demo_art)
+    if not arts:
         return
     tmp = Path(tempfile.gettempdir())
     schema = tmp / "theia_seed_schema.json"
     defs   = tmp / "theia_seed_defaults.json"
+
+    def _merge_gen(verb: str, out: Path) -> bool:
+        """Run `artheia <verb>` over every FC art + demo, merging the per-art
+        `configs` dicts into one {package, configs} file. A single art failing is
+        skipped (best-effort), not fatal."""
+        merged = {"package": "system", "configs": {}}
+        any_ok = False
+        per_art = tmp / f"_seed_{verb}_part.json"
+        for a in arts:
+            if _run(["artheia", verb, str(a), "--out", str(per_art)]) != 0:
+                continue
+            try:
+                part = _json.loads(per_art.read_text())
+            except Exception:  # noqa: BLE001
+                continue
+            merged["configs"].update(part.get("configs", {}))
+            any_ok = True
+        if any_ok:
+            out.write_text(_json.dumps(merged, indent=2) + "\n")
+        return any_ok
+
     try:
-        if _run(["artheia", "gen-schema", str(art), "--out", str(schema)]) != 0:
+        if not _merge_gen("gen-schema", schema):
             print("theia: seed skipped — gen-schema failed.", file=sys.stderr)
             return
-        if _run(["artheia", "gen-config-defaults",
-                 str(art), "--out", str(defs)]) != 0:
+        if not _merge_gen("gen-config-defaults", defs):
             print("theia: seed skipped — gen-config-defaults failed.",
                   file=sys.stderr)
             return

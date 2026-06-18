@@ -20,7 +20,14 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "tools" / "tdb"))
 sys.path.insert(0, "/tmp/migpb/system/demo")
 
-import demo_pb2 as demo  # noqa: E402
+# demo_pb2 is only needed by the LEGACY demo-driver actions (seed/change/get) and
+# as a fallback in `defaults`. The first-boot `defaults` seed now resolves every
+# FC's proto class dynamically via the probe codec, so a missing demo_pb2 (no
+# /tmp/migpb staging) must NOT break the all-FC seed. Soft-import.
+try:
+    import demo_pb2 as demo  # noqa: E402
+except Exception:  # noqa: BLE001
+    demo = None
 from tdb_client import PerClient  # noqa: E402
 
 # node prototype -> (proto message class, v1 field values)
@@ -83,32 +90,52 @@ def get(per, node, schema):
 def seed_defaults(per, cfgdef, schema):
     """First-boot seed: PutConfig the DECLARED config defaults (gen-config-
     defaults output) for every node that has NO stored value yet. A node with an
-    existing value is left untouched (idempotent — defaults seed once). Nodes
-    whose config declares no defaults (empty `values`) are skipped."""
-    name_to_cls = {c.DESCRIPTOR.name: c for c in
-                   (demo.CounterConfig, demo.ObserverConfig,
-                    demo.IncrementerConfig, demo.P4Config)}
+    existing value is left untouched (idempotent — defaults seed once).
+
+    Resolves the proto class DYNAMICALLY via the probe codec from each config's
+    `art_package` + `proto_type` (emitted by gen-config-defaults), so this seeds
+    EVERY FC's config (FwConfig/PhmConfig/NmConfig/…), not just the demo nodes.
+    The codec compiles each package's .proto → _pb2 lazily + caches it — the same
+    path PerClient.decode_snapshot already uses to DECODE. Falls back to the
+    legacy demo class map only if an entry lacks art_package (older defaults
+    JSON), so a regenerated defaults file needs no hardcoded list."""
+    legacy_cls = {c.DESCRIPTOR.name: c for c in
+                  (demo.CounterConfig, demo.ObserverConfig,
+                   demo.IncrementerConfig, demo.P4Config)} if demo else {}
+    codec = per.ctx.codec
     for node, info in cfgdef["configs"].items():
         values = info.get("values") or {}
         # NOTE: we seed EVERY config-bearing node, even one whose .art declares
         # no field defaults (values == {}). Such a node still gets a
         # /theia/config/<node> key — an empty proto + its digest — so the key is
         # visible in the Table Viewer and the node has a stored baseline to edit
-        # from. (Previously empty-default nodes were skipped, so only nodes with
-        # declared defaults like CounterConfig ever got a key.)
+        # from.
         # Skip if already present (don't clobber a real stored value).
         cur = per.probe.call("PerClient", "GetConfig", timeout=3.0,
                              target_node=node, want_digest="")
         if cur.get("mod_rev", 0):
             print(f"  {node}: already has a stored value — not seeding defaults")
             continue
-        cls = name_to_cls.get(info["config_type"])
-        if cls is None:
-            print(f"  {node}: no proto class for {info['config_type']} — skip")
+        # Encode via the probe codec (dynamic, all FCs). art_package+proto_type
+        # come from gen-config-defaults; fall back to the demo class map for an
+        # older defaults file that lacks them.
+        art_pkg = info.get("art_package")
+        proto_type = info.get("proto_type")
+        try:
+            if art_pkg and proto_type:
+                raw = codec.encode(art_pkg, proto_type, **values)
+            else:
+                cls = legacy_cls.get(info["config_type"])
+                if cls is None:
+                    print(f"  {node}: no art_package + no legacy class for "
+                          f"{info['config_type']} — skip")
+                    continue
+                raw = cls(**values).SerializeToString()
+        except Exception as ex:  # noqa: BLE001 — never let one FC abort the seed
+            print(f"  {node}: encode {info['config_type']} failed ({ex}) — skip")
             continue
-        msg = cls(**values)
         rep = per.probe.call("PerClient", "PutConfig", timeout=3.0,
-                             target_node=node, config=msg.SerializeToString(),
+                             target_node=node, config=raw,
                              digest=info["digest"], expect_rev=0)
         print(f"  seeded {node} ({info['config_type']}@{info['digest']}) "
               f"{values} -> {rep.get('status')}")

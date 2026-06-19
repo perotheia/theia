@@ -65,6 +65,19 @@ http:
       entryPoints: [websecure]
       middlewares: [userauth]
       tls: {}
+    deploymentsDLv1:
+      rule: "PathRegexp(`/api/devices/v1/deployments/download`)"
+      service: deployments
+      entryPoints: [websecure]
+      priority: 100
+      tls: {}
+    deploymentsDLv2:
+      rule: "PathRegexp(`/api/devices/v[2-9]/deployments/download`)"
+      service: deployments
+      entryPoints: [websecure]
+      priority: 100
+      middlewares: [dep-dev-v2to1]
+      tls: {}
     deploymentsDev:
       rule: "PathRegexp(`/api/devices/v1/deployments`)"
       service: deployments

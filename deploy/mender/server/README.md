@@ -80,8 +80,11 @@ changed shape — 3.4.0 `POST /api/devices/v2/deployments/.../next` (older body)
 which v4.0.1 serves at v1 with a different schema (the server's own demo uses the
 4.x `mender-client-qemu:mender-master`). Enrolment/auth/inventory use the *stable*
 API and work; the *pull* needs the rig running the **4.x mender-update client**
-(Mender APT repo, not in Debian). `theia-routes.yaml` already routes + rewrites the
-device-deployments path (v2→v1) so the only remaining gap is the client version.
+(Mender APT repo, not in Debian). `theia-routes.yaml` routes the full deployments surface — mgmt (artifacts +
+deployments), the device update-check (with the v2→v1 rewrite), AND the artifact
+**download** (a dedicated higher-priority router, no devauth — downloads use a
+signed URL, mirroring the upstream `deploymentsDL`). So the only remaining gap is
+the client version.
 
 So 3d splits: **enrol + report = DONE** (this); **server-triggered pull = needs the
 4.x client on the rig** (a deliberate rig change — Mender APT repo or a vendored

@@ -6,31 +6,42 @@ model as the on-device UCM agent (`services/ucm/impl/release_dir.hpp`). Mender i
 customized to fit this via a **custom update module** (`theia-release`), which is
 Mender's supported extension point for non-rootfs payloads.
 
-## Why this works (tested on a real Mender install)
+## Why this works (verified on a real rig with the real mender client)
 
 Mender's update modules are scripts the integrator writes; `mender-artifact write
 module-image --type <name>` produces a CUSTOM (non-rootfs) artifact that the module
-installs. We verified end-to-end on a Mender 3.0.0 / mender-artifact 3.6.0 box:
+installs. Verified end-to-end with the **actual `mender` client 3.4.0 on the rpi4
+rig** (rig1-central) — full standalone `mender install` / `commit` / `rollback`:
 
 ```
-INSTALL v1.0.0  → current → releases/1.0.0          (com runs v1)
-INSTALL v2.0.0  → current → releases/2.0.0          (atomic switch)
-                  previous → releases/1.0.0
-ROLLBACK        → current → releases/1.0.0          (com runs v1 again, seconds)
+install v1.0.0  → current → releases/1.0.0          (com runs v1)
+commit          → kept
+install v2.0.0  → current → releases/2.0.0           (atomic switch; previous → 1.0.0)
+rollback        → current → releases/1.0.0           (com runs v1 again, seconds)
 ```
 
 `mender-artifact read` confirms `Type: theia-release` (a module-image, NOT
-rootfs-image — no A/B). The only quirk: Mender namespaces the artifact's provides
-as `rootfs-image.theia-release.version` for any module-image; it's just Mender's
-provides string, not an actual rootfs.
+rootfs-image — no A/B). Quirks found on the live run:
+- Mender namespaces a module-image's provides as `rootfs-image.theia-release.version`
+  — just a provides string, not an actual rootfs.
+- `mender install` gates on `/var/lib/mender/device_type` (must match the artifact's
+  `theia-rig` compat) + reads `/etc/mender/artifact_info`. On a server-enrolled rig
+  these come from enrolment; the Ansible `install-mender.yml` task seeds them so a
+  provisioned rig does standalone OTA out of the box.
+- During `Download`, Mender presents the payload only as named pipes in
+  `<tree>/streams/`; the module is a no-op there and reads `<tree>/files/` in
+  `ArtifactInstall` (which Mender materialises by then).
 
 ## Files
 
 - **`modules/theia-release`** — the update module. Install to
   `/usr/share/mender/modules/v3/theia-release` (0755) on the rig. Implements:
-  - `Download` → stage the payload tarball into `releases/<ver>/`
-  - `ArtifactInstall` → save `previous`, atomically re-aim `current → releases/<ver>`
-    (temp symlink + `rename(2)`)
+  - `Download` → **no-op**. During Download Mender exposes the payload only as
+    named PIPEs in `<tree>/streams/` (no `files/` yet); since the artifacts are
+    small we let Mender auto-save them to `<tree>/files/` instead of streaming.
+  - `ArtifactInstall` → extract the payload from `<tree>/files/` into
+    `releases/<ver>/`, save `previous`, atomically re-aim `current → releases/<ver>`
+    (temp symlink + `rename(2)`). Mender has materialised `files/` by this state.
   - `ArtifactCommit` → keep it (the PHM-verify gate runs in the state-script / UCM)
   - `ArtifactRollback` → restore `current → previous` (rollback in seconds)
   - `SupportsRollback`=Yes, `NeedsArtifactReboot`=No (theia restarts only the

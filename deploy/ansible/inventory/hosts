@@ -10,9 +10,11 @@
 # `theia provision <machine>` / `theia orchestrate <machine>` target one host.
 
 [all:vars]
-ansible_user      = applied
 # The artheia manifest tree ON THE CONTROLLER (theia dist output). Pushed per-host.
-manifest_dir      = dist/manifest
+# Resolved against the repo root (deploy/ansible/../../dist/manifest) so the
+# controller-side file lookups work regardless of where ansible-playbook is run.
+# Override with -e manifest_dir=/abs/path for a different dist tree.
+manifest_dir      = {{ playbook_dir }}/../../dist/manifest
 etcd_machine      = central
 
 # ----- lab rig (the dev bench: dalek controller, rpi4 + x86 boxes) -----------
@@ -21,7 +23,8 @@ rig_lab_central
 rig_lab_compute
 
 [rig_lab_central]
-rpi4    ansible_host=10.0.0.22  machine=central
+# rig1-central is the ssh-config alias (user=axadmin, host=10.0.0.22); the rpi4.
+rig1-central    ansible_host=10.0.0.22  ansible_user=axadmin  machine=central
 
 [rig_lab_compute]
 # add compute nodes here, e.g.:

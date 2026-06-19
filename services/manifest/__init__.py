@@ -1,7 +1,7 @@
 """Adaptive Platform Functional Cluster manifest (generated from .art).
 
 :data:`ServicesLayer` is the L0 :class:`artheia.manifest.Layer` carrying
-the ``cluster Services`` FCs (from ``services/system/system.art``) as
+the ``cluster Services`` FCs (from ``system/system.art``) as
 :class:`SwComponent`, :class:`Executable`, and :class:`Process`
 (Execution Manifest) entries.
 

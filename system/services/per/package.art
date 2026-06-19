@@ -34,7 +34,7 @@ package system.services.per
 // sends to a watching node, applied by that node's GenServer base handle_cast.
 // ChildControlIf (the config-service push interface that bundles config_push)
 // also lives in platform.runtime; per is a SENDER of it.
-import platform.runtime.*
+import system.platform.runtime.*
 
 // (Logging does NOT flow over a TIPC interface. Each node logs directly to its
 // runtime sink — file / syslog / null, selected by THEIA_LOGGER (Logger.hh).

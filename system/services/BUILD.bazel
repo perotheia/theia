@@ -1,0 +1,17 @@
+# The consolidated Services manifest tree — cluster.art + each FC's .art
+# (com/log/per/sm/ucm/shwa/…) as REAL files under system/services/<fc>/.
+# Shipped in the theia-services-dev .deb to /opt/theia/services so a downstream
+# workspace relinks ONE dir (system/services → /opt/theia/services).
+
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "services_manifest",
+    # cluster.art + each FC's component.art/package.art, all real files in this
+    # tree. The deb packer stages them under /opt/theia/services preserving
+    # this layout.
+    srcs = glob(
+        ["cluster.art", "*/*.art"],
+        allow_empty = False,
+    ),
+)

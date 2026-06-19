@@ -23,12 +23,12 @@ loading, CAN/FlexRay bus framing). That stays in the gateway.
 package(default_visibility = ["//visibility:public"])
 
 # Control-plane nanopb codec (#386), generated from
-# system/package.art (package platform.runtime). Compiled INTO the
+# system/platform/runtime/package.art (package system.platform.runtime). Compiled INTO the
 # runtime library so both the supervisor (sender) and every FC app
 # (receiver, via GenServer's register_cast) link the SAME
 # platform_runtime_LogLevelPush type. .pb.{c,h} are BUILT, not
 # committed — regenerate the .proto with:
-#   artheia gen-proto-package platform/runtime/system/runtime/package.art \
+#   artheia gen-proto-package system/platform/runtime/package.art \
 #       --out platform/runtime/proto
 genrule(
     name = "control_pb",
@@ -97,7 +97,9 @@ cc_library(
 filegroup(
     name = "runtime_dist_srcs",
     srcs = glob(["include/*.hh", "src/*.cc"]) + [
-        "system/runtime/package.art",
+        # The runtime .art now lives under //system (package
+        # system.platform.runtime); the deb stages it preserving its path.
+        "//system/platform/runtime:package.art",
         "proto/platform_runtime/runtime.proto",
         # Ship the BUILT nanopb codec too (genrule outputs) so a downstream
         # workspace compiles against it without re-running nanopb_generator —

@@ -31,7 +31,7 @@ package system.supervisor
 // supervisor's ConfigureTrace/ConfigureLogLevel embed these so there is ONE
 // canonical definition (was triplicated: log FC + runtime + here). See
 // platform/runtime/system/runtime/package.art.
-import platform.runtime.*
+import system.platform.runtime.*
 
 // ---- messages ------------------------------------------------------------
 

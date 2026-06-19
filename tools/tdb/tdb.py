@@ -9,7 +9,7 @@ Two modes, like adb:
                                      tdb supervisor
   2. Interactive prompt_toolkit REPL (no command):  tdb
 
-All transport is probe-backed (tools/tdb/system/tdb.art via artheia.probe) —
+All transport is probe-backed (system/tools/tdb/tdb.art via artheia.probe) —
 no raw TIPC. See feedback-clients-via-art-probe.
 
 adb-shaped verbs:

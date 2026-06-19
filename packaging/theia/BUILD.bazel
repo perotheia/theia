@@ -82,7 +82,7 @@ pkg_deb(
         # The supervisor .art (system.supervisor package) — a consuming ws's
         # system.art imports it (`import system.supervisor.*`) to deploy the
         # fabric; ships so the resolver reaches it from /opt/theia.
-        "//platform/supervisor/system:supervisor_art_srcs",
+        "//system/supervisor:supervisor_art_srcs",
     ],
     prefix = "/opt/theia",
     strip_prefix = "",
@@ -126,9 +126,9 @@ pkg_deb(
     section = "devel",
     depends = "theia-services, theia-framework",
     # The .art manifest tree → /opt/theia/services (relink system/services here).
-    data = ["//services/system/services:services_manifest"],
+    data = ["//system/services:services_manifest"],
     prefix = "/opt/theia/services",
-    strip_prefix = "services/system/services",
+    strip_prefix = "system/services",
     # protos → /opt/theia/proto/... ; the Python manifest → site-packages
     # (importable as services.manifest.service once setup.bash puts it on
     # PYTHONPATH). Explicit dests because they live under different source roots

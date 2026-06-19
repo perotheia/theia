@@ -11,7 +11,7 @@
 // nanopb renders proto3 `string` as pb_callback_t, which GenServer's
 // register_cast path can't capture, so the log level rides as an enum.
 //
-// package platform.runtime → nanopb prefix platform_runtime_ (no
+// package system.platform.runtime → nanopb prefix platform_runtime_ (no
 // `system`→`services` rename applies). C type:
 // platform_runtime_LogLevelPush.
 

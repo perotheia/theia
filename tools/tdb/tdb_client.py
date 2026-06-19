@@ -2,7 +2,7 @@
 
 NO raw TIPC. Every peer (supervisor, log[trace]) is reached through
 `artheia.probe`, which resolves the peer's TIPC address + per-op service_id
-from tools/tdb/system/tdb.art (imported supervisor + log interfaces). If the
+from system/tools/tdb/tdb.art (imported supervisor + log interfaces). If the
 Theia transport changes, the runtime + probe change and this file does not.
 See feedback-clients-via-art-probe + docs/tasks/TODO/e2e-local-stage-tdb.md.
 

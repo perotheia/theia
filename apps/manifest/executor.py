@@ -1,4 +1,4 @@
-"""Apps supervisor-tree sidecar — GENERATED from apps/system/apps/component.art by gen-manifest.
+"""Apps supervisor-tree sidecar — GENERATED from system/apps/component.art by gen-manifest.
 
 One ``app_sup`` node (one_for_one) whose children are this manifest's app
 members. The generic rig grafts it onto the services supervisor tree's empty

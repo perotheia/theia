@@ -14,7 +14,7 @@ package system.supervisor
 
 // ChildControlIf (the supervisor → child trace/log control plane) lives in the
 // runtime package — see platform/runtime/system/runtime/package.art.
-import platform.runtime.*
+import system.platform.runtime.*
 
 // ---- nodes ---------------------------------------------------------------
 

@@ -1,18 +1,17 @@
-# //system — workspace's virtual root for the `system` package.
+# //system — workspace's root for the `system` package.
 #
-# Re-exports every .art file reachable from here as a single
-# filegroup so downstream manifest builds depend on the full
-# system tree. The directory itself is the namespace anchor for
-# `import system.*` declarations.
+# Re-exports every .art file under system/ as a single filegroup so
+# downstream manifest builds depend on the full system tree. The
+# directory is the namespace anchor for `import system.*`, and the
+# on-disk layout mirrors the package FQN 1:1 (system/services/<fc>/ →
+# system.services.<fc>, system/apps/ → system.apps, …).
 #
-# We do NOT follow_symlinks here. The per-FC entries under
-# system/services/ symlink into the real component trees
-# (services/<fc>/system/<fc>/, services/nop/<fc>/), and the
-# top-level entries (demo/, supervisor/, …) symlink to their owning
-# trees; Bazel treats these as opaque inputs (artheia
-# chases them at runtime), so they aren't re-exposed as Bazel
-# sources. Only the physical aggregators (system.art,
-# services/cluster.art) are globbed here.
+# The whole tree is real files now — the .art definitions were
+# consolidated here from the per-component <component>/system/ dirs, so
+# the glob below picks up the entire tree directly (no symlinks to
+# chase). The runtime package declares
+# `package system.platform.runtime`, so its .art lives at
+# system/platform/runtime/package.art (FQN mirrors path here too).
 
 filegroup(
     name = "art_sources",

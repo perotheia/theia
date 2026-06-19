@@ -1,0 +1,11 @@
+# The runtime .art (package system.platform.runtime): the control-plane
+# message definitions (TraceControlPush / LogLevelPush / ConfigUpdated) that
+# services + the supervisor import via `import system.platform.runtime.*`.
+#
+# Lives under //system with the rest of the .art tree, but keeps the
+# platform.runtime lineage in its FQN. Exported so //platform/runtime can
+# stage it into the theia-runtime-dev deb.
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["package.art"])

@@ -73,26 +73,26 @@ class FcSpec:
 FC_SPECS = [
     # Daemon FCs under services/. The log FC spec carries BOTH the
     # LogDaemon (syslog sink) and TraceCollector (trace fan-out) nodes.
-    FcSpec("sm",  "services/sm/system/sm/package.art",   "ara::sm",  "services/sm"),
-    FcSpec("com", "services/com/system/com/package.art", "ara::com", "services/com"),
-    FcSpec("crypto", "services/crypto/system/crypto/package.art", "ara::crypto",
+    FcSpec("sm",  "system/services/sm/package.art",   "ara::sm",  "services/sm"),
+    FcSpec("com", "system/services/com/package.art", "ara::com", "services/com"),
+    FcSpec("crypto", "system/services/crypto/package.art", "ara::crypto",
            "services/crypto", hand_owned_impl_build=True),   # OpenSSL linkopts
-    FcSpec("per", "services/per/system/per/package.art", "ara::per", "services/per",
+    FcSpec("per", "system/services/per/package.art", "ara::per", "services/per",
            hand_owned_impl_build=True),   # per_etcd + migration_registry targets
-    FcSpec("ucm", "services/ucm/system/ucm/package.art", "ara::ucm", "services/ucm"),
-    FcSpec("log", "services/log/system/log/package.art", "ara::log", "services/log",
+    FcSpec("ucm", "system/services/ucm/package.art", "ara::ucm", "services/ucm"),
+    FcSpec("log", "system/services/log/package.art", "ara::log", "services/log",
            hand_owned_impl_build=True),   # shared trace_hub cc_library
-    FcSpec("tsync", "services/tsync/system/tsync/package.art", "ara::tsync",
+    FcSpec("tsync", "system/services/tsync/package.art", "ara::tsync",
            "services/tsync", hand_owned_impl_build=True),   # ptp_backend.hpp hdr
-    FcSpec("nm", "services/nm/system/nm/package.art", "ara::nm", "services/nm",
+    FcSpec("nm", "system/services/nm/package.art", "ara::nm", "services/nm",
            hand_owned_impl_build=True),   # nm_backend.hpp hdr (the `ip` observer)
-    FcSpec("shwa", "services/shwa/system/shwa/package.art", "ara::shwa",
+    FcSpec("shwa", "system/services/shwa/package.art", "ara::shwa",
            "services/shwa", hand_owned_impl_build=True),   # host/jetson backend select
-    FcSpec("osi", "services/osi/system/osi/package.art", "ara::osi", "services/osi",
+    FcSpec("osi", "system/services/osi/package.art", "ara::osi", "services/osi",
            hand_owned_impl_build=True),   # osi_backend.hpp hdr (cgroup/power)
-    FcSpec("fw", "services/fw/system/fw/package.art", "ara::fw", "services/fw",
+    FcSpec("fw", "system/services/fw/package.art", "ara::fw", "services/fw",
            hand_owned_impl_build=True),   # fw_backend.hpp hdr (nftables gen/apply)
-    FcSpec("idsm", "services/idsm/system/idsm/package.art", "ara::idsm",
+    FcSpec("idsm", "system/services/idsm/package.art", "ara::idsm",
            "services/idsm", hand_owned_impl_build=True),   # ids_backend.hpp + log dep
     # log carries the SECURITY TraceKind IDSM produces; keep it regen-checked.
     # rds exercises the `node prebuilt` primitive: RoudiBroker (forks iox-roudi,
@@ -100,14 +100,14 @@ FC_SPECS = [
     # the prebuilt template-pair + impl/BUILD `not n.prebuilt` state-skip stay
     # regen-stable. The ara::rds transport lib lives in services/rds/transport
     # (a sibling target), not impl/BUILD, so impl/BUILD is gen-app-default.
-    FcSpec("rds", "services/rds/system/rds/package.art", "ara::rds", "services/rds"),
+    FcSpec("rds", "system/services/rds/package.art", "ara::rds", "services/rds"),
     # Non-services FCs — same generator, different homes. These prove
     # gen-app's path-agnostic label derivation (//<out>/lib:<short>_lib).
     # The apps spec is one spec with three process-compositions; each is its
     # own app dir via --composition (appended to --out verbatim).
-    FcSpec("demo_p1", "apps/system/apps/component.art", "demo", "apps", "Demo3WayP1"),
-    FcSpec("demo_p2", "apps/system/apps/component.art", "demo", "apps", "Demo3WayP2"),
-    FcSpec("demo_p3", "apps/system/apps/component.art", "demo", "apps", "Demo3WayP3"),
+    FcSpec("demo_p1", "system/apps/component.art", "demo", "apps", "Demo3WayP1"),
+    FcSpec("demo_p2", "system/apps/component.art", "demo", "apps", "Demo3WayP2"),
+    FcSpec("demo_p3", "system/apps/component.art", "demo", "apps", "Demo3WayP3"),
 ]
 
 

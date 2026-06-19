@@ -11,7 +11,7 @@ module) so each is a self-contained, obvious source of truth for its target.
 The single-machine on-HOST install (reduced FC set, no nm/fw/idsm/osi/rds) is a
 third rig: ``apps/manifest/rig.py`` (drives ``theia install`` → install/).
 
-Composition reference (``apps/system/apps/package.art``):
+Composition reference (``system/apps/package.art``):
 
 ==============  ======================================  ==============
 process binary  hosted prototypes (.art)                start_cmd
@@ -234,7 +234,7 @@ DemoHost = CentralHost
 # ---------------------------------------------------------------------------
 #
 # `apps/manifest/applications.py` is GENERATED from `cluster Applications`
-# in apps/system/apps/component.art by `artheia gen-manifest`. It
+# in system/apps/component.art by `artheia gen-manifest`. It
 # carries one SwComponent / Executable / Process per cluster member, with
 # every path derived from the (base_dir=apps, ident) directory convention
 # (app dir apps/<ident>, bazel //apps/<ident>:<ident>, start_cmd bin/<ident>)

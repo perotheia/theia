@@ -131,6 +131,11 @@ CentralHost = MachineManifest(
     # its stable type at instance=0 (supervisor:0, shwa:0); central com addresses
     # other machines at instance=N over the cluster-wide TIPC fabric.
     machine_index=0,
+    # This RIG's TIPC clusterid (network id) — multi-rig test isolation. BOTH
+    # machines of one rig share it (central + compute are one TIPC network). A
+    # SECOND rig on the same switch uses a DISTINCT id (e.g. 4713) so the two rigs
+    # don't see each other's TIPC services. 4711 (default) = no isolation.
+    tipc_cluster_id=4712,
     hardware=HardwareResource(
         cpu=CpuResource(architecture=CpuArchitecture.X86_64),
     ),
@@ -163,6 +168,8 @@ ComputeHost = MachineManifest(
     # Cluster TIPC instance — compute is machine 1. Its supervisor binds
     # supervisor:1, its shwa binds shwa:1; central com reaches them at instance=1.
     machine_index=1,
+    # Same rig as central → SAME clusterid (one TIPC network spans the rig).
+    tipc_cluster_id=4712,
     hardware=HardwareResource(
         # x86_64 for now — both demo containers are amd64 (the aarch64/rpi4
         # cross-toolchain isn't registered; dropped for the demo). Flip back to

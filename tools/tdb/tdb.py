@@ -103,9 +103,35 @@ def _opt(args, name):
     return None
 
 
-# tdb's command map = the shared verbs + the TIPC-only get-snapshot.
+def cmd_clusterid(_args, _sup, _tf) -> int:
+    """clusterid — the LOCAL host's TIPC clusterid (network id).
+
+    Multi-rig isolation: each rig on a shared switch runs a distinct TIPC
+    clusterid (run-supervisor.sh sets Machine.tipc_cluster_id at boot), so rigs
+    don't see each other's TIPC services. This reports which network THIS host is
+    on (4711 = the shared default). A probe on this host only reaches nodes on the
+    same clusterid; reach a DIFFERENT rig over com (`rtdb --target <ip>:7700`)."""
+    import subprocess
+    try:
+        out = subprocess.run(["tipc", "node", "get", "netid"],
+                             capture_output=True, text=True, timeout=4)
+        cid = (out.stdout or out.stderr).strip().splitlines()[0] if out.stdout or out.stderr else "?"
+        print(f"TIPC clusterid (this host): {cid}"
+              + ("   (default — shared with other 4711 rigs)" if cid == "4711"
+                 else "   (isolated network)"))
+        return 0
+    except FileNotFoundError:
+        print("tipc tool not found (install iproute2 / tipc); cannot read clusterid")
+        return 1
+    except Exception as e:  # noqa: BLE001
+        print(f"clusterid read failed: {e}")
+        return 1
+
+
+# tdb's command map = the shared verbs + the TIPC-only get-snapshot + clusterid.
 _COMMANDS = dict(_SHARED_COMMANDS)
 _COMMANDS["get-snapshot"] = cmd_get_snapshot
+_COMMANDS["clusterid"] = cmd_clusterid
 
 
 # ---------------------------------------------------------------------------

@@ -72,6 +72,31 @@ fi
 export THEIA_MACHINE_INSTANCE
 log "machine instance=${THEIA_MACHINE_INSTANCE} (from machine.json)"
 
+# This rig's TIPC CLUSTERID (network id) — multi-rig test isolation. TIPC nodes
+# only peer when their clusterid matches, so a rig with a DISTINCT clusterid is in
+# its own isolated TIPC network on a shared switch (no (type,instance) collisions
+# with other rigs). Read Machine.tipc_cluster_id (default 4711 = the TIPC default,
+# shared — unchanged). Set BEFORE any TIPC traffic (the supervisor is the first
+# TIPC user), and only when non-default + the tooling/caps are present. Best-
+# effort: a no-CAP_NET_ADMIN host logs a warning + runs on the default.
+_clusterid=4711
+if [[ -f "$_machine_json" ]]; then
+    _cid="$(grep -o '"tipc_cluster_id"[[:space:]]*:[[:space:]]*[0-9]*' "$_machine_json" \
+            | sed 's/.*:[[:space:]]*//')"
+    _clusterid="${_cid:-4711}"
+fi
+if [[ "$_clusterid" != "4711" ]]; then
+    modprobe tipc 2>/dev/null || true
+    if command -v tipc >/dev/null 2>&1 \
+       && tipc node set clusterid "$_clusterid" 2>/dev/null; then
+        log "TIPC clusterid=${_clusterid} (rig isolation; tipc node set)"
+    else
+        log "WARN: could not set TIPC clusterid=${_clusterid} (tipc tool / "\
+"CAP_NET_ADMIN missing?) — running on the default 4711"
+    fi
+fi
+export THEIA_TIPC_CLUSTERID="${_clusterid}"
+
 # The CLUSTER manifest root — machines.json (the index→name list) + each
 # <machine>/machine.json. com inherits this from the supervisor's env and reads
 # it to map a TIPC instance (e.g. an AccelSample's machine_index) back to a

@@ -1517,8 +1517,9 @@ def cmd_init(args: list[str]) -> int:
         generated sidecars.
       - .theia               — records THEIA_ROOT (the source it's bound to).
 
-    Theia itself is NOT vendored: system/runtime + the platform/ wrappers are
-    SYMLINKS into $THEIA_ROOT, so a Theia bump is a re-source, not a re-copy."""
+    Theia itself is NOT vendored: system/platform/runtime + system/supervisor
+    (and, with --with-services, system/services) are SYMLINKS into $THEIA_ROOT,
+    so a Theia bump is a re-source, not a re-copy."""
     if "-h" in args or "--help" in args:
         print(cmd_init.__doc__, file=sys.stderr)
         return 0
@@ -1536,24 +1537,22 @@ def cmd_init(args: list[str]) -> int:
     # plant in the workspace point at real files the artheia resolver can reach.
     src = (theia_root / "system" / "system.art").is_file()
     if src:
-        runtime_pkg = theia_root / "system" / "runtime"
-        runtime_art = (theia_root / "platform" / "runtime"
-                       / "system" / "runtime" / "package.art")
+        # Source checkout: the whole .art tree is real files under system/, with
+        # the on-disk layout mirroring each package FQN 1:1 (the runtime is
+        # `package system.platform.runtime`, hence system/platform/runtime/).
+        runtime_pkg = theia_root / "system" / "platform" / "runtime"
+        runtime_art = runtime_pkg / "package.art"
         supervisor_pkg = theia_root / "system" / "supervisor"
         services_pkg = theia_root / "system" / "services"
     else:
         # Installed deb layout (theia-runtime-dev + theia-services-dev):
-        #   runtime spec → src/runtime/system/runtime/{package.art}
-        #   services tree → services/{cluster.art, <fc>/...}
-        # (no separate supervisor .art ships; the supervisor binary is prebuilt
-        # in the runtime deb, and the engine spec isn't needed to RESOLVE a
-        # consuming app — only to rebuild the supervisor itself.)
-        # The pero_theia module tree ships at /opt/theia/platform/... (no `src/`),
-        # so the runtime + supervisor .art resolve at the SAME relative paths as
-        # the repo.
-        runtime_pkg = theia_root / "platform" / "runtime" / "system" / "runtime"
+        #   runtime spec  → system/platform/runtime/package.art
+        #   supervisor    → system/supervisor/
+        #   services tree → services/{cluster.art, <fc>/...}  (deb strips the
+        #                   system/services prefix → /opt/theia/services)
+        runtime_pkg = theia_root / "system" / "platform" / "runtime"
         runtime_art = runtime_pkg / "package.art"
-        supervisor_pkg = theia_root / "platform" / "supervisor" / "system"
+        supervisor_pkg = theia_root / "system" / "supervisor"
         services_pkg = theia_root / "services"
     if not runtime_art.is_file():
         print(f"theia init: THEIA_ROOT={theia_root} doesn't look like a Theia "
@@ -1601,16 +1600,16 @@ def cmd_init(args: list[str]) -> int:
         p.symlink_to(rel_target)
         created.append(f"{rel} -> {rel_target}")
 
-    # system/ aggregator + the runtime link (Theia's .art import root).
-    _link("system/runtime", runtime_pkg)
-    # The supervisor .art only exists in a source checkout; the installed deb
-    # ships the supervisor binary prebuilt, so skip the link when absent.
+    # The runtime .art package. The framework's supervisor/services .art import
+    # `system.platform.runtime.*` (ChildControlIf, TraceControlPush, LogLevelPush);
+    # the resolver maps that FQN to system/platform/runtime/, so link the package
+    # dir there. (One link, FQN-correct — no separate platform/runtime/package.art
+    # or system/runtime shims.)
+    _link("system/platform/runtime", runtime_pkg)
+    # The supervisor .art (system.supervisor). Present in a source checkout and in
+    # the theia-runtime-dev deb; link it so `import system.supervisor.*` resolves.
     if supervisor_pkg.exists():
         _link("system/supervisor", supervisor_pkg)
-    # The runtime .art package: a service/supervisor .art imports `platform.runtime.*`
-    # (ChildControlIf, TraceControlPush, LogLevelPush), which the resolver maps to
-    # platform/runtime/package.art. Link it to the resolved runtime spec.
-    _link("platform/runtime/package.art", runtime_art)
     # --with-services: link the framework's ARA service FCs so `cluster Services`
     # resolves + the rig can import services.manifest.{service,executor}.
     if with_services:
@@ -1940,8 +1939,8 @@ _INIT_README = '''\
 # @NAME@ — Theia consuming workspace
 
 Built against a SIBLING Theia source checkout (THEIA_ROOT=@THEIA_ROOT@),
-not vendored. system/runtime + system/services + system/supervisor are
-symlinks into it.
+not vendored. system/platform/runtime + system/supervisor (+ system/services
+with --with-services) are symlinks into it.
 
 ```sh
 source @THEIA_ROOT@/setup.sh     # exports THEIA_ROOT, puts `theia` on PATH

@@ -5,7 +5,7 @@
 ;; Version: 0.1.0
 ;; Package-Requires: ((emacs "27.1") (lsp-mode "8.0"))
 ;; Keywords: languages, tools
-;; URL: https://cicd.skyway.porsche.com/PG50/pero_theia
+;; URL: https://github.com/perotheia/theia
 
 ;;; Commentary:
 

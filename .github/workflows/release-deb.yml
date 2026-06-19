@@ -24,15 +24,15 @@ jobs:
     runs-on: ubuntu-${{ matrix.ubuntu }}
     steps:
       - uses: actions/checkout@v4
-        # NOT submodules:recursive — .gitmodules points artheia/rf-theia at
-        # GitLab (the origin), unreachable from GitHub CI. Re-point to the
-        # GitHub mirror + init below.
+        # NOT submodules:recursive — .gitmodules uses SSH URLs
+        # (git@github.com:perotheia/…), which the CI runner can't auth for an
+        # unauthenticated checkout. Re-point to HTTPS + init below.
 
-      - name: Check out submodules from the GitHub mirror
+      - name: Check out submodules over HTTPS
         run: |
           # artheia + rf-theia (theia release builds both wheels for the
-          # framework deb) + etcd (the per service links it). Re-point the
-          # GitLab-origin submodules at the public GitHub mirror.
+          # framework deb) + etcd (the per service links it). Override the
+          # SSH submodule URLs with their public HTTPS equivalents.
           git config submodule.artheia.url https://github.com/perotheia/artheia.git
           git config submodule.rf-theia.url https://github.com/perotheia/rf-theia.git
           git submodule update --init artheia rf-theia third_party/etcd-cpp-apiv3

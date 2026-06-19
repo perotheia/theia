@@ -94,8 +94,8 @@ build:libpsp:
   script:
     - cd workspace
     # PSP requires code generation first
-    - cd mlbevo_gen2_cmp_psp && bash generate.sh && cd ..
-    - bazel build //platforms/mlbevo_gen2_cmp_psp:psp
+    - cd vehicle_gen2_cmp_psp && bash generate.sh && cd ..
+    - bazel build //platforms/vehicle_gen2_cmp_psp:psp
         --config=linux --config=ci
 
 # ── Stage: build_firmware ──────────────────────────────────────────────────
@@ -144,8 +144,8 @@ package:psp:
   <<: *setup_workspace
   script:
     - cd workspace
-    - bazel build //platforms/mlbevo_gen2_cmp_psp:psp_tar --config=linux --config=ci
+    - bazel build //platforms/vehicle_gen2_cmp_psp:psp_tar --config=linux --config=ci
   artifacts:
     name: "psp-${CI_COMMIT_SHORT_SHA}"
-    paths: [workspace/bazel-bin/mlbevo_gen2_cmp_psp/psp_tar.tar.gz]
+    paths: [workspace/bazel-bin/vehicle_gen2_cmp_psp/psp_tar.tar.gz]
     expire_in: 30 days

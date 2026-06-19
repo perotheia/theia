@@ -149,7 +149,7 @@ def main(argv: list[str]) -> int:
             f"Architecture: {arch}\n"
             "Section: apps\n"
             "Priority: optional\n"
-            "Maintainer: Theia <info@robofortis.com>\n"
+            "Maintainer: Theia <theia@example.com>\n"
         )
         if args.format == "deb":
             installed_kb = _du_kb(data)

@@ -69,11 +69,11 @@ _PSP_COMMON_ATTRS = {
     "dbc_specs": attr.label_keyed_string_dict(
         allow_files = [".dbc"],
         mandatory   = True,
-        doc = "Maps each DBC file label to its bus name string, e.g. {'//mlbevo_gen2_cmp_psp/config/dbc/KCAN.dbc': 'kcan'}.",
+        doc = "Maps each DBC file label to its bus name string, e.g. {'//vehicle_gen2_cmp_psp/config/dbc/KCAN.dbc': 'kcan'}.",
     ),
     "namespace_fr": attr.string(
         mandatory = True,
-        doc = "FlexRay namespace prefix (e.g. 'mlbevo_gen2').",
+        doc = "FlexRay namespace prefix (e.g. 'vehicle_gen2').",
     ),
 }
 

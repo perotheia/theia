@@ -118,7 +118,7 @@ pkg_deb(
     package = "theia-{vehicle}-{machine}",
     version = "1.0.0",
     architecture = "{arch}",
-    maintainer = "Theia <info@robofortis.com>",
+    maintainer = "Theia <theia@example.com>",
     description = "Theia admin console for vehicle {vehicle} (rig {machine}). " +
                   "Installs supervisor-gui + machines.json; the operator " +
                   "connects to TARGET machines listed in /etc/theia/machines.json.",

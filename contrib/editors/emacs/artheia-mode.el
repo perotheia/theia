@@ -1,7 +1,7 @@
 ;;; artheia-mode.el --- Major mode + LSP client for the artheia .art DSL  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2026  Theia / RoboFortis
-;; Author: Theia <theia@robofortis.com>
+;; Copyright (C) 2026  Theia Project
+;; Author: Theia <theia@example.com>
 ;; Version: 0.1.0
 ;; Package-Requires: ((emacs "27.1") (lsp-mode "8.0"))
 ;; Keywords: languages, tools

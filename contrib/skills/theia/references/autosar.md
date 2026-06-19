@@ -29,7 +29,7 @@ import + gen-autosar-system run.
 
 ## Commands
 
-Assume `PATH="$PWD/.venv/bin:$PATH"`, `AR=mlbevo_gen2` and `PSP=vendor/autosar/$AR`.
+Assume `PATH="$PWD/.venv/bin:$PATH"`, `AR=vehicle_gen2` and `PSP=vendor/autosar/$AR`.
 
 ```sh
 # CAN — fast (seconds)
@@ -37,7 +37,7 @@ artheia import-dbc  --dbc $PSP/config/dbc/*KCAN*.dbc --bus kcan \
     --out $PSP/system/$AR/kcan --package system.autosar.$AR
 
 # FlexRay — slow (minutes on a real FIBEX); --no-validate skips the round-trip
-artheia import-fibex --fibex $PSP/config/MLBevo_Gen2_Fx_Cluster_*.xml --bus flexray \
+artheia import-fibex --fibex $PSP/config/Vehicle_Gen2_Fx_Cluster_*.xml --bus flexray \
     --out $PSP/system/$AR/flexray --package system.autosar.$AR \
     --no-validate
 

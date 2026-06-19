@@ -51,7 +51,7 @@ Version: $VERSION
 Architecture: amd64
 Section: utils
 Priority: optional
-Maintainer: Theia <theia@robofortis.com>
+Maintainer: Theia <theia@example.com>
 Installed-Size: $installed_kb
 Depends: theia-services, python3
 Description: Theia operator tools — the supervisor GUI (wxWidgets) + rtdb.

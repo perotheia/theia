@@ -1250,7 +1250,7 @@ def _build_framework_deb(out_dir: Path, version: str = "0.1.0") -> int:
         "Architecture: all\n"
         "Section: devel\n"
         "Priority: optional\n"
-        "Maintainer: Theia <theia@robofortis.com>\n"
+        "Maintainer: Theia <theia@example.com>\n"
         f"Installed-Size: {installed_kb}\n"
         "Depends: python3\n"
         "Description: Theia framework — artheia/rf-theia wheels + bazel rules + CLIs\n")

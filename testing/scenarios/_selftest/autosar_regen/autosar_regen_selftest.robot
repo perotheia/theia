@@ -3,7 +3,7 @@ Documentation    Hermetic selftest of `artheia gen-autosar-system`
 ...              regen consistency.
 ...
 ...              The vendor AUTOSAR PSP repo
-...              (vendor/autosar/mlbevo_gen2_cmp_psp/) is regenerated
+...              (vendor/autosar/vehicle_gen2_cmp_psp/) is regenerated
 ...              from external DBC + FIBEX exports by three generators:
 ...                gen-autosar-system  — emits the per-bus .art
 ...                gen-can-codec       — emits .proto + .c encoders
@@ -14,9 +14,9 @@ Documentation    Hermetic selftest of `artheia gen-autosar-system`
 ...              switched to the `system.*` namespace (see
 ...              docs/tasks/TODO/autosar-regen-package-names.md), the
 ...              emitted package name went from
-...                `autosar.mlbevo_gen2_cmp_psp.system`
+...                `autosar.vehicle_gen2_cmp_psp.system`
 ...              to
-...                `system.autosar.mlbevo_gen2`
+...                `system.autosar.vehicle_gen2`
 ...              — and the CLI help example fell out of date for a
 ...              while. This selftest catches regressions in the
 ...              `--package` plumbing and asserts the generator stays
@@ -40,15 +40,15 @@ ${TMPDIR}    %{TMPDIR=/tmp}
 
 *** Test Cases ***
 Package Decl Reflects --package Flag
-    [Documentation]    The `--package system.autosar.mlbevo_gen2` flag
+    [Documentation]    The `--package system.autosar.vehicle_gen2` flag
     ...                must land verbatim in the emitted .art file's
     ...                `package <name>` line. If this fails the
     ...                generator stopped honoring the flag.
     [Tags]    autosar-regen    hermetic    selftest    priority-high
 
-    ${path}=    Run Gen Autosar System    out1.art    system.autosar.mlbevo_gen2
+    ${path}=    Run Gen Autosar System    out1.art    system.autosar.vehicle_gen2
     ${pkg}=     Read Package Decl From Art    ${path}
-    Should Be Equal As Strings    ${pkg}    system.autosar.mlbevo_gen2
+    Should Be Equal As Strings    ${pkg}    system.autosar.vehicle_gen2
 
 
 Different --package Produces Different Decl
@@ -71,8 +71,8 @@ Regen Is Byte Deterministic
     ...                timestamp.
     [Tags]    autosar-regen    hermetic    selftest    priority-high
 
-    ${a}=    Run Gen Autosar System    determinism_a.art    system.autosar.mlbevo_gen2
-    ${b}=    Run Gen Autosar System    determinism_b.art    system.autosar.mlbevo_gen2
+    ${a}=    Run Gen Autosar System    determinism_a.art    system.autosar.vehicle_gen2
+    ${b}=    Run Gen Autosar System    determinism_b.art    system.autosar.vehicle_gen2
     Files Are Byte Identical    ${a}    ${b}
 
 
@@ -83,6 +83,6 @@ Catalog PDUs Flow Into Interface Decls
     ...                generator regressions where messages drop.
     [Tags]    autosar-regen    hermetic    selftest
 
-    ${path}=    Run Gen Autosar System    pdu_check.art    system.autosar.mlbevo_gen2
+    ${path}=    Run Gen Autosar System    pdu_check.art    system.autosar.vehicle_gen2
     Art File Forward Declares Pdu    ${path}    FOO_01
     Art File Forward Declares Pdu    ${path}    ALPHA_01

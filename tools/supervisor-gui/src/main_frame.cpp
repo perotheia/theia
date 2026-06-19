@@ -676,7 +676,7 @@ void MainFrame::on_menu(wxCommandEvent& evt) {
                 "Connects to one or more target machines via services/com\n"
                 "(gRPC); the Table Viewer reads per's config store over\n"
                 "com→per (no direct etcd client).");
-            info.SetCopyright("(C) 2026 — Theia / robofortis.com");
+            info.SetCopyright("(C) 2026 — Theia Project");
             wxAboutBox(info, this);
             return;
         }

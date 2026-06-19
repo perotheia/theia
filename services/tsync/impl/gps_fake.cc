@@ -21,7 +21,7 @@ GnssFix GpsBackend::poll(const std::string& /*dev*/) {
         std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::system_clock::now().time_since_epoch())
             .count());
-    // A plausible fixed position (Porsche Weissach dev rig). Not used for time;
+    // A plausible fixed position (a dev rig). Not used for time;
     // present so the Position API has something to serve.
     f.lat = 48.8369;
     f.lon = 8.9706;

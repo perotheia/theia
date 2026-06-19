@@ -35,7 +35,7 @@ Version: $VERSION
 Architecture: arm64
 Section: misc
 Priority: optional
-Maintainer: Theia <theia@robofortis.com>
+Maintainer: Theia <theia@example.com>
 Installed-Size: $installed_kb
 Depends: libc6 (>= 2.34), libstdc++6 (>= 12)
 Description: Theia runtime: the supervisor binary (run-time fabric) — Raspberry Pi 4 (aarch64).

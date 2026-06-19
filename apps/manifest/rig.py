@@ -1,42 +1,35 @@
-"""Demo deployment manifest — three-process layout for ``Demo3Way``.
+"""Demo deployment manifest — single-machine ``Demo3Way`` rig.
 
-Composition reference (``apps/system/apps/package.art``):
+A worked example of the structured manifest DSL. Read it top-to-bottom:
+each section builds on the one above.
 
-==============  ======================================  ==============
-process binary  hosted prototypes (.art)                start_cmd
-==============  ======================================  ==============
-``apps_p1``     counter_p1, driver_p1, ticker_p1        ``apps/build/p1_main``
-``apps_p2``     observer_p2                             ``apps/build/p2_main``
-``apps_p3``     incrementer_p3                          ``apps/build/p3_main``
-==============  ======================================  ==============
+    1. INPUTS      machines, platform-fabric components, and the
+                   generated app binaries/processes (from
+                   ``apps/manifest/applications.py``).
+    2. FC BRIDGE   ``DemoRig`` — the legacy ``Layer``/``merge_layers``
+                   path. It is kept for one concrete reason: the artheia
+                   FC loader only synthesises the per-FC ServiceManifests
+                   while materialising a ``Rig``. The DSL spec below
+                   reuses those. We pin each FC + Process to its host here.
+    3. THE SPEC    ``DemoSoftware`` — the structured-DSL
+                   :class:`SoftwareSpecification`, composed onto the
+                   platform base with ``ServicesSoftware.mappend(...)``.
+                   This is the part to copy when writing a new rig.
+    4. PER-MACHINE ``CentralSoftware`` / ``CentralRig`` — the spec sliced
+                   to exactly what one TARGET machine installs.
 
-Each process binary boots a :class:`TimerService`, a :class:`TipcMux`,
-and the LocalRefs of its hosted prototypes; cross-process traffic
-flows through RemoteRefs registered against the mux's listening
-TIPC service address.
+The DSL in one sentence: a :class:`SoftwareSpecification` is a record of
+set-typed fields; ``base.mappend(layer)`` merges ``layer`` over ``base``
+field-by-field, and a field holding ``{Append(x), Remove(y)}`` edits the
+base's set rather than replacing it. See :class:`SoftwareSpecification`
+for the field reference.
 
-This file is being migrated from the legacy :class:`Layer` shape
-(parallel ``add_machines`` / ``add_components`` / ``add_executions``
-lists) to the structured-DSL :class:`SoftwareSpecification` shape
-(set-typed fields with inline :class:`Append` / :class:`Remove`
-transforms). See ``docs/tasks/PROGRESS/artheia-dsl-recovery.md`` for
-the recovery plan.
+Exports (the module-level names other code depends on):
 
-What's exported:
-
-- ``DemoSoftware`` (NEW) — the :class:`SoftwareSpecification` for the
-  rig. Vehicle layers compose against it via ``.mappend(...)``.
-- ``DemoRig`` (LEGACY) — the materialized :class:`Rig` for the CLI's
-  ``artheia executor emit`` / ``artheia gui emit`` (both still
-  ``isinstance(x, Rig)``-check on the export).
-- ``DemoLayer`` (LEGACY) — the old :class:`Layer`, kept for any
-  importer that still needs it.
-
-``DemoRig`` is produced by composing ``PlatformBase.mappend(DemoLayer)``
-through the legacy path, then ``DemoSoftware.to_rig()`` reconciles to
-the same shape. Once the CLI switches to walk
-:class:`SoftwareSpecification` directly (phase 4), the legacy exports
-go away.
+    DemoSoftware      the full spec — CLI ranks ``*Software`` attrs by name
+    CentralSoftware   per-machine spec (central only)
+    CentralRig        materialised single-machine Rig for ``executor emit``
+    DemoRig, DemoLayer  legacy bridge, re-exported via apps.manifest
 """
 
 from __future__ import annotations
@@ -60,42 +53,29 @@ from artheia.manifest import (
     VehicleIdentity,
     merge_layers,
 )
-from artheia.manifest.application import (
-    BuildTypeEnum,
-    Executable,
-    ExecutionStateReportingBehaviorEnum,
-    RootSwComponentPrototype,
-)
-from artheia.manifest.execution import (
-    Process,
-    SchedulingPolicy,
-    StartupConfig,
-    StateDependentStartupConfig,
-    TerminationBehaviorEnum,
-)
-from artheia.manifest.machine import CpuResource, IpEndpoint
+from artheia.manifest.machine import CpuResource, IpEndpoint, ProcessToMachineMapping
 from artheia.manifest.platform import PlatformBase
 from artheia.manifest.rig import SoftwareSpecification
 from artheia.manifest.applicative import Append, SetTransformTypes
 from artheia.manifest.layer import Override
 from services.manifest.service import ServicesSoftware
 
-# ---------------------------------------------------------------------------
-# Demo machines.
-#
-# Two-host topology designed for the Docker-compose deployment under
-# `deploy/`:
-#
-#   central — services (18 FCs). The GUI connects here for
-#             supervisor introspection.
-#   compute — demo binaries (3 process binaries materializing
-#             Demo3Way's per-process compositions).
-#
-# Single-host setups (legacy) can keep collapsing both to one machine
-# by overriding the host_machine bindings in their own SoftwareSpec
-# layer. The default below is the multi-host shape.
-# ---------------------------------------------------------------------------
+# The generated manifest for ``cluster Applications`` — one SwComponent /
+# Executable / Process per Demo3Way member, paths derived from the .art.
+# Regenerated by ``artheia gen-manifest``; never hand-edited.
+from apps.manifest.applications import (
+    APPLICATIONS_COMPONENTS as _APP_COMPONENTS,
+    APPLICATIONS_PROCESSES as DEMO_PROCESSES,
+    APPLICATIONS_SHORTS as _APP_SHORTS,
+)
 
+
+# ===========================================================================
+# 1. INPUTS — machines and components
+# ===========================================================================
+
+# The supervisor daemon, deployed as a Theia opkg with a systemd unit.
+# (The gateway opkg lives in the consuming gataway_ws, not standalone theia.)
 _PLATFORM_OPKG_ARTIFACTS = [
     OpkgArtifact(
         name="supervisor",
@@ -103,26 +83,21 @@ _PLATFORM_OPKG_ARTIFACTS = [
         target_dir="/opt/theia/supervisor/",
         systemd_unit="/etc/systemd/system/theia-supervisor.service",
     ),
-    # gateway opkg lives in gataway_ws, not standalone theia.git.
 ]
 
+# This rig is single-machine: everything lands on ``central``. The
+# multi-host (central + compute) split lives in apps/manifest/zonal_rig.py.
 CentralHost = MachineManifest(
     name="central",
     hardware=HardwareResource(
         cpu=CpuResource(architecture=CpuArchitecture.X86_64),
     ),
-    # services/com gRPC endpoint — the GUI connects here. In the
-    # Docker scenario this is the bridge-IP of the `central` container
-    # on the shared network. Loopback default keeps single-host bring-
-    # up working.
-    com_endpoint=IpEndpoint(
-        address=IPv4Address("127.0.0.1"),
-        port=7700,
-    ),
-    # Provisioning: etcd from Ubuntu apt; supervisor as a Theia opkg
-    # under /opt/theia/ with a systemd unit. Application .ipks (the FCs,
-    # the demo binaries) land via the orchestration phase reading
-    # application.yaml — not listed here.
+    # services/com gRPC endpoint the GUI connects to. Loopback keeps
+    # single-host bring-up working; the Docker scenario overrides it with
+    # the container's bridge IP.
+    com_endpoint=IpEndpoint(address=IPv4Address("127.0.0.1"), port=7700),
+    # etcd from apt; supervisor as a Theia opkg. Application .ipks (FCs,
+    # demo binaries) are staged later from application.yaml, not here.
     os_packages=[
         OsPackage(name="etcd-server", source="apt"),
         OsPackage(name="libsystemd0", source="apt"),
@@ -130,48 +105,12 @@ CentralHost = MachineManifest(
     opkg_artifacts=list(_PLATFORM_OPKG_ARTIFACTS),
 )
 
-# (ComputeHost + AdminHost moved to apps/manifest/zonal_rig.py — this rig is
-# single-machine: central only.)
-
-# Legacy alias for any caller that still references DemoHost (the
-# original single-host name). Points at central — the services side
-# is what most existing tests assert against.
+# Back-compat alias for callers/tests that still say DemoHost.
 DemoHost = CentralHost
 
-# ---------------------------------------------------------------------------
-# Process binaries — DERIVED from the .art, not hand-listed.
-# ---------------------------------------------------------------------------
-#
-# `apps/manifest/applications.py` is GENERATED from `cluster Applications`
-# in apps/system/apps/component.art by `artheia gen-manifest`. It
-# carries one SwComponent / Executable / Process per cluster member, with
-# every path derived from the (base_dir=apps, ident) directory convention
-# (app dir apps/<ident>, bazel //apps/<ident>:<ident>, start_cmd bin/<ident>)
-# and each Process.nodes set from the composition's hosted prototypes.
-#
-# rig.py consumes those directly — the hand-written 5-tuple table is gone.
-# This module keeps only the deploy concerns: machines, host pinning,
-# PTM, and the app_sup override.
-
-from apps.manifest.applications import (  # noqa: E402
-    APPLICATIONS_COMPONENTS as _APP_COMPONENTS,
-    APPLICATIONS_EXECUTABLES as DEMO_EXECUTABLES,
-    APPLICATIONS_PROCESSES as DEMO_PROCESSES,
-    APPLICATIONS_SHORTS as _APP_SHORTS,
-)
-
-
-# ---------------------------------------------------------------------------
-# Platform-fabric SwComponents — these are the daemons referenced by
-# `cluster Platform { composition Supervisor sup }` in system/system.art.
-# They live alongside the FCs (`cluster Services`) and the demo binaries
-# (`cluster Demo3Way`) but are functionally distinct: they ARE the platform.
-# (The gateway daemon, formerly here, moved to gataway_ws.)
-#
-# Matches the opkg artifacts declared on each TARGET machine
-# (CentralHost / ComputeHost) — same bazel_target stems.
-# ---------------------------------------------------------------------------
-
+# Platform-fabric components: the daemons that ARE the platform (from
+# ``cluster Platform`` in system.art), distinct from the FCs and the demo
+# binaries. Each names an opkg artifact on its target machine.
 _PLATFORM_FABRIC_COMPONENTS: list[SwComponent] = [
     SwComponent(
         name="supervisor",
@@ -180,39 +119,35 @@ _PLATFORM_FABRIC_COMPONENTS: list[SwComponent] = [
         art_node="system.supervisor/Supervisor",
         bazel_buildable=True,
     ),
-    # NB: the gateway is NOT part of standalone theia.git — it lives in a
-    # consuming workspace (gataway_ws), whose rig adds the gateway SwComponent
-    # + its execution process + the drv_sup Append. See
-    # docs/tasks/TODO/repo-split-standalone-theia.md.
+    # The gateway SwComponent + its process + drv_sup Append are added by
+    # the consuming gataway_ws rig, not here (theia.git is standalone).
 ]
 
-# DEMO_BINARIES = the demo per-process binaries (compute-bound AAs),
-# straight from the generated applications.py. Kept separate from
-# _PLATFORM_FABRIC_COMPONENTS so the structured-DSL AAs below can each
-# carry only what belongs to them.
+# The Demo3Way per-process binaries (compute-bound AAs), straight from the
+# generated applications.py.
 DEMO_BINARIES = list(_APP_COMPONENTS)
 
-# DEMO_COMPONENTS (legacy-path-only) = demo binaries + platform fabric.
-# The legacy merge_layers flow collapses everything into one application
-# bag; the structured-DSL flow splits via _ComputeApp / _PlatformAppOverlay
-# below — and uses DEMO_BINARIES / _PLATFORM_FABRIC_COMPONENTS directly,
-# not this combined list.
+# Legacy-path-only: the merge_layers flow wants one combined component bag.
+# The DSL path below instead keeps fabric and binaries separate so each
+# ApplicationManifest carries only what belongs to it.
 DEMO_COMPONENTS = DEMO_BINARIES + _PLATFORM_FABRIC_COMPONENTS
 
-# DEMO_EXECUTABLES / DEMO_PROCESSES are imported above from
-# applications.py — no local builders needed.
-
-
-# ---------------------------------------------------------------------------
-# Legacy path — DemoLayer + merge_layers(PlatformBase, [DemoLayer]) → DemoRig.
-# Kept until phase 4 swaps the CLI to walk SoftwareSpecification.
-# ---------------------------------------------------------------------------
-
-# app_sup ships empty in the platform base (apps belong to the rig).
-# This rig attaches its three demo binaries as app_sup's children —
-# each resolves through its Process (DEMO_PROCESSES, with a real
-# start_cmd) exactly like an FC leaf resolves through its Process.
+# app_sup ships empty in the platform base (apps belong to the rig); this
+# rig attaches its demo binaries as app_sup's children. Each child resolves
+# through its Process (a real start_cmd) just like an FC leaf does.
 _APP_SUP_CHILDREN = list(_APP_SHORTS)
+
+
+# ===========================================================================
+# 2. FC BRIDGE — DemoRig (legacy path), the source of FC service manifests
+# ===========================================================================
+#
+# Why this still exists: the artheia FC loader synthesises one
+# ServiceManifest (18 FC ServiceInstances) only as a side effect of
+# materialising a Rig through merge_layers. The structured-DSL spec in
+# section 3 reuses those manifests rather than re-deriving them. Once the
+# loader can emit service manifests for a SoftwareSpecification directly,
+# this whole section disappears.
 
 DemoLayer = Layer(
     name="apps",
@@ -220,8 +155,8 @@ DemoLayer = Layer(
     add_machines=[DemoHost],
     add_components=DEMO_COMPONENTS,
     add_executions=DEMO_PROCESSES,
-    # Override (not Append) so we REPLACE app_sup's empty children list
-    # with the demo apps — Override does replace(base, **patch).
+    # Override (not Append) — REPLACE app_sup's empty children list with the
+    # demo apps. Override does dataclasses.replace(base, **patch).
     override_supervisors=[
         Override(identity="app_sup", patch={"children": list(_APP_SUP_CHILDREN)}),
     ],
@@ -229,9 +164,9 @@ DemoLayer = Layer(
 
 DemoRig: Rig = merge_layers(PlatformBase, [DemoLayer])
 
-# Bind the platform application to the demo host. (One application bag
-# for the whole rig — services + demo binaries; the supervisor splits
-# them into the apps subtree by bazel_target prefix.)
+# Bind the platform application to the host. One application bag for the
+# whole legacy rig; the supervisor splits it into the apps subtree by
+# bazel_target prefix.
 if DemoRig.applications:
     DemoRig.applications[0] = ApplicationManifest(
         name=DemoRig.applications[0].name,
@@ -239,129 +174,54 @@ if DemoRig.applications:
         components=DemoRig.applications[0].components,
     )
 
-# ---------------------------------------------------------------------------
-# Pin each FC's ServiceInstance to its host machine.
-#
-# The artheia FC loader synthesises one ServiceInstance per FC with
-# `remote_machine=""`. That empty value triggers the dist_manifest
-# emitter's loose-mode fallback (include-everywhere), which is wrong
-# in a multi-machine rig — e.g. shwa is compute-node-only because the
-# SHWA daemon reads nvidia-smi on the compute box.
-#
-# Pinning rule for the demo:
-#   - shwa → compute_host  (the only compute-pinned FC)
-#   - everything else → central  (platform + control-plane FCs)
-#
-# This drives the strict-mode filter in dist_manifest, so
-# central/service.yaml no longer includes shwa, and
-# compute_host/service.yaml contains shwa alone.
-# ---------------------------------------------------------------------------
-
-# Single-machine rig: every FC lands on central. (The 2-machine split that
-# pins shwa → compute lives in apps/manifest/zonal_rig.py.)
-_FC_HOST_MACHINE: dict[str, str] = {}
-_DEFAULT_FC_HOST_MACHINE = CentralHost.name
-
+# Pin each FC's ServiceInstance to its host. The loader leaves
+# remote_machine="", which makes the dist_manifest emitter fall back to
+# include-everywhere — wrong for a multi-machine rig. Single-machine here,
+# so every FC pins to central. (The shwa→compute pin lives in zonal_rig.)
 for _sm in DemoRig.service_manifests:
     _sm.instances = [
-        dataclasses.replace(
-            _i,
-            remote_machine=_FC_HOST_MACHINE.get(
-                _i.name, _DEFAULT_FC_HOST_MACHINE
-            ),
-        )
+        dataclasses.replace(_i, remote_machine=CentralHost.name)
         for _i in _sm.instances
     ]
 
-# ---------------------------------------------------------------------------
-# Pin each Process to its host Machine via ProcessToMachineMapping.
-#
-# AUTOSAR §9.4 PTM is the spec-aligned channel for "this Process runs
-# on this Machine." Used by the supervisor-tree slicer in
-# `artheia.manifest.supervisor.build_supervisor_tree(rig, machine=)` —
-# overrides the AA-host_machine fallback when both signals apply.
-#
-# Today's rig has zero PTM entries (the slicer falls back to AA
-# membership). That's wrong for these three:
-#
-#   shwa       — AA says central (it's in platform_app), reality is
-#                compute (the SHWA daemon reads nvidia-smi there).
-#   supervisor — AA says compute (it's in DEMO_COMPONENTS, which
-#                landed in compute_app), reality is central. Every
-#                TARGET runs its own supervisor binary — the
-#                "supervisor" SwComponent here names the .ipk artifact
-#                only; central is the canonical host of record.
-#
-# PTM is **sparse-positive** — it lists only deviations from the AA
-# default. Unmapped Processes fall through to AA host_machine.
-# ---------------------------------------------------------------------------
-
-from artheia.manifest.machine import ProcessToMachineMapping  # noqa: E402
-
-_PROCESS_HOST_OVERRIDES: dict[str, str] = {
-    # Single-machine: everything on central. (shwa→compute pin is in zonal_rig.)
-    "supervisor": CentralHost.name,
-}
-
+# Pin Processes to machines via AUTOSAR §9.4 ProcessToMachineMapping. PTM
+# is sparse-positive: list only deviations from the AA-host_machine default;
+# unmapped Processes fall through. The supervisor-tree slicer reads these.
+# Here only ``supervisor`` needs pinning (every machine runs its own
+# supervisor binary; central is the host of record).
 _PTM_ENTRIES = [
-    ProcessToMachineMapping(
-        name=f"ptm_{_proc}",
-        process=_proc,
-        machine=_mach,
-    )
-    for _proc, _mach in _PROCESS_HOST_OVERRIDES.items()
+    ProcessToMachineMapping(name=f"ptm_{_proc}", process=_proc, machine=_mach)
+    for _proc, _mach in {"supervisor": CentralHost.name}.items()
 ]
+DemoRig.process_to_machine_mappings = (
+    list(DemoRig.process_to_machine_mappings) + _PTM_ENTRIES
+)
 
-DemoRig.process_to_machine_mappings = list(
-    DemoRig.process_to_machine_mappings
-) + _PTM_ENTRIES
 
-
-# ---------------------------------------------------------------------------
-# Structured-DSL path — DemoSoftware = ServicesSoftware.mappend(DemoSpecLayer).
-#
-# Mirrors the mosaic raj_syscomp.py pattern:
-#
-#     RajSoftware = MacanSoftware.mappend(RajLayer).mappend(...)
-#
-# Here the chain is:
+# ===========================================================================
+# 3. THE SPEC — DemoSoftware (structured DSL) ← copy this for a new rig
+# ===========================================================================
 #
 #     DemoSoftware = ServicesSoftware.mappend(DemoSpecLayer)
 #
-# DemoSpecLayer carries the demo-specific deltas (vehicle identity,
-# the demo_host machine, the three demo process binaries). ServicesSoftware
-# is the platform-services base. The result is a fully-merged spec
-# that .to_rig()s to the same shape as the legacy DemoRig above.
-# ---------------------------------------------------------------------------
-
-# Two ApplicationManifests, each bound to its own machine:
+# ServicesSoftware is the platform-services base (18 FCs). DemoSpecLayer is
+# the demo-specific delta. mappend merges the delta over the base
+# field-by-field; same-identity Appends (e.g. platform_app) union into the
+# base's element rather than replacing it.
 #
-#   platform_app on central — services (18 FCs from ServicesSoftware).
-#                              Same-identity Append merges into
-#                              ServicesSoftware's platform_app: host
-#                              binding overrides "" → central,
-#                              components stay as the 18 FCs (the
-#                              demo binaries are routed to compute_app
-#                              via the next Append, NOT here).
-#   compute_app on compute — the three demo binaries (Demo3Way's
-#                             per-process compositions).
-#
-# This split is what makes `bazel build @rig_apps//central:image`
-# and `@rig_apps//compute_host:image` produce two distinct .ipks for
-# Docker deployment under `deploy/`.
+# Two applications, each bound to a machine:
+#   platform_app   the 18 FCs (from the base) + the platform fabric.
+#   central_demo_app   the three demo binaries.
+# This split is what lets Bazel emit one .ipk image per app/machine.
 
 _PlatformAppOverlay = ApplicationManifest(
     name="platform_app",
     host_machine=CentralHost.name,
-    # The 18 FC components come from ServicesSoftware (the platform base);
-    # the mappend merges them in by same-identity (name="platform_app").
-    # We add the platform-fabric components here — supervisor — because
-    # they belong on central and platform_app is its AA.
+    # FCs arrive from the base via same-identity merge; we contribute the
+    # platform-fabric components (supervisor), which belong on central.
     components=list(_PLATFORM_FABRIC_COMPONENTS),
 )
 
-# Single-machine: the demo per-process binaries also land on central
-# (no separate compute app). The 2-machine split lives in zonal_rig.py.
 _CentralDemoApp = ApplicationManifest(
     name="central_demo_app",
     host_machine=CentralHost.name,
@@ -370,38 +230,39 @@ _CentralDemoApp = ApplicationManifest(
 
 DemoSpecLayer = SoftwareSpecification(
     vehicle=VehicleIdentity(name="apps", make="theia", model="gen_server-apps"),
+
+    # Add the host. (set[SetTransformTypes] cast keeps the type-checker
+    # happy: each field is "concrete set | set-of-edits | Empty".)
     machines=cast(set[SetTransformTypes], {
         Append(CentralHost),
     }),
+
+    # platform_app unions into the base's platform_app (same identity);
+    # central_demo_app is new.
     applications=cast(set[SetTransformTypes], {
         Append(_PlatformAppOverlay),
         Append(_CentralDemoApp),
     }),
+
+    # The demo Processes (with real start_cmds) join the base's FC processes.
     execution_manifests=cast(set[SetTransformTypes], {
         Append(p) for p in DEMO_PROCESSES
     }),
-    # Carry the pinned service_manifests from the legacy DemoRig
-    # (built via merge_layers above) into the structured-DSL output.
-    # The artheia loader synthesises one platform_services ServiceManifest
-    # with 18 FC instances; we already pinned each instance's
-    # remote_machine in the post-merge step above. Append them as a
-    # set transform so .mappend() picks them up.
+
+    # Reuse the host-pinned FC service manifests from section 2.
     service_manifests=cast(set[SetTransformTypes], {
         Append(_sm) for _sm in DemoRig.service_manifests
     }),
-    # Same trick for ProcessToMachineMapping: the PTM overrides we
-    # appended to DemoRig above drive the supervisor-tree slicer in
-    # `build_supervisor_tree(rig, machine=...)`. Carry them through
-    # to the structured-DSL path so DemoSoftware.to_rig() (the one
-    # CLI consumers prefer via *Software ranking) gets them too.
+
+    # Carry the §9.4 PTM overrides through so the supervisor-tree slicer
+    # sees them on the DSL path too.
     process_to_machine_mappings=cast(set[SetTransformTypes], {
         Append(_ptm) for _ptm in _PTM_ENTRIES
     }),
-    # Attach the demo apps to app_sup. ServicesSoftware ships app_sup with an
-    # empty children list; an Append of the same-identity node unions
-    # the demo leaves into it (set-transform list-merge), matching the
-    # legacy DemoLayer.override_supervisors above. Each child resolves
-    # through its DEMO_PROCESSES Process (with a real start_cmd).
+
+    # Attach the demo leaves to app_sup. The base ships app_sup with an
+    # empty children list; a same-identity Append unions the leaves in
+    # (matching DemoLayer.override_supervisors above).
     supervisors=cast(set[SetTransformTypes], {
         Append(SupervisorNode(
             name="app_sup",
@@ -414,29 +275,16 @@ DemoSpecLayer = SoftwareSpecification(
 DemoSoftware: SoftwareSpecification = ServicesSoftware.mappend(DemoSpecLayer)
 
 
-# ---------------------------------------------------------------------------
-# Per-machine split — CentralSoftware + ComputeSoftware.
+# ===========================================================================
+# 4. PER-MACHINE — CentralSoftware / CentralRig
+# ===========================================================================
 #
-# The demo deploys onto two TARGET machines with DIFFERENT software:
-#
-#   central — the platform services (minus shwa) + the demo apps p1/p2,
-#                  under the standard platform supervisor tree.
-#   compute_host — shwa (the GPU/accelerator FC) + the demo app p3, under a
-#                  small machine-local tree: root → srv_sup → shwa,
-#                                              root → app_sup → p3.
-#
-# We MOVE shwa + p3 to compute by partitioning the manifest lists in plain
-# Python — fresh per-machine lists, no Remove/Append transform dance. The
-# components/processes are shared dataclasses; we just reference them from
-# the right machine's list. Because each machine's SoftwareSpecification
-# carries ONLY its own components/processes, the "moved" element simply
-# isn't in the other machine's execution tree — the transform semantics
-# fall out of set membership, not an explicit Remove.
-#
-# Two squashes: CentralSoftware = ServicesSoftware.mappend(CentralLayer),
-# ComputeSoftware = ServicesSoftware.mappend(ComputeLayer). Each .to_rig()s
-# to a single-machine rig the CLI / Bazel emits per host.
-# ---------------------------------------------------------------------------
+# What one TARGET machine actually installs. Built STANDALONE (fresh
+# per-machine lists), NOT via mappend onto ServicesSoftware — mappend would
+# union with the base and drag the full FC set + platform root tree back in,
+# undoing any per-machine partition. Each machine's spec therefore carries
+# exactly its own slice, and "moving" an element to another machine is just
+# leaving it out of this list — no explicit Remove needed.
 
 from services.manifest.service import (  # noqa: E402
     SERVICES_COMPONENTS as _FC_COMPONENTS,
@@ -444,87 +292,53 @@ from services.manifest.service import (  # noqa: E402
     SUPERVISORS as _PLATFORM_SUPERVISORS,
 )
 
-# ---------------------------------------------------------------------------
-# LOCAL-DEV exclusion — this rig.py drives `theia install` (the on-HOST install/
-# stack a developer runs directly, not in a container). The FCs that touch the
-# HOST network or need root/Linux capabilities would disrupt the dev box (and
-# spam "Operation not permitted" without setcap), so they're dropped here:
-#
-#   nm   — Network-Management (rtnetlink: would read/touch host links/addrs)
-#   fw   — Firewall (nftables / cap_net_admin: would edit host nft ruleset)
-#   idsm — IDS-Manager (eBPF + NETLINK_SOCK_DIAG: needs CAP_BPF/root)
-#   osi  — OS-Interface (cgroup v2 + nvpmodel power: needs root/Orin)
-#   rds  — Raw-Data-Stream (iceoryx RoudiBroker: needs root + shared memory)
-#
-# The full set runs in the container/target rigs (test_rig.py / zonal_rig.py),
-# where caps + an isolated netns make them safe. Removing the component +
-# process here also prunes the supervisor leaf at build_supervisor_tree time
-# (the same "declared-but-not-running" slicing shwa uses on central).
+# Local-dev exclusion: this rig drives ``theia install`` (on-HOST, not
+# containerised). FCs that touch the host network or need root/caps would
+# disrupt a dev box, so they're dropped here. The full set runs in the
+# container/target rigs (test_rig.py / zonal_rig.py) where caps + a netns
+# make them safe. Dropping the component + process also prunes the
+# supervisor leaf at build_supervisor_tree time.
+#   nm, fw, idsm, osi, rds — host network / nftables / eBPF / cgroup / shm.
 LOCAL_EXCLUDE_FCS = {"nm", "fw", "idsm", "osi", "rds"}
 
-_central_fc_components = [
-    c for c in _FC_COMPONENTS if c.name not in LOCAL_EXCLUDE_FCS
-]
-_central_fc_processes = [
-    p for p in _FC_PROCESSES if p.name not in LOCAL_EXCLUDE_FCS
-]
-_central_app_components = list(DEMO_BINARIES)
-_central_app_processes = list(DEMO_PROCESSES)
-_central_app_shorts = [c.name for c in _central_app_components]
+_central_fc_components = [c for c in _FC_COMPONENTS if c.name not in LOCAL_EXCLUDE_FCS]
+_central_fc_processes = [p for p in _FC_PROCESSES if p.name not in LOCAL_EXCLUDE_FCS]
+_central_app_shorts = [c.name for c in DEMO_BINARIES]
 
-
-# --- central supervisor tree: platform tree, app_sup = central apps --------
-# Reuse the platform SUPERVISORS as-is (shwa is still *declared* under
-# pltf_sup, but with no shwa Process on central its leaf is sliced out at
-# build_supervisor_tree time — the honest "declared but not running here").
-# Only app_sup needs the central app list.
+# Reuse the platform supervisor tree; only app_sup needs this rig's apps.
+# (Excluded FCs stay declared under pltf_sup but, with no Process on
+# central, their leaves are sliced out at build time — honest "declared but
+# not running here", same mechanism shwa uses.)
 _central_supervisors = [
     dataclasses.replace(s, children=list(_central_app_shorts))
     if s.name == "app_sup" else s
     for s in _PLATFORM_SUPERVISORS
 ]
 
+# Drop the excluded FCs from the service manifests too, so the emitted
+# service.yaml / comm-matrix don't reference an FC this rig doesn't run.
+# Drop a manifest that ends up empty.
+_LOCAL_SERVICE_MANIFESTS = [
+    dataclasses.replace(_sm, instances=_kept)
+    for _sm in DemoRig.service_manifests
+    if (_kept := [i for i in _sm.instances if i.name not in LOCAL_EXCLUDE_FCS])
+]
+
 
 def _mk_app(name: str, host: str, components: list) -> ApplicationManifest:
-    return ApplicationManifest(
-        name=name, host_machine=host, components=list(components)
-    )
+    return ApplicationManifest(name=name, host_machine=host, components=list(components))
 
 
-# Filter the excluded FCs out of the service_manifests too, so the emitted
-# service.yaml / comm-matrix don't reference an FC this rig doesn't run. Each
-# ServiceManifest carries a list of ServiceInstances (one per FC); drop the
-# excluded ones, and drop a now-empty ServiceManifest entirely.
-def _filtered_service_manifests() -> list:
-    out = []
-    for _sm in DemoRig.service_manifests:
-        kept = [i for i in _sm.instances if i.name not in LOCAL_EXCLUDE_FCS]
-        if kept:
-            out.append(dataclasses.replace(_sm, instances=kept))
-    return out
-
-
-_LOCAL_SERVICE_MANIFESTS = _filtered_service_manifests()
-
-
-# Each per-machine spec is built STANDALONE (fresh lists), NOT combined
-# onto ServicesSoftware — mappend unions with the base, which would drag the
-# full 6-FC set + the platform root tree back in and undo the partition.
-# Building fresh means each machine carries exactly its own slice.
-
-# --- CentralSoftware --------------------------------------------------------
 CentralSoftware: SoftwareSpecification = SoftwareSpecification(
-    vehicle=VehicleIdentity(name="apps", make="theia",
-                            model="gen_server-apps"),
+    vehicle=VehicleIdentity(name="apps", make="theia", model="gen_server-apps"),
     machines=cast(set[SetTransformTypes], {Append(CentralHost)}),
     applications=cast(set[SetTransformTypes], {
         Append(_mk_app("platform_app", CentralHost.name,
                        _central_fc_components + _PLATFORM_FABRIC_COMPONENTS)),
-        Append(_mk_app("central_app", CentralHost.name,
-                       _central_app_components)),
+        Append(_mk_app("central_app", CentralHost.name, DEMO_BINARIES)),
     }),
     execution_manifests=cast(set[SetTransformTypes], {
-        Append(p) for p in (_central_fc_processes + _central_app_processes)
+        Append(p) for p in (_central_fc_processes + list(DEMO_PROCESSES))
     }),
     service_manifests=cast(set[SetTransformTypes], {
         Append(_sm) for _sm in _LOCAL_SERVICE_MANIFESTS
@@ -534,9 +348,6 @@ CentralSoftware: SoftwareSpecification = SoftwareSpecification(
     }),
 )
 
-
-# Materialized rig — what `artheia executor emit apps.manifest.rig --rig
-# CentralRig` consumes to write install/central/executor.json. This rig.py is
-# SINGLE-MACHINE (central only); the 2-machine central+compute split is in
-# apps/manifest/zonal_rig.py (ComputeRig + ComputeSoftware live there).
+# Materialised rig consumed by ``artheia executor emit apps.manifest.rig
+# --rig CentralRig`` to write install/central/executor.json.
 CentralRig: Rig = CentralSoftware.to_rig()

@@ -1,48 +1,81 @@
-# Static traefik file-provider routes for the OSS mender-server, mapping the API
-# paths to the service containers directly. up.sh copies this into the cloned
-# server's compose/config/traefik/ (which traefik loads via
-# --providers.file.directory). This makes routing independent of the broken
-# Docker-label discovery (see docker-compose.override.yml for why).
-#
-# Both surfaces are covered:
-#   /api/management/...  the FLEET side  (fleet.py: upload artifacts, deploy)
-#   /api/devices/...     the DEVICE side (the rig's mender client: auth, pull)
+# Static traefik file-routes for the OSS mender-server — replaces the broken
+# Docker-label discovery (Docker>=25 vs traefik old-client negotiation). Mirrors
+# the upstream compose labels: per-service routers + the SAME middlewares
+# (devauth/userauth forwardAuth + the inventory path rewrites). Covers both the
+# fleet (/api/management) and device (/api/devices) surfaces so the rig can enrol
+# AND pull.
 http:
+  middlewares:
+    devauth:
+      forwardAuth:
+        address: "http://deviceauth:8080/api/internal/v1/devauth/tokens/verify"
+        authResponseHeaders: "X-MEN-RequestID"
+    userauth:
+      forwardAuth:
+        address: "http://useradm:8080/api/internal/v1/useradm/auth/verify"
+        authResponseHeaders: "X-MEN-RequestID,X-MEN-RBAC-Inventory-Groups,X-MEN-RBAC-Deployments-Groups,X-MEN-RBAC-Releases-Tags"
+    inv-dev-rewrite:
+      replacepathregex:
+        regex: "^/api/devices/v1/inventory/(.*)"
+        replacement: "/api/0.1.0/attributes"
+    inv-mgmt-rewrite:
+      replacepathregex:
+        regex: "^/api/management/v1/inventory/(.*)"
+        replacement: "/api/0.1.0/$1"
+    dep-dev-v2to1:
+      replacepathregex:
+        regex: "^/api/devices/v2/deployments/(.*)"
+        replacement: "/api/devices/v1/deployments/$1"
   routers:
-    deploymentsMgmt:
-      rule: "PathPrefix(`/api/management/v1/deployments`) || PathPrefix(`/api/management/v2/deployments`)"
-      service: deployments
+    # ---- useradm (mgmt: login, PAT) ----
+    useradmMgmt:
+      rule: "PathPrefix(`/api/management/v1/useradm`)"
+      service: useradm
       entryPoints: [websecure]
       tls: {}
-    deploymentsDL:
-      rule: "PathPrefix(`/api/devices/v1/deployments`) || PathPrefix(`/api/devices/v2/deployments`)"
-      service: deployments
-      entryPoints: [websecure]
-      tls: {}
-    deviceauthMgmt:
+    # ---- deviceauth ----
+    devauthMgmt:
       rule: "PathPrefix(`/api/management/v1/devauth`) || PathPrefix(`/api/management/v2/devauth`)"
       service: deviceauth
       entryPoints: [websecure]
+      middlewares: [userauth]
       tls: {}
-    deviceauthDev:
+    devauthDev:
       rule: "PathPrefix(`/api/devices/v1/authentication`)"
       service: deviceauth
       entryPoints: [websecure]
       tls: {}
+    # ---- inventory (needs the path rewrite to /api/0.1.0) ----
     inventoryMgmt:
       rule: "PathPrefix(`/api/management/v1/inventory`)"
       service: inventory
       entryPoints: [websecure]
+      middlewares: [userauth, inv-mgmt-rewrite]
       tls: {}
     inventoryDev:
       rule: "PathPrefix(`/api/devices/v1/inventory`)"
       service: inventory
       entryPoints: [websecure]
+      middlewares: [devauth, inv-dev-rewrite]
       tls: {}
-    useradmMgmt:
-      rule: "PathPrefix(`/api/management/v1/useradm`)"
-      service: useradm
+    # ---- deployments (mgmt: artifacts/deployments; dev: pull + download) ----
+    deploymentsMgmt:
+      rule: "PathPrefix(`/api/management/v1/deployments`) || PathPrefix(`/api/management/v2/deployments`)"
+      service: deployments
       entryPoints: [websecure]
+      middlewares: [userauth]
+      tls: {}
+    deploymentsDev:
+      rule: "PathRegexp(`/api/devices/v1/deployments`)"
+      service: deployments
+      entryPoints: [websecure]
+      middlewares: [devauth]
+      tls: {}
+    deploymentsDevV2:
+      rule: "PathRegexp(`/api/devices/v[2-9]/deployments`)"
+      service: deployments
+      entryPoints: [websecure]
+      middlewares: [devauth, dep-dev-v2to1]
       tls: {}
     gui:
       rule: "PathPrefix(`/`)"
@@ -51,23 +84,13 @@ http:
       priority: 1
       tls: {}
   services:
-    deployments:
-      loadBalancer:
-        servers:
-          - url: "http://deployments:8080"
-    deviceauth:
-      loadBalancer:
-        servers:
-          - url: "http://deviceauth:8080"
-    inventory:
-      loadBalancer:
-        servers:
-          - url: "http://inventory:8080"
     useradm:
-      loadBalancer:
-        servers:
-          - url: "http://useradm:8080"
+      loadBalancer: {servers: [{url: "http://useradm:8080"}]}
+    deviceauth:
+      loadBalancer: {servers: [{url: "http://deviceauth:8080"}]}
+    inventory:
+      loadBalancer: {servers: [{url: "http://inventory:8080"}]}
+    deployments:
+      loadBalancer: {servers: [{url: "http://deployments:8080"}]}
     gui:
-      loadBalancer:
-        servers:
-          - url: "http://gui:8090"
+      loadBalancer: {servers: [{url: "http://gui:8090"}]}

@@ -56,21 +56,39 @@ deploy/vucm/fleet.py --insecure release 2.0.0 /opt/theia/releases/2.0.0 rig-lab
 targets hosted.mender.io's v2 layout. **Verified on dalek**: `upload` → 201 +
 artifact id, `artifacts` lists them (`2.0.0 ['theia-rig']`).
 
-## Remaining: enrol the rig (the device side)
+## Enrol a rig — DONE for rig1-central (confirmable in the UI)
 
-To run the full server→rig pull, the rig's mender client must enrol to this server
-and be accepted:
-1. Point the rig's mender at the server (`/etc/mender/mender.conf` ServerURL =
-   `https://<dalek>`, with the server CA) and `systemctl start mender-updated`.
-2. Accept the device (`fleet.py devices` shows pending → accept in the UI / device-
-   auth API), add it to a group.
-3. `fleet.py deploy <artifact> <group>` → the rig pulls → the `theia-release`
-   module lands the release-dir + symlink → `ArtifactInstall_Leave` → UCM.
+`enroll-rig.sh <rig-ssh> <server-ip>` does the whole device-side enrolment (proven
+on rig1-central → the dalek server): ship the server CA + trust it, hosts entry for
+the cert vhost, `mender.conf`, the identity/inventory scripts (Debian's mender-client
+ships none), bootstrap, then accept the pending device via the device-auth API.
 
-The on-device half (theia-release module + state-script + UCM) is already
-live-verified standalone on rig1-central (see `deploy/mender/README.md`); this step
-swaps the *trigger* from `mender install <file>` to a server deployment. That's the
-next-release server team's integration point — the harness here is what they drive.
+```sh
+deploy/mender/server/enroll-rig.sh rig1-central 10.0.0.99
+```
+
+**Verified**: rig1-central shows in the UI as **accepted**, reporting inventory
+(`hostname=raspberrypi`, `device_type=theia-rig`, `ipv4=10.0.0.22/24`,
+`mac=dc:a6:32:ba:6f:e6`). Auth + inventory work over Mender's stable device API.
+
+### The deploy (pull) path needs a 4.x client — version gap found
+
+`fleet.py deploy <artifact> <group>` → the rig pulls → `theia-release` module →
+`ArtifactInstall_Leave` → UCM. But: **Debian's mender-client 3.4.0 (on the rig) is
+too old for server v4.0.1's deployments device API**. The update-check endpoint
+changed shape — 3.4.0 `POST /api/devices/v2/deployments/.../next` (older body),
+which v4.0.1 serves at v1 with a different schema (the server's own demo uses the
+4.x `mender-client-qemu:mender-master`). Enrolment/auth/inventory use the *stable*
+API and work; the *pull* needs the rig running the **4.x mender-update client**
+(Mender APT repo, not in Debian). `theia-routes.yaml` already routes + rewrites the
+device-deployments path (v2→v1) so the only remaining gap is the client version.
+
+So 3d splits: **enrol + report = DONE** (this); **server-triggered pull = needs the
+4.x client on the rig** (a deliberate rig change — Mender APT repo or a vendored
+mender-update). The on-device theia-release+UCM half is already proven standalone
+(`mender install <file>`, see `deploy/mender/README.md`); only the *trigger* over
+the wire awaits the client upgrade. That's the next-release server/rig-image team's
+call — the harness + routes are ready for it.
 
 ## Concept map (where each piece lives)
 

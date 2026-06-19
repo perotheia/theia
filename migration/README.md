@@ -31,7 +31,7 @@ produce **identical** results on a real config.
 ```
 # 1. clean etcd + schema v1
 ETCDCTL_API=3 etcdctl --endpoints=127.0.0.1:2379 del --prefix /theia/config/
-artheia gen-schema demo/system/demo/component.art --out migration/schema_v1.json
+artheia gen-schema apps/system/apps/component.art --out migration/schema_v1.json
 theia install central && theia start central
 
 # 2. seed v1 values, change some, snapshot
@@ -41,8 +41,8 @@ tdb get-snapshot snap_v1 --schema migration/schema_v1.json
 theia stop central
 
 # 3. add P4Config, evolve v1->v2, gen schema_v3, SCAFFOLD the transform
-#    (edit demo/system/demo/package.art + demo.options, regen P4)
-artheia gen-schema demo/system/demo/component.art --out migration/schema_v3.json
+#    (edit apps/system/apps/package.art + demo.options, regen P4)
+artheia gen-schema apps/system/apps/component.art --out migration/schema_v3.json
 # gen-migration diffs the two schemas → per-node transform .json + BUILD entries
 # (review the `_review` notes; set add-defaults; confirm renames):
 artheia gen-migration --from migration/schema_v2.json --to migration/schema_v3.json \
@@ -80,7 +80,7 @@ The whole point — the individually-tested tools, joined for real, exposed thre
    second call returned null and `std::string + null` segfaulted. Fixed (call
    once). (services/per/impl/migration_plugin.cc)
 2. **the plugin .so wasn't self-contained** — it had undefined `pb_decode` /
-   `system_demo_P4Config_msg` and a DT_NEEDED on the proto cc_library's .so, so
+   `system_apps_P4Config_msg` and a DT_NEEDED on the proto cc_library's .so, so
    per's RTLD_NOW dlopen failed. Fixed in this BUILD: compile demo.pb.c in +
    link nanopb statically + header-only proto dep (no runtime shared lib).
 3. **gen-transform's `rename` codegen** emitted `to.label = from.tag` even though

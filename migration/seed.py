@@ -18,7 +18,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "tools" / "tdb"))
-sys.path.insert(0, "/tmp/migpb/system/demo")
+sys.path.insert(0, "/tmp/migpb/system/apps")
 
 # demo_pb2 is only needed by the LEGACY demo-driver actions (seed/change/get) and
 # as a fallback in `defaults`. The first-boot `defaults` seed now resolves every

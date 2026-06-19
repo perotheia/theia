@@ -18,7 +18,7 @@ package(default_visibility = ["//visibility:public"])
 # demo.pb.h include WITHOUT a runtime shared-lib dependency (see note above).
 cc_library(
     name = "demo_pb_hdr",
-    hdrs = ["//platform/proto/system/demo:demo_pb_h"],
+    hdrs = ["//platform/proto/system/apps:apps_pb_h"],
     strip_include_prefix = "/platform/proto",
 )
 

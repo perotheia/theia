@@ -13,6 +13,7 @@ observer/`Wait For State` half (Step C) asserts the resulting STATEM trace.
 Run (supervisor + p4 live, e.g. `theia install central` then the supervisor):
     PATH="$PWD/.venv/bin:$PATH" python apps/test/fsm_drive.py
 """
+import os
 import sys
 import time
 from pathlib import Path
@@ -22,10 +23,13 @@ sys.path.insert(0, str(REPO / "artheia"))
 
 from artheia.gen_server.probe import ArtheiaContext   # noqa: E402
 
-# DemoFsmTester lives in the demo package itself (system.demo). Load it through
-# the canonical `system/demo` symlink so any cross-package imports resolve (the
-# dir-climb mirrors the package FQN).
-ART = REPO / "system/demo/package.art"
+# DemoFsmTester lives in the demo package itself (system.apps after the demo→apps
+# rename). Load it through the canonical `system/apps` symlink so any cross-package
+# imports resolve (the dir-climb mirrors the package FQN). NOT hardcoded: override
+# with the THEIA_DEMO_ART env var (absolute path, or relative to the repo root).
+_demo_art = os.environ.get("THEIA_DEMO_ART", "")
+ART = (Path(_demo_art) if Path(_demo_art).is_absolute() else REPO / _demo_art) \
+    if _demo_art else REPO / "system/apps/package.art"
 PROTO = REPO / "platform/proto"
 
 # The DemoFsmIn events, in the order that walks IDLE→PROCESSING→DONE→IDLE.

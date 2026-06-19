@@ -291,7 +291,7 @@ def _fc_art_path(fc: str, target: str):
     """The .art the gen-params emitter reads for an FC, derived from the bazel
     target. Services FCs (``//services/<fc>/...``) live at the canonical symlink
     path system/services/<fc>/package.art; app compositions (``//apps/...``) at
-    system/demo/package.art. Returns a Path or None if absent (an FC with no
+    system/apps/package.art. Returns a Path or None if absent (an FC with no
     .art simply gets no params file)."""
     if target.startswith("//services/"):
         cand = WORKSPACE / "system" / "services" / fc / "package.art"
@@ -455,7 +455,7 @@ def cmd_start(args: list[str]) -> int:
 def _seed_defaults() -> None:
     """Seed declared config defaults into etcd via services/per (first-boot).
 
-    Generates the schema + config-defaults from system/demo/package.art and runs
+    Generates the schema + config-defaults from system/apps/package.art and runs
     migration/seed.py's idempotent `defaults` action. per must be up and reachable
     (give it a moment after the supervisor forks it). Best-effort: any failure is
     logged, never fatal."""
@@ -470,7 +470,7 @@ def _seed_defaults() -> None:
     # so we run them over EACH FC's package.art (canonical symlink path — needed
     # for cross-package imports) + the demo, then MERGE. gen-config-defaults emits
     # art_package+proto_type per config so seed.py resolves each FC's proto class
-    # dynamically via the probe codec. (Was a single system/demo/package.art →
+    # dynamically via the probe codec. (Was a single system/apps/package.art →
     # FwConfig/PhmConfig/NmConfig/… never reached etcd.)
     arts = sorted((WORKSPACE / "system" / "services").glob("*/package.art"))
     demo_art = WORKSPACE / "system" / "demo" / "package.art"

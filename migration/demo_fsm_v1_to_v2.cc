@@ -6,7 +6,7 @@
 // the field ops in tools/migrate/migrate.py (the JSON design/test bench).
 
 #include "impl/migration_plugin_api.h"
-#include "system/demo/demo.pb.h"
+#include "system/apps/apps.pb.h"
 
 #include <pb_decode.h>
 #include <pb_encode.h>
@@ -20,12 +20,12 @@
 
 extern "C" int transform_P4Config(const char* in, size_t in_len,
                              char** out, size_t* out_len) {
-    system_demo_P4Config from = system_demo_P4Config_init_zero;
-    system_demo_P4Config to   = system_demo_P4Config_init_zero;
+    system_apps_P4Config from = system_apps_P4Config_init_zero;
+    system_apps_P4Config to   = system_apps_P4Config_init_zero;
 
     pb_istream_t is = pb_istream_from_buffer(
         reinterpret_cast<const pb_byte_t*>(in), in_len);
-    if (!pb_decode(&is, system_demo_P4Config_fields, &from)) return 1;
+    if (!pb_decode(&is, system_apps_P4Config_fields, &from)) return 1;
 
     // Default carry: every field keeps its value unless a rule overrides it.
     to.timeout_s = from.timeout_s;
@@ -48,7 +48,7 @@ extern "C" int transform_P4Config(const char* in, size_t in_len,
         reinterpret_cast<pb_byte_t*>(*out = static_cast<char*>(std::malloc(4096))),
         4096);
     if (!*out) return 1;
-    if (!pb_encode(&os, system_demo_P4Config_fields, &to)) { std::free(*out); return 1; }
+    if (!pb_encode(&os, system_apps_P4Config_fields, &to)) { std::free(*out); return 1; }
     *out_len = os.bytes_written;
     return 0;
 }

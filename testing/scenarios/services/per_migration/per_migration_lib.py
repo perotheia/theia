@@ -114,9 +114,9 @@ def _case(node: str) -> MigrationCase:
 def _demo_pb2():
     """Import the demo protobuf module, generating it on demand into /tmp."""
     gen = Path("/tmp/rf_migpb")
-    if not (gen / "system" / "demo" / "demo_pb2.py").exists():
+    if not (gen / "system" / "apps" / "apps_pb2.py").exists():
         gen.mkdir(parents=True, exist_ok=True)
-        proto = REPO / "platform/proto/system/demo/demo.proto"
+        proto = REPO / "platform/proto/system/apps/apps.proto"
         subprocess.run(
             [sys.executable, "-m", "grpc_tools.protoc",
              "-I", str(REPO / "platform/proto"),
@@ -127,7 +127,7 @@ def _demo_pb2():
     if p not in sys.path:
         sys.path.insert(0, p)
     import importlib
-    return importlib.import_module("demo_pb2")
+    return importlib.import_module("apps_pb2")
 
 
 @library(scope="SUITE")

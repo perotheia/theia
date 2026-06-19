@@ -230,7 +230,7 @@ node atomic DemoFsmGate {
 // ordered, over one persistent connection — to drive the FSM standalone
 // (apps/test/fsm_drive.py + the rf statem scenario). It lives in THIS package
 // (no import/extern: DemoFsmGate + DemoFsmIn are siblings here) so it resolves
-// through the canonical `system/demo` symlink like every other demo node.
+// through the canonical `system/apps` symlink like every other demo node.
 //
 // NOT deployed: it appears in no composition/cluster, so the manifest +
 // supervisor tree never instantiate it. It exists purely as a probe-resolvable

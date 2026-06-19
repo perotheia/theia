@@ -15,7 +15,7 @@ filegroup(
         "__init__.py",
         # Generated application manifest (cluster Applications); rig.py
         # imports APPLICATIONS_* from it. Regenerate with
-        # `artheia gen-manifest demo/system/demo/component.art
+        # `artheia gen-manifest apps/system/apps/component.art
         #  apps/manifest/applications.py`.
         "applications.py",
         # FC layer the rig inherits from.

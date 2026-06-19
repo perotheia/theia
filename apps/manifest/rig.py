@@ -25,14 +25,14 @@ the recovery plan.
 What's exported:
 
 - ``DemoSoftware`` (NEW) — the :class:`SoftwareSpecification` for the
-  rig. Vehicle layers compose against it via ``.squash(...)``.
+  rig. Vehicle layers compose against it via ``.mappend(...)``.
 - ``DemoRig`` (LEGACY) — the materialized :class:`Rig` for the CLI's
   ``artheia executor emit`` / ``artheia gui emit`` (both still
   ``isinstance(x, Rig)``-check on the export).
 - ``DemoLayer`` (LEGACY) — the old :class:`Layer`, kept for any
   importer that still needs it.
 
-``DemoRig`` is produced by composing ``PlatformBase.squash(DemoLayer)``
+``DemoRig`` is produced by composing ``PlatformBase.mappend(DemoLayer)``
 through the legacy path, then ``DemoSoftware.to_rig()`` reconciles to
 the same shape. Once the CLI switches to walk
 :class:`SoftwareSpecification` directly (phase 4), the legacy exports
@@ -76,7 +76,7 @@ from artheia.manifest.execution import (
 from artheia.manifest.machine import CpuResource, IpEndpoint
 from artheia.manifest.platform import PlatformBase
 from artheia.manifest.rig import SoftwareSpecification
-from artheia.manifest.transform import Append, Override, SetTransformTypes
+from artheia.manifest.applicative import Append, Override, SetTransformTypes
 from services.manifest.service import ServicesSoftware
 
 # ---------------------------------------------------------------------------
@@ -317,15 +317,15 @@ DemoRig.process_to_machine_mappings = list(
 
 
 # ---------------------------------------------------------------------------
-# Structured-DSL path — DemoSoftware = ServicesSoftware.squash(DemoSpecLayer).
+# Structured-DSL path — DemoSoftware = ServicesSoftware.mappend(DemoSpecLayer).
 #
 # Mirrors the mosaic raj_syscomp.py pattern:
 #
-#     RajSoftware = MacanSoftware.squash(RajLayer).squash(...)
+#     RajSoftware = MacanSoftware.mappend(RajLayer).mappend(...)
 #
 # Here the chain is:
 #
-#     DemoSoftware = ServicesSoftware.squash(DemoSpecLayer)
+#     DemoSoftware = ServicesSoftware.mappend(DemoSpecLayer)
 #
 # DemoSpecLayer carries the demo-specific deltas (vehicle identity,
 # the demo_host machine, the three demo process binaries). ServicesSoftware
@@ -353,7 +353,7 @@ _PlatformAppOverlay = ApplicationManifest(
     name="platform_app",
     host_machine=CentralHost.name,
     # The 18 FC components come from ServicesSoftware (the platform base);
-    # the squash merges them in by same-identity (name="platform_app").
+    # the mappend merges them in by same-identity (name="platform_app").
     # We add the platform-fabric components here — supervisor — because
     # they belong on central and platform_app is its AA.
     components=list(_PLATFORM_FABRIC_COMPONENTS),
@@ -384,7 +384,7 @@ DemoSpecLayer = SoftwareSpecification(
     # The artheia loader synthesises one platform_services ServiceManifest
     # with 18 FC instances; we already pinned each instance's
     # remote_machine in the post-merge step above. Append them as a
-    # set transform so .squash() picks them up.
+    # set transform so .mappend() picks them up.
     service_manifests=cast(set[SetTransformTypes], {
         Append(_sm) for _sm in DemoRig.service_manifests
     }),
@@ -410,7 +410,7 @@ DemoSpecLayer = SoftwareSpecification(
     }),
 )
 
-DemoSoftware: SoftwareSpecification = ServicesSoftware.squash(DemoSpecLayer)
+DemoSoftware: SoftwareSpecification = ServicesSoftware.mappend(DemoSpecLayer)
 
 
 # ---------------------------------------------------------------------------
@@ -432,8 +432,8 @@ DemoSoftware: SoftwareSpecification = ServicesSoftware.squash(DemoSpecLayer)
 # isn't in the other machine's execution tree — the transform semantics
 # fall out of set membership, not an explicit Remove.
 #
-# Two squashes: CentralSoftware = ServicesSoftware.squash(CentralLayer),
-# ComputeSoftware = ServicesSoftware.squash(ComputeLayer). Each .to_rig()s
+# Two squashes: CentralSoftware = ServicesSoftware.mappend(CentralLayer),
+# ComputeSoftware = ServicesSoftware.mappend(ComputeLayer). Each .to_rig()s
 # to a single-machine rig the CLI / Bazel emits per host.
 # ---------------------------------------------------------------------------
 
@@ -506,8 +506,8 @@ def _filtered_service_manifests() -> list:
 _LOCAL_SERVICE_MANIFESTS = _filtered_service_manifests()
 
 
-# Each per-machine spec is built STANDALONE (fresh lists), NOT squashed
-# onto ServicesSoftware — squash unions with the base, which would drag the
+# Each per-machine spec is built STANDALONE (fresh lists), NOT combined
+# onto ServicesSoftware — mappend unions with the base, which would drag the
 # full 6-FC set + the platform root tree back in and undo the partition.
 # Building fresh means each machine carries exactly its own slice.
 

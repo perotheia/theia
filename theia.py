@@ -1875,7 +1875,7 @@ from artheia.manifest.machine import HardwareResource, CpuResource, CpuArchitect
 
 # The framework's ARA services: the FC components/processes + the OTP supervisor
 # tree (root → ar_sup → core_sup → … with app_sup). ServicesSoftware is a full
-# SoftwareSpecification we squash our apps onto.
+# SoftwareSpecification we combine our apps onto.
 from services.manifest.service import (
     ServicesSoftware as _ServicesSoftware,   # private alias: keep `Software` the
     SERVICES_COMPONENTS as _FC_COMPONENTS,   # ONLY public *Software export so the
@@ -1918,7 +1918,7 @@ _supervisors = [
 # Layer the workspace deltas (one machine, the FCs bound to it, the apps) onto
 # ServicesSoftware. `Software` is the only public *Software export → the rig
 # resolver picks it (the imported services spec is private as _ServicesSoftware).
-Software = _ServicesSoftware.squash(SoftwareSpecification(
+Software = _ServicesSoftware.mappend(SoftwareSpecification(
     vehicle=VehicleIdentity(name="@NAME@", make="theia", model="workspace"),
     machines=cast(set[SetTransformTypes], {Append(Host)}),
     applications=cast(set[SetTransformTypes], {

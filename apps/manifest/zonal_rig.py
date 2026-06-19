@@ -25,14 +25,14 @@ the recovery plan.
 What's exported:
 
 - ``DemoSoftware`` (NEW) — the :class:`SoftwareSpecification` for the
-  rig. Vehicle layers compose against it via ``.squash(...)``.
+  rig. Vehicle layers compose against it via ``.mappend(...)``.
 - ``DemoRig`` (LEGACY) — the materialized :class:`Rig` for the CLI's
   ``artheia executor emit`` / ``artheia gui emit`` (both still
   ``isinstance(x, Rig)``-check on the export).
 - ``DemoLayer`` (LEGACY) — the old :class:`Layer`, kept for any
   importer that still needs it.
 
-``DemoRig`` is produced by composing ``PlatformBase.squash(DemoLayer)``
+``DemoRig`` is produced by composing ``PlatformBase.mappend(DemoLayer)``
 through the legacy path, then ``DemoSoftware.to_rig()`` reconciles to
 the same shape. Once the CLI switches to walk
 :class:`SoftwareSpecification` directly (phase 4), the legacy exports
@@ -77,7 +77,7 @@ from artheia.manifest.execution import (
 from artheia.manifest.machine import CpuResource, IpEndpoint
 from artheia.manifest.platform import PlatformBase
 from artheia.manifest.rig import SoftwareSpecification
-from artheia.manifest.transform import Append, Override, SetTransformTypes
+from artheia.manifest.applicative import Append, Override, SetTransformTypes
 from services.manifest.service import ServicesSoftware
 
 # ---------------------------------------------------------------------------
@@ -428,15 +428,15 @@ DemoRig.process_to_machine_mappings = list(
 
 
 # ---------------------------------------------------------------------------
-# Structured-DSL path — DemoSoftware = ServicesSoftware.squash(DemoSpecLayer).
+# Structured-DSL path — DemoSoftware = ServicesSoftware.mappend(DemoSpecLayer).
 #
 # Mirrors the mosaic raj_syscomp.py pattern:
 #
-#     RajSoftware = MacanSoftware.squash(RajLayer).squash(...)
+#     RajSoftware = MacanSoftware.mappend(RajLayer).mappend(...)
 #
 # Here the chain is:
 #
-#     DemoSoftware = ServicesSoftware.squash(DemoSpecLayer)
+#     DemoSoftware = ServicesSoftware.mappend(DemoSpecLayer)
 #
 # DemoSpecLayer carries the demo-specific deltas (vehicle identity,
 # the demo_host machine, the three demo process binaries). ServicesSoftware
@@ -461,7 +461,7 @@ DemoRig.process_to_machine_mappings = list(
 # Docker deployment under `deploy/`.
 
 _PlatformAppOverlay = ApplicationManifest(
-    # MUST match ServicesSoftware's app name (`services_app`) so the squash
+    # MUST match ServicesSoftware's app name (`services_app`) so the mappend
     # merges by same-identity: that pulls host_machine=central_host onto the
     # FC components (which ship with host_machine="" in the platform base).
     # A mismatched name left the FCs unbound → "" resolved to admin_host, and
@@ -469,7 +469,7 @@ _PlatformAppOverlay = ApplicationManifest(
     name="services_app",
     host_machine=CentralHost.name,
     # The FC components come from ServicesSoftware (the platform base); the
-    # same-identity squash merges them in. We add the platform-fabric
+    # same-identity mappend merges them in. We add the platform-fabric
     # components here — supervisor (+ gateway when it builds) — because they
     # belong on central and services_app is its AA.
     components=list(_PLATFORM_FABRIC_COMPONENTS),
@@ -505,7 +505,7 @@ DemoSpecLayer = SoftwareSpecification(
     # The artheia loader synthesises one platform_services ServiceManifest
     # with 18 FC instances; we already pinned each instance's
     # remote_machine in the post-merge step above. Append them as a
-    # set transform so .squash() picks them up.
+    # set transform so .mappend() picks them up.
     service_manifests=cast(set[SetTransformTypes], {
         Append(_sm) for _sm in DemoRig.service_manifests
     }),
@@ -531,7 +531,7 @@ DemoSpecLayer = SoftwareSpecification(
     }),
 )
 
-DemoSoftware: SoftwareSpecification = ServicesSoftware.squash(DemoSpecLayer)
+DemoSoftware: SoftwareSpecification = ServicesSoftware.mappend(DemoSpecLayer)
 
 
 # ---------------------------------------------------------------------------
@@ -553,8 +553,8 @@ DemoSoftware: SoftwareSpecification = ServicesSoftware.squash(DemoSpecLayer)
 # isn't in the other machine's execution tree — the transform semantics
 # fall out of set membership, not an explicit Remove.
 #
-# Two squashes: CentralSoftware = ServicesSoftware.squash(CentralLayer),
-# ComputeSoftware = ServicesSoftware.squash(ComputeLayer). Each .to_rig()s
+# Two squashes: CentralSoftware = ServicesSoftware.mappend(CentralLayer),
+# ComputeSoftware = ServicesSoftware.mappend(ComputeLayer). Each .to_rig()s
 # to a single-machine rig the CLI / Bazel emits per host.
 # ---------------------------------------------------------------------------
 
@@ -665,8 +665,8 @@ def _mk_app(name: str, host: str, components: list) -> ApplicationManifest:
     )
 
 
-# Each per-machine spec is built STANDALONE (fresh lists), NOT squashed
-# onto ServicesSoftware — squash unions with the base, which would drag the
+# Each per-machine spec is built STANDALONE (fresh lists), NOT combined
+# onto ServicesSoftware — mappend unions with the base, which would drag the
 # full 6-FC set + the platform root tree back in and undo the partition.
 # Building fresh means each machine carries exactly its own slice.
 
@@ -723,11 +723,11 @@ ComputeRig: Rig = ComputeSoftware.to_rig()
 
 # ---------------------------------------------------------------------------
 # DemoSoftware — the deploy spec. The full 2(+admin)-machine vehicle, built
-# from the PARTITIONED per-machine apps (NOT the squash) so each component lands
+# from the PARTITIONED per-machine apps (NOT the mappend) so each component lands
 # on its real machine: shwa + p3 on compute, the rest on central. `theia
 # manifest` / `theia dist` emit from this.
 #
-# (The earlier squash-based DemoSoftware mis-bound shwa to central — its PTM
+# (The earlier mappend-based DemoSoftware mis-bound shwa to central — its PTM
 # moved the process to compute but not the component. Building from the explicit
 # per-machine apps binds the COMPONENT correctly too.)
 # ---------------------------------------------------------------------------

@@ -55,11 +55,14 @@
     state: directory
     mode: "0755"
 
-- name: "Push the Mender→UCM state script"
+- name: "Push the Mender→UCM state script + the UCM adopter it calls"
   ansible.builtin.copy:
-    src: "{{ playbook_dir }}/../mender/state-scripts/ArtifactInstall_Leave_01_ucm-request"
-    dest: /etc/mender/scripts/ArtifactInstall_Leave_01_ucm-request
+    src: "{{ playbook_dir }}/../mender/state-scripts/{{ item }}"
+    dest: "/etc/mender/scripts/{{ item }}"
     mode: "0755"
+  loop:
+    - ArtifactInstall_Leave_01_ucm-request   # the Mender hook
+    - ucm-adopt.py                            # hands the landed release to UCM
 
 # Tailscale/VPN enrolment is its OWN flow (tools/rig-enroll over com gRPC) — not
 # here. This task only lands the OTA agent + the theia-release customization.

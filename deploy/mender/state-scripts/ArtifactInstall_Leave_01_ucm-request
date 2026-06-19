@@ -29,10 +29,22 @@ if ! command -v python3 >/dev/null 2>&1 || [ ! -d "$THEIA_ROOT/artheia" ]; then
     exit 0
 fi
 
-echo "ucm-request: signalling UcmDaemon.RequestUpdate for $VER (sw/full)"
-# Reuse the campaign driver — it's the single source of the UCM trigger.
-if [ -x "$THEIA_ROOT/deploy/vucm/campaign.sh" ]; then
-    THEIA_ROOT="$THEIA_ROOT" "$THEIA_ROOT/deploy/vucm/campaign.sh" sw "$VER" full
+echo "ucm-request: signalling UcmDaemon.RequestUpdate to ADOPT $VER (sw/full)"
+# Hand the already-landed release to UCM (ucm-adopt.py = the Mender→UCM bridge).
+# UCM runs the restart + PHM-verify the bare symlink switch skips; its idempotent
+# stage/switch tolerate the release Mender already staged. The adopter exits 0 if
+# UCM isn't deployed here (the symlink switch IS the install then) and non-zero
+# only on an explicit UCM REJECT → Mender's ArtifactRollback restores `previous`.
+# The script is shipped next to this one (artifact-embedded) or under
+# /etc/mender/scripts/; resolve either.
+adopt=""
+for c in "$THEIA_ROOT/deploy/mender/state-scripts/ucm-adopt.py" \
+         "/etc/mender/scripts/ucm-adopt.py" \
+         "$(dirname "$0")/ucm-adopt.py"; do
+    [ -f "$c" ] && { adopt="$c"; break; }
+done
+if [ -n "$adopt" ]; then
+    THEIA_ROOT="$THEIA_ROOT" python3 "$adopt" "$VER" full
 else
-    echo "ucm-request: campaign.sh not deployed; symlink-only install of $VER (ok)"
+    echo "ucm-request: ucm-adopt.py not found; symlink-only install of $VER (ok)"
 fi

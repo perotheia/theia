@@ -22,10 +22,6 @@ http:
       replacepathregex:
         regex: "^/api/management/v1/inventory/(.*)"
         replacement: "/api/0.1.0/$1"
-    dep-dev-v2to1:
-      replacepathregex:
-        regex: "^/api/devices/v2/deployments/(.*)"
-        replacement: "/api/devices/v1/deployments/$1"
   routers:
     # ---- useradm (mgmt: login, PAT) ----
     useradmMgmt:
@@ -76,19 +72,18 @@ http:
       service: deployments
       entryPoints: [websecure]
       priority: 100
-      middlewares: [dep-dev-v2to1]
       tls: {}
     deploymentsDev:
-      rule: "PathRegexp(`/api/devices/v1/deployments`)"
+      rule: "PathRegexp(`/api/devices/v[0-9]+/deployments`)"
       service: deployments
       entryPoints: [websecure]
       middlewares: [devauth]
       tls: {}
-    deploymentsDevV2:
-      rule: "PathRegexp(`/api/devices/v[2-9]/deployments`)"
-      service: deployments
+    s3store:
+      rule: "PathPrefix(`/mender`)"
+      service: s3store
       entryPoints: [websecure]
-      middlewares: [devauth, dep-dev-v2to1]
+      priority: 99999
       tls: {}
     gui:
       rule: "PathPrefix(`/`)"
@@ -107,3 +102,5 @@ http:
       loadBalancer: {servers: [{url: "http://deployments:8080"}]}
     gui:
       loadBalancer: {servers: [{url: "http://gui:8090"}]}
+    s3store:
+      loadBalancer: {servers: [{url: "http://s3:8080"}]}

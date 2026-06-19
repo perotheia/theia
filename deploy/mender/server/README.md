@@ -71,27 +71,37 @@ deploy/mender/server/enroll-rig.sh rig1-central 10.0.0.99
 (`hostname=raspberrypi`, `device_type=theia-rig`, `ipv4=10.0.0.22/24`,
 `mac=dc:a6:32:ba:6f:e6`). Auth + inventory work over Mender's stable device API.
 
-### The deploy (pull) path needs a 4.x client — version gap found
+### Full server→rig OTA — DONE end-to-end on real hardware
 
-`fleet.py deploy <artifact> <group>` → the rig pulls → `theia-release` module →
-`ArtifactInstall_Leave` → UCM. But: **Debian's mender-client 3.4.0 (on the rig) is
-too old for server v4.0.1's deployments device API**. The update-check endpoint
-changed shape — 3.4.0 `POST /api/devices/v2/deployments/.../next` (older body),
-which v4.0.1 serves at v1 with a different schema (the server's own demo uses the
-4.x `mender-client-qemu:mender-master`). Enrolment/auth/inventory use the *stable*
-API and work; the *pull* needs the rig running the **4.x mender-update client**
-(Mender APT repo, not in Debian). `theia-routes.yaml` routes the full deployments surface — mgmt (artifacts +
-deployments), the device update-check (with the v2→v1 rewrite), AND the artifact
-**download** (a dedicated higher-priority router, no devauth — downloads use a
-signed URL, mirroring the upstream `deploymentsDL`). So the only remaining gap is
-the client version.
+A server deployment now drives the whole loop. Verified on rig1-central:
 
-So 3d splits: **enrol + report = DONE** (this); **server-triggered pull = needs the
-4.x client on the rig** (a deliberate rig change — Mender APT repo or a vendored
-mender-update). The on-device theia-release+UCM half is already proven standalone
-(`mender install <file>`, see `deploy/mender/README.md`); only the *trigger* over
-the wire awaits the client upgrade. That's the next-release server/rig-image team's
-call — the harness + routes are ready for it.
+```
+deployment 2.0.0 → rig → download from S3 → theia-release module:
+  staged release 2.0.0 → /opt/theia/releases/2.0.0
+  current → releases/2.0.0 (previous → releases/1.0.0)   ← atomic symlink switch
+  committed current=releases/2.0.0
+Deployment finished with status: Success
+```
+
+Rig: `current → releases/2.0.0` (`com` runs v2.0.0), `provides artifact_name=2.0.0`;
+server: deployment `finished`. The complete VUCM→UCM loop: a server deployment →
+Mender pull over the wire → the `theia-release` custom module → release-dir + symlink
+(NOT A/B) → reported back. No `mender install <file>` — a real server-triggered field
+update.
+
+Three things were needed beyond enrolment:
+1. **The 4.x client on the rig.** Debian's mender-client 3.4.0 is too old for server
+   v4.0.1. `enroll-rig.sh` installs the 4.x stack via Mender's APT repo (the official
+   `get.mender.io`, which publishes `+debian+trixie` arm64 packages). The 4.x client
+   splits into `mender-authd` (D-Bus auth provider) + `mender-updated` (drives
+   poll+install); its `artifact_name` lives in an LMDB provides store, **seeded by a
+   baseline `mender-update install` of a theia-release artifact** (a blank/`unknown`
+   artifact_name → the deployments endpoint 400s `cannot be blank`).
+2. **Deployments route as-is** — the upstream does NOT rewrite the device-deployments
+   path; the 4.x client tries v2, gets 404, falls back to v1 GET itself. (An earlier
+   v2→v1 rewrite was wrong and removed.)
+3. **The S3 storage route** — a high-priority `/mender` route to the seaweedfs store
+   (`s3.docker.mender.io/mender/<id>` is the artifact download URL).
 
 ## Concept map (where each piece lives)
 

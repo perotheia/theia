@@ -19,11 +19,11 @@
 # e.g.
 #   enroll-rig.sh rig1-central 10.0.0.99
 #
-# NOTE on the deploy (pull) path: enrolment/auth/inventory use Mender's STABLE
-# device API and work with the Debian mender-client 3.4.0. The deployments
-# update-check (`/api/devices/v2/deployments/.../next`) changed shape in the 4.x
-# client; server v4.0.1 + client 3.4.0 mismatch there (the rig enrols + reports
-# but won't PULL until it runs the 4.x mender-update client). See README.md.
+# This installs the 4.x mender-update client (Debian's 3.4.0 is too old for server
+# v4.0.1's deployments API) + seeds a baseline theia-release artifact so the client's
+# provides store has a real artifact_name (else the deployments endpoint 400s). Then
+# enrols + accepts. Full server→pull→theia-release→UCM is then live. Pass a baseline
+# .mender as $4 (BASELINE_ARTIFACT) to seed; default skips seeding.
 set -euo pipefail
 
 RIG="${1:?usage: enroll-rig.sh <rig-ssh> <server-ip> [host] [admin-email] [admin-pass]}"
@@ -81,22 +81,52 @@ chmod 755 /usr/share/mender/inventory/mender-inventory-theia
 [ -f /etc/mender/artifact_info ] || echo artifact_name=unprovisioned > /etc/mender/artifact_info
 EOF
 
-# --- 5. bootstrap + start → submit auth request ---
-echo "[enroll] bootstrap + start the client (submits the auth request)"
-ssh "$RIG" 'sudo mender bootstrap --forcebootstrap >/dev/null 2>&1 || true; sudo systemctl restart mender-client'
-sleep 6
+# --- 5. install the 4.x client (mender-update + mender-auth) ---
+# Debian's mender-client 3.4.0 can't pull from server v4.0.1. Install the 4.x
+# stack via Mender's official repo script (publishes +debian+trixie arm64 pkgs).
+echo "[enroll] installing the 4.x mender-update client"
+ssh "$RIG" 'set -e
+  if ! command -v mender-update >/dev/null 2>&1; then
+    curl -fsSL https://get.mender.io -o /tmp/get-mender.sh
+    sudo bash /tmp/get-mender.sh mender-update mender-auth
+  fi
+  sudo systemctl disable --now mender-client 2>/dev/null || true   # retire 3.4.0
+  sudo install -d -m0755 /var/lib/mender
+  echo device_type=theia-rig | sudo tee /var/lib/mender/device_type >/dev/null'
 
-# --- 6. accept the pending device via the server device-auth API ---
+# --- 5b. seed a baseline artifact so the provides store has a real artifact_name ---
+# (a blank/unknown artifact_name → the deployments endpoint 400s "cannot be blank")
+BASELINE_ARTIFACT="${4:-}"
+if [ -n "$BASELINE_ARTIFACT" ] && [ -f "$BASELINE_ARTIFACT" ]; then
+    echo "[enroll] seeding baseline artifact $(basename "$BASELINE_ARTIFACT")"
+    scp "$BASELINE_ARTIFACT" "$RIG:/tmp/baseline.mender" >/dev/null
+    ssh "$RIG" 'sudo install -d -m0755 /opt/theia
+                sudo mender-update install /tmp/baseline.mender >/dev/null 2>&1 || true
+                sudo mender-update commit >/dev/null 2>&1 || true'
+fi
+
+# --- 6. start the 4.x daemons → submit auth request ---
+echo "[enroll] starting mender-authd + mender-updated (submits the auth request)"
+ssh "$RIG" 'sudo systemctl restart mender-authd; sleep 3; sudo systemctl restart mender-updated'
+sleep 8
+
+# --- 7. accept the pending device via the server device-auth API ---
 jwt="$(ssh "$SERVER_SSH" "curl -sk -u '$ADMIN_EMAIL:$ADMIN_PASS' -X POST '$BASE/api/management/v1/useradm/auth/login'")"
-pend="$(ssh "$SERVER_SSH" "curl -sk -H 'Authorization: Bearer $jwt' '$BASE/api/management/v2/devauth/devices?status=pending'")"
-dev="$(echo "$pend"  | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d[0]["id"] if d else "")')"
-aset="$(echo "$pend" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d[0]["auth_sets"][0]["id"] if d else "")')"
-[ -n "$dev" ] || { echo "[enroll] no pending device — check the client logs on $RIG"; exit 1; }
-echo "[enroll] accepting device $dev"
+# find the device's PENDING auth set (a re-enrol adds a new set to the same device)
+devs="$(ssh "$SERVER_SSH" "curl -sk -H 'Authorization: Bearer $jwt' '$BASE/api/management/v2/devauth/devices'")"
+read -r dev aset <<EOF2
+$(echo "$devs" | python3 -c 'import sys,json
+for d in json.load(sys.stdin):
+    for a in d.get("auth_sets",[]):
+        if a["status"]=="pending": print(d["id"], a["id"]); break')
+EOF2
+[ -n "$dev" ] || { echo "[enroll] no pending auth set — check the client logs on $RIG"; exit 1; }
+echo "[enroll] accepting device $dev (auth set $aset)"
 ssh "$SERVER_SSH" "curl -sk -H 'Authorization: Bearer $jwt' -H 'Content-Type: application/json' -X PUT '$BASE/api/management/v2/devauth/devices/$dev/auth/$aset/status' -d '{\"status\":\"accepted\"}'"
 
-# --- 7. restart → authorize + submit inventory ---
-ssh "$RIG" 'sudo systemctl restart mender-client'
-echo "[enroll] done. $RIG is accepted; it will report inventory within ~30s."
+# --- 8. restart → authorize + submit inventory + poll for deployments ---
+ssh "$RIG" 'sudo systemctl restart mender-authd; sleep 3; sudo systemctl restart mender-updated'
+echo "[enroll] done. $RIG is accepted; it reports inventory + polls for deployments."
 echo "[enroll] confirm in the UI: $BASE  ($ADMIN_EMAIL)"
+echo "[enroll] deploy:  deploy/vucm/fleet.py --insecure deploy <artifact> <group>"
 rm -f "$ca"

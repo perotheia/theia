@@ -76,7 +76,8 @@ from artheia.manifest.execution import (
 from artheia.manifest.machine import CpuResource, IpEndpoint
 from artheia.manifest.platform import PlatformBase
 from artheia.manifest.rig import SoftwareSpecification
-from artheia.manifest.applicative import Append, Override, SetTransformTypes
+from artheia.manifest.applicative import Append, SetTransformTypes
+from artheia.manifest.layer import Override
 from services.manifest.service import ServicesSoftware
 
 # ---------------------------------------------------------------------------

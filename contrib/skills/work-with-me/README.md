@@ -4,9 +4,10 @@ A Claude Code MCP plugin that watches **your** (the human's) file changes
 and lets you ask Claude to review them for consistency at any point during a
 session.
 
-The plugin source is tracked under `docs/skills/work-with-me/`; it is linked into
-`.claude/plugins/work-with-me` (a local, gitignored symlink) so Claude Code
-discovers it. It runs on the **workspace `.venv`** — no per-plugin venv.
+The plugin source is tracked under `contrib/skills/work-with-me/`; Claude Code
+discovers it through the `work-with-me` entry in the repo-root `.mcp.json`, which
+points the server directly at that path. It runs on the **workspace `.venv`** —
+no per-plugin venv.
 
 ## How it works
 
@@ -77,14 +78,7 @@ attributed to the user (the original, un-disambiguated behavior).
 Deps go in the workspace venv:
 
 ```sh
-.venv/bin/pip install -r docs/skills/work-with-me/requirements.txt
-```
-
-Link the plugin into `.claude/` (local, gitignored):
-
-```sh
-mkdir -p .claude/plugins
-ln -sfn ../../docs/skills/work-with-me .claude/plugins/work-with-me
+.venv/bin/pip install -r contrib/skills/work-with-me/requirements.txt
 ```
 
 Register the MCP server — merge `mcp.json.example` into the repo-root
@@ -96,7 +90,7 @@ under an `mcpServers` key (local scope):
   "work-with-me": {
     "type": "stdio",
     "command": ".venv/bin/python",
-    "args": [".claude/plugins/work-with-me/server.py"],
+    "args": ["contrib/skills/work-with-me/server.py"],
     "env": { "CLAUDE_PROJECT_DIR": "${CLAUDE_PROJECT_DIR}" }
   }
 }
@@ -110,7 +104,7 @@ Register the attribution hook — add to `.claude/settings.json` (project) or
   "PostToolUse": [ {
     "matcher": "Edit|Write|MultiEdit|NotebookEdit",
     "hooks": [ { "type": "command",
-      "command": "${CLAUDE_PROJECT_DIR}/.claude/plugins/work-with-me/hooks/record_agent_edit.sh" } ]
+      "command": "${CLAUDE_PROJECT_DIR}/contrib/skills/work-with-me/hooks/record_agent_edit.sh" } ]
   } ]
 }
 ```

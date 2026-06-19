@@ -9,7 +9,7 @@
 #   "hooks": { "PostToolUse": [ {
 #       "matcher": "Edit|Write|MultiEdit|NotebookEdit",
 #       "hooks": [ { "type": "command",
-#                    "command": "${CLAUDE_PROJECT_DIR}/.claude/plugins/work-with-me/hooks/record_agent_edit.sh" } ]
+#                    "command": "${CLAUDE_PROJECT_DIR}/contrib/skills/work-with-me/hooks/record_agent_edit.sh" } ]
 #   } ] }
 #
 # Reads the hook payload (JSON) on stdin; needs `jq`. Always exits 0 so it

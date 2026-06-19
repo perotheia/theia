@@ -586,7 +586,7 @@ state = State()
 # JSON file that a shell statusline script reads. Atomic write (tmp + rename)
 # so the reader never sees a half-line; throttled so a fs-event burst doesn't
 # hammer the disk. Format is documented in the README so anyone can write
-# their own statusline; ours lives at docs/skills/work-with-me/statusline.sh.
+# their own statusline; ours lives at contrib/skills/work-with-me/statusline.sh.
 
 _STATS_THROTTLE_S = 0.25
 _stats_lock = threading.Lock()

@@ -9,7 +9,7 @@
 # Wire it in .claude/settings.json (local/gitignored — non-intrusive):
 #   "statusLine": {
 #     "type": "command",
-#     "command": ".claude/plugins/work-with-me/statusline.sh",
+#     "command": "contrib/skills/work-with-me/statusline.sh",
 #     "refreshInterval": 5
 #   }
 #

@@ -4,7 +4,7 @@
     "work-with-me": {
       "type": "stdio",
       "command": ".venv/bin/python",
-      "args": [".claude/plugins/work-with-me/server.py"],
+      "args": ["contrib/skills/work-with-me/server.py"],
       "env": {
         "CLAUDE_PROJECT_DIR": "${CLAUDE_PROJECT_DIR}"
       }

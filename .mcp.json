@@ -12,7 +12,7 @@
     },
     "work-with-me": {
       "command": ".venv/bin/python",
-      "args": [".claude/plugins/work-with-me/server.py"],
+      "args": ["contrib/skills/work-with-me/server.py"],
       "type": "stdio"
     }
   }

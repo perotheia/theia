@@ -1,0 +1,40 @@
+# theia local override for the OSS mender-server compose. Drop alongside the
+# cloned mender-server's docker-compose.yml (up.sh copies it in).
+#
+# WHY: on a host running Docker >= 25 (dalek runs 29), the daemon enforces a
+# minimum Engine API version of 1.44. Traefik v3.1's Docker provider negotiates at
+# 1.24 and is rejected → traefik discovers ZERO routes via Docker labels → every
+# /api path 404s. We bump traefik to v3.3 and point its Docker provider at a
+# socket-proxy; the actual routing is then driven by the STATIC file provider
+# (theia-routes.yaml) so it does not depend on Docker-label discovery at all.
+services:
+  dockerproxy:
+    image: tecnativa/docker-socket-proxy:latest
+    environment:
+      - CONTAINERS=1
+      - NETWORKS=1
+      - SERVICES=1
+      - TASKS=1
+      - INFO=1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - default
+  traefik:
+    image: traefik:v3.3
+    command:
+      - --api=true
+      - --api.insecure=true
+      - --accesslog=true
+      - --entrypoints.web.address=:80
+      - --entrypoints.web.http.redirections.entryPoint.scheme=https
+      - --entrypoints.web.http.redirections.entryPoint.to=websecure
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.websecure.http.tls=true
+      - --entrypoints.websecure.asDefault=true
+      - --providers.file.directory=/etc/traefik/config
+      - --providers.docker=true
+      - --providers.docker.exposedByDefault=false
+      - --providers.docker.endpoint=tcp://dockerproxy:2375
+    depends_on:
+      - dockerproxy

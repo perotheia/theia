@@ -1,0 +1,36 @@
+# install-mender.yml — install the Mender client (the ONE persistent agent on the
+# rig; OTA only) + the theia-release custom update module + the Mender→UCM state
+# script. == the new agentless analogue of "provisioning installs the convergence
+# agent" — except Mender does OTA, NOT general config (that's controller-pushed).
+#
+# Theia does NOT use Mender's rootfs A/B; the theia-release module lands releases
+# as /opt/theia/releases/<ver> + a `current` symlink switch (see deploy/mender/).
+- name: "Install mender-client (apt; distro package)"
+  ansible.builtin.apt:
+    name: mender-client
+    state: present
+    update_cache: true
+  failed_when: false          # some distros need the mender apt repo first; tolerate
+  register: _mender_apt
+
+- name: "Ensure the custom update-module dir"
+  ansible.builtin.file:
+    path: /usr/share/mender/modules/v3
+    state: directory
+    mode: "0755"
+
+- name: "Push the theia-release update module (release-dir + symlink, NOT A/B)"
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../mender/modules/theia-release"
+    dest: /usr/share/mender/modules/v3/theia-release
+    mode: "0755"
+
+- name: "Push the Mender→UCM state script"
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../mender/state-scripts/ArtifactInstall_Leave_01_ucm-request"
+    dest: /etc/mender/scripts/ArtifactInstall_Leave_01_ucm-request
+    mode: "0755"
+  failed_when: false          # /etc/mender may not exist until mender-client is set up
+
+# Tailscale/VPN enrolment is its OWN flow (tools/rig-enroll over com gRPC) — not
+# here. This task only lands the OTA agent + the theia-release customization.

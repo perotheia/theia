@@ -1,0 +1,122 @@
+#!/bin/sh
+# theia-release — a Mender Update Module that deploys a Theia release as a
+# RELEASE DIRECTORY + SYMLINK switch (NOT an A/B rootfs image).
+#
+# This is the customization point that makes Mender fit Theia's deploy model:
+# Mender's rootfs-image module flips A/B partitions; we don't have those. Instead
+# this module lands the artifact payload as /opt/theia/releases/<version>/ and
+# atomically re-aims /opt/theia/current → it (the SAME model as services/ucm's
+# release_dir.hpp). Mender owns download/integrity/orchestration + the standalone
+# install→commit→rollback state machine; this module owns "where the bits land".
+#
+# Mender invokes this script as:  theia-release <STATE> <payload-files-dir>
+# The states we implement (the rest no-op with exit 0):
+#   Download         — stream the payload into the staging release dir
+#   ArtifactInstall  — atomically switch current → the new release (+ save previous)
+#   ArtifactCommit   — keep it (drop the rollback marker)
+#   ArtifactRollback — restore current → previous (rollback in seconds)
+#   ArtifactFailure / ArtifactRollbackReboot ... — best-effort cleanup / no-op
+#
+# Install:  copy this file to /usr/share/mender/modules/v3/theia-release (0755).
+# THEIA_ROOT defaults to /opt/theia; override via the env for testing.
+set -eu
+
+STATE="$1"
+FILES="$2"   # Mender's dir holding the artifact's payload files + headers
+
+THEIA_ROOT="${THEIA_ROOT:-/opt/theia}"
+RELEASES="$THEIA_ROOT/releases"
+CURRENT="$THEIA_ROOT/current"
+PREVIOUS="$THEIA_ROOT/previous"
+
+# The artifact's version = the Mender artifact name (header). Mender writes the
+# headers under $FILES/.. ; read artifact_name from the standard location.
+_artifact_name() {
+    # Mender stages headers at $FILES/../header/headerinfo or exposes them via the
+    # `mender-update show-artifact`-style files; the robust source is the payload
+    # subdir name we packed (version.txt) — see deploy/mender/build-artifact.sh.
+    if [ -f "$FILES/files/version.txt" ]; then
+        cat "$FILES/files/version.txt"
+    elif [ -f "$FILES/version.txt" ]; then
+        cat "$FILES/version.txt"
+    else
+        echo "unknown"
+    fi
+}
+
+case "$STATE" in
+  Download)
+    # Stream the payload tarball into a STAGING release dir. The payload is a
+    # tar.zst of the release tree (bin/ lib/ config/ migrations/ hooks/ +
+    # version.txt). Mender places payload files under $FILES/files/.
+    ver="$(_artifact_name)"
+    stage="$RELEASES/$ver"
+    mkdir -p "$stage"
+    # the build packs exactly one file: release.tar.zst (or .gz)
+    tarball="$(ls "$FILES"/files/release.tar.* 2>/dev/null | head -1 || true)"
+    [ -n "$tarball" ] || { echo "theia-release: no release.tar.* in payload" >&2; exit 1; }
+    case "$tarball" in
+      *.zst) zstd -dc "$tarball" | tar -x -C "$stage" ;;
+      *.gz)  tar -xzf "$tarball" -C "$stage" ;;
+      *)     tar -xf "$tarball"  -C "$stage" ;;
+    esac
+    echo "$ver" > "$stage/.mender_version"
+    echo "theia-release: staged release $ver → $stage"
+    ;;
+
+  ArtifactInstall)
+    # Atomically switch current → the staged release; record previous for rollback.
+    ver="$(cat "$RELEASES"/*/.mender_version 2>/dev/null | tail -1)"
+    [ -n "$ver" ] || { echo "theia-release: no staged release" >&2; exit 1; }
+    stage="$RELEASES/$ver"
+    [ -d "$stage" ] || { echo "theia-release: staged dir missing: $stage" >&2; exit 1; }
+    # save the outgoing current as previous (the rollback target)
+    if [ -L "$CURRENT" ]; then
+        oldtarget="$(readlink "$CURRENT")"
+        ln -sfn "$oldtarget" "$PREVIOUS"
+    fi
+    # atomic re-aim: write a temp symlink + rename(2) over current
+    tmp="$THEIA_ROOT/.current.$$"
+    ln -sfn "releases/$ver" "$tmp"
+    mv -T "$tmp" "$CURRENT"
+    echo "theia-release: current → releases/$ver (previous → $(readlink "$PREVIOUS" 2>/dev/null || echo none))"
+    # NOTE: in production this signals the UCM agent (UcmDaemon.RequestUpdate) to
+    # drive the supervisor stop/restart + PHM verify. The Mender state-scripts
+    # (ArtifactCommit_Enter / ArtifactRollback_Enter) bridge to UCM; this module
+    # just lands the bits. Standalone (no UCM) the symlink switch is the install.
+    ;;
+
+  ArtifactCommit)
+    # Keep the new release. (UCM's PHM-verify gate runs in the commit STATE-SCRIPT,
+    # not here; reaching commit means it passed.) Nothing to undo.
+    echo "theia-release: committed current=$(readlink "$CURRENT" 2>/dev/null)"
+    ;;
+
+  ArtifactRollback)
+    # Restore current → previous (the UCM rollback model, in seconds).
+    if [ -L "$PREVIOUS" ]; then
+        prev="$(readlink "$PREVIOUS")"
+        tmp="$THEIA_ROOT/.current.$$"
+        ln -sfn "$prev" "$tmp"
+        mv -T "$tmp" "$CURRENT"
+        echo "theia-release: ROLLBACK current → $prev"
+    else
+        echo "theia-release: no previous to roll back to" >&2
+    fi
+    ;;
+
+  SupportsRollback)
+    # Tell Mender this module supports rollback (so it offers it on failure).
+    echo "Yes"
+    ;;
+
+  NeedsArtifactReboot)
+    # Theia does NOT reboot for an update — UCM restarts only the affected FCs.
+    echo "No"
+    ;;
+
+  *)
+    # ArtifactVerifyReboot / ArtifactFailure / Cleanup / etc. — no-op.
+    exit 0
+    ;;
+esac

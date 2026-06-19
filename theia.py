@@ -11,8 +11,9 @@ Commands:
 
     theia rig up          docker compose up   (the two-host deploy stack)
     theia rig down        docker compose down
-    theia provision       puppet apply  — Phase 1 (install os pkgs + .ipk)
-    theia orchestrate     puppet apply  — Phase 2 (app rollout, no restart)
+    theia provision       ansible-playbook — Phase 1 (os pkgs + Mender client)
+    theia orchestrate     ansible-playbook — Phase 2 (app rollout, no restart)
+                          (both agentless over SSH; --puppet = legacy engine)
     theia manifest        rig.py → dist/manifest/*.json (the SOLE rig entry)
     theia dist            per-host .ipk from dist/manifest/ JSON (no rig.py)
     theia install         build + puppet-populate install/<machine>/ (local host)
@@ -52,6 +53,7 @@ if not (WORKSPACE / "manifest").is_dir() and not (WORKSPACE / ".theia").is_file(
 
 COMPOSE = THEIA_ROOT / "deploy" / "docker-compose.yml"
 PUPPET = THEIA_ROOT / "deploy" / "puppet"
+ANSIBLE = THEIA_ROOT / "deploy" / "ansible"
 
 
 def _run(argv: list[str], cwd: "Path | None" = None) -> int:
@@ -143,15 +145,50 @@ def _puppet(manifest: str, args: list[str]) -> int:
     ])
 
 
+def _ansible(playbook: str, machine: str | None, args: list[str]) -> int:
+    """Run an Ansible playbook from deploy/ansible/ (agentless, SSH-push).
+    `machine` (the artheia machine name, e.g. central) is passed as -e machine=…;
+    the inventory maps each host's machine= var, so a playbook run pushes the
+    right dist/manifest/<machine>/ slice. Extra args (e.g. -l rpi4) pass through."""
+    cmd = ["ansible-playbook", "-i", str(ANSIBLE / "inventory" / "hosts"),
+           str(ANSIBLE / playbook)]
+    if machine:
+        cmd += ["-e", f"machine={machine}"]
+    cmd += args
+    # cwd = deploy/ansible so ansible.cfg + the relative manifest_dir resolve.
+    return _run(cmd, cwd=ANSIBLE)
+
+
+def _split_machine(args: list[str]) -> tuple[str | None, list[str]]:
+    """First bare (non-flag) arg is the machine name; the rest pass through to
+    the engine. `theia provision central -l rpi4` → ("central", ["-l","rpi4"])."""
+    machine, rest = None, []
+    for a in args:
+        if machine is None and not a.startswith("-"):
+            machine = a
+        else:
+            rest.append(a)
+    return machine, rest
+
+
 def cmd_provision(args: list[str]) -> int:
-    """puppet apply Phase 1 — install OS packages + .ipk artifacts.
-    Reads /etc/theia/manifest/machine.yaml; target from $THEIA_MACHINE."""
-    return _puppet("provisioning.pp", args)
+    """Phase 1 — OS packages + Mender client, pushed over SSH (agentless).
+    `theia provision <machine> [ansible-args...]`. Reads dist/manifest/<machine>/.
+    Legacy: `theia provision --puppet [puppet-args...]` runs the old engine."""
+    if "--puppet" in args:
+        return _puppet("provisioning.pp", [a for a in args if a != "--puppet"])
+    machine, rest = _split_machine(args)
+    return _ansible("provision.yml", machine, rest)
 
 
 def cmd_orchestrate(args: list[str]) -> int:
-    """puppet apply Phase 2 — day-to-day app rollout, no supervisor restart."""
-    return _puppet("orchestration.pp", args)
+    """Phase 2 — app rollout (binaries + real config), pushed over SSH; no restart.
+    `theia orchestrate <machine> [ansible-args...]`.
+    Legacy: `theia orchestrate --puppet [puppet-args...]`."""
+    if "--puppet" in args:
+        return _puppet("orchestration.pp", [a for a in args if a != "--puppet"])
+    machine, rest = _split_machine(args)
+    return _ansible("orchestrate.yml", machine, rest)
 
 
 def _bazel_root() -> Path:
@@ -2018,8 +2055,8 @@ filegroup(name = "apps_proto", srcs = ["apps.proto"])
 COMMANDS = {
     "init":        (cmd_init,        "scaffold the CWD as a Theia consuming workspace (source or /opt/theia)"),
     "rig":         (cmd_rig,         "docker compose {up|down} the deploy stack"),
-    "provision":   (cmd_provision,   "puppet apply — Phase 1 (os pkgs + .ipk)"),
-    "orchestrate": (cmd_orchestrate, "puppet apply — Phase 2 remote (app rollout)"),
+    "provision":   (cmd_provision,   "ansible — Phase 1 (os pkgs + Mender; --puppet=legacy)"),
+    "orchestrate": (cmd_orchestrate, "ansible — Phase 2 remote app rollout (--puppet=legacy)"),
     "install":     (cmd_install,     "build + puppet-populate install/<machine>/ (local host)"),
     "stage-local": (cmd_install,     "alias for `install` (back-compat)"),
     "start":       (cmd_start,       "run the staged supervisor from install/<machine>/ (detached + pidfile)"),

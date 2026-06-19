@@ -1,0 +1,38 @@
+#!/bin/sh
+# Mender STATE SCRIPT — runs on the device AFTER the theia-release module's
+# ArtifactInstall state (the bits are now staged at /opt/theia/releases/<ver>
+# and `current` has been re-aimed). This is the Mender → UCM hand-off.
+#
+# In production the theia-release module ONLY lands the release dir + flips the
+# symlink (idempotent, fast, no service knowledge). The AUTOSAR lifecycle —
+# stop/restart the affected FCs, PHM-health verify, ACTIVE-or-ROLLBACK — belongs
+# to the on-device UCM agent (services/ucm). This script signals UCM to run it,
+# reusing the EXACT probe path deploy/vucm/campaign.sh uses (UcmDaemon.RequestUpdate
+# over TIPC). Mender owns "the release arrived + is on disk"; UCM owns "make theia
+# adopt it safely". If this script exits non-zero Mender treats the install as
+# failed → ArtifactRollback runs → the module restores the previous symlink.
+#
+# Mender installs state-scripts from the artifact OR from
+# /etc/mender/scripts/<StateName>_<Action>_<NN>_<name>; this file is the artifact-
+# embedded variant (pass it to `mender-artifact write` via --script). For a
+# standalone (no UCM running) install this is a no-op success.
+set -eu
+
+THEIA_ROOT="${THEIA_ROOT:-/opt/theia}"
+VER="$(readlink "$THEIA_ROOT/current" 2>/dev/null | sed 's#releases/##')"
+[ -n "$VER" ] || { echo "ucm-request: no current release" >&2; exit 1; }
+
+# If no UCM agent is up (standalone install / dev box), succeed quietly — the
+# symlink switch IS the install. The supervisor will pick up `current` on restart.
+if ! command -v python3 >/dev/null 2>&1 || [ ! -d "$THEIA_ROOT/artheia" ]; then
+    echo "ucm-request: no UCM client env; symlink-only install of $VER (ok)"
+    exit 0
+fi
+
+echo "ucm-request: signalling UcmDaemon.RequestUpdate for $VER (sw/full)"
+# Reuse the campaign driver — it's the single source of the UCM trigger.
+if [ -x "$THEIA_ROOT/deploy/vucm/campaign.sh" ]; then
+    THEIA_ROOT="$THEIA_ROOT" "$THEIA_ROOT/deploy/vucm/campaign.sh" sw "$VER" full
+else
+    echo "ucm-request: campaign.sh not deployed; symlink-only install of $VER (ok)"
+fi

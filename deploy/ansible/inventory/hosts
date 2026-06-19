@@ -1,0 +1,31 @@
+# Theia rig inventory — agentless SSH targets, grouped by rig + machine role.
+#
+# A "rig" is one vehicle/test-bench (a TIPC cluster, isolated by tipc_cluster_id —
+# see deploy/run-supervisor.sh). Each rig has machines by role: `central` (the
+# etcd host + gateway) and `compute` (the AUTOSAR worker). The group vars map a
+# host to its artheia manifest machine name (machine=) so the playbooks push the
+# right dist/manifest/<machine>/ slice.
+#
+# Real fleets generate this from the manifest; this is the dev/lab template.
+# `theia provision <machine>` / `theia orchestrate <machine>` target one host.
+
+[all:vars]
+ansible_user      = applied
+# The artheia manifest tree ON THE CONTROLLER (theia dist output). Pushed per-host.
+manifest_dir      = dist/manifest
+etcd_machine      = central
+
+# ----- lab rig (the dev bench: dalek controller, rpi4 + x86 boxes) -----------
+[rig_lab:children]
+rig_lab_central
+rig_lab_compute
+
+[rig_lab_central]
+rpi4    ansible_host=10.0.0.22  machine=central
+
+[rig_lab_compute]
+# add compute nodes here, e.g.:
+# taycann ansible_host=10.0.0.33  machine=compute
+
+[rig_lab:vars]
+rig_id = lab

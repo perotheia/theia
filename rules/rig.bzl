@@ -59,14 +59,30 @@ package(default_visibility = ["//visibility:public"])
 '''
 
 
+# Framework label prefixes — targets that live in the @pero_theia module
+# (the Theia framework), NOT the consuming workspace. Mirrors theia.py's
+# _is_framework_target so the deploy bundle and `theia install` agree on
+# which binaries come from the framework vs the user's own app tree.
+_FRAMEWORK_PREFIXES = ("//platform/", "//services/")
+
+
 def _abs_label(label):
-    """Rewrite a label like `//services/com` to be absolute against
-    the main pero_theia repo. The synthetic @rig_<name>// repo
-    resolves bare //... labels relative to itself, which isn't what
-    the user wrote in the rig.py SwComponent."""
-    if label.startswith("//"):
-        return "@pero_theia" + label
-    return label
+    """Make a bare `//…` SwComponent label absolute against the repo that
+    actually defines it. A rig declared from a CONSUMING workspace mixes two
+    origins: framework binaries (//platform/…, //services/…) live in the
+    @pero_theia module, while the workspace's OWN app binaries (//apps/…) live
+    in the consuming (root) module. The synthetic @rig_<name>// repo resolves a
+    bare //… against ITSELF (wrong for both), so partition explicitly:
+      - framework prefixes → @pero_theia//…
+      - everything else    → @@//… (the root module — the consuming workspace,
+        or theia.git itself when the rig is the framework's own demo).
+    A non-`//` label (already repo-qualified or relative) is left untouched."""
+    if not label.startswith("//"):
+        return label
+    for pfx in _FRAMEWORK_PREFIXES:
+        if label.startswith(pfx):
+            return "@pero_theia" + label
+    return "@@" + label
 
 
 def _host_machine_targets(machine, vehicle_name):

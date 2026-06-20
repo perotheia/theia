@@ -61,3 +61,50 @@ jobs:
         with:
           name: selftest-report
           path: out/
+
+  # The in-repo demo at demo/ is a real CONSUMING WORKSPACE (the `theia init`
+  # shape: system/apps real, manifest/ rig, proto/, framework symlinked via
+  # @pero_theia). Run its HERMETIC app tests — the artheia gen pipeline stages
+  # (parse → gen-netgraph/routing/app-composition → manifest/rig resolution) a
+  # real user exercises — from the demo workspace root. The live + live-bazel
+  # stages (need a running stack / a bazel C++ build) stay gated, same as the
+  # framework's live suites above.
+  demo-workspace:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check out artheia + rf-theia from the GitHub mirror
+        run: |
+          git config submodule.artheia.url https://github.com/perotheia/artheia.git
+          git config submodule.rf-theia.url https://github.com/perotheia/rf-theia.git
+          git submodule update --init artheia rf-theia
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install artheia + rf-theia
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e artheia/
+          pip install -e rf-theia/
+
+      - name: Demo consuming-workspace hermetic tests
+        env:
+          # The demo workspace's own Python layer (manifest.rig + the generated
+          # manifest sidecars) must import; the framework's services.manifest
+          # layer is one dir up (the @pero_theia checkout = the repo root).
+          PYTHONPATH: ${{ github.workspace }}/demo:${{ github.workspace }}
+          RF_THEIA_WORKSPACE: ${{ github.workspace }}/demo
+        working-directory: demo
+        run: |
+          python -m robot \
+            --include hermetic --exclude live --exclude live-bazel \
+            --outputdir out \
+            tests/demo_chain/
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: demo-workspace-report
+          path: demo/out/

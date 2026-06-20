@@ -1,14 +1,15 @@
 // Top-level system aggregation.
 //
-// `platform/system/` IS the workspace's virtual root for the `system`
-// package. The directory layout mirrors the package FQN one-to-one:
+// `system/` IS the workspace's virtual root for the `system` package. The
+// directory layout mirrors the package FQN one-to-one:
 //
-//   platform/system/services/<short>/  →  system.services.<short>
-//   platform/system/supervisor/         →  system.supervisor
-//   apps/system/apps/               →  system.apps
+//   system/services/<short>/   →  system.services.<short>
+//   system/supervisor/          →  system.supervisor
+//   system/platform/runtime/    →  system.platform.runtime
 //
-// (The gateway + AUTOSAR vendor trees are NOT part of standalone theia.git;
-//  a consuming workspace adds system.gateway / system.autosar.* itself.)
+// (The app cluster `system.apps` is NOT part of the framework — the in-repo
+//  demo lives in the consuming workspace at demo/ (demo/system/apps/...), and
+//  the gateway + AUTOSAR vendor trees are added by a consuming workspace too.)
 //
 // This file does NOT declare a top-level composition. In the new
 // abstraction ladder:

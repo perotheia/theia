@@ -7,7 +7,8 @@ with Bazel.
 
 It's a **standalone git repo** with a small set of git submodules. You author
 your apps in a SEPARATE **consuming workspace** scaffolded by `theia init`; the
-in-repo `apps/` is Theia's own demo, exercising the framework in CI.
+in-repo demo lives in exactly such a workspace at `demo/` (Theia dogfoods the
+`theia init` flow), exercising the framework in CI.
 
 ## Repositories
 
@@ -29,8 +30,8 @@ platform/
   supervisor/       the OTP-style fork/exec supervisor (Execution Management)
   proto/            committed .proto + .options; .pb.* are genrule-derived
 services/           the ARA Functional Clusters (com, per, sm, ucm, log, shwa, …)
-apps/               Theia's own demo app (package system.apps) + deploy rigs
 system/             the virtual root the .art tree resolves against
+demo/               the in-repo consuming-workspace demo (what `theia init` produces); exercises the framework in CI
 rf-theia/           submodule — the RF testing harness (TheiaTestLibrary + MCP)
 testing/scenarios/  the .robot test scenarios (project tests; import rf_theia)
 contrib/
@@ -74,7 +75,9 @@ python3 -m venv .venv && . .venv/bin/activate
 pip install --find-links /opt/theia/wheels artheia rf-theia   # from the deb's wheels
 source /opt/theia/setup.sh
 theia init [--with-services]                       # scaffold against $THEIA_ROOT
-artheia gen-app --kind fc apps/system/apps/component.art --out apps --proto-out platform/proto
+# edit system/apps/{package,component}.art, then generate the C++ + proto + manifest:
+artheia gen-app --kind fc system/apps/component.art --out apps --proto-out proto
+artheia gen-manifest system/apps/component.art manifest/app.py
 theia manifest && theia install && theia start
 ```
 

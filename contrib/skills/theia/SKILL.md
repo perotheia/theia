@@ -1,7 +1,6 @@
 ---
 name: theia
 description: Refresher for agents working in the theia framework — the AUTOSAR-Adaptive-style platform (Functional Clusters on the Theia C++ actor runtime, modeled in the artheia .art DSL). Orients you to the layout, the build, the consuming-workspace flow (theia init), and where to dig deeper. Args: (none) — read top-to-bottom, then load a reference under references/ for the task at hand.
-disable-model-invocation: true
 ---
 
 Theia is a AUTOSAR-Adaptive-Platform-style
@@ -14,8 +13,9 @@ It's a **standalone git repo** (`theia`) with `artheia/` and
 monorepo any more (that split happened; some on-disk `gateway/` / `vendor/`
 dirs are gitignored legacy repo-sync leftovers, not part of the framework).
 A user builds their own apps in a SEPARATE **consuming workspace** scaffolded
-by `theia init` (see "Consuming workspaces" below). The in-repo `apps/` is
-Theia's own demo, exercising the framework in CI.
+by `theia init` (see "Consuming workspaces" below). The in-repo demo lives in
+exactly such a workspace at `demo/` — Theia dogfoods the `theia init` flow,
+exercising the framework in CI.
 
 Read this page to orient. For a specific task, load the matching reference:
 
@@ -55,8 +55,9 @@ Standalone `theia` git repo (+ `artheia`/`etcd` submodules). Major dirs:
   aggregation point everything resolves against. `system/system.art`
   (`cluster Platform`); per-cluster symlinks: `system/services` →
   `../services/system/services` (one consolidated dir, holds
-  `cluster.art` + per-FC symlinks), `system/apps` → `../apps/system/apps`,
-  `system/supervisor`, `system/runtime`.
+  `cluster.art` + per-FC symlinks), `system/supervisor`,
+  `system/platform/runtime`. The framework root has **no app cluster** —
+  `system.apps` (the demo) moved OUT to the `demo/` consuming workspace.
 - **`services/`** — the FCs. 6 with real daemons live at
   `services/<fc>/system/<fc>/{package,component}.art` (spec) +
   `services/<fc>/{lib,main,impl}/` (generated + hand-owned C++).
@@ -64,10 +65,21 @@ Standalone `theia` git repo (+ `artheia`/`etcd` submodules). Major dirs:
 - **`platform/`** — the C++ **runtime** (`platform/runtime/`), the
   **supervisor** (`platform/supervisor/`), and `platform/proto/` (committed
   `.proto` + `.options`; the `.pb.*` are gitignored, genrule-derived).
+  Framework-only now — holds `system/services` + `system/supervisor` proto,
+  **no `system/apps`** (the demo carries its own proto, see below).
   (The **gateway** moved OUT to the `gataway_ws` consuming workspace.)
-- **`apps/`** — Theia's own demo (package **`system.apps`**, was `system.demo`):
-  the `.art` at `apps/system/apps/{package,component}.art`, the generated
-  C++ at `apps/Demo3WayP{1..4}/`, and the deploy rigs `apps/manifest/{rig,zonal_rig}.py`.
+- **`demo/`** — the in-repo **consuming workspace** (package **`system.apps`**,
+  what `theia init` produces): the app source at
+  `demo/system/apps/{package,component}.art`, the generated C++ at
+  `demo/apps/Demo3WayP{1..4}/{lib,main,impl}/`, the deploy rigs
+  `demo/manifest/{rig,test_rig,zonal_rig}.py`, the demo's OWN proto at
+  `demo/proto/system/apps/` (package `system_apps`, distinct from the
+  framework's `platform/proto/`), the config-migration example
+  `demo/migration/`, the RF tests `demo/tests/`, and its Bazel module
+  (`demo/{MODULE.bazel,.bazelrc,.theia,BUILD.bazel}` + shims +
+  `system/{supervisor,services,platform/runtime}` symlinks into the
+  framework). It binds to the framework via `local_path_override(pero_theia
+  = "..")`.
 - **`artheia/`** — **submodule** (remote `theia`). The `.art` grammar,
   parser/resolver, code generators, manifest model, LSP, VS Code extension.
   Commit/push it independently of theia, then bump the submodule pin.
@@ -98,23 +110,27 @@ theia init                             # bare: supervisor + your own apps
 #   or:  theia init --with-services    # + the ARA services (com/log/per/sm/ucm/shwa)
 
 # 2. (optional) author an app: add a composition to
-#    apps/system/apps/component.art, then generate its C++:
-artheia gen-app --kind fc apps/system/apps/component.art --out apps
+#    system/apps/component.art, then generate its C++ + proto:
+artheia gen-app --kind fc system/apps/component.art --out apps --proto-out proto
 
 # 3. emit + serialize the manifests, install the runtime layout, run it.
-artheia gen-manifest apps/system/apps/component.art apps/manifest/app.py
+artheia gen-manifest system/apps/component.art manifest/app.py
 theia manifest && theia install && theia start
 ```
 
 What `theia init` creates in the CWD (never overwriting): `system/system.art`
-(the workspace aggregator), `manifest/rig.py` (one-machine stub),
-`apps/system/apps/{package,component}.art` (the workspace's **own** empty app
-package, `system.apps`), and a Bazel module (`MODULE.bazel`, `.bazelrc`,
-`.bazelversion`, alias-shim `BUILD`s, local proto `BUILD`). Theia itself is
-**not vendored** — `system/runtime`, `system/supervisor` (and, with
-`--with-services`, `system/services`) plus `platform/runtime/package.art` are
-**relative symlinks into `$THEIA_ROOT`**, so a Theia bump is a re-source, not
-a re-copy. `.theia` records the bound `THEIA_ROOT`.
+(the workspace aggregator), `system/apps/{package,component}.art` (the
+workspace's **own** empty app package, `system.apps` — the REAL, canonical app
+source, mapped 1:1 from the FQN: **no `apps/system/apps` indirection, no
+symlink**), `manifest/rig.py` (one-machine stub; gen-manifest writes
+`manifest/app.py`), `apps/` (home for the generated C++ via `gen-app --out
+apps`), `proto/` (home for the generated proto via `gen-app --proto-out
+proto`), and a Bazel module (`MODULE.bazel`, `.bazelrc`, `.bazelversion`,
+alias-shim `BUILD`s, local proto `BUILD`). It's idempotent — re-run it any
+time (e.g. to add `--with-services`). Theia itself is **not vendored** —
+`system/platform/runtime`, `system/supervisor` (and, with `--with-services`,
+`system/services`) are **relative symlinks into `$THEIA_ROOT`**, so a Theia
+bump is a re-source, not a re-copy. `.theia` records the bound `THEIA_ROOT`.
 
 How `theia` resolves work in a consuming workspace (`theia.py`):
 - **WORKSPACE** = where you ran `theia` (`$THEIA_INVOCATION_CWD`); **THEIA_ROOT**
@@ -128,8 +144,9 @@ How `theia` resolves work in a consuming workspace (`theia.py`):
   `per` finds `libetcd-cpp-api.so`; shutdown is one **batch SIGTERM** of all
   workers reaped against a single deadline (≈0.5 s, not N×timeout).
 
-The in-repo `apps/` is just Theia dogfooding this same path (its rig is
-`apps/manifest/rig.py`, vehicle `apps`) so CI exercises the consuming flow.
+The in-repo `demo/` is just Theia dogfooding this same path (its rig is
+`demo/manifest/rig.py`) so CI exercises the consuming flow against the real
+framework.
 
 ## The Functional Cluster catalog
 
@@ -166,7 +183,13 @@ Transport is **TIPC** (`TipcMux`, per-process listener) carrying **nanopb**
 wire bytes; `RemoteRef`/`NodeRef` do correlated request/reply;
 `RemoteCodec` hashes a stable 16-bit `service_id` per message type.
 `Tracer` emits `[header][proto-wire]` records when a node is selectively
-enabled.
+enabled. The host-side **trace decoder is pluggable**: the framework ships
+`//platform/runtime/trace:libtrace_decoder_system.so` (system_services_sm_*
+types, in the deb) and each app workspace ships its own (the demo's
+`//trace:libtrace_decoder_apps.so`, system_apps_* types). Consumers
+(supervisor-gui, rtdb, rf-theia) dlopen **every** `libtrace_decoder_*.so` from
+the plugin dir (`THEIA_TRACE_DECODER_PATH`, exported by `setup.sh`) and try
+each.
 
 ## The supervisor
 
@@ -190,16 +213,19 @@ The `com` FC bridges theia↔gRPC to external tools (`supdbg`, `supervisor-gui`,
         ▼
  manifest python layer       executor emit /        serialized JSON manifests
  (services/manifest,    ──►  generate-manifest  ──► dist/manifest/<machine>/*.json
-  apps/manifest/rig)
+  demo/manifest/rig)
         │
         │ rig_ext (//rules:rig.bzl)  /  `theia manifest` + `theia install`
         ▼
  bazel build @rig_apps//…  ──►  bundles, install/ runtime layout
 ```
 
+`@rig_apps` (and `@rig_test` / `@rig_zonal`) are declared in the **workspace's**
+`MODULE.bazel` now (via `@pero_theia//rules:rig.bzl`), not the framework root.
 In a **consuming workspace** the same pipeline runs against the user's own
-rig (`apps/manifest/rig.py` in the workspace) and `theia` resolves framework
-targets against `$THEIA_ROOT` — see "Consuming workspaces" below.
+rig (`manifest/rig.py` in the workspace; `demo/manifest/rig.py` for the demo)
+and `theia` resolves framework targets against `$THEIA_ROOT` — see "Consuming
+workspaces" above.
 
 Details and exact commands are in
 [references/artheia-gen-system.md](references/artheia-gen-system.md).

@@ -12,10 +12,6 @@ load("@rules_cc//cc:defs.bzl", "cc_library")
 cc_library(
     name = "platform_protos",
     srcs = [
-        "//platform/proto/gateway/system:status_pb_c",
-        "//platform/proto/system/apps:apps_pb_c",
-        "//platform/proto/system/gateway:gateway_pb_c",
-        "//platform/proto/system/odd_path_monitor:odd_path_monitor_pb_c",
         "//platform/proto/system/services/com:com_pb_c",
         "//platform/proto/system/services/crypto:crypto_pb_c",
         "//platform/proto/system/services/diag:diag_pb_c",
@@ -36,10 +32,6 @@ cc_library(
         "//platform/proto/system/supervisor:supervisor_pb_c",
     ],
     hdrs = [
-        "//platform/proto/gateway/system:status_pb_h",
-        "//platform/proto/system/apps:apps_pb_h",
-        "//platform/proto/system/gateway:gateway_pb_h",
-        "//platform/proto/system/odd_path_monitor:odd_path_monitor_pb_h",
         "//platform/proto/system/services/com:com_pb_h",
         "//platform/proto/system/services/crypto:crypto_pb_h",
         "//platform/proto/system/services/diag:diag_pb_h",

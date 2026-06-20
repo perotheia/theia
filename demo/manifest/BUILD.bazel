@@ -1,0 +1,28 @@
+# manifest — Python rig + transitive .art inputs.
+#
+# Exposes `rig_sources` so //platform/manifest:rig can depend on every
+# file artheia might read while materializing manifest.rig.
+#
+# Bazel can't follow Python's runtime imports, so we list the
+# upstream filegroups explicitly. Touching any of these forces a
+# re-run of the manifest emit.
+
+filegroup(
+    name = "rig_sources",
+    srcs = [
+        # The rig module itself.
+        "rig.py",
+        "__init__.py",
+        # Generated application manifest (cluster Applications); rig.py
+        # imports APPLICATIONS_* from it. Regenerate with
+        # `artheia gen-manifest apps/system/apps/component.art
+        #  manifest/applications.py`.
+        "applications.py",
+        # FC layer the rig inherits from.
+        "//services/manifest:service_sources",
+        # All .art files anywhere in the system tree (we glob from
+        # the package root so '..' is unnecessary).
+        "//system:art_sources",
+    ],
+    visibility = ["//visibility:public"],
+)

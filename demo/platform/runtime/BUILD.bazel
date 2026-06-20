@@ -1,0 +1,5 @@
+# Alias → the Theia runtime in the sibling pero_theia module. gen-app's lib/main
+# BUILD files reference //platform/runtime:runtime; forward to @pero_theia.
+package(default_visibility = ["//visibility:public"])
+alias(name = "runtime", actual = "@pero_theia//platform/runtime:runtime")
+alias(name = "runtime_proto_cc", actual = "@pero_theia//platform/runtime:runtime_proto_cc")

@@ -1509,13 +1509,21 @@ def cmd_init(args: list[str]) -> int:
     a bare `theia start` brings the full service tree up under the supervisor.
 
     It creates, in the CWD (never overwriting an existing file):
+      - system/apps/{package,component}.art — this workspace's OWN app package,
+        a REAL dir (FQN system.apps ↔ this path 1:1; no symlink). You edit these.
       - system/system.art   — the workspace aggregator. Imports the Theia
         clusters (services / supervisor) you'll deploy, plus a stub you fill in
         by hand (link system/<yourthing> + add its cluster). You then `theia
         manifest` against it.
       - manifest/rig.py      — a one-machine, one-app rig stub importing the
-        generated sidecars.
+        generated sidecars (gen-manifest writes manifest/app.py).
+      - apps/, proto/        — homes for the GENERATED C++ (gen-app --out apps)
+        and proto (gen-app --proto-out proto); never mixed with the framework.
       - .theia               — records THEIA_ROOT (the source it's bound to).
+
+    Re-runnable: `theia init` is idempotent — it never overwrites your files
+    (system/apps, impl/), only (re)links the framework deps + (re)writes the
+    scaffold BUILD/shim files. Run it again (e.g. add --with-services) any time.
 
     Theia itself is NOT vendored: system/platform/runtime + system/supervisor
     (and, with --with-services, system/services) are SYMLINKS into $THEIA_ROOT,
@@ -1616,23 +1624,31 @@ def cmd_init(args: list[str]) -> int:
         _link("system/services", services_pkg)
     # The workspace's OWN empty app package (no compositions yet). gen-manifest
     # walks `cluster Applications` here — empty → an empty app manifest +
-    # executor sidecar, which the rig imports as-is. WRITE before the symlink so
-    # the target dir exists.
-    _write("apps/system/apps/package.art", _INIT_APPS_PACKAGE_ART)
-    _write("apps/system/apps/component.art", _INIT_APPS_COMPONENT_ART)
+    # executor sidecar, which the rig imports as-is.
+    #
+    # system/apps is the REAL, canonical app source (FQN system.apps maps to the
+    # dir 1:1 — no `apps/system/apps` indirection, no symlink). The user edits
+    # these; gen-app emits the C++ to apps/ and the proto to proto/, gen-manifest
+    # writes the Python sidecar to manifest/ — all SEPARATE from this source dir.
+    _write("system/apps/package.art", _INIT_APPS_PACKAGE_ART)
+    _write("system/apps/component.art", _INIT_APPS_COMPONENT_ART)
+    # Python package markers for the generated C++ tree + the manifest layer.
     _write("apps/__init__.py", "")
-    _write("apps/manifest/__init__.py", "")
-    # system/apps → THIS workspace's own app package (an IN-workspace target, not
-    # the framework). The user adds compositions there; until then the workspace
-    # still inits/builds/runs a bare supervisor.
-    _link("system/apps", ws / "apps" / "system" / "apps")
+    _write("manifest/__init__.py", "")
 
     sys_art = (_INIT_SYSTEM_ART_SERVICES if with_services else _INIT_SYSTEM_ART)
     rig_py = (_INIT_RIG_PY_SERVICES if with_services else _INIT_RIG_PY)
     _write("system/system.art", sys_art.replace("@NAME@", name))
     _write("manifest/__init__.py", "")
     _write("manifest/rig.py", rig_py.replace("@NAME@", name))
-    _write(".theia", f"THEIA_ROOT={theia_root}\nname={name}\n")
+    # Record THEIA_ROOT RELATIVE to the workspace when they share a prefix (keeps
+    # the ws+theia pair relocatable, e.g. an in-repo demo/ committed with a
+    # `../` link); fall back to absolute if they're on different roots.
+    try:
+        _theia_root_rec = os.path.relpath(theia_root, ws)
+    except ValueError:
+        _theia_root_rec = str(theia_root)
+    _write(".theia", f"THEIA_ROOT={_theia_root_rec}\nname={name}\n")
     _write("README.md", _INIT_README.replace("@NAME@", name)
                                    .replace("@THEIA_ROOT@", str(theia_root)))
 
@@ -1658,11 +1674,13 @@ def cmd_init(args: list[str]) -> int:
     _write("platform/runtime/BUILD.bazel", _INIT_SHIM_RUNTIME)
     _write("platform/supervisor/tombstone/BUILD.bazel", _INIT_SHIM_TOMBSTONE)
     # The app's own proto package: gen-app writes apps.proto + apps.options under
-    # platform/proto/system/apps/; this BUILD nanopb-compiles them. platform/
-    # proto:platform_protos aggregates it (+ the runtime proto from @pero_theia)
-    # so the gen-app lib's `//platform/proto:platform_protos` dep resolves locally.
-    _write("platform/proto/BUILD.bazel", _INIT_PROTO_AGG)
-    _write("platform/proto/system/apps/BUILD.bazel", _INIT_APPS_PROTO_BUILD)
+    # proto/system/apps/ (--proto-out proto); this BUILD nanopb-compiles them.
+    # //proto:platform_protos aggregates it (+ the runtime proto from @pero_theia)
+    # so the gen-app lib's `//proto:platform_protos` dep resolves locally. The app
+    # proto lives under proto/ (the workspace's own), NOT platform/proto/ (which
+    # in the framework holds the FC protos) — they never mix.
+    _write("proto/BUILD.bazel", _INIT_PROTO_AGG)
+    _write("proto/system/apps/BUILD.bazel", _INIT_APPS_PROTO_BUILD)
 
     flavour = "services workspace" if with_services else "empty workspace"
     print(f"\ntheia init: scaffolded '{name}' ({flavour}) against {theia_root}",
@@ -1672,13 +1690,13 @@ def cmd_init(args: list[str]) -> int:
     extra = ("\n  (the ARA services com/log/per/sm/ucm/shwa come up under the "
              "supervisor)" if with_services else "")
     print("\nVerify the toolchain before adding apps:\n"
-          "  artheia gen-manifest apps/system/apps/component.art "
-          "apps/manifest/app.py\n"
+          "  artheia gen-manifest system/apps/component.art "
+          "manifest/app.py\n"
           f"  theia manifest && theia install && theia start{extra}\n"
-          "\nThen add a composition to apps/system/apps/component.art and "
+          "\nThen add a composition to system/apps/component.art and "
           "generate + build its C++:\n"
-          "  artheia gen-app --kind fc apps/system/apps/component.art "
-          "--out apps --proto-out platform/proto\n"
+          "  artheia gen-app --kind fc system/apps/component.art "
+          "--out apps --proto-out proto\n"
           "  bazel build //apps/...        # compiles against @pero_theia",
           file=sys.stderr)
     return 0
@@ -1691,17 +1709,17 @@ _INIT_SYSTEM_ART = '''\
 // through the system/ symlinks). `theia manifest` walks this file.
 //
 // EMPTY-workspace shape: just the supervisor + an (empty) Applications cluster.
-// Add your app by declaring a `composition` in apps/system/apps/component.art
-// and `cluster Applications { composition <Yours> <id> }` — it flows here via
-// the import below, no edit needed.
+// Add your app by declaring a `composition` in system/apps/component.art and
+// `cluster Applications { composition <Yours> <id> }` — it flows here via the
+// import below, no edit needed.
 
 package system
 
 import system.supervisor.*   // the OTP-style supervisor (the runtime fabric)
-import system.apps.*         // THIS workspace's app package (system/apps → apps/system/apps)
+import system.apps.*         // THIS workspace's app package (system/apps, real dir)
 
 // --- forward-decl: the clusters this workspace deploys --------------------
-cluster Applications { }     // empty until you add a composition in apps/
+cluster Applications { }     // empty until you add a composition in system/apps/
 
 composition Supervisor { }
 
@@ -1735,9 +1753,9 @@ _INIT_APPS_COMPONENT_ART = '''\
 //   1. declare a node in package.art
 //   2. `composition MyApp { prototype MyNode my_node }`  (here)
 //   3. `cluster Applications { composition MyApp my_app }`  (here)
-//   4. `artheia gen-app --kind fc apps/system/apps/component.art --out apps
-//       --proto-out platform/proto [--composition MyApp]` to emit the C++
-//       (--proto-out lands apps.proto where platform/proto's BUILD expects it),
+//   4. `artheia gen-app --kind fc system/apps/component.art --out apps
+//       --proto-out proto [--composition MyApp]` to emit the C++
+//       (--proto-out lands apps.proto where proto/'s BUILD expects it),
 //       then `bazel build //apps/...` (compiles against @pero_theia).
 
 package system.apps
@@ -1751,8 +1769,8 @@ _INIT_RIG_PY = '''\
 EMPTY-workspace rig: imports the generated (initially empty) app manifest +
 its executor sidecar and runs a one-machine supervisor. Verify the toolchain
 NOW (theia manifest / install / start) — it works with zero apps. As you add
-compositions to apps/system/apps/component.art and regenerate the manifest
-(`artheia gen-manifest apps/system/apps/component.art apps/manifest/app.py`),
+compositions to system/apps/component.art and regenerate the manifest
+(`artheia gen-manifest system/apps/component.art manifest/app.py`),
 the app_sup children + processes appear here automatically.
 
 See $THEIA_ROOT/docs/skills/theia/references/deployment.md.
@@ -1769,12 +1787,12 @@ from artheia.manifest.rig import SoftwareSpecification, Append, SetTransformType
 from artheia.manifest.machine import HardwareResource, CpuResource, CpuArchitecture
 
 # The generated app manifest (empty until you add apps). gen-manifest writes
-# apps/manifest/app.py with APPLICATIONS_PROCESSES / APPLICATIONS_SHORTS +
+# manifest/app.py with APPLICATIONS_PROCESSES / APPLICATIONS_SHORTS +
 # an executor.py sidecar (app_sup with the app children). Both are empty for a
 # fresh workspace — import defensively so `theia init` → `theia manifest`
 # works before the first gen-manifest run.
 try:
-    from apps.manifest.app import (
+    from manifest.app import (
         APPLICATIONS_PROCESSES as _APP_PROCESSES,
         APPLICATIONS_SHORTS as _APP_SHORTS,
     )
@@ -1855,8 +1873,8 @@ the OTP supervisor tree from services.manifest.executor), with this workspace's
 apps Appended into app_sup. `theia install` builds the FC binaries (com/log/per/
 sm/ucm/shwa) + the supervisor; `theia start` runs the whole service tree.
 
-As you add compositions to apps/system/apps/component.art and regenerate
-(`artheia gen-manifest apps/system/apps/component.art apps/manifest/app.py`),
+As you add compositions to system/apps/component.art and regenerate
+(`artheia gen-manifest system/apps/component.art manifest/app.py`),
 the app leaves appear under app_sup automatically.
 
 See $THEIA_ROOT/docs/skills/theia/references/deployment.md.
@@ -1894,7 +1912,7 @@ _SUPERVISOR = SwComponent(
 
 # This workspace's generated app manifest (empty until you add apps).
 try:
-    from apps.manifest.app import (
+    from manifest.app import (
         APPLICATIONS_PROCESSES as _APP_PROCESSES,
         APPLICATIONS_COMPONENTS as _APP_COMPONENTS,
         APPLICATIONS_SHORTS as _APP_SHORTS,
@@ -1961,10 +1979,10 @@ _INIT_MODULE_BAZEL = '''\
 # @MODNAME@ — a Theia consuming workspace's Bazel module. Builds this workspace's
 # OWN app C++ (apps/<App>/...) against the sibling Theia source tree, consumed as
 # the `pero_theia` module via local_path_override (the gataway_ws pattern). The
-# gen-app BUILD files reference //platform/runtime, //platform/proto,
+# gen-app BUILD files reference //platform/runtime, //proto,
 # //platform/supervisor/tombstone — resolved by the alias shims under platform/
-# that forward to @pero_theia//... (the app's OWN proto under platform/proto/
-# system/apps builds locally).
+# that forward to @pero_theia//... (the app's OWN proto under proto/system/apps
+# builds locally).
 module(name = "@MODNAME@", version = "0.1.0")
 
 bazel_dep(name = "platforms", version = "0.0.11")
@@ -2009,19 +2027,20 @@ alias(name = "tombstone", actual = "@pero_theia//platform/supervisor/tombstone:t
 '''
 
 _INIT_PROTO_AGG = '''\
-# //platform/proto:platform_protos — the nanopb wire types the gen-app lib links.
-# This workspace builds its OWN app proto (system/apps, nanopb-compiled below) +
-# pulls the runtime control proto from @pero_theia. (The framework aggregates all
-# the FC protos here; a consuming workspace only needs its own app proto + the
-# runtime one — the lib #includes "system/apps/apps.pb.h".)
+# //proto:platform_protos — the nanopb wire types the gen-app lib links. This
+# workspace builds its OWN app proto (system/apps, nanopb-compiled below) + pulls
+# the runtime control proto from @pero_theia. (The framework aggregates all the
+# FC protos under //platform/proto; a consuming workspace only needs its own app
+# proto + the runtime one — the lib #includes "system/apps/apps.pb.h". The app
+# proto lives under proto/, never mixed with the framework's platform/proto/.)
 load("@rules_cc//cc:defs.bzl", "cc_library")
 
 package(default_visibility = ["//visibility:public"])
 
 cc_library(
     name = "platform_protos",
-    srcs = ["//platform/proto/system/apps:apps_pb_c"],
-    hdrs = ["//platform/proto/system/apps:apps_pb_h"],
+    srcs = ["//proto/system/apps:apps_pb_c"],
+    hdrs = ["//proto/system/apps:apps_pb_h"],
     includes = ["."],   # callers #include "system/apps/apps.pb.h"
     copts = ["-fPIC"],
     deps = ["@pero_theia//platform/runtime:runtime_proto_cc"],
@@ -2029,7 +2048,7 @@ cc_library(
 '''
 
 _INIT_APPS_PROTO_BUILD = '''\
-# nanopb sources for the system.apps package. gen-app (--proto-out platform/proto)
+# nanopb sources for the system.apps package. gen-app (--proto-out proto)
 # writes apps.proto AND apps.options here (it auto-pins every string/bytes field
 # to a fixed char[]; override per field with an .art `[max_size:N]`). Both feed
 # this genrule (.options auto-loaded by nanopb). .pb.{c,h} are BUILT, not committed.

@@ -1,0 +1,11 @@
+# Consuming-workspace Bazel config (mirrors the framework, host-only).
+build --enable_bzlmod
+build --incompatible_enable_cc_toolchain_resolution
+build --action_env=PATH
+# nanopb pb.h location varies by libnanopb-dev version (flat /usr/include vs
+# /usr/include/nanopb/) — add the subdir so the generated *.pb.h #include <pb.h>
+# resolves either way (harmless when absent).
+build --copt=-I/usr/include/nanopb
+build:linux --cpu=k8
+build:linux --compiler=gcc
+build --config=linux

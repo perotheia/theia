@@ -80,30 +80,31 @@ log regenerates byte-identically
     Regen And Diff FC    log
 
 
-# ── Non-services FCs ──────────────────────────────────────────────────────
-# Same generator, different homes — proving gen-app's path-agnostic label
-# derivation. The apps spec is one spec, three process-compositions
-# (--composition appended to --out verbatim); gateway is a single-app FC
-# living outside services/.
+# ── Non-services FCs (demo consuming workspace) ────────────────────────────
+# Same generator, a different home AND a different workspace. The in-repo demo
+# app moved out of the framework tree into the CONSUMING workspace at demo/;
+# its .art + committed apps are resolved against demo/, not the framework root.
+# Still proves gen-app's path-agnostic label derivation: the apps spec is one
+# spec, three process-compositions (--composition appended to --out verbatim).
 
-apps Demo3WayP1 regenerates byte-identically
-    [Documentation]    apps/Demo3WayP1/{lib,main,impl/BUILD.bazel} ==
+demo apps Demo3WayP1 regenerates byte-identically
+    [Documentation]    demo/apps/Demo3WayP1/{lib,main,impl/BUILD.bazel} ==
     ...                gen-app --composition Demo3WayP1 from
-    ...                apps/system/apps/component.art.
+    ...                demo/system/apps/component.art (demo workspace).
     [Tags]    fc-regen-stability    hermetic    selftest
     Regen And Diff FC    demo_p1
 
 
-apps Demo3WayP2 regenerates byte-identically
-    [Documentation]    apps/Demo3WayP2/{lib,main,impl/BUILD.bazel} ==
-    ...                gen-app --composition Demo3WayP2 from the apps spec.
+demo apps Demo3WayP2 regenerates byte-identically
+    [Documentation]    demo/apps/Demo3WayP2/{lib,main,impl/BUILD.bazel} ==
+    ...                gen-app --composition Demo3WayP2 from the demo apps spec.
     [Tags]    fc-regen-stability    hermetic    selftest
     Regen And Diff FC    demo_p2
 
 
-apps Demo3WayP3 regenerates byte-identically
-    [Documentation]    apps/Demo3WayP3/{lib,main,impl/BUILD.bazel} ==
-    ...                gen-app --composition Demo3WayP3 from the apps spec.
+demo apps Demo3WayP3 regenerates byte-identically
+    [Documentation]    demo/apps/Demo3WayP3/{lib,main,impl/BUILD.bazel} ==
+    ...                gen-app --composition Demo3WayP3 from the demo apps spec.
     [Tags]    fc-regen-stability    hermetic    selftest
     Regen And Diff FC    demo_p3
 

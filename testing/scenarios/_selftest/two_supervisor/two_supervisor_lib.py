@@ -2,17 +2,26 @@
 
 Drives a LIVE 2-machine demo on a single host: two `supervisor`
 processes, each fed its own per-machine ``executor.json`` emitted by
-``artheia executor emit --rig {Central,Compute}Rig``. Central hosts the
-4 FC daemons (sm/com/per/ucm) + apps p1/p2; compute hosts the shwa FC +
+``artheia executor emit manifest.zonal_rig --rig {Central,Compute}Rig``.
+Central hosts the FC daemons + apps p1/p2; compute hosts the shwa FC +
 app p3. p3's DriverNode is a cross-process consumer of p1's CounterNode,
 so a green run proves the .art-declared cross-machine TIPC wiring holds
 when the two supervisor trees are brought up independently.
 
-Layout is produced by ``apps/stage_local.sh`` (install/<machine>/ with
-supervisor + executor.json + bin/<child>). This lib only orchestrates:
-stage → launch central → launch compute → assert spawns → SIGTERM →
-assert clean exit. No Puppet/systemd — the supervisor binary is run
-directly so the loop stays fast and hermetic.
+This is a DEMO-APP test and is anchored at the demo CONSUMING workspace
+(demo/). The fixture (the Demo3Way apps + the 2-machine split rig) lives
+there now: demo/manifest/zonal_rig.py exports CentralRig + ComputeRig.
+
+STRUCTURAL BLOCKER (live, can't run as-is after the demo move): the
+2-machine staging this lib drives (install/central/ AND install/compute/,
+each with supervisor + executor.json + bin/<child>) no longer has a
+producer. The demo's stage_local.sh became a SINGLE-machine wrapper
+(`theia stage-local central` → install/central/ only); the framework root
+no longer has apps/stage_local.sh at all. Materialising the 2-machine
+install tree from manifest.zonal_rig's CentralRig/ComputeRig is new demo
+infrastructure, not a path repoint, and the test additionally needs the
+full live C++ build (FC daemons + demo apps + supervisor). See
+`Stage Install Tree` for where it stops.
 
 Only used by two_supervisor_selftest.robot.
 """
@@ -47,25 +56,45 @@ class TwoSupervisorLib:
 
     @keyword("Use Workspace")
     def use_workspace(self, path: str) -> None:
+        """Anchor at the demo CONSUMING workspace root (demo/) — the dir
+        with MODULE.bazel + manifest/zonal_rig.py (CentralRig/ComputeRig)."""
         self._workspace = Path(path).resolve()
         if not (self._workspace / "MODULE.bazel").exists():
             raise AssertionError(
-                f"{self._workspace} doesn't look like a pero_theia checkout"
+                f"{self._workspace} doesn't look like a theia workspace"
             )
 
     @keyword("Stage Install Tree")
     def stage_install_tree(self) -> None:
-        """Run apps/stage_local.sh to lay out install/{central,compute}/.
+        """Lay out install/{central,compute}/ for the 2-machine demo.
 
-        Assumes the binaries are already built (5 FC daemons via Bazel,
-        p1/p2/p3 via the demo CMake build, supervisor via CMake). The
-        script copies them into per-machine bin/ dirs and emits each
-        machine's executor.json."""
+        STRUCTURAL BLOCKER after the demo move: there is no longer a
+        producer for the 2-machine install tree. The demo's stage_local.sh
+        is now SINGLE-machine (`theia stage-local central` → install/central/
+        only), and the framework root has no apps/stage_local.sh. This test
+        needs install/central/ AND install/compute/ — each with supervisor +
+        executor.json + bin/<child> — staged from manifest.zonal_rig's
+        CentralRig + ComputeRig, plus a full live C++ build of the FC daemons,
+        demo apps, and supervisor.
+
+        Until the demo grows a 2-machine staging path (e.g. a `stage-local
+        --rig zonal` mode that emits per-machine install trees from
+        CentralRig/ComputeRig), this keyword cannot run. We assert the
+        precise missing piece rather than silently passing."""
         assert self._workspace is not None
+        script = self._workspace / "stage_local.sh"
+        if not script.exists():
+            raise AssertionError(
+                f"no staging script at {script} — the demo's stage_local.sh "
+                "moved with the demo into demo/"
+            )
+        # The single-machine stage_local.sh only produces install/central/.
+        # Drive it so the central side is at least staged, then surface the
+        # missing compute side as the structural blocker.
         env = os.environ.copy()
         env.pop("PYTHONPATH", None)
         r = subprocess.run(
-            ["bash", "apps/stage_local.sh"],
+            ["bash", str(script)],
             cwd=str(self._workspace), env=env,
             capture_output=True, text=True, check=False,
         )
@@ -79,7 +108,13 @@ class TwoSupervisorLib:
             sup = self._workspace / "install" / machine / "supervisor"
             for p in (exe, sup):
                 if not p.exists():
-                    raise AssertionError(f"stage produced no {p}")
+                    raise AssertionError(
+                        f"stage produced no {p} — the demo's single-machine "
+                        "stage_local.sh stages only install/central/; the "
+                        "2-machine (central+compute) install tree this test "
+                        "needs has no producer after the demo move (see lib "
+                        "docstring)."
+                    )
 
     # ------------------------------------------------------------------
     # Launch / wait

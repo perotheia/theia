@@ -29,8 +29,13 @@
 package system
 
 import system.services.*    // system/services → ../services/system/services (Services bundle)
-import system.apps.*        // system/apps     → ../apps/system/apps       (Applications)
 import system.supervisor.*  // system/supervisor → ../platform/supervisor/system
+
+// NB: `system.apps.*` (the Demo3Way application cluster) is NOT part of
+// standalone theia.git either — the in-repo demo moved into the CONSUMING
+// workspace at demo/ (demo/system/apps/component.art). Like the gateway below,
+// the demo's aggregator imports these Theia clusters and Appends its app
+// cluster; the framework aggregator no longer references system.apps.
 
 // NB: the gateway is NOT part of standalone theia.git. `GatewayBridge` + the
 // vehicle-bus driver layer live in a CONSUMING workspace (gataway_ws), whose

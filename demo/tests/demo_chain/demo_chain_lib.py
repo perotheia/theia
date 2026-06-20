@@ -5,15 +5,27 @@ fresh /tmp workdir so the assertions don't depend on any committed
 output state. Each keyword does ONE stage; the test cases compose
 them so a failure points at the first broken hop.
 
+This is a DEMO-APP test and runs FROM the demo consuming workspace
+(demo/). All artheia paths are workspace-relative to demo/:
+
+  * .art source        system/apps/component.art
+  * rig module         manifest.rig          (importable: manifest/ is a
+                                              package at the demo root)
+
+artheia is the FRAMEWORK's console script — there is no demo/.venv, so
+we put the framework venv (<demo>/../.venv/bin, i.e. THEIA_ROOT/.venv)
+on PATH. Subprocesses run with cwd=demo/ and PYTHONPATH=. so the rig
+module imports.
+
 Pipeline stages (mirrors the architecture map):
 
   1. artheia parse              — .art syntax + AST shape
   2. artheia rig-deps           — rig.json (Bazel + GUI feed)
   3. artheia gen-netgraph       — per-cluster signal routing JSON
   4. artheia gen-routing        — per-process LocalRef/RemoteRef hh
-  5. artheia gen-app-composition — per-process CMakeLists + main.cc
-  6. artheia generate-manifest  — dist/manifest/<m>/{4 yamls + index}
-  7. artheia executor emit      — per-machine execution.yaml tree
+  5. artheia gen-app            — per-process app skeleton (lib/main/impl)
+  6. artheia generate-manifest  — dist/manifest/<m>/{4 jsons} + machines.json
+  7. artheia executor emit      — per-machine execution tree
   8. bazel build ...:image      — .ipk with arch tag matching rig.py
 
 Only used by demo_chain_selftest.robot.
@@ -42,13 +54,14 @@ class DemoChainLib:
 
     @keyword("Use Workspace")
     def use_workspace(self, path: str) -> None:
-        """Anchor at the pero_theia checkout root. All artheia paths
-        below are workspace-relative, so we cd to here before each
-        subprocess call."""
+        """Anchor at the demo consuming workspace root (the dir holding
+        MODULE.bazel + system/apps/component.art + manifest/). All
+        artheia paths below are workspace-relative, so we cd to here
+        before each subprocess call."""
         self._workspace = Path(path).resolve()
         if not (self._workspace / "MODULE.bazel").exists():
             raise AssertionError(
-                f"{self._workspace} doesn't look like a pero_theia checkout"
+                f"{self._workspace} doesn't look like a theia workspace"
             )
 
     @keyword("Use Workdir")
@@ -59,16 +72,25 @@ class DemoChainLib:
         self._workdir = Path(path)
         self._workdir.mkdir(parents=True, exist_ok=True)
 
-    def _artheia(self, *args: str) -> subprocess.CompletedProcess:
-        """Run `artheia ...` from the workspace root with the venv on PATH.
+    def _venv_bin(self) -> Path:
+        """The framework venv's bin dir. The demo workspace has no
+        venv of its own; artheia is the framework console script living
+        at THEIA_ROOT/.venv/bin (THEIA_ROOT == <demo>/..)."""
+        assert self._workspace is not None
+        return self._workspace.parent / ".venv" / "bin"
 
-        Strips PYTHONPATH from the subprocess env so the rf-theia venv's
-        sys.path (which Robot exposes via PYTHONPATH=.) doesn't shadow
-        the artheia package's `__version__` import."""
+    def _artheia(self, *args: str) -> subprocess.CompletedProcess:
+        """Run `artheia ...` from the demo workspace root with the
+        framework venv on PATH.
+
+        Sets PYTHONPATH=. so the demo's rig modules (manifest.rig etc.)
+        import — `manifest/` is a package at the workspace root. The
+        artheia package itself comes from the venv, so prepending '.'
+        doesn't shadow it."""
         assert self._workspace is not None, "call `Use Workspace` first"
         env = os.environ.copy()
-        env["PATH"] = f"{self._workspace}/.venv/bin:{env.get('PATH', '')}"
-        env.pop("PYTHONPATH", None)
+        env["PATH"] = f"{self._venv_bin()}:{env.get('PATH', '')}"
+        env["PYTHONPATH"] = "."
         return subprocess.run(
             ["artheia", *args],
             cwd=str(self._workspace),
@@ -93,7 +115,7 @@ class DemoChainLib:
     def stage1_parse(self) -> str:
         """Run `artheia parse system/apps/component.art` and
         return the tree dump. Validates grammar + import resolution
-        for the demo cluster + 3 compositions."""
+        for the demo cluster + its process compositions."""
         r = self._artheia("parse", "system/apps/component.art")
         self._ok(r, "stage 1: artheia parse")
         return r.stdout
@@ -116,7 +138,7 @@ class DemoChainLib:
         assert self._workdir is not None, "call `Use Workdir` first"
         out = self._workdir / "rig.json"
         r = self._artheia(
-            "rig-deps", "apps.manifest.rig", "--out", str(out)
+            "rig-deps", "manifest.rig", "--out", str(out)
         )
         self._ok(r, "stage 2: artheia rig-deps")
         if not out.exists():
@@ -218,22 +240,27 @@ class DemoChainLib:
             )
 
     # ------------------------------------------------------------------
-    # Stage 5 — gen-app-composition
+    # Stage 5 — gen-app (per-process app skeleton)
     # ------------------------------------------------------------------
 
     @keyword("Stage 5 Gen App Composition")
     def stage5_gen_app_composition(self, composition: str) -> str:
-        """Emit per-process CMake project skeletons (main.cc +
-        CMakeLists.txt). One project per `on process P` partition."""
+        """Emit the per-process app skeleton (lib/main/impl) for one
+        composition via `gen-app --kind fc --composition`. gen-app
+        appends the composition to --out, so the project lands at
+        <out>/<composition>/. One project per `on process P` partition."""
         assert self._workdir is not None
-        out_dir = self._workdir / f"app_{composition.lower()}"
+        out_dir = self._workdir / "app"
         out_dir.mkdir(exist_ok=True)
         r = self._artheia(
-            "gen-app-composition", "system/apps/component.art",
-            "--composition", composition,
+            "gen-app", "--kind", "fc",
+            "system/apps/component.art",
             "--out", str(out_dir),
+            "--proto-out", str(self._workdir / "proto"),
+            "--ns", "demo",
+            "--composition", composition,
         )
-        self._ok(r, f"stage 5: artheia gen-app-composition --composition {composition}")
+        self._ok(r, f"stage 5: artheia gen-app --composition {composition}")
         return str(out_dir)
 
     @keyword("App Composition Has Process Dir")
@@ -247,17 +274,18 @@ class DemoChainLib:
             )
 
     # ------------------------------------------------------------------
-    # Stage 6 — generate-manifest (per-machine YAML set)
+    # Stage 6 — generate-manifest (per-machine JSON set)
     # ------------------------------------------------------------------
 
     @keyword("Stage 6 Generate Manifest")
     def stage6_generate_manifest(self) -> str:
         """Emit the per-machine deploy manifest set:
-        <out>/<machine>/{machine,application,service,execution}.yaml + index.yaml."""
+        <out>/<machine>/{machine,application,service,execution}.json +
+        a top-level machines.json index."""
         assert self._workdir is not None
         out = self._workdir / "manifest"
         r = self._artheia(
-            "generate-manifest", "apps.manifest.rig",
+            "generate-manifest", "manifest.rig",
             "--out", str(out),
         )
         self._ok(r, "stage 6: artheia generate-manifest")
@@ -307,12 +335,12 @@ class DemoChainLib:
 
     @keyword("Index Json Lists Machines")
     def index_json_lists_machines(self, root: str, *names: str) -> None:
-        """Top-level index.json mirrors index.yaml — Puppet's bootstrap
+        """Top-level machines.json is the RigIndex — Puppet's bootstrap
         uses it to find each machine's directory."""
         import json as _json
-        jp = Path(root) / "index.json"
+        jp = Path(root) / "machines.json"
         if not jp.exists():
-            raise AssertionError(f"missing top-level index.json: {jp}")
+            raise AssertionError(f"missing top-level machines.json: {jp}")
         doc = _json.loads(jp.read_text())
         if doc.get("kind") != "RigIndex":
             raise AssertionError(
@@ -322,7 +350,7 @@ class DemoChainLib:
         missing = [n for n in names if n not in got]
         if missing:
             raise AssertionError(
-                f"index.json machines = {got}; missing {missing}"
+                f"machines.json machines = {got}; missing {missing}"
             )
 
     @keyword("Execution Json Lists Process")
@@ -344,13 +372,13 @@ class DemoChainLib:
 
     @keyword("Stage 7 Executor Emit")
     def stage7_executor_emit(self, machine: str) -> str:
-        """Emit the supervisor tree YAML for ONE machine. This is the
+        """Emit the supervisor tree for ONE machine. This is the
         per-machine slice (#287) — pinned SupervisorNodes whose host
         doesn't match are dropped."""
         assert self._workdir is not None
         out = self._workdir / f"executor_{machine}.json"
         r = self._artheia(
-            "executor", "emit", "apps.manifest.rig",
+            "executor", "emit", "manifest.rig",
             "--machine", machine,
             "--out", str(out),
         )
@@ -377,7 +405,7 @@ class DemoChainLib:
         produced .ipk path via `bazel cquery --output=files`."""
         assert self._workspace is not None
         env = os.environ.copy()
-        env["PATH"] = f"{self._workspace}/.venv/bin:{env.get('PATH', '')}"
+        env["PATH"] = f"{self._venv_bin()}:{env.get('PATH', '')}"
         target = f"@rig_apps//{machine}:image"
         b = subprocess.run(
             ["bazel", "build", target],

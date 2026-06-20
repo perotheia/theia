@@ -4,18 +4,26 @@ Documentation    End-to-end selftest of the Demo3Way generation
 ...              points at the first broken hop instead of a generic
 ...              "the demo build broke" failure mode.
 ...
+...              This is a DEMO-APP test: it runs FROM the demo
+...              consuming workspace (demo/), driving artheia against
+...              the demo's own `system/apps/component.art` +
+...              `manifest.rig`. The demo rig is single-machine — every
+...              component lands on `central` (x86_64/amd64). The
+...              multi-host split lives in manifest/zonal_rig.py and is
+...              exercised by the two_supervisor selftest, not here.
+...
 ...              Pipeline (matches docs/architecture.md):
 ...
 ...                .art source  ──┐
 ...                rig.py        ─┤  artheia parse / rig-deps / gen-netgraph
-...                               │  gen-routing / gen-app-composition
+...                               │  gen-routing / gen-app
 ...                               │
-...                              .yaml + .json + .hh + .cc + CMakeLists
+...                              .json + .hh + .cc + BUILD.bazel
 ...                               │
 ...                               │  artheia generate-manifest
 ...                               │  artheia executor emit
 ...                               │
-...                              dist/manifest/<machine>/*.yaml
+...                              dist/manifest/<machine>/*.json
 ...                               │
 ...                               │  bazel build @rig_apps//<m>:image
 ...                               │  (rules/rig.bzl pkg_opkg)
@@ -41,10 +49,10 @@ Suite Setup      Set Up Workspace + Workdir
 *** Variables ***
 ${TMPDIR}        %{TMPDIR=/tmp}
 ${WORKDIR}       ${TMPDIR}/demo_chain_selftest
-# Workspace root — when run from `testing/` with PYTHONPATH=. (the
-# canonical TESTING.md command), CURDIR resolves under testing/.
-# We need the pero_theia checkout one level up.
-${WORKSPACE}     ${CURDIR}/../../../..
+# Workspace root — this suite lives at demo/tests/demo_chain/, so the
+# demo consuming-workspace root (the dir with MODULE.bazel +
+# system/apps/component.art + manifest/) is two levels up.
+${WORKSPACE}     ${CURDIR}/../..
 
 
 *** Keywords ***
@@ -58,9 +66,9 @@ Set Up Workspace + Workdir
 
 *** Test Cases ***
 Stage 1 — parse component.art
-    [Documentation]    `artheia parse demo/system/demo/component.art`
+    [Documentation]    `artheia parse system/apps/component.art`
     ...                must succeed and dump a tree that mentions
-    ...                the Demo3Way cluster + its 3 process
+    ...                the Demo3Way cluster + its process
     ...                compositions.
     [Tags]    demo-chain    hermetic    selftest    stage-1
 
@@ -72,21 +80,19 @@ Stage 1 — parse component.art
 
 
 Stage 2 — rig-deps JSON
-    [Documentation]    `artheia rig-deps apps.manifest.rig` emits
-    ...                the Bazel rig_ext extension's input.
-    ...                Asserts machine list, per-machine arch, and
-    ...                that demo_p1/p2/p3 components pin to
-    ...                compute_host (per #289-style pinning).
+    [Documentation]    `artheia rig-deps manifest.rig` emits the
+    ...                Bazel rig_ext extension's input. The demo rig is
+    ...                single-machine: every component pins to `central`
+    ...                (x86_64 → amd64). Asserts the machine + arch and
+    ...                that p1/p2/p3 land on it.
     [Tags]    demo-chain    hermetic    selftest    stage-2
 
     ${rig_json}=    Stage 2 Rig Deps
-    Json Has Machines    ${rig_json}    admin_host    central_host    compute_host
-    # ComputeHost is aarch64 in rig.py — #371 wired this through.
-    Machine Arch Is      ${rig_json}    compute_host    arm64
-    Machine Arch Is      ${rig_json}    central_host   amd64
-    Json Has Component   ${rig_json}    demo_p1    compute_host
-    Json Has Component   ${rig_json}    demo_p2    compute_host
-    Json Has Component   ${rig_json}    demo_p3    compute_host
+    Json Has Machines    ${rig_json}    central
+    Machine Arch Is      ${rig_json}    central    amd64
+    Json Has Component   ${rig_json}    p1    central
+    Json Has Component   ${rig_json}    p2    central
+    Json Has Component   ${rig_json}    p3    central
 
 
 Stage 3 — gen-netgraph JSON
@@ -122,38 +128,32 @@ Stage 4 — gen-routing per-process headers (KNOWN BROKEN, #378)
     ...    Stage 4 Gen Routing    Demo3WayP1
 
 
-Stage 5 — gen-app-composition CMake projects (KNOWN BROKEN, #378)
-    [Documentation]    One CMake project per `on process P`
-    ...                partition. Today these are still CMake (not
-    ...                yet cc_binary); regression here would mean
-    ...                the codegen path that ties refs.hh to a real
-    ...                build broke.
-    ...
-    ...                Same broken loader as stage 4 — see #378.
+Stage 5 — gen-app per-process skeleton
+    [Documentation]    One app skeleton per `on process P` partition,
+    ...                emitted by `gen-app --kind fc --composition`.
+    ...                gen-app appends the composition to --out, so the
+    ...                project lands at <out>/Demo3WayP1/{lib,main,impl}.
     [Tags]    demo-chain    hermetic    selftest    stage-5
-    ...      known-broken
 
-    Run Keyword And Expect Error    *Unknown object "CounterNode"*
-    ...    Stage 5 Gen App Composition    Demo3WayP1
+    ${out}=    Stage 5 Gen App Composition    Demo3WayP1
+    App Composition Has Process Dir    ${out}    Demo3WayP1
 
 
 Stage 6 — generate-manifest JSON set
     [Documentation]    Per-machine deploy manifest set — 4 JSON files
-    ...                + index.json. The C++ supervisor +
-    ...                supervisor-gui read from here directly via
-    ...                nlohmann/json (no yaml-cpp dep since #380).
-    ...                Asserts demo_p1/p2/p3 land in compute_host's
+    ...                + a top-level machines.json index. The C++
+    ...                supervisor + supervisor-gui read from here
+    ...                directly via nlohmann/json (no yaml-cpp dep
+    ...                since #380). Asserts p1/p2/p3 land in central's
     ...                execution.json.
     [Tags]    demo-chain    hermetic    selftest    stage-6
 
     ${root}=    Stage 6 Generate Manifest
-    Manifest Has Machine Jsons    ${root}    central_host
-    Manifest Has Machine Jsons    ${root}    compute_host
-    Manifest Has Machine Jsons    ${root}    admin_host
+    Manifest Has Machine Jsons    ${root}    central
 
-    Execution Json Lists Process    ${root}    compute_host    demo_p1
-    Execution Json Lists Process    ${root}    compute_host    demo_p2
-    Execution Json Lists Process    ${root}    compute_host    demo_p3
+    Execution Json Lists Process    ${root}    central    p1
+    Execution Json Lists Process    ${root}    central    p2
+    Execution Json Lists Process    ${root}    central    p3
 
 
 Stage 6b — manifest schema sanity (#379, #380)
@@ -167,42 +167,39 @@ Stage 6b — manifest schema sanity (#379, #380)
     ${root}=    Stage 6 Generate Manifest
 
     # Top-level kind tags (one consumer-facing identity per file).
-    Json Kind Is    ${root}    central_host    machine        MachineManifest
-    Json Kind Is    ${root}    central_host    application    ApplicationManifest
-    Json Kind Is    ${root}    central_host    service        ServiceManifest
-    Json Kind Is    ${root}    central_host    execution      ExecutionManifest
+    Json Kind Is    ${root}    central    machine        MachineManifest
+    Json Kind Is    ${root}    central    application    ApplicationManifest
+    Json Kind Is    ${root}    central    service        ServiceManifest
+    Json Kind Is    ${root}    central    execution      ExecutionManifest
 
-    # index.json — Puppet's per-host directory lookup.
-    Index Json Lists Machines    ${root}    central_host    compute_host    admin_host
+    # machines.json — the RigIndex Puppet uses for per-host lookup.
+    Index Json Lists Machines    ${root}    central
 
     # Hard wall against YAML re-emergence.
     No Yaml Emitted    ${root}
 
 
 Stage 7 — executor emit per-machine tree
-    [Documentation]    Per-machine supervisor tree YAML. Root is
-    ...                always `one_for_all`; non-matching pinned
+    [Documentation]    Per-machine supervisor tree. Root is always
+    ...                `one_for_all`; non-matching pinned
     ...                SupervisorNodes are pruned out. This is the
-    ...                YAML the C++ supervisor reads at startup.
+    ...                tree the C++ supervisor reads at startup.
     [Tags]    demo-chain    hermetic    selftest    stage-7
 
-    ${y}=    Stage 7 Executor Emit    central_host
+    ${y}=    Stage 7 Executor Emit    central
     Executor Json Root Strategy Is    ${y}    one_for_all
-
-    ${y2}=    Stage 7 Executor Emit    compute_host
-    Executor Json Root Strategy Is    ${y2}    one_for_all
 
 
 Stage 8 — bazel build .ipk image (arch tag matches rig.py)
     [Documentation]    The terminal stage — bazel build produces
     ...                an .ipk whose arch tag matches what rig.py
-    ...                declared for the machine (#371). ComputeHost
-    ...                declared aarch64 → _arm64.ipk; CentralHost
-    ...                declared x86_64 → _amd64.ipk.
+    ...                declared for the machine (#371). The demo's
+    ...                single `central` machine declared x86_64 →
+    ...                _amd64.ipk.
     ...
     ...                Tagged 'live-bazel' — skip in CI environments
     ...                where Bazel isn't installed.
     [Tags]    demo-chain    live-bazel    selftest    stage-8
 
-    ${ipk}=    Stage 8 Bazel Build Image    compute_host
-    Ipk Name Carries Arch    ${ipk}    arm64
+    ${ipk}=    Stage 8 Bazel Build Image    central
+    Ipk Name Carries Arch    ${ipk}    amd64

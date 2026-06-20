@@ -1,17 +1,19 @@
 *** Settings ***
 Documentation    Live two-supervisor central/compute selftest.
 ...
-...              The apps rig (apps/manifest/rig.py) splits its software
-...              onto two TARGET machines:
+...              This is a DEMO-APP test anchored at the demo CONSUMING
+...              workspace (demo/). The demo's 2-machine split rig
+...              (demo/manifest/zonal_rig.py) puts its software on two
+...              TARGET machines:
 ...
-...                central_host (CentralRig)
+...                central (CentralRig)
 ...                  root → ar_sup → core_sup → sm
 ...                                            ├ network_sup → com
 ...                                            ├ host_svc_sup → per
 ...                                            └ pltf_sup → ucm
 ...                                  → app_sup → p1, p2
 ...
-...                compute_host (ComputeRig)
+...                compute (ComputeRig)
 ...                  root → srv_sup → shwa
 ...                       → app_sup → p3
 ...
@@ -24,13 +26,18 @@ Documentation    Live two-supervisor central/compute selftest.
 ...                * both supervisors drain cleanly on SIGTERM
 ...
 ...              Each machine is fed its own executor.json, emitted by
-...              `artheia executor emit --rig {Central,Compute}Rig` — the
-...              .art-driven rig is the source of truth for the split.
+...              `artheia executor emit manifest.zonal_rig --rig
+...              {Central,Compute}Rig` — the .art-driven rig is the source
+...              of truth for the split.
 ...
-...              Prereq: binaries built (Bazel FC daemons + demo CMake
-...              apps + supervisor CMake). The suite stages them via
-...              apps/stage_local.sh; it does NOT build. Tag 'live' so
-...              CI can gate it where the binaries aren't present.
+...              STRUCTURAL BLOCKER (live): after the demo extraction there
+...              is no producer for the 2-machine install tree this suite
+...              orchestrates. The demo's stage_local.sh became a
+...              SINGLE-machine wrapper (install/central/ only); the
+...              framework root no longer has apps/stage_local.sh. The first
+...              keyword (Stage Install Tree) fails with the precise missing
+...              piece. Needs new demo 2-machine staging + a full live C++
+...              build. Tag 'live' so CI gates it.
 
 Library          ${CURDIR}/two_supervisor_lib.py
 
@@ -41,7 +48,10 @@ Force Tags       selftest    live    two-supervisor
 
 
 *** Variables ***
-${WORKSPACE}     ${CURDIR}/../../../..
+# The demo CONSUMING workspace (demo/) — this suite lives at
+# testing/scenarios/_selftest/two_supervisor/, so demo/ is four levels up
+# then into demo. zonal_rig (CentralRig/ComputeRig) + the apps live there.
+${WORKSPACE}     ${CURDIR}/../../../../demo
 
 
 *** Test Cases ***

@@ -47,12 +47,26 @@ class FcSpec:
                  services/<short>; an FC lives anywhere.
     composition: --composition for a multi-composition spec (the demo);
                  None for a single-app FC.
+    workspace:   which workspace the FC lives in, relative to the framework
+                 checkout root. None ⇒ the framework root itself (services/
+                 FCs). "demo" ⇒ the in-repo demo CONSUMING workspace, whose
+                 app FCs (Demo3Way) moved out of the framework tree. The lib
+                 runs gen-app with cwd / spec / in-tree resolved against this
+                 workspace, and --proto-out set per-workspace.
+    proto_out:   --proto-out tree, workspace-relative. The framework's
+                 committed FCs were emitted with the proto tree under
+                 platform/proto (that's where the //platform/proto:platform_protos
+                 label the BUILD files reference resolves), so that's the
+                 default. The demo workspace keeps proto at its root (proto/),
+                 so the demo FCs override this to "proto".
     """
     short: str
     spec: str
     ns: str
     out: str
     composition: Optional[str] = None
+    workspace: Optional[str] = None
+    proto_out: str = "platform/proto"
     # impl/BUILD.bazel is normally regen-stable + checked. A few FCs HAND-OWN
     # it because they add real cc_library targets gen-app can't emit (e.g. per's
     # per_etcd / migration_registry isolation, log's shared trace_hub). For
@@ -101,13 +115,22 @@ FC_SPECS = [
     # regen-stable. The ara::rds transport lib lives in services/rds/transport
     # (a sibling target), not impl/BUILD, so impl/BUILD is gen-app-default.
     FcSpec("rds", "system/services/rds/package.art", "ara::rds", "services/rds"),
-    # Non-services FCs — same generator, different homes. These prove
-    # gen-app's path-agnostic label derivation (//<out>/lib:<short>_lib).
-    # The apps spec is one spec with three process-compositions; each is its
-    # own app dir via --composition (appended to --out verbatim).
-    FcSpec("demo_p1", "system/apps/component.art", "demo", "apps", "Demo3WayP1"),
-    FcSpec("demo_p2", "system/apps/component.art", "demo", "apps", "Demo3WayP2"),
-    FcSpec("demo_p3", "system/apps/component.art", "demo", "apps", "Demo3WayP3"),
+    # Non-services FCs — same generator, different home AND a different
+    # workspace. The in-repo demo app moved out of the framework tree into a
+    # CONSUMING workspace at demo/, so its .art (demo/system/apps/component.art)
+    # and committed apps (demo/apps/Demo3WayP<N>) are resolved against the demo
+    # workspace, not the framework root. The C++ namespace is `system_apps` —
+    # the demo's gen-app default derived from the system.apps package path (the
+    # committed apps were emitted with --ns system_apps). These still prove
+    # gen-app's path-agnostic label derivation (//<out>/lib:<short>_lib): the
+    # apps spec is one spec with three process-compositions, each its own app
+    # dir via --composition (appended to --out verbatim).
+    FcSpec("demo_p1", "system/apps/component.art", "system_apps", "apps",
+           "Demo3WayP1", workspace="demo", proto_out="proto"),
+    FcSpec("demo_p2", "system/apps/component.art", "system_apps", "apps",
+           "Demo3WayP2", workspace="demo", proto_out="proto"),
+    FcSpec("demo_p3", "system/apps/component.art", "system_apps", "apps",
+           "Demo3WayP3", workspace="demo", proto_out="proto"),
 ]
 
 
@@ -141,10 +164,16 @@ class FcRegenLib:
             shutil.rmtree(scratch)
         scratch.mkdir(parents=True)
 
+        # Which workspace this FC lives in. services/ FCs live in the
+        # framework checkout (Use Workspace anchors there); the demo app FCs
+        # moved out into the demo CONSUMING workspace at <framework>/demo. The
+        # .art spec + committed FC dir are resolved against THIS workspace.
+        fc_ws = self._workspace / fc.workspace if fc.workspace else self._workspace
+
         # The cross-slice Bazel labels gen-app emits are derived from the
         # --out STRING (//<out>/lib:<short>_lib), so to reproduce the
         # committed FC byte-for-byte we must pass the SAME workspace-
-        # relative --out the real invocation uses (e.g. `demo`, not an
+        # relative --out the real invocation uses (e.g. `apps`, not an
         # absolute /tmp path). We run with cwd=scratch and an ABSOLUTE
         # spec path, so the relative --out writes into scratch while the
         # baked-in labels stay `//<fc.out>/...`. --composition is appended
@@ -152,15 +181,17 @@ class FcRegenLib:
         # both for the filesystem and the label prefix).
         cmd = [
             "artheia", "gen-app", "--kind", "fc",
-            str(self._workspace / fc.spec),
+            str(fc_ws / fc.spec),
             "--out", fc.out,                       # workspace-relative — drives labels
-            "--proto-out", "proto",
+            "--proto-out", fc.proto_out,
             "--ns", fc.ns,
         ]
         if fc.composition:
             cmd += ["--composition", fc.composition]
 
         env = os.environ.copy()
+        # artheia is the FRAMEWORK console script — its venv lives at the
+        # framework root regardless of which workspace the FC belongs to.
         env["PATH"] = f"{self._workspace}/.venv/bin:{env.get('PATH', '')}"
         env.pop("PYTHONPATH", None)
         result = subprocess.run(
@@ -174,9 +205,9 @@ class FcRegenLib:
             )
 
         # gen-app wrote to scratch/<fc.in_tree>; the committed copy is at
-        # <workspace>/<fc.in_tree>.
+        # <fc_ws>/<fc.in_tree>.
         regen_dir = scratch / fc.in_tree
-        in_tree = self._workspace / fc.in_tree
+        in_tree = fc_ws / fc.in_tree
         # Diff every regenerable file. Note we skip the source-path
         # comment because that's a cosmetic /tmp vs services/ path
         # difference, not real drift.

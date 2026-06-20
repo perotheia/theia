@@ -12,12 +12,12 @@ Documentation    Config-migration tests — PER NODE, parametrized by (node,
 ...              no live stack. The `live` case also drives per MigrateBulk and
 ...              asserts online == offline (the lockstep invariant).
 ...
-...              Run hermetic:
+...              Run hermetic (from the demo workspace root):
 ...                PYTHONPATH=. ../.venv/bin/robot --include hermetic \
-...                  scenarios/services/per_migration/
+...                  tests/per_migration/
 ...              Run live (needs `theia start` + etcd):
 ...                PYTHONPATH=. ../.venv/bin/robot --include live \
-...                  scenarios/services/per_migration/
+...                  tests/per_migration/
 Library          ${CURDIR}/per_migration_lib.py
 
 

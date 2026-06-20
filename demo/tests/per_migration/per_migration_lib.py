@@ -29,8 +29,8 @@ from typing import Any, Optional
 
 from robot.api.deco import keyword, library
 
-# Workspace root: testing/scenarios/services/per_migration/ -> 4 up.
-REPO = Path(__file__).resolve().parents[4]
+# Workspace root (the demo module): demo/tests/per_migration/ -> 2 up.
+REPO = Path(__file__).resolve().parents[2]
 MIGRATION = REPO / "migration"
 SNAP_DIR = MIGRATION / "snapshots"
 
@@ -116,11 +116,14 @@ def _demo_pb2():
     gen = Path("/tmp/rf_migpb")
     if not (gen / "system" / "apps" / "apps_pb2.py").exists():
         gen.mkdir(parents=True, exist_ok=True)
-        proto = REPO / "platform/proto/system/apps/apps.proto"
+        # The demo app proto lives in THIS workspace (demo/proto); the runtime
+        # control proto it imports lives in the framework (@pero_theia, i.e. the
+        # sibling Theia checkout one dir up from the demo module root).
+        proto = REPO / "proto/system/apps/apps.proto"
         subprocess.run(
             [sys.executable, "-m", "grpc_tools.protoc",
-             "-I", str(REPO / "platform/proto"),
-             "-I", str(REPO / "platform/runtime/proto"),
+             "-I", str(REPO / "proto"),
+             "-I", str(REPO.parent / "platform/runtime/proto"),
              "--python_out", str(gen), str(proto)],
             check=True, cwd=str(REPO))
     p = str(gen / "system" / "demo")

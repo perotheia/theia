@@ -6,7 +6,7 @@ Documentation    Hermetic selftest of the rf-theia trace_decoder
 ...              one trace record without a live cluster:
 ...
 ...                runtime/Tracer.hh (C++)  ──nanopb wire bytes──►
-...                libtrace_decoder_ctypes.so (ctypes)            ──►
+...                libtrace_decoder_system.so (ctypes plugin)     ──►
 ...                rf_theia.adapters.trace_decoder.TraceDecoder   ──►
 ...                Python dict
 ...
@@ -16,10 +16,12 @@ Documentation    Hermetic selftest of the rf-theia trace_decoder
 ...              cc_test produces (#359). If proto-wire-v3 stayed
 ...              stable between the two stacks for that one message,
 ...              the design holds; scaling out is just registering
-...              more prototypes in trace_decoder_protos.cc.
+...              more prototypes in trace_decoder_system_protos.cc
+...              (framework) / an app workspace's
+...              trace_decoder_apps_protos.cc.
 ...
 ...              Prereq: `bazel build
-...                //platform/runtime/trace:libtrace_decoder_ctypes.so`.
+...                //platform/runtime/trace:libtrace_decoder_system.so`.
 Library          ${CURDIR}/trace_decoder_lib.py
 
 
@@ -35,7 +37,7 @@ ${RUNNING_PAYLOAD_HEX}    080210959a97ece39fe7cb17
 
 *** Test Cases ***
 SO Has Expected Prototypes Registered
-    [Documentation]    The trace_decoder_protos.cc static-init shim
+    [Documentation]    The trace_decoder_system_protos.cc static-init shim
     ...                must register at least one message type. If the
     ...                count is 0, the static `Registrar` ctor didn't
     ...                run (linker drop) — alwayslink=True is missing.

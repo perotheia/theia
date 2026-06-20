@@ -1,0 +1,49 @@
+# libtrace_decoder_apps.so — the APP (consuming-workspace) half of the
+# pluggable trace-decoder.
+#
+# The framework ships libtrace_decoder_system.so (sm + other framework wire
+# types). This workspace ships libtrace_decoder_apps.so (its own system_apps_*
+# types). Host consumers (supervisor-gui, rf-theia adapter, rtdb) dlopen EVERY
+# libtrace_decoder_*.so in their plugin dir and try each plugin's `trace_decode`
+# until one succeeds — so the two .so's coexist, each with its own global
+# Decoder registry.
+#
+# Built against the framework's proto-agnostic decoder CORE (@pero_theia//
+# platform/runtime/trace:trace_decoder) for register_global + the C ABI, plus
+# THIS workspace's libprotobuf C++ binding of the app proto.
+
+package(default_visibility = ["//visibility:public"])
+
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
+
+
+# APP proto registration shim — alwayslink so its static-init Registrar ctor
+# runs even though no symbol from this TU is referenced.
+cc_library(
+    name = "trace_decoder_apps_protos",
+    srcs = ["trace_decoder_apps_protos.cc"],
+    copts = [
+        "-Wall",
+        "-Wextra",
+        "-std=c++17",
+        "-fPIC",
+    ],
+    deps = [
+        "@pero_theia//platform/runtime/trace:trace_decoder",
+        "//proto/system/apps:apps_pb_cpp",
+    ],
+    alwayslink = True,
+)
+
+
+# The shippable APP decoder plugin. Combines the framework decoder core with
+# this workspace's proto registrar. Consumers load it alongside the framework
+# libtrace_decoder_system.so.
+cc_binary(
+    name = "libtrace_decoder_apps.so",
+    linkshared = True,
+    deps = [
+        "@pero_theia//platform/runtime/trace:trace_decoder",
+        ":trace_decoder_apps_protos",
+    ],
+)

@@ -33,13 +33,22 @@ cc_library(
 )
 
 
-# Proto registration shim — pulled into libtrace_decoder.so via
-# `alwayslink = True` so its static-init `Registrar` ctor actually
-# runs even though no symbol from this TU is referenced. Without
-# this flag the linker drops the .o entirely.
+# FRAMEWORK proto registration shim — pulled into the framework decoder
+# .so via `alwayslink = True` so its static-init `Registrar` ctor
+# actually runs even though no symbol from this TU is referenced.
+# Without this flag the linker drops the .o entirely.
+#
+# PLUGGABLE DECODER SPLIT: this is the SYSTEM (framework) half. It
+# registers ONLY framework wire types (system_services_sm_*). The demo
+# app types (system_apps_*) moved to the consuming workspace's own
+# plugin (demo/trace/trace_decoder_apps_protos.cc → libtrace_decoder_apps.so).
+#
+# Back-compat note: was `trace_decoder_protos` (srcs trace_decoder_protos.cc),
+# which also linked //platform/proto/system/apps:apps_pb_cpp. That apps proto
+# moved to demo/ and the dep was dropped here.
 cc_library(
-    name = "trace_decoder_protos",
-    srcs = ["trace_decoder_protos.cc"],
+    name = "trace_decoder_system_protos",
+    srcs = ["trace_decoder_system_protos.cc"],
     copts = [
         "-Wall",
         "-Wextra",
@@ -49,28 +58,33 @@ cc_library(
     deps = [
         ":trace_decoder",
         "//platform/proto/system/services/sm:sm_pb_cpp",
-        # demo message set (Inc/Get/GetReply) — the records the GUI/rtdb show
-        # against the running demo, so the decoder can render them too.
-        "//platform/proto/system/apps:apps_pb_cpp",
     ],
     alwayslink = True,
 )
 
 
-# The shippable .so for ctypes consumers (rf-theia, rtdb). Combines
-# the decoder lib with its proto registrar — the .so a Python caller
-# dlopen()s already knows about every type at the moment of the first
-# call.
+# The shippable FRAMEWORK decoder plugin for ctypes consumers (rf-theia,
+# rtdb, supervisor-gui). Combines the proto-agnostic decoder core with
+# the framework proto registrar — the .so a consumer dlopen()s already
+# knows about every framework type at the first call.
 #
-# Output is `libtrace_decoder_ctypes.so` to avoid colliding with the
-# `libtrace_decoder.so` that `:trace_decoder` (a cc_library) emits
-# alongside its .a. Python opens this via its full name anyway.
+# Output is `libtrace_decoder_system.so`: the SYSTEM (framework) plugin.
+# Consumers load EVERY `libtrace_decoder_*.so` from their plugin dir
+# (this one + the app workspace's `libtrace_decoder_apps.so`) and try
+# each plugin's `trace_decode` in turn until one succeeds.
+#
+# Back-compat note: was `libtrace_decoder_ctypes.so` (a single monolithic
+# .so carrying both framework + demo types). Renamed in the pluggable
+# split; the demo/ install bundle's install_lib and the three consumers
+# (supervisor-gui, rf-theia adapter, rtdb-via-adapter) were updated to
+# match. The distinct `_system` suffix also still avoids colliding with
+# the `libtrace_decoder.so` that `:trace_decoder` (a cc_library) emits.
 cc_binary(
-    name = "libtrace_decoder_ctypes.so",
+    name = "libtrace_decoder_system.so",
     linkshared = True,
     deps = [
         ":trace_decoder",
-        ":trace_decoder_protos",
+        ":trace_decoder_system_protos",
     ],
 )
 

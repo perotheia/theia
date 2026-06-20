@@ -1,6 +1,8 @@
-// trace_decoder_lib — dlopen wrapper around libtrace_decoder_ctypes.so.
-// Decodes a trace record's proto payload to JSON for the trace panel's
-// detail pane. See trace_decoder_lib.cpp for the .so discovery rules.
+// trace_decoder_lib — dlopen wrapper around the pluggable trace decoders.
+// Loads EVERY libtrace_decoder_*.so in the plugin dir (framework system +
+// app plugins) and decodes a trace record's proto payload to JSON for the
+// trace panel's detail pane, trying each plugin until one succeeds. See
+// trace_decoder_lib.cpp for the plugin-dir discovery rules.
 
 #pragma once
 
@@ -16,7 +18,7 @@ public:
     TraceDecoderLib(const TraceDecoderLib&)            = delete;
     TraceDecoderLib& operator=(const TraceDecoderLib&) = delete;
 
-    // True if libtrace_decoder_ctypes.so was found + opened.
+    // True if at least one libtrace_decoder_*.so plugin was found + opened.
     bool available() const;
 
     // Decode `payload` (raw proto-wire-v3 bytes) against `msg_type` (the wire

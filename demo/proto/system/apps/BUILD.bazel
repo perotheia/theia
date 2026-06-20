@@ -17,3 +17,53 @@ genrule(
 filegroup(name = "apps_pb_c", srcs = ["apps.pb.c"])
 filegroup(name = "apps_pb_h", srcs = ["apps.pb.h"])
 filegroup(name = "apps_proto", srcs = ["apps.proto"])
+
+
+# ---------------------------------------------------------------------------
+# Google libprotobuf companion — REFLECTION-capable C++ binding of the
+# same .proto. Host-only, used by the app's trace-decoder plugin
+# (//trace:libtrace_decoder_apps.so), which decodes a record's payload via
+# google::protobuf reflection. Mirrors the FRAMEWORK's old apps_pb_cpp
+# pattern (protoc --cpp_out genrule + cc_library on @pero_theia's
+# system_protobuf), but lives HERE now that the demo proto moved into this
+# consuming workspace.
+#
+# protoc writes `apps.pb.h`, which would collide with nanopb's apps.pb.h,
+# so we emit into a `cpp/` subdir. The package root is `proto/` (two dirs up
+# from apps.proto) so the generated path is `cpp/system/apps/apps.pb.h` and
+# callers write `#include "system/apps/apps.pb.h"` — same shape as the
+# nanopb `//proto:platform_protos` include convention.
+# ---------------------------------------------------------------------------
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+genrule(
+    name = "apps_pb_cpp_gen",
+    srcs = ["apps.proto"],
+    outs = [
+        "cpp/system/apps/apps.pb.cc",
+        "cpp/system/apps/apps.pb.h",
+    ],
+    cmd = "set -e;"
+        # proto = .../proto/system/apps/apps.proto. Strip the trailing
+        # `system/apps/apps.proto` to get the `proto/` package root protoc must
+        # -I, so the file's logical path stays `system/apps/apps.proto`.
+        + " proto=$(location apps.proto);"
+        + " proto_root=$${proto%/system/apps/apps.proto};"
+        # out_dir = the `cpp/` dir under the genrule's bin output root.
+        + " out=$(location cpp/system/apps/apps.pb.cc);"
+        + " out_dir=$${out%/system/apps/apps.pb.cc};"
+        + " mkdir -p $$out_dir;"
+        + " protoc -I $$proto_root --cpp_out=$$out_dir system/apps/apps.proto;",
+    local = True,
+)
+
+cc_library(
+    name = "apps_pb_cpp",
+    srcs = ["cpp/system/apps/apps.pb.cc"],
+    hdrs = ["cpp/system/apps/apps.pb.h"],
+    # `cpp/` is the include root so callers write
+    # `#include "system/apps/apps.pb.h"`.
+    includes = ["cpp"],
+    deps = ["@pero_theia//third_party:system_protobuf"],
+    visibility = ["//visibility:public"],
+)

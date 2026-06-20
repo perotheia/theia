@@ -53,10 +53,16 @@ pkg_files(
     prefix = "theia/bin",
 )
 
-# theia/lib — shared libraries (trace decoder ctypes .so).
+# theia/lib — shared libraries: the pluggable trace-decoder plugins. The
+# FRAMEWORK system plugin (sm + framework types) comes from @pero_theia; the
+# APP plugin (this workspace's system_apps_* types) is built locally. Consumers
+# dlopen BOTH from the install's theia/lib (see THEIA_TRACE_DECODER_PATH).
 pkg_files(
     name = "install_lib",
-    srcs = ["@pero_theia//platform/runtime/trace:libtrace_decoder_ctypes.so"],
+    srcs = [
+        "@pero_theia//platform/runtime/trace:libtrace_decoder_system.so",
+        "//trace:libtrace_decoder_apps.so",
+    ],
     attributes = pkg_attributes(mode = "0644"),
     prefix = "theia/lib",
 )

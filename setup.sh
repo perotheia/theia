@@ -36,4 +36,34 @@ case ":${PYTHONPATH:-}:" in
 esac
 export PYTHONPATH
 
+# THEIA_WORKSPACE — the dir this setup.sh was SOURCED FROM (the consuming
+# workspace, e.g. demo/ or gataway_ws), when it differs from THEIA_ROOT (the
+# framework checkout). A consuming workspace sources the SIBLING theia's
+# setup.sh from its own root, so $PWD at source time IS the workspace. When you
+# source the framework's own setup.sh from the framework root, the two match and
+# THEIA_WORKSPACE is left unset.
+_theia_pwd="$(pwd)"
+if [ "$_theia_pwd" != "$THEIA_ROOT" ]; then
+  THEIA_WORKSPACE="$_theia_pwd"
+  export THEIA_WORKSPACE
+fi
+
+# THEIA_TRACE_DECODER_PATH — colon-separated DIRS the pluggable trace decoder
+# scans for `libtrace_decoder_*.so` (framework system plugin + the workspace's
+# app plugin + an installed prefix). Consumers (supervisor-gui, rf-theia
+# adapter, rtdb) dlopen EVERY plugin found here and try each to decode a record.
+_theia_decoder_dirs="$THEIA_ROOT/bazel-bin/platform/runtime/trace"
+if [ -n "${THEIA_WORKSPACE:-}" ]; then
+  _theia_decoder_dirs="$_theia_decoder_dirs:$THEIA_WORKSPACE/bazel-bin/trace"
+fi
+if [ -d /opt/theia/lib ]; then
+  _theia_decoder_dirs="$_theia_decoder_dirs:/opt/theia/lib"
+fi
+case ":${THEIA_TRACE_DECODER_PATH:-}:" in
+  *":$_theia_decoder_dirs:"*) ;;
+  *) THEIA_TRACE_DECODER_PATH="$_theia_decoder_dirs${THEIA_TRACE_DECODER_PATH:+:$THEIA_TRACE_DECODER_PATH}";;
+esac
+export THEIA_TRACE_DECODER_PATH
+unset _theia_pwd _theia_decoder_dirs
+
 echo "theia: THEIA_ROOT=$THEIA_ROOT (sourced)"

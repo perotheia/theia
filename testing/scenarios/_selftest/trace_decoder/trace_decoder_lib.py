@@ -20,7 +20,7 @@ class TraceDecoderLib:
 
     @keyword("Open Trace Decoder")
     def open_trace_decoder(self) -> None:
-        """Locate + dlopen libtrace_decoder_ctypes.so."""
+        """Locate + dlopen the trace-decoder plugins (libtrace_decoder_*.so)."""
         self._dec = TraceDecoder()
 
     @keyword("Trace Decoder Registered Count")

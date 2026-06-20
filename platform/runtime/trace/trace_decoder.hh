@@ -90,4 +90,12 @@ int trace_decode(const char*    msg_type_name,
 // expected.
 unsigned long trace_decoder_size(void);
 
+// Release/version string for THIS plugin .so. Each libtrace_decoder_*.so
+// (framework `libtrace_decoder_system.so`, app `libtrace_decoder_apps.so`,
+// …) exports its own. The pluggable-decoder loader reads every plugin's
+// value and, when an app plugin's version disagrees with the framework
+// system plugin's, logs a WARNING (it does NOT hard-fail) — a wire-format
+// drift early-warning. Defined in each plugin's *_protos.cc registrar.
+const char* trace_decoder_release_ver(void);
+
 }  // extern "C"

@@ -77,10 +77,19 @@ cc_library(
         "-Wextra",
         "-fPIC",
         # Force-include the generated stamp so runtime.cpp's #ifdef THEIA_GIT_SHA
-        # picks it up without an explicit #include of a derived file.
+        # picks it up without an explicit #include of a derived file. Use
+        # $(execpath) on the genrule output rather than a hand-built
+        # $(GENDIR)/... path: $(GENDIR) omits the external-repo prefix, so when
+        # this target is built as a dependency of a CONSUMING workspace (the
+        # framework is @pero_theia+ then), the literal path missed the
+        # bazel-out/.../bin/external/pero_theia+/ segment. $(execpath) resolves
+        # correctly in both the in-repo and consumed-as-@pero_theia cases.
         "-include",
-        "$(GENDIR)/platform/supervisor/impl/core/version.h",
+        "$(execpath :version_h)",
     ],
+    # version_h in `data` so $(execpath) above can resolve its label (copts
+    # location-expansion only sees `data`, not `hdrs`).
+    data = [":version_h"],
     deps = [
         "//third_party:nlohmann_json",
         # platform/runtime Logger — the engine routes log_info/warn/err through

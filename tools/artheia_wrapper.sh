@@ -30,8 +30,16 @@ find_workspace() {
 }
 
 WORKSPACE="$(find_workspace || true)"
-if [[ -n "$WORKSPACE" && -x "$WORKSPACE/.venv/bin/artheia" ]]; then
-    export PATH="$WORKSPACE/.venv/bin:$PATH"
+if [[ -n "$WORKSPACE" ]]; then
+    if [[ -x "$WORKSPACE/.venv/bin/artheia" ]]; then
+        export PATH="$WORKSPACE/.venv/bin:$PATH"
+    fi
+    # PYTHONPATH = workspace root so `artheia executor emit manifest.rig` can
+    # import the workspace's OWN rig + generated manifest modules (the rig.py
+    # path is relative to the consuming workspace, not the framework). The rig
+    # genrules run `local` (un-sandboxed) so $WORKSPACE here is the real
+    # execroot/_main, where the workspace's manifest/ package is symlinked in.
+    export PYTHONPATH="${WORKSPACE}${PYTHONPATH:+:$PYTHONPATH}"
 fi
 
 exec artheia "$@"

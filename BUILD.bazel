@@ -4,127 +4,13 @@ Quick reference:
   # Build all host targets
   bazel build //... --config=linux
 
-  # Cross-compile all firmware targets
-  bazel build //gateway/firmware/pero_cmp_ti/... //gateway/firmware/pero_cmp_ti_gw/... --config=cortex_r4f
+  # Build & test the platform runtime + Functional Clusters
+  bazel test //platform/... //services/... --config=linux
 
-  # Build & test host
-  bazel test //gateway/libs/pero_cmp_lnx/... --config=linux
+The local-host demo deploy bundle (//:install) and the per-rig synthetic deploy
+repos (@rig_apps etc.) moved to the demo/ consuming workspace when the demo apps
+were extracted. The framework root no longer carries an install target; a
+consuming workspace assembles its own (see demo/BUILD.bazel).
 """
 
-load("@rules_pkg//pkg:install.bzl", "pkg_install")
-load("@rules_pkg//pkg:mappings.bzl", "pkg_attributes", "pkg_files", "pkg_mkdirs")
-
 package(default_visibility = ["//visibility:public"])
-
-# ── Convenience alias groups ───────────────────────────────────────────────
-
-# All Linux host targets
-alias(
-    name = "host_all",
-    actual = "//gateway/libs/pero_cmp_lnx:all",
-)
-
-# All firmware targets
-alias(
-    name = "firmware_all",
-    actual = "//gateway/firmware/pero_cmp_ti:all",
-)
-
-# ── Host install bundle ────────────────────────────────────────────────────
-#
-#   bazel run //:install -- --destdir <abs-dir>
-#
-# lays the host artifacts out in the runtime filesystem shape:
-#
-#   <dir>/theia/bin/   — executables (FC daemons + run-supervisor.sh)
-#   <dir>/theia/lib/   — shared libraries (the trace decoder .so)
-#   <dir>/etc/theia/   — config: executor.json (supervisor tree) +
-#                        machines.yaml (GUI manifest), from the rig
-#
-# Only Bazel-built artifacts are packaged. The CMake-built supervisor +
-# services/com gRPC bridge are bind-mounted in the docker deploy today;
-# packaging them needs a Bazel target for each (follow-up).
-
-# theia/bin — the FC daemon binaries Bazel builds.
-# theia/bin — the supervisor + the FC daemons + demo apps it forks. Mirrors
-# what apps/stage_local.sh stages (com retired: dropped). The supervisor is
-# the gen-app ara::exec binary; children are referenced by `bin/<name>` from
-# the executor.json tree.
-pkg_files(
-    name = "install_bin",
-    srcs = [
-        "//platform/supervisor/main:supervisor",
-        "//services/log/main:log",
-        "//services/per/main:per",
-        "//services/sm/main:sm",
-        "//services/shwa/main:shwa",
-        "//services/ucm/main:ucm",
-    ],
-    attributes = pkg_attributes(mode = "0755"),
-    prefix = "theia/bin",
-)
-
-# theia/bin — the supervisor entrypoint script.
-pkg_files(
-    name = "install_bin_scripts",
-    srcs = ["//deploy:run-supervisor.sh"],
-    attributes = pkg_attributes(mode = "0755"),
-    prefix = "theia/bin",
-)
-
-# theia/lib — shared libraries (trace decoder ctypes .so).
-pkg_files(
-    name = "install_lib",
-    srcs = ["//platform/runtime/trace:libtrace_decoder_ctypes.so"],
-    attributes = pkg_attributes(mode = "0644"),
-    prefix = "theia/lib",
-)
-
-# etc/theia — config emitted by the rig (supervisor tree + GUI manifest).
-pkg_files(
-    name = "install_etc",
-    srcs = [
-        "@rig_apps//:executor_json",
-        "@rig_apps//:machines_yaml",
-    ],
-    attributes = pkg_attributes(mode = "0644"),
-    prefix = "etc/theia",
-)
-
-# Supervisor tree → install/central/. The host install bundle is
-# SINGLE-MACHINE (@rig_apps = apps.manifest.rig, central hosts everything).
-# The 2-machine central+compute split is the distributed Docker/Puppet deploy
-# (@rig_zonal = apps.manifest.zonal_rig), built via `theia dist`, not bundled
-# here.
-pkg_files(
-    name = "install_central",
-    srcs = ["@rig_apps//:executor_json_central"],
-    attributes = pkg_attributes(mode = "0644"),
-    # The genrule names the output central/executor.json; strip that
-    # prefix so it lands at <prefix>/executor.json.
-    strip_prefix = "central",
-    prefix = "central",
-)
-
-# Keep the layout's dirs present even when a group is empty.
-pkg_mkdirs(
-    name = "install_dirs",
-    dirs = [
-        "theia/bin",
-        "theia/lib",
-        "etc/theia",
-        "central",
-    ],
-)
-
-pkg_install(
-    name = "install",
-    srcs = [
-        ":install_bin",
-        ":install_bin_scripts",
-        ":install_lib",
-        ":install_etc",
-        ":install_central",
-        ":install_dirs",
-    ],
-)

@@ -274,31 +274,60 @@ def _rig_repo_impl(ctx):
     per machine subdir, plus a top-level BUILD.bazel with executor /
     machines yaml targets."""
 
-    # 1. Resolve artheia. Prefer the workspace .venv; fall back to PATH.
-    workspace = ctx.path(Label("@pero_theia//:MODULE.bazel")).dirname
-    venv_artheia = str(workspace) + "/.venv/bin/artheia"
+    # 1. Resolve artheia + the import root for the rig module.
+    #
+    # The rig MODULE (e.g. `manifest.rig`) is a Python module owned by the
+    # CONSUMING workspace — the ROOT module of this build (demo/, gataway_ws,
+    # …), NOT the @pero_theia framework module. So `artheia rig-deps
+    # manifest.rig` must run with the consuming workspace root on PYTHONPATH;
+    # `ctx.workspace_root` is exactly that root (the main repo dir). When the
+    # framework is itself the root (in-repo dev), workspace_root == the
+    # framework checkout and its own rig modules resolve the same way.
+    consuming_ws = str(ctx.workspace_root)
 
-    artheia = venv_artheia
-    result = ctx.execute([artheia, "--version"], quiet = True)
-    if result.return_code != 0:
+    # artheia binary: prefer the consuming workspace's own .venv, then the
+    # @pero_theia framework venv (the editable install lives there in a source
+    # checkout), then PATH.
+    framework_ws = str(ctx.path(Label("@pero_theia//:MODULE.bazel")).dirname)
+    candidates = [
+        consuming_ws + "/.venv/bin/artheia",
+        framework_ws + "/.venv/bin/artheia",
+    ]
+    artheia = None
+    for cand in candidates:
+        if ctx.execute([cand, "--version"], quiet = True).return_code == 0:
+            artheia = cand
+            break
+    if artheia == None:
         # Try PATH-resolved artheia.
-        artheia = "artheia"
-        result = ctx.execute(["which", "artheia"], quiet = True)
-        if result.return_code != 0:
+        if ctx.execute(["which", "artheia"], quiet = True).return_code == 0:
+            artheia = "artheia"
+        else:
             fail(
                 "Could not find `artheia` CLI. Install the workspace venv " +
-                "(`pip install -e artheia/`) and ensure {} is on PATH.".format(
-                    venv_artheia,
+                "(`pip install -e artheia/`) and ensure one of {} is on PATH.".format(
+                    candidates,
                 ),
             )
 
     # 2. Run rig-deps to get the structure. `--rig <attr>` selects the spec
     # when the module exports several (else the resolver's default).
+    #
+    # PYTHONPATH = consuming workspace root so `manifest.rig` (the demo's own
+    # module) imports. Also prepend the framework's `artheia/` source parent so
+    # the editable-installed `artheia` PACKAGE wins over the bare `artheia/`
+    # source DIRECTORY that would otherwise shadow it as a namespace portion
+    # (same guard theia.py applies). os.pathsep is ":" on the Linux dev/CI box.
+    pythonpath = [consuming_ws]
+    if ctx.path(framework_ws + "/artheia/artheia/__init__.py").exists:
+        pythonpath.insert(0, framework_ws + "/artheia")
+    rig_env = {"PYTHONPATH": ":".join(pythonpath)}
+
     rig_json = "rig.json"
     rig_deps_cmd = [artheia, "rig-deps", ctx.attr.rig_module, "--out", rig_json]
     if ctx.attr.rig_attr:
         rig_deps_cmd += ["--rig", ctx.attr.rig_attr]
-    result = ctx.execute(rig_deps_cmd, quiet = False)
+    result = ctx.execute(rig_deps_cmd, quiet = False, environment = rig_env)
     if result.return_code != 0:
         fail("artheia rig-deps {} failed:\n{}\n{}".format(
             ctx.attr.rig_module,
@@ -346,8 +375,12 @@ package(default_visibility = ["//visibility:public"])
 genrule(
     name = "executor_json",
     outs = ["executor.json"],
-    cmd = "bash $(rootpath @pero_theia//tools:artheia_wrapper.sh) executor emit {rig_module}{rig_arg} --out $@",
+    cmd = "bash $(execpath @pero_theia//tools:artheia_wrapper.sh) executor emit {rig_module}{rig_arg} --out $@",
     tools = ["@pero_theia//tools:artheia_wrapper.sh"],
+    # local: run un-sandboxed so the wrapper's PYTHONPATH=execroot/_main can
+    # import the consuming workspace's rig module (manifest/ is symlinked into
+    # the real execroot, not staged into a sandbox).
+    local = True,
 )
 
 alias(
@@ -358,20 +391,29 @@ alias(
 # Per-machine supervisor trees. The rig module exports CentralRig /
 # ComputeRig (apps.manifest.rig), each a single-machine Rig with its own
 # supervision tree (central: platform tree minus shwa; compute: srv_sup ->
-# shwa, app_sup -> p3). The top-level //:install rule lays these into
-# install/central/executor.json and install/compute/executor.json.
+# shwa, app_sup -> p3). The consuming workspace's //:install rule lays these
+# into install/central/executor.json and install/compute/executor.json.
+#
+# The output dirs are PREFIXED (`exec_central/` not `central/`) so they never
+# collide with a per-machine subpackage of the SAME name: a rig whose machine
+# is literally named `central` writes `central/BUILD.bazel`, which would make a
+# bare `central/executor.json` output cross a package boundary. The consuming
+# install rule strip_prefix's `exec_central` to land the file at
+# `central/executor.json`.
 genrule(
     name = "executor_json_central",
-    outs = ["central/executor.json"],
-    cmd = "bash $(rootpath @pero_theia//tools:artheia_wrapper.sh) executor emit {rig_module} --rig CentralRig --out $@",
+    outs = ["exec_central/executor.json"],
+    cmd = "bash $(execpath @pero_theia//tools:artheia_wrapper.sh) executor emit {rig_module} --rig CentralRig --out $@",
     tools = ["@pero_theia//tools:artheia_wrapper.sh"],
+    local = True,
 )
 
 genrule(
     name = "executor_json_compute",
-    outs = ["compute/executor.json"],
-    cmd = "bash $(rootpath @pero_theia//tools:artheia_wrapper.sh) executor emit {rig_module} --rig ComputeRig --out $@",
+    outs = ["exec_compute/executor.json"],
+    cmd = "bash $(execpath @pero_theia//tools:artheia_wrapper.sh) executor emit {rig_module} --rig ComputeRig --out $@",
     tools = ["@pero_theia//tools:artheia_wrapper.sh"],
+    local = True,
 )
 
 # machines.json — the GUI manifest (JSON; `artheia gui emit`). The
@@ -380,8 +422,9 @@ genrule(
 genrule(
     name = "machines_json",
     outs = ["machines.json"],
-    cmd = "bash $(rootpath @pero_theia//tools:artheia_wrapper.sh) gui emit {rig_module}{rig_arg} --out $@",
+    cmd = "bash $(execpath @pero_theia//tools:artheia_wrapper.sh) gui emit {rig_module}{rig_arg} --out $@",
     tools = ["@pero_theia//tools:artheia_wrapper.sh"],
+    local = True,
 )
 
 alias(

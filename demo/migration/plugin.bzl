@@ -13,13 +13,13 @@ load("@rules_cc//cc:defs.bzl", "cc_binary")
 def migration_plugin(name, src, demo_hdr = ":demo_pb_hdr"):
     cc_binary(
         name = "libper_migrate_%s.so" % name,
-        srcs = [src, "//platform/proto/system/apps:apps_pb_c"],
+        srcs = [src, "//proto/system/apps:apps_pb_c"],
         copts = ["-std=c++17", "-fPIC"],
         linkshared = True,
         linkstatic = False,
         linkopts = ["-l:libprotobuf-nanopb.a"],
         deps = [
-            "//services/per/impl:migration_registry",  # header-only C ABI
+            "@pero_theia//services/per/impl:migration_registry",  # header-only C ABI
             demo_hdr,                                  # demo.pb.h include
         ],
     )

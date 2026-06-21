@@ -72,7 +72,10 @@ workspace against a Theia checkout (or an installed `/opt/theia`):
 ```sh
 cd ~/my_ws
 python3 -m venv .venv && . .venv/bin/activate
-pip install --find-links /opt/theia/wheels artheia rf-theia   # from the deb's wheels
+# --no-index pins to the deb's wheels — WITHOUT it pip may prefer a stale
+# cached/PyPI artheia, whose gen-app emits framework-internal proto labels
+# (//platform/proto) that don't resolve in a consuming workspace.
+pip install --no-index --find-links /opt/theia/wheels artheia rf-theia
 source /opt/theia/setup.sh
 theia init [--with-services]                       # scaffold against $THEIA_ROOT
 # edit system/apps/{package,component}.art, then generate the C++ + proto + manifest:

@@ -103,7 +103,9 @@ sibling Theia checkout (later, an installed `/opt/theia` prefix). The flow:
 # 0. put a Theia checkout on PATH — exports THEIA_ROOT, prepends its venv +
 #    the `theia` launcher, adds artheia to PYTHONPATH.
 cd ~/repo/launch-box/gataway_ws        # your (empty) workspace repo
-source ../theia/setup.sh               # the ROS `setup.bash` analogue (bash + zsh)
+source ../theia/env.sh                 # source-checkout activation (the ROS
+                                       # `setup.bash` analogue); the deb ships
+                                       # /opt/theia/setup.sh instead
 
 # 1. scaffold this dir as a workspace bound to $THEIA_ROOT.
 theia init                             # bare: supervisor + your own apps
@@ -188,7 +190,8 @@ enabled. The host-side **trace decoder is pluggable**: the framework ships
 types, in the deb) and each app workspace ships its own (the demo's
 `//trace:libtrace_decoder_apps.so`, system_apps_* types). Consumers
 (supervisor-gui, rtdb, rf-theia) dlopen **every** `libtrace_decoder_*.so` from
-the plugin dir (`THEIA_TRACE_DECODER_PATH`, exported by `setup.sh`) and try
+the plugin dir (`THEIA_TRACE_DECODER_PATH`, exported by `env.sh` in source /
+the deb's `setup.sh`) and try
 each.
 
 ## The supervisor

@@ -1,10 +1,17 @@
-# env.sh — source me to set up the Theia dev shell (zsh).
+# env.sh — the SOURCE-side Theia activation (the catkin `devel/setup.bash` /
+# ROS `/opt/ros/<distro>/setup.bash` analogue for a source checkout). The
+# installed deb ships its own /opt/theia/setup.{bash,zsh}; in source you use
+# THIS. Two ways to source it:
 #
-#   source env.sh
+#   source env.sh                 # from the framework root — dev the framework
+#   cd my_ws && source ../theia/env.sh   # from a CONSUMING workspace — activate
+#                                          a sibling framework checkout (sets
+#                                          THEIA_WORKSPACE to the cwd)
 #
-# Activates the workspace .venv (puts `artheia`, `theia`, `tdb`, `bazel`
+# Activates the framework .venv (puts `artheia`, `theia`, `tdb`, `bazel`
 # wrappers on PATH), ensures the workspace-CLI symlinks (`theia`, `tdb`,
-# `rtdb`) exist in .venv/bin, and registers tab completion for `artheia`,
+# `rtdb`) exist in .venv/bin, exports THEIA_ROOT / THEIA_WORKSPACE /
+# THEIA_TRACE_DECODER_PATH, and registers tab completion for `artheia`,
 # `theia`, `tdb`, and `rtdb`. zsh is the supported shell; bash is a fallback.
 #
 # Completion sources: artheia is click (its native shell-source, see
@@ -25,12 +32,26 @@ else
 fi
 _THEIA_ROOT="$(cd "$(dirname "$_THEIA_ENV_SRC")" && pwd)"
 
-# THEIA_ROOT — the workspace root, exported so in-source tools resolve paths
-# without $PWD assumptions (rtdb defaults its dev-cert dir to
-# $THEIA_ROOT/dist/manifest/<machine>/certs; theia/tdb use it too).
+# THEIA_ROOT — the framework checkout (where THIS env.sh lives), exported so
+# in-source tools resolve paths without $PWD assumptions (rtdb defaults its
+# dev-cert dir to $THEIA_ROOT/dist/manifest/<machine>/certs; theia/tdb use it).
 export THEIA_ROOT="$_THEIA_ROOT"
 
+# THEIA_WORKSPACE — the dir env.sh was SOURCED FROM, when it differs from the
+# framework checkout. This is the source-side analogue of the deb's
+# /opt/theia/setup.sh: a CONSUMING workspace (demo/, gataway_ws) cd's into its
+# own root and `source ../theia/env.sh`, so $PWD at source time IS the
+# workspace. theia/tdb/rtdb read the rig + dist/manifest + install/ from HERE,
+# not from the framework. Sourcing env.sh from the framework root leaves the two
+# equal and THEIA_WORKSPACE unset.
+_theia_pwd="$(pwd)"
+if [ "$_theia_pwd" != "$_THEIA_ROOT" ]; then
+    export THEIA_WORKSPACE="$_theia_pwd"
+fi
+
 # --- activate the venv ---------------------------------------------------
+# The framework's venv (editable artheia + the tool console scripts). A
+# consuming workspace has no venv of its own — it borrows the framework's.
 if [ -f "$_THEIA_ROOT/.venv/bin/activate" ]; then
     # shellcheck disable=SC1091
     . "$_THEIA_ROOT/.venv/bin/activate"
@@ -39,6 +60,23 @@ else
          "(python -m venv .venv && pip install -e artheia)" >&2
     return 1 2>/dev/null || exit 1
 fi
+
+# THEIA_TRACE_DECODER_PATH — colon-separated DIRS the pluggable trace decoder
+# scans for `libtrace_decoder_*.so` (framework system plugin + the workspace's
+# app plugin + an installed prefix). Consumers (supervisor-gui, rf-theia, rtdb)
+# dlopen every plugin found here and try each to decode a record.
+_theia_decoder_dirs="$_THEIA_ROOT/bazel-bin/platform/runtime/trace"
+if [ -n "${THEIA_WORKSPACE:-}" ]; then
+    _theia_decoder_dirs="$_theia_decoder_dirs:$THEIA_WORKSPACE/bazel-bin/trace"
+fi
+if [ -d /opt/theia/lib ]; then
+    _theia_decoder_dirs="$_theia_decoder_dirs:/opt/theia/lib"
+fi
+case ":${THEIA_TRACE_DECODER_PATH:-}:" in
+    *":$_theia_decoder_dirs:"*) ;;
+    *) export THEIA_TRACE_DECODER_PATH="$_theia_decoder_dirs${THEIA_TRACE_DECODER_PATH:+:$THEIA_TRACE_DECODER_PATH}";;
+esac
+unset _theia_pwd _theia_decoder_dirs
 
 # --- workspace-CLI symlinks (idempotent) ---------------------------------
 # `theia` (workspace dispatcher), `tdb` (local TIPC debug bridge) and `rtdb`

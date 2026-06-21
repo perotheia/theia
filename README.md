@@ -56,9 +56,9 @@ The three primitives everything in `.art` rests on:
 git clone --recurse-submodules https://github.com/perotheia/theia
 cd theia
 python3 -m venv .venv && . .venv/bin/activate
-pip install -e artheia/ -e . -e 'rf-theia/[mcp]'   # artheia + the workspace + harness
+pip install -e artheia/ -e 'rf-theia/[mcp]'        # artheia + the test harness
 
-source setup.sh                                    # THEIA_ROOT, PATH, PYTHONPATH
+source env.sh                                      # THEIA_ROOT, PATH, .venv, completion
 artheia parse system/system.art                    # validate the full .art tree
 PATH="$PWD/.venv/bin:$PATH" bazel build //services/...:all
 theia manifest && theia install && theia start     # bring the stack up

@@ -4,5 +4,16 @@
 # console-script symlink only exists where artheia was pip-installed; this shim
 # makes the command available without it — e.g. in a fresh consuming workspace
 # that sources a sibling theia's setup.sh.)
-here="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+# Resolve symlinks: `theia` is symlinked onto PATH (e.g. .venv/bin/theia ->
+# this shim), so $0/BASH_SOURCE is the LINK. Follow it to the real shim dir,
+# else `$here/tools` resolves relative to the link's dir (.venv/bin/tools/…).
+self="${BASH_SOURCE[0]:-$0}"
+while [ -L "$self" ]; do
+  link="$(readlink "$self")"
+  case "$link" in
+    /*) self="$link" ;;
+    *)  self="$(dirname "$self")/$link" ;;
+  esac
+done
+here="$(cd "$(dirname "$self")" && pwd)"
 exec python3 "$here/tools/theia.py" "$@"

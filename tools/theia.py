@@ -31,10 +31,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-# THEIA_ROOT — the framework checkout (where theia.py lives, or $THEIA_ROOT when
-# a consuming workspace sourced setup.sh). Framework assets (deploy/, rules/)
-# resolve against it.
-THEIA_ROOT = Path(os.environ.get("THEIA_ROOT") or Path(__file__).resolve().parent)
+# THEIA_ROOT — the framework checkout (whose tools/ holds this script, or
+# $THEIA_ROOT when a consuming workspace sourced setup.sh). Framework assets
+# (deploy/, rules/) resolve against it. This file lives at <root>/tools/theia.py,
+# so the checkout root is its parent's parent.
+THEIA_ROOT = Path(os.environ.get("THEIA_ROOT") or Path(__file__).resolve().parent.parent)
 
 # WORKSPACE — the directory the user RAN `theia` from. For a consuming workspace
 # (gataway_ws, test_ws) that's the workspace itself; the rig, dist/manifest, and
@@ -1224,15 +1225,18 @@ def _build_framework_deb(out_dir: Path, version: str = "0.1.0") -> int:
         (opt / "BUILD.bazel").write_text(
             '# pero_theia module root (the installed /opt/theia).\n'
             'package(default_visibility = ["//visibility:public"])\n')
-    # theia.py itself (the workspace lifecycle driver) + setup scripts.
-    shutil.copy2(WORKSPACE / "theia.py", opt / "theia.py")
+    # theia.py itself (the workspace lifecycle driver) + setup scripts. It lives
+    # under tools/ in the source tree; mirror that into the deb so the in-root
+    # `theia` shim and the deb bin shim resolve it the same way.
+    (opt / "tools").mkdir(parents=True, exist_ok=True)
+    shutil.copy2(THEIA_ROOT / "tools" / "theia.py", opt / "tools" / "theia.py")
     for s in ("setup.bash", "setup.zsh"):
         shutil.copy2(pkg_root / s, opt / s)
 
     # `theia` launcher — PURE STDLIB (theia.py imports nothing from artheia), so
     # `theia init/manifest/install/start` work before the user has a venv.
     (opt / "bin" / "theia").write_text(
-        '#!/bin/sh\nexec python3 "$(dirname "$0")/../theia.py" "$@"\n')
+        '#!/bin/sh\nexec python3 "$(dirname "$0")/../tools/theia.py" "$@"\n')
     (opt / "bin" / "theia").chmod(0o755)
     # artheia / -lsp / -mcp shims — exec the artheia from the user's ACTIVE venv
     # (resolved on PATH, skipping THIS shim dir to avoid recursion). The Python

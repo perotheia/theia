@@ -1,0 +1,22 @@
+{
+  "venvPath": ".",
+  "venv": ".venv",
+  "extraPaths": [
+    ".",
+    "artheia",
+    "rf-theia"
+  ],
+  "typeCheckingMode": "basic",
+  "exclude": [
+    "**/__pycache__",
+    "**/.venv",
+    "bazel-*",
+    "external",
+    "vendor",
+    "build",
+    "build-*",
+    "dist",
+    "up",
+    ".repo"
+  ]
+}

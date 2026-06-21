@@ -44,11 +44,11 @@ fi
 # script entrypoints, not pip console_scripts — link them into .venv/bin so
 # they're on PATH alongside `artheia`. `ln -sf` makes re-sourcing a no-op.
 # (The .venv is gitignored, so this is where the symlinks get (re)created.)
-ln -sf "$_THEIA_ROOT/theia.py"           "$_THEIA_ROOT/.venv/bin/theia"
+ln -sf "$_THEIA_ROOT/theia"              "$_THEIA_ROOT/.venv/bin/theia"
 ln -sf "$_THEIA_ROOT/tools/tdb/tdb.py"   "$_THEIA_ROOT/.venv/bin/tdb"
 ln -sf "$_THEIA_ROOT/tools/rtdb/rtdb.py" "$_THEIA_ROOT/.venv/bin/rtdb"
-chmod +x "$_THEIA_ROOT/theia.py" "$_THEIA_ROOT/tools/tdb/tdb.py" \
-         "$_THEIA_ROOT/tools/rtdb/rtdb.py" 2>/dev/null
+chmod +x "$_THEIA_ROOT/theia" "$_THEIA_ROOT/tools/theia.py" \
+         "$_THEIA_ROOT/tools/tdb/tdb.py" "$_THEIA_ROOT/tools/rtdb/rtdb.py" 2>/dev/null
 
 # --- shell completion ----------------------------------------------------
 if [ -n "${ZSH_VERSION:-}" ]; then

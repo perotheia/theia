@@ -159,6 +159,7 @@ HealthPanel::HealthPanel(wxWindow* parent) : PanelBase(parent) {
     impl_->list->AppendColumn("Uptime",  wxLIST_FORMAT_LEFT,  80);
     impl_->list->AppendColumn("CPU",     wxLIST_FORMAT_LEFT,  55);
     impl_->list->AppendColumn("RSS",     wxLIST_FORMAT_LEFT,  60);
+    impl_->list->SetMinSize(wxSize(60, 40));   // floor → no negative-height alloc
     sizer->Add(impl_->list, 1, wxEXPAND | wxALL, 4);
 
     SetSizer(sizer);

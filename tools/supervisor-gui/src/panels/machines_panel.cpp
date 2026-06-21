@@ -110,6 +110,12 @@ MachinesPanel::MachinesPanel(wxWindow* parent) : wxPanel(parent) {
     // ---- Connections (top) -----------------------------------------------
     sizer->Add(bold("Connections"), 0, wxLEFT | wxRIGHT | wxTOP, 6);
     conn_list_ = make_list(this, "Endpoint");
+    // Floor each list: two proportional lists + labels stacked in this narrow
+    // 220px pane can't all fit when the pane is allocated a tiny height at the
+    // first layout pass — one list would get a NEGATIVE height (seen as
+    // "allocate widget with height -7" → GtkScrollbar `size >= 0`). A floor
+    // keeps every child >= 0.
+    conn_list_->SetMinSize(wxSize(40, 40));
     sizer->Add(conn_list_, 1, wxEXPAND | wxALL, 4);
 
     sizer->Add(new wxStaticLine(this), 0, wxEXPAND | wxLEFT | wxRIGHT, 4);
@@ -117,6 +123,7 @@ MachinesPanel::MachinesPanel(wxWindow* parent) : wxPanel(parent) {
     // ---- Machines (bottom) -----------------------------------------------
     sizer->Add(bold("Machines"), 0, wxLEFT | wxRIGHT | wxTOP, 6);
     mach_list_ = make_list(this, "Where");
+    mach_list_->SetMinSize(wxSize(40, 40));
     sizer->Add(mach_list_, 1, wxEXPAND | wxALL, 4);
 
     SetSizer(sizer);

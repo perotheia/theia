@@ -157,6 +157,19 @@ TraceDecoderLib::TraceDecoderLib() : impl_(new Impl()) {
         impl_->plugins.push_back(std::move(p));
     }
 
+    // Summary: which decoder plugins loaded (so "my app types show as hex"
+    // is one log line away from "the apps plugin didn't load"). One line.
+    if (impl_->plugins.empty()) {
+        std::fprintf(stderr, "[trace_decoder_lib] no decoder plugins found "
+            "(set THEIA_TRACE_DECODER_PATH) — payloads render as hex.\n");
+    } else {
+        std::fprintf(stderr, "[trace_decoder_lib] loaded %zu decoder plugin(s):\n",
+                     impl_->plugins.size());
+        for (const auto& p : impl_->plugins)
+            std::fprintf(stderr, "  %s%s%s\n", p.path.c_str(),
+                         p.ver.empty() ? "" : " ver=", p.ver.c_str());
+    }
+
     // 3. Version-compat WARNING: the FIRST plugin whose name carries
     // "_system" is the framework reference; warn if any other plugin's
     // version disagrees. (Soft check — never fails decode.)

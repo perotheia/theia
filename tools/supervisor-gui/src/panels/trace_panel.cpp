@@ -536,6 +536,11 @@ TracePanel::TracePanel(wxWindow* parent) : PanelBase(parent) {
     impl_->tree = new wxTreeCtrl(impl_->split, wxID_ANY,
                                    wxDefaultPosition, wxDefaultSize,
                                    wxTR_DEFAULT_STYLE | wxTR_HIDE_ROOT);
+    // Min pane + gravity so the fixed sash never hands a pane a negative size
+    // when this tab is first shown at a small allocation (GTK scrollbar
+    // `size >= 0` abort under G_DEBUG=fatal-warnings; harmless clamp otherwise).
+    impl_->split->SetMinimumPaneSize(60);
+    impl_->split->SetSashGravity(1.0);   // bottom (tree) fixed at -260, list grows
     impl_->split->SplitHorizontally(impl_->list, impl_->tree, -260);
     sizer->Add(impl_->split, 1, wxEXPAND);
     SetSizer(sizer);

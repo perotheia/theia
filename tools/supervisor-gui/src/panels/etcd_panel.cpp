@@ -236,6 +236,10 @@ private:
         rightSz->Add(btnRow, 0, wxALL, 4);
 
         rightPanel->SetSizer(rightSz);
+        // Min pane + gravity so the fixed 460px sash never hands a pane a
+        // negative size on first show (GTK `size >= 0` scrollbar abort).
+        split->SetMinimumPaneSize(80);
+        split->SetSashGravity(0.5);
         split->SplitVertically(list_, rightPanel, 460);
 
         // --- assemble ---------------------------------------------------

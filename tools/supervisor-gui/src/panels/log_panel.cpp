@@ -193,6 +193,11 @@ LogPanel::LogPanel(wxWindow* parent) : PanelBase(parent) {
 
     // --- the virtual list ---
     impl_->list = new LogListCtrl(this, &impl_->rows, &impl_->visible, &impl_->mtx);
+    // Floor the list's preferred size: in a nested-splitter pane squeezed near
+    // zero (a transient allocate / a hard shrink) wx can compute a NEGATIVE
+    // preferred size for the virtual list, which GTK rejects in its scrollbar
+    // (`gtk_box_gadget_distribute: size >= 0`). A small floor keeps it >= 0.
+    impl_->list->SetMinSize(wxSize(80, 40));
     sizer->Add(impl_->list, 1, wxEXPAND | wxALL, 2);
     SetSizer(sizer);
 

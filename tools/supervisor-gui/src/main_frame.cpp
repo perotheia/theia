@@ -128,6 +128,14 @@ MainFrame::MainFrame(std::vector<MachineEndpoint> machines)
     : wxFrame(nullptr, wxID_ANY, "supervisor-gui",
               wxDefaultPosition, wxSize(1400, 800)) {
 
+    // Floor the window so a layout pass can ALWAYS honour the nested-splitter
+    // minimum pane sizes (machines pane 220 + diag Health|Diag panes, and the
+    // diag top-row / Log split). Without a floor, a transient tiny allocation
+    // (notebook best-size probe, a hard shrink) hands a child pane a NEGATIVE
+    // size and GTK aborts: `gtk_box_gadget_distribute: assertion 'size >= 0'`
+    // in the pane's scrollbar. 900x600 clears every min-pane sum below.
+    SetMinSize(wxSize(900, 600));
+
     // --- menu bar ----------------------------------------------------
     {
         auto* mb = new wxMenuBar();
@@ -201,8 +209,10 @@ MainFrame::MainFrame(std::vector<MachineEndpoint> machines)
     diag_panel_     = new DiagPanel         (top_split);
     log_panel_      = new LogPanel          (vsplit);
     top_split->SetMinimumPaneSize(180);
+    top_split->SetSashGravity(0.5);   // redistribute on resize, don't pin 520px
     top_split->SplitVertically(health_panel_, diag_panel_, 520);   // Health | Diag
     vsplit->SetMinimumPaneSize(140);
+    vsplit->SetSashGravity(0.5);
     vsplit->SplitHorizontally(top_split, log_panel_, 320);         // top row / Log
     auto* diag_sz = new wxBoxSizer(wxVERTICAL);
     diag_sz->Add(vsplit, 1, wxEXPAND);
@@ -216,6 +226,7 @@ MainFrame::MainFrame(std::vector<MachineEndpoint> machines)
     notebook_->AddPage(trace_,        "Trace");
     notebook_->AddPage(diag_tab,      "Diagnostic");
 
+    splitter->SetSashGravity(0.0);   // fixed-width left pane; notebook grows
     splitter->SplitVertically(machines_panel_, notebook_, 220);
 
     // --- status bar (3 fields: connected count + focused machine + hb age)

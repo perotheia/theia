@@ -87,13 +87,17 @@ class FcSpec:
 FC_SPECS = [
     # Daemon FCs under services/. The log FC spec carries BOTH the
     # LogDaemon (syslog sink) and TraceCollector (trace fan-out) nodes.
-    FcSpec("sm",  "system/services/sm/package.art",   "ara::sm",  "services/sm"),
+    FcSpec("sm",  "system/services/sm/package.art",   "ara::sm",  "services/sm",
+           hand_owned_impl_build=True),   # sm_sup_link.hpp (FunctionGroupSm's
+           # RemoteRef to the supervisor — the SM→EM execute path)
     FcSpec("com", "system/services/com/package.art", "ara::com", "services/com"),
     FcSpec("crypto", "system/services/crypto/package.art", "ara::crypto",
            "services/crypto", hand_owned_impl_build=True),   # OpenSSL linkopts
     FcSpec("per", "system/services/per/package.art", "ara::per", "services/per",
            hand_owned_impl_build=True),   # per_etcd + migration_registry targets
-    FcSpec("ucm", "system/services/ucm/package.art", "ara::ucm", "services/ucm"),
+    FcSpec("ucm", "system/services/ucm/package.art", "ara::ucm", "services/ucm",
+           hand_owned_impl_build=True),   # release_dir.hpp (UcmGate's release-
+           # directory A/B replacement model)
     FcSpec("log", "system/services/log/package.art", "ara::log", "services/log",
            hand_owned_impl_build=True),   # shared trace_hub cc_library
     FcSpec("tsync", "system/services/tsync/package.art", "ara::tsync",

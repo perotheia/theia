@@ -85,7 +85,8 @@ jobs:
       - name: Build the .deb set (theia release)
         run: |
           export PATH="$PWD/.venv/bin:$PATH"
-          python3 theia.py release --arch host
+          # theia.py lives at tools/theia.py; the `./theia` shim execs it.
+          ./theia release --arch host
 
       - name: Fix per-release runtime Depends (dpkg-shlibdeps)
         run: |

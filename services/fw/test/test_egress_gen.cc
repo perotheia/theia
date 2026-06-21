@@ -26,10 +26,14 @@ int main() {
       if (f) ::fclose(f); }
 
     int rules = 0, ov = 0, eg = 0;
+    // Empty custom policy (arg 7): this test exercises the egress-slice path,
+    // not the structured FwPolicy overrides (grpc CIDR / vpn iface / forward /
+    // output / drop-logging) — those default to off in a default FwPolicy.
+    ara::fw::FwPolicy custom{};
     std::string rs = ara::fw::build_ruleset(
         "7700,7710,7711,2379", "drop", "/nonexistent-fwd",
         "per=10.0.0.0/8,192.168.0.0/16;rogue=10.0.0.0/8",
-        slice, root, rules, ov, eg);
+        slice, root, custom, rules, ov, eg);
 
     // per is placed → enforced; rogue is not → skipped.
     assert(eg == 1 && "only the placed FC (per) gets an egress rule");

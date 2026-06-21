@@ -20,6 +20,28 @@ permissions:
   contents: read
 
 jobs:
+  # artheia generator/DSL unit suite — the pure-Python pytest that gates the
+  # manifest emitters, the supervisor-tree slicer, the autosar/proto generators,
+  # etc. No C++, no live stack: catches generator regressions before the heavy
+  # release-deb build runs.
+  artheia-pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check out artheia from the GitHub mirror
+        run: |
+          git config submodule.artheia.url https://github.com/perotheia/artheia.git
+          git submodule update --init artheia
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Install artheia (+ test deps)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e "artheia/[dev]" || pip install -e artheia/ pytest pytest-snapshot
+      - name: Run the artheia pytest suite
+        run: python -m pytest artheia/ -q
+
   hermetic:
     runs-on: ubuntu-latest
     steps:

@@ -71,9 +71,11 @@ public:
         "system_supervisor_HeartbeatReport";
     static constexpr uint16_t kServiceId = hash_msg_type_(kMsgTypeName);
 
-    // Re-roll the socket every N beats so connect-by-name re-lands on the live
-    // supervisor binding even when SIGKILL'd predecessors left stale bindings.
-    static constexpr uint64_t kReRollEvery = 4;
+    // The initial connect retries this many times on fresh sockets so it lands
+    // on the LIVE supervisor binding even when SIGKILL'd predecessors left stale
+    // bindings the kernel hasn't reaped (connect-by-name load-balances across
+    // all of them). Once connected we STAY (no periodic re-roll).
+    static constexpr int kConnectTries = 6;
 
     explicit HeartbeatPublisher(std::string node_name)
         : node_name_(std::move(node_name)), self_pid_(::getpid()) {}
@@ -107,26 +109,35 @@ public:
     // restarting / not yet bound) is silently dropped; the next tick retries.
     void send_once() {
         if (fd_ < 0) return;
-        // Periodic RE-ROLL onto a fresh socket. TIPC connect-by-name load-
-        // balances across EVERY port bound at the supervisor's name — and a
-        // SIGKILL'd supervisor can leave a stale binding the kernel reaps
-        // slowly, so a one-shot connect may latch onto a DEAD port and a
-        // fire-and-forget SEQPACKET send to it never errors (so we'd never
-        // notice). The probe hits the same hazard and cures it the same way:
-        // re-roll the socket periodically so we eventually land on the LIVE
-        // binding. In production (one binding) this just reconnects to the same
-        // port — harmless. (project-probe-connect-stale-bindings.)
-        if (connected_ && (seq_.load() % kReRollEvery) == 0) {
-            ::close(fd_);
-            fd_ = ::socket(AF_TIPC, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
-            connected_ = false;
-        }
-        // Lazy connect: if we couldn't reach the supervisor at open() (it bound
-        // after us), the peer went away, or we just re-rolled — try now. Skip
-        // the send until connected so we don't fault on an unconnected socket.
-        if (fd_ < 0) return;
+        // Lazy connect, then STAY connected. A TIPC connect-by-name picks ONE
+        // port at connect time (load-balancing across every binding at the
+        // supervisor's name); once a SEQPACKET connection is ESTABLISHED it is
+        // pinned to THAT port — subsequent sends do NOT re-roll the dice. So the
+        // ONLY danger is the connect landing on a STALE binding left by a
+        // SIGKILL'd predecessor (the kernel reaps those slowly): a send to a
+        // dead port silently succeeds, the supervisor never hears us, and its
+        // watchdog SIGTERMs a healthy node.
+        //
+        // We therefore do NOT periodically re-roll (the old behavior — it broke
+        // a WORKING connection every N beats and re-rolled onto a possibly-dead
+        // binding, which is exactly what killed healthy nodes at multiples of
+        // the re-roll period). Instead the connect itself is the careful step:
+        // we keep the established connection forever, and only re-connect when
+        // the peer actually goes away (the send below fails → supervisor
+        // restarted → reconnect lands on the FRESH binding). To survive a connect
+        // that lands on a stale binding at startup, the FIRST connect retries a
+        // few times on fresh sockets (kConnectTries) — over a few tries it lands
+        // on the live binding, and once connected it stays.
+        // (project-probe-connect-stale-bindings.)
         if (!connected_) {
-            connected_ = connect_locked_();
+            for (int i = 0; i < kConnectTries && !connected_; ++i) {
+                if (i > 0) {                      // fresh socket per retry
+                    ::close(fd_);
+                    fd_ = ::socket(AF_TIPC, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
+                    if (fd_ < 0) return;
+                }
+                connected_ = connect_locked_();
+            }
             if (!connected_) return;
         }
         std::string rec;

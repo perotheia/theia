@@ -1,0 +1,11 @@
+# Common-type .art (package system.platform.msgs.std): pure VALUE message
+# definitions other packages import via `import system.platform.msgs.std.*`.
+#
+# One of four sibling type packages under //system/platform/msgs (std /
+# geometry / sensor / nav). Lives under //system with the rest of the .art
+# tree (picked up by the //system:art_sources glob); exported so a proto/C++
+# consumer can stage it.
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["package.art"])

@@ -5,4 +5,4 @@
 # makes the command available without it — e.g. in a fresh consuming workspace
 # that sources a sibling theia's setup.sh.)
 here="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
-exec python3 "$here/theia.py" "$@"
+exec python3 "$here/tools/theia.py" "$@"

@@ -241,6 +241,13 @@ def main(argv: list[str] | None = None) -> int:
         print(_RTDB_HELP)
         return 0
 
+    # Hidden hook: emit the verb list (one per line) for shell completion, so
+    # env.sh stays in lockstep with _COMMANDS instead of a hardcoded list. Runs
+    # before any com/gRPC connect.
+    if argv[0] == "__complete":
+        print("\n".join(_COMMANDS))
+        return 0
+
     sess = _Session(target)
     try:
         return _dispatch(sess, argv[0], argv[1:])

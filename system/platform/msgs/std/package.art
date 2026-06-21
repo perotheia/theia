@@ -1,0 +1,56 @@
+// platform.msgs.std — the common-type root (ROS std_msgs analogue).
+//
+// One of four sibling type packages under system/platform/msgs/ (std /
+// geometry / sensor / nav). Holds the universal Header every stamped message
+// carries, plus the SI-unit scalar wrappers shared across the geometry /
+// sensor / nav packages. These are pure VALUE types — messages only, no nodes,
+// no ports — so the package is a single package.art (no component.art).
+//
+// One canonical source: gen-proto renders each message to a nanopb struct
+// `platform_msgs_std_<Name>` (the flattened package prefix), and a C++ alias
+// header can re-export them under `namespace std { using … }`. Downstream
+// packages embed these by `import system.platform.msgs.std.*` and referencing
+// the bare message name.
+//
+// SI units mirror up/mosaic-eng-ref's signals/common_types/si_units.proto,
+// sorted alphabetically and de-duplicated. Each message is titled with the
+// unit it represents and holds a single field named for the plural unit, so
+// the unit is explicit wherever a field is accessed (no `_unit` suffixes).
+
+package platform.msgs.std
+
+// ── Header ────────────────────────────────────────────────────────────────
+//
+// Everything stamped starts here. ROS std_msgs/Header equivalent: a
+// monotonic capture time plus the coordinate frame the data is expressed in.
+// frame_id is a short symbolic frame name ("base_link", "front_camera"), not
+// a path — 32 chars is generous.
+message Header {
+    uint64 timestamp_ns                   // capture time, nanoseconds since epoch
+    string frame_id [max_size:32]         // coordinate frame the data is in
+}
+
+// ── SI units (alphabetical, de-duplicated) ──────────────────────────────────
+//
+// proto3 has no `required`; the single-field-per-unit shape is preserved as a
+// plain field. float unless the quantity needs 64-bit range (Meter64) or an
+// integer count (Seconds, Milliseconds).
+message Ampere               { float  amperes }
+message AngleDegree          { float  angle_degrees }
+message Bar                  { float  bars }
+message DegreesCelsius       { float  degrees_celsius }
+message Hertz                { float  hertz }
+message KilogramPerHour      { float  kilograms_per_hour }
+message KilometerPerHour     { float  kilometers_per_hour }
+message Meter                { float  meters }
+// 64-bit Meter for very large distances (e.g. UTM coordinates).
+message Meter64              { double meters }
+message MeterPerSecond       { float  meters_per_second }
+message Milliseconds         { int32  milliseconds }
+message Newton               { float  newtons }
+message NewtonMeter          { float  newton_meters }
+message Percent              { float  percent }
+message RevolutionsPerMinute { float  rpm }
+message Seconds              { int32  seconds }
+message Volt                 { float  volts }
+message Watt                 { float  watts }

@@ -1,0 +1,62 @@
+// platform.msgs.geometry — spatial primitives (ROS geometry_msgs analogue).
+//
+// Cloned near-verbatim: the rigid-body transform / pose vocabulary the
+// perception and control stacks share. Pure VALUE types (messages only) →
+// single package.art.
+//
+// nanopb structs: platform_msgs_geometry_<Name>. The stamped variants
+// (PoseStamped, TransformStamped) embed platform.msgs.std.Header, so this
+// package imports std; the cross-package ref qualifies in the proto as
+// platform_msgs_std.Header via the import.
+
+package platform.msgs.geometry
+
+import system.platform.msgs.std.*   // Header, embedded by the *Stamped variants
+
+// ── Linear primitives ───────────────────────────────────────────────────────
+message Vector3 {
+    double x
+    double y
+    double z
+}
+
+message Point {
+    double x
+    double y
+    double z
+}
+
+message Quaternion {
+    double x
+    double y
+    double z
+    double w
+}
+
+// ── Pose / Transform ────────────────────────────────────────────────────────
+message Pose {
+    Point      position
+    Quaternion orientation
+}
+
+message PoseStamped {
+    Header header
+    Pose   pose
+}
+
+// Linear + angular velocity (ROS geometry_msgs/Twist).
+message Twist {
+    Vector3 linear
+    Vector3 angular
+}
+
+message Transform {
+    Vector3    translation
+    Quaternion rotation
+}
+
+message TransformStamped {
+    Header    header
+    string    child_frame_id [max_size:32]   // frame this transform maps INTO
+    Transform transform
+}

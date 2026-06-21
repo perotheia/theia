@@ -1,0 +1,95 @@
+// platform.msgs.sensor — sensor payloads (ROS sensor_msgs analogue).
+//
+// The highest-value compatibility types for an autonomy stack — camera frames
+// + intrinsics, IMU, GNSS fix. Pure VALUE types (messages only) → single
+// package.art.
+//
+// nanopb structs: platform_msgs_sensor_<Name>. These embed msgs.std.Header and
+// msgs.geometry.{Quaternion,Vector3}, so this package imports both;
+// cross-package refs qualify in the proto via the imports.
+//
+// Variable-length fields (Image.data, the fixed-size covariance/intrinsic
+// matrices) are bounded inline with [max_size:N] / [max_count:N] so nanopb
+// renders them as fixed in-struct arrays — no pb_callback_t, no heap — the
+// same constraint the TIPC transport places on every wire message. A frame
+// exceeding a bound is truncated at encode time, never an overrun. Image.data
+// is capped at 2 MiB (a 1024x512 RGB frame); raise per the sensor if needed.
+
+package platform.msgs.sensor
+
+import system.platform.msgs.std.*       // Header
+import system.platform.msgs.geometry.*  // Quaternion, Vector3 (embedded by Imu)
+
+// ── Camera ──────────────────────────────────────────────────────────────────
+//
+// A raw image frame. `encoding` is a ROS image-encoding token ("rgb8",
+// "mono8", "bgra8"); `step` is the full row length in bytes (width * channels
+// * bytes-per-channel).
+message Image {
+    Header header
+    uint32 width
+    uint32 height
+    string encoding [max_size:16]
+    bool   is_bigendian
+    uint32 step
+    bytes  data [max_size:2097152]        // row-major, `step` * `height` bytes
+}
+
+// Pinhole-camera intrinsics for the image stream from this frame_id. The
+// matrices are the ROS sensor_msgs/CameraInfo layout: D (distortion, model
+// dependent — up to 8 coeffs), K (3x3 intrinsic), R (3x3 rectification), P
+// (3x4 projection). Fixed-count so they ride the wire as plain arrays.
+message CameraInfo {
+    Header          header
+    uint32          width
+    uint32          height
+    string          distortion_model [max_size:16]   // e.g. "plumb_bob"
+    repeated double d [max_count:8]                   // distortion coefficients
+    repeated double k [max_count:9]                   // 3x3 intrinsic matrix
+    repeated double r [max_count:9]                   // 3x3 rectification matrix
+    repeated double p [max_count:12]                  // 3x4 projection matrix
+}
+
+// ── IMU ─────────────────────────────────────────────────────────────────────
+//
+// Orientation + angular velocity + linear acceleration, each with a 3x3
+// row-major covariance. A leading -1 in covariance[0] means "unknown" (ROS
+// convention).
+message Imu {
+    Header          header
+    Quaternion      orientation
+    repeated double orientation_covariance [max_count:9]
+    Vector3         angular_velocity
+    repeated double angular_velocity_covariance [max_count:9]
+    Vector3         linear_acceleration
+    repeated double linear_acceleration_covariance [max_count:9]
+}
+
+// ── GNSS ──────────────────────────────────────────────────────────────────
+//
+// A satellite navigation fix (ROS sensor_msgs/NavSatFix). status/service
+// follow the NavSatStatus enums; position_covariance is the 3x3 ENU
+// covariance with `covariance_type` describing how it was derived.
+enum NavSatStatus {
+    STATUS_NO_FIX   = 0     // unable to fix position (ROS uses -1; 0-based here)
+    STATUS_FIX      = 1     // unaugmented fix
+    STATUS_SBAS_FIX = 2     // with satellite-based augmentation
+    STATUS_GBAS_FIX = 3     // with ground-based augmentation
+}
+
+enum NavSatCovarianceType {
+    COVARIANCE_TYPE_UNKNOWN        = 0
+    COVARIANCE_TYPE_APPROXIMATED   = 1
+    COVARIANCE_TYPE_DIAGONAL_KNOWN = 2
+    COVARIANCE_TYPE_KNOWN          = 3
+}
+
+message NavSatFix {
+    Header               header
+    NavSatStatus         status
+    double               latitude              // degrees, positive north
+    double               longitude             // degrees, positive east
+    double               altitude              // metres above the WGS-84 ellipsoid
+    repeated double      position_covariance [max_count:9]   // 3x3 ENU, m^2
+    NavSatCovarianceType position_covariance_type
+}

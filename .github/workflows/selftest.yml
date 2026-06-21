@@ -91,10 +91,14 @@ jobs:
 
       - name: Demo consuming-workspace hermetic tests
         env:
-          # The demo workspace's own Python layer (manifest.rig + the generated
-          # manifest sidecars) must import; the framework's manifest.services
-          # layer is one dir up (the @pero_theia checkout = the repo root).
-          PYTHONPATH: ${{ github.workspace }}/demo:${{ github.workspace }}
+          # The demo workspace is self-contained: PYTHONPATH=demo only. Its
+          # `manifest` namespace package spans the demo's apps (manifest.apps,
+          # manifest.<rig>) AND the framework's manifest.services — the latter
+          # symlinked in at demo/manifest/services (mirroring a deb-installed
+          # /opt/theia framework next to a user's own theia_ws). Repo-root is
+          # deliberately NOT on the path: it would shadow the venv-installed
+          # artheia with the ./artheia submodule checkout dir.
+          PYTHONPATH: ${{ github.workspace }}/demo
           RF_THEIA_WORKSPACE: ${{ github.workspace }}/demo
         working-directory: demo
         run: |

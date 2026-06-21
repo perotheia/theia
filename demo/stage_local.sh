@@ -26,7 +26,7 @@ export PATH="$REPO/.venv/bin:$PATH"
 
 # 1. Build + populate install/central/ + setcap — via Puppet (theia stage-local).
 #    bazel builds; Puppet copies the binaries in and applies the cap contract.
-python "$REPO/theia.py" stage-local central
+"$REPO/theia" stage-local central
 
 # 2. Demo-specific: cluster netgraph.json for the log[trace] hub's src/dst
 #    addr→component-name rewrite. (Build-only artifact, not part of the supervised

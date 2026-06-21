@@ -1,0 +1,37 @@
+// platform.msgs.nav — navigation estimates (ROS nav_msgs analogue).
+//
+// Odometry is the high-value type: an estimate of a body's pose and velocity,
+// each with a 6x6 covariance. Pure VALUE types (messages only) → single
+// package.art.
+//
+// nanopb structs: platform_msgs_nav_<Name>. Embeds msgs.std.Header and
+// msgs.geometry.{Pose,Twist}, so this package imports both; cross-package refs
+// qualify in the proto via the imports. The 6x6 covariances are bounded inline
+// so nanopb renders them as fixed in-struct arrays (see msgs.sensor for the
+// rationale).
+
+package platform.msgs.nav
+
+import system.platform.msgs.std.*       // Header
+import system.platform.msgs.geometry.*  // Pose, Twist (embedded by the *WithCovariance types)
+
+// Pose with its 6x6 (x,y,z,roll,pitch,yaw) row-major covariance.
+message PoseWithCovariance {
+    Pose            pose
+    repeated double covariance [max_count:36]
+}
+
+// Twist with its 6x6 row-major covariance.
+message TwistWithCovariance {
+    Twist           twist
+    repeated double covariance [max_count:36]
+}
+
+// Pose estimate in `header.frame_id`, velocity in `child_frame_id`
+// (ROS nav_msgs/Odometry).
+message Odometry {
+    Header              header
+    string              child_frame_id [max_size:32]   // frame the twist is in
+    PoseWithCovariance  pose
+    TwistWithCovariance twist
+}

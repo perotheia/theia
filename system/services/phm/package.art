@@ -73,7 +73,7 @@ message PhmConfig {
     // `entity` name; an entity not listed uses the global defaults. A zero field
     // in an override means "inherit the global default for this field" (so a
     // policy can override just restart_fail and leave the rest global).
-    repeated PhmEntityPolicy entity_policies
+    repeated PhmEntityPolicy entity_policies [max_count:32]
 }
 
 // A custom supervision policy for ONE monitored entity. Zero fields inherit the
@@ -127,7 +127,7 @@ message PhmHealthStatus {
     HealthLevel     level         // OK | WARNING | DEGRADED | FAILED
     SupervisionKind kind          // which supervision type tripped it
     uint32          fg            // Function Group id the entity belongs to (0=Machine)
-    string          detail        // human note (e.g. "5 restarts in 30s")
+    string          detail [max_size:128]        // human note (e.g. "5 restarts in 30s")
     uint64          ts_ns
 }
 interface senderReceiver PhmHealthStream {
@@ -145,8 +145,8 @@ message PhmFaultEvent {
     HealthLevel     level
     SupervisionKind kind
     uint32          restart_count
-    string          tombstone_path  // from the supervisor's tombstone, "" if none
-    string          detail
+    string          tombstone_path [max_size:128]  // from the supervisor's tombstone, "" if none
+    string          detail [max_size:128]
     uint64          ts_ns
 }
 interface senderReceiver PhmDtcStream {

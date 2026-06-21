@@ -5,7 +5,7 @@
 # embedded TIPC transport needs.
 #
 # This is the WIRE binding (com <-> supervisor over GwMessageHeader). The
-# libprotobuf binding (supervisor_proto, for the gRPC/GUI edge + supdbg's
+# libprotobuf binding (supervisor_proto, for the gRPC/GUI edge + tdb's
 # future gRPC host) is unconstrained and keeps using protoc.
 #
 # Sizes are deliberate upper bounds. A frame that would exceed them is

@@ -77,13 +77,13 @@ enum CtxKind {
 //   cert_ttl_days
 message CryptoConfig {
     // Slot → backend routing: "slotA=hw,slotB=sw" (unlisted = software).
-    string slot_providers = ""
+    string slot_providers = "" [max_size:256]
     // PEM slot directory: slot "<n>" → <slot_dir>/<n>.{key,crt}.
-    string slot_dir       = "/etc/theia/crypto"
+    string slot_dir       = "/etc/theia/crypto" [max_size:256]
     // HSM/TPM device id (PKCS#11 URI / TA path) for the HardwareProvider.
-    string hsm_device     = ""
+    string hsm_device     = "" [max_size:128]
     // PKI: CSR subject base (e.g. "/O=Theia/CN=") + cert validity (rotation).
-    string ca_subject     = "/O=Theia/CN="
+    string ca_subject     = "/O=Theia/CN=" [max_size:128]
     uint32 cert_ttl_days  = 825
     // Rotation signal: bump to make the manager reload a slot's cert/key
     // (a new cert was provisioned to the slot dir / HSM) without a restart.
@@ -108,7 +108,7 @@ enum KeyUsage {
 // the key can never be read as raw bytes, only used via the API.
 message KeySlotInfo {
     string slot_id
-    string algorithm_family
+    string algorithm_family [max_size:32]
     uint32 allowed_usage      // KeyUsage bitmask
     bool   exportable
 }
@@ -116,7 +116,7 @@ message KeySlotInfo {
 message SlotInfoReq   { string slot_id }
 message SlotInfoReply {
     CryptoStatus status
-    string       message
+    string       message [max_size:128]
     KeySlotInfo  info
 }
 
@@ -132,7 +132,7 @@ message CreateCtxReq {
 }
 message CreateCtxReply {
     CryptoStatus status
-    string       message
+    string       message [max_size:128]
     uint64       ctx          // the context handle (0 on error)
 }
 
@@ -142,7 +142,7 @@ message CtxStartReq {
 }
 message CtxAck {
     CryptoStatus status
-    string       message
+    string       message [max_size:128]
 }
 
 // Update(ctx, chunk) — feed one chunk. Call repeatedly for arbitrary-length
@@ -150,7 +150,7 @@ message CtxAck {
 // VERIFIER also feeds the signature-to-check via the final Finish (below).
 message CtxUpdateReq {
     uint64 ctx
-    bytes  chunk
+    bytes  chunk [max_size:8192]
 }
 
 // Finish(ctx) — complete the op and return the result + release the handle.
@@ -159,12 +159,12 @@ message CtxUpdateReq {
 //   VERIFIER → set `signature` to the sig under test; output empty, `valid` set
 message CtxFinishReq {
     uint64 ctx
-    bytes  signature         // VERIFIER only: the signature to check; else empty
+    bytes  signature [max_size:640]         // VERIFIER only: the signature to check; else empty
 }
 message CtxFinishReply {
     CryptoStatus status
-    string       message
-    bytes        output       // digest or signature; empty for VERIFIER
+    string       message [max_size:128]
+    bytes        output [max_size:640]       // digest or signature; empty for VERIFIER
     bool         valid        // VERIFIER only
 }
 
@@ -173,11 +173,11 @@ message CtxFinishReply {
 // Hash(data) → digest. No key — pure transform.
 message HashReq {
     HashAlgo algo
-    bytes    data
+    bytes    data [max_size:8192]
 }
 message HashReply {
     CryptoStatus status
-    string       message
+    string       message [max_size:128]
     bytes        digest
 }
 
@@ -185,24 +185,24 @@ message HashReply {
 message SignReq {
     string   key_slot
     HashAlgo algo
-    bytes    data
+    bytes    data [max_size:8192]
 }
 message SignReply {
     CryptoStatus status
-    string       message
-    bytes        signature
+    string       message [max_size:128]
+    bytes        signature [max_size:640]
 }
 
 // Verify(slot, data, signature) → valid (uses the slot's public key / cert).
 message VerifyReq {
     string   key_slot
     HashAlgo algo
-    bytes    data
-    bytes    signature
+    bytes    data [max_size:8192]
+    bytes    signature [max_size:640]
 }
 message VerifyReply {
     CryptoStatus status
-    string       message
+    string       message [max_size:128]
     bool         valid
 }
 
@@ -215,12 +215,12 @@ message VerifyReply {
 // "private-key-op(KeySlot)".)
 message PrivOpReq {
     string slot
-    bytes  input             // the padded block (input^d mod n)
+    bytes  input [max_size:640]             // the padded block (input^d mod n)
 }
 message PrivOpReply {
     CryptoStatus status
-    string       message
-    bytes        output      // input^d mod n (the raw RSA signature)
+    string       message [max_size:128]
+    bytes        output [max_size:640]      // input^d mod n (the raw RSA signature)
 }
 
 // GetCert(slot) → PEM (the X.509 provider surface, §2). Serves a slot's cert so
@@ -230,8 +230,8 @@ message CertReq {
 }
 message CertReply {
     CryptoStatus status
-    string       message
-    bytes        pem
+    string       message [max_size:128]
+    bytes        pem [max_size:8192]
 }
 
 // ─── Interfaces ─────────────────────────────────────────────────────────────

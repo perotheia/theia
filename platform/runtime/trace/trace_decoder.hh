@@ -10,7 +10,7 @@
 // registry built from cc_proto_library-compiled message factories.
 //
 // Output is JSON via google::protobuf::util::MessageToJsonString,
-// which is what supdbg + supervisor-gui surface to humans.
+// which is what tdb + supervisor-gui surface to humans.
 
 #include <cstdint>
 #include <map>
@@ -62,7 +62,7 @@ void register_global(std::string_view msg_type_name,
 
 
 // ---------------------------------------------------------------------------
-// C ABI — for ctypes consumers (rf-theia adapter, supdbg Python plugin).
+// C ABI — for ctypes consumers (rf-theia adapter, tdb Python plugin).
 //
 // Wraps a process-global Decoder pre-populated by static init with every
 // message type the library was built against. Callers don't manage

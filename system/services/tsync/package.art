@@ -44,13 +44,13 @@ enum TimeSource {
 // → on_config_update (re-point the interface / domain / mode live).
 message TsyncConfig {
     // The PTP NIC the host disciplines to (ptp4l -i <iface>). "" = auto/none.
-    string ptp_interface = ""
+    string ptp_interface = "" [max_size:32]
     // IEEE 1588 PTP domain number.
     uint32 ptp_domain    = 0
     // Preferred source: "gps" | "ptp" | "system" (the degrade order anchor).
     // central (GM) = "gps" (the in-process GNSS driver disciplines the clock);
     // compute (slave) = "ptp" (locks to central over Ethernet).
-    string source        = "ptp"
+    string source        = "ptp" [max_size:16]
     // Status poll cadence (ms) — how often the FC re-reads the GPS driver / ptp4l.
     uint32 poll_ms       = 1000
     // Offset (ns) above which LOCKED degrades to UNLOCKED (lock quality gate).
@@ -73,10 +73,10 @@ message SyncStatus {
     SyncState  state
     TimeSource source
     sint64     offset_ns      // current offset from the master (signed)
-    string     grandmaster    // GM clock identity, "" if none
-    string     interface      // the disciplined NIC, "" if none
+    string     grandmaster [max_size:32]    // GM clock identity, "" if none
+    string     interface [max_size:32]      // the disciplined NIC, "" if none
     uint64     ts_ns          // FC's wall-clock at this reading (epoch ns)
-    string     message        // human note (e.g. "ptp4l not installed")
+    string     message [max_size:128]        // human note (e.g. "ptp4l not installed")
 }
 
 // ─── AUTOSAR ara::tsync getter wire types ───────────────────────────────────
@@ -107,7 +107,7 @@ message OffsetReply { sint64 offset_ns    bool valid }
 
 // GetGrandmasterInfo → the grandmaster clock identity + the disciplined NIC.
 // Empty strings when there is no GM (SYSTEM/NTP, or no daemon).
-message GrandmasterReply { string grandmaster    string interface }
+message GrandmasterReply { string grandmaster [max_size:32]    string interface [max_size:32] }
 
 // ─── Interface ─────────────────────────────────────────────────────────────
 

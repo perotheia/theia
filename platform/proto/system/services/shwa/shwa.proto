@@ -38,10 +38,6 @@ message AccelSample {
     uint64 disk_install_total_kb = 17;
     uint64 disk_install_avail_kb = 18;
     uint64 ts_ns = 19;
-    // Cluster identity — which machine produced this sample. shwa stamps
-    // machine_index from its resolved TIPC instance (central=0, compute=1, …);
-    // com (which has the machine manifest) fills machine_name for the GUI Load
-    // panel so it can label per-machine HW without a second lookup.
     uint32 machine_index = 20;
     string machine_name = 21;
 }

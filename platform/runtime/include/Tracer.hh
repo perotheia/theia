@@ -246,7 +246,7 @@ public:
     //   enabled_ == true + filter set   → emit ONLY msg types listed
     //                                     in the filter.
     //
-    // Used by the supervisor's ConfigureTrace path: supdbg picks the
+    // Used by the supervisor's ConfigureTrace path: tdb picks the
     // msg types it wants and pushes them via TIPC to the node, the
     // node's `trace_enable("SmStateMsg", true)` delegates to
     // Tracer::trace_enable, and subsequent emit()s for that type land

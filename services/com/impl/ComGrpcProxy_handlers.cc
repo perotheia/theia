@@ -9,7 +9,7 @@
 // The old hand-rolled World-A gRPC main() folded into World B: this is now a
 // first-class generated runnable node, built by the native Bazel binary
 // //services/com/main:com (no more cmake / rules_foreign_cc). com's job:
-// bridge external gRPC peers (dashboards / supdbg / rf-theia) to the on-host
+// bridge external gRPC peers (dashboards / tdb / rf-theia) to the on-host
 // supervisor. We serve `SupervisorView` over gRPC.
 //
 // #418 — CONTROL path (the unary mutators: Start/Delete/Restart/Terminate/
@@ -92,7 +92,7 @@ constexpr uint32_t kOpConfigureLogLevel = 11;  // #385
 
 // Listen address. Overridable via THEIA_COM_LISTEN (the rig/executor sets it
 // from the machine manifest's com gRPC endpoint); defaults to the historical
-// 0.0.0.0:7700 that supervisor-gui + supdbg + rf-theia connect to.
+// 0.0.0.0:7700 that supervisor-gui + tdb + rf-theia connect to.
 std::string listen_addr() {
     if (const char* e = std::getenv("THEIA_COM_LISTEN")) return e;
     return "0.0.0.0:7700";

@@ -254,7 +254,7 @@ public:
     // ---- Server-port operations (one per unique handler signature) — impl
     //
     // Deduplicated by (req_msg, rep_msg): when two server ports
-    // share an interface (e.g. ctl_supdbg + ctl_com both providing
+    // share an interface (e.g. ctl_tdb + ctl_com both providing
     // TraceControl), the handler signature is identical and only
     // gets emitted once. Dispatch is by request type, not by port.
 SmEmpty handle_call(const SmRequest& req,

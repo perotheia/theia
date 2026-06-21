@@ -41,7 +41,7 @@ message ResourceLimitReq {
 
 message ResourceLimitReply {
     bool   applied = 1
-    string message = 2
+    string message = 2 [max_size:96]
 }
 
 // ─── Status wire types ──────────────────────────────────────────────────────
@@ -59,7 +59,7 @@ message FcResource {
 // The platform-wide snapshot OsiCtl broadcasts + serves.
 message ResourceStatus {
     uint32       fc_count   = 3
-    repeated FcResource fcs = 4
+    repeated FcResource fcs = 4 [max_count:32]
     uint64       ts_ns      = 5
 }
 

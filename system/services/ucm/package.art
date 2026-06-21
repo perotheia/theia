@@ -56,19 +56,19 @@ enum UpdateScope { US_FULL = 0       US_PARTIAL = 1 }
 // The package manifest (manifest.json inside theia-package.tar.zst), on the wire.
 message PackageManifest {
     string  name           // "theia" (full) or an FC name (partial), e.g. "phm"
-    string  version        // target release version, e.g. "1.2.0"
+    string  version [max_size:32]        // target release version, e.g. "1.2.0"
     UpdateKind  kind
     UpdateScope scope
-    string  artifact_path  // staged tar.zst path the download landed at
-    string  signature      // detached signature, verified via to_crypto pre-install
-    repeated string requires  // dependency constraints ("runtime>=1.3")
-    repeated string fcs       // FCs touched (partial: the one FC; full: all)
+    string  artifact_path [max_size:256]  // staged tar.zst path the download landed at
+    string  signature [max_size:512]      // detached signature, verified via to_crypto pre-install
+    repeated string requires [max_count:16]  // dependency constraints ("runtime>=1.3")
+    repeated string fcs [max_size:32, max_count:32]       // FCs touched (partial: the one FC; full: all)
     bool    has_migrations    // run migrations (per MigrateBulk / package hooks/) after switch
 }
 
 // ─── ctl front (external Update Clients / com → UCM) ────────────────────────
 
-message UcmRequest { string package_id    string version }
+message UcmRequest { string package_id    string version [max_size:32] }
 message UcmReply   { uint32 status }
 
 // RequestUpdate carries the full manifest (com forwards the fleet campaign).
@@ -108,10 +108,10 @@ enum UcmState {
 }
 message UcmProgress {
     UcmState    state
-    string      version        // target version in flight
+    string      version [max_size:32]        // target version in flight
     UpdateKind  kind
     UpdateScope scope
-    string      detail         // human note (last step / error)
+    string      detail [max_size:128]         // human note (last step / error)
     uint64      ts_ns
 }
 
@@ -136,7 +136,7 @@ interface senderReceiver UcmLifecycleIn {
 message UcmConfig {
     // The release-tree root. `current`/`previous` symlinks + releases/<ver>/
     // live here. Defaults to the deployed prefix.
-    string releases_root  = "/opt/theia/releases"
+    string releases_root  = "/opt/theia/releases" [max_size:128]
     // How long (ms) UcmFsm stays in VERIFYING watching PHM health before it
     // commits to ACTIVE. A non-OK verdict inside the window → ROLLBACK.
     uint32 verify_budget_ms = 30000

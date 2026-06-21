@@ -52,10 +52,10 @@ interface senderReceiver PhmDtcStream     { data PhmFaultEvent fault }
 message UdsRequest {
     uint32 source_addr   // DoIP tester logical address
     uint32 target_addr   // DoIP ECU logical address (us)
-    bytes  uds           // raw UDS payload: service id + data
+    bytes  uds [max_size:4096]           // raw UDS payload: service id + data
 }
 message UdsReply {
-    bytes  uds           // UDS response payload (positive, or 7F sid nrc)
+    bytes  uds [max_size:4096]           // UDS response payload (positive, or 7F sid nrc)
     bool   is_nrc        // true if the response is a negative-response code
 }
 

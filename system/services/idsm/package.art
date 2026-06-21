@@ -40,7 +40,7 @@ enum IdsState {
 message IdsmConfig {
     // Path to the compiled eBPF object the backend loads (.bpf.o). Absent →
     // IDS_UNAVAILABLE. On the dev host this is unset (mock backend).
-    string bpf_object_path = ""
+    string bpf_object_path = "" [max_size:128]
     // The bpffs-pinned ring-buffer map name the program publishes events on.
     string ringbuf_map     = "ids_events"
     // Poll cadence (ms) — how often IdsmDaemon drains the ring buffer.
@@ -51,7 +51,7 @@ message IdsmConfig {
     // Test/degrade seam: a newline-JSON file the mock backend tails when no eBPF
     // object is loaded (lets the ingest→firehose→escalate pipeline run on a host
     // without eBPF). Empty = no mock source.
-    string mock_event_path = ""
+    string mock_event_path = "" [max_size:128]
 
     // ---- userspace ProcBackend (Cat A/C/D/H — no eBPF needed) -------------
     // The ProcBackend polls `ss`/`/proc` and diffs against these manifest-
@@ -61,13 +61,13 @@ message IdsmConfig {
     // The DMZ listeners the deployment EXPECTS (comma-separated "comm:port",
     // e.g. "com:7700,com:7710,com:7711"). A listening socket NOT in this set is
     // Cat A/C. Default = com's gRPC servers (the only sanctioned IP endpoints).
-    string expected_listeners = "com:7700,com:7710,com:7711"
+    string expected_listeners = "com:7700,com:7710,com:7711" [max_size:512]
     // The processes allowed to expose a gRPC endpoint (comma-separated comm).
     // Only com in Theia; anything else accepting on a gRPC port is Cat D.
-    string grpc_servers = "com"
+    string grpc_servers = "com" [max_size:128]
     // Comma-separated "comm:sha256hex" the running ELF must match (Cat H). Empty
     // = integrity check off (the digests are normally manifest/UCM-supplied).
-    string elf_digests = ""
+    string elf_digests = "" [max_size:2048]
 }
 
 // ─── Detection ──────────────────────────────────────────────────────────────
@@ -76,8 +76,8 @@ message IdsmConfig {
 message Detection {
     uint32 severity     // 1=low … 5=critical
     string signature    // rule/heuristic name ("port-scan", "spoofed-src", …)
-    string src          // source identifier (ip:port / pid / comm)
-    string dst          // destination identifier
+    string src [max_size:96]          // source identifier (ip:port / pid / comm)
+    string dst [max_size:96]          // destination identifier
     uint64 ts_ns
 }
 

@@ -342,7 +342,7 @@ message DeleteChildRequest {
 //
 // Survives child restart for free: the node's first heartbeat after
 // a (re)start is the supervisor's re-push trigger. The trace
-// originator (supdbg / services/log) does NOT re-issue after a
+// originator (tdb / services/log) does NOT re-issue after a
 // restart.
 //
 // Lifetime:
@@ -566,7 +566,7 @@ interface clientServer SupervisorControlIf {
     // child's regular config + keepalive subscription.
     //
     // Typical caller: services/log[trace] (which receives the trace
-    // request from supdbg or from external-via-com), forwards it
+    // request from tdb or from external-via-com), forwards it
     // here so the supervisor remembers.
     operation ConfigureTrace(in req: ConfigureTraceRequest) returns ControlReply
     operation GetTraceConfig(in req: GetTraceConfigRequest) returns TraceConfigList

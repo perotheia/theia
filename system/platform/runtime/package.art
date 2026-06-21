@@ -27,7 +27,7 @@ enum LogLevelValue {
     LL_ERROR = 4
 }
 
-// Pushed by the supervisor on a runtime log-level change (supdbg
+// Pushed by the supervisor on a runtime log-level change (tdb
 // log set-level → com → supervisor → here). GenServer's base handle
 // applies it via process_logger().set_level(LogLevel(level)).
 message LogLevelPush {

@@ -74,7 +74,7 @@ message StartChildCall  { system_supervisor.ChildSpec     spec = 1; }
 message DeleteChildCall { string name = 1; }
 
 // (target_node, level) log-level set. Routed via the supervisor (#385):
-// supdbg → com → supervisor → node. The supervisor stores the level
+// tdb → com → supervisor → node. The supervisor stores the level
 // keyed by child NAME so it survives restart (overwrites the child's
 // spawn env THEIA_LOG_LEVEL) and pushes a live LogLevelConfig frame to
 // the node for no-restart application. `level` is one of
@@ -275,7 +275,7 @@ message TraceRecord {
 }
 
 // (target_node, msg_type, kind) filter toggle. Routed via the
-// supervisor's NodeTraceCtl push path (#361): supdbg/GUI → com →
+// supervisor's NodeTraceCtl push path (#361): tdb/GUI → com →
 // supervisor → node. `enabled=true` installs the filter and starts
 // flow; the supervisor remembers it so it survives child restarts
 // (#353). `enabled=false` removes the filter. `kind=0` means all kinds.

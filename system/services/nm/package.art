@@ -55,9 +55,9 @@ enum NetState {
 // interface) to associate; psk "" = an open network. When the policy must pick a
 // wifi link, it chooses the highest-priority profile whose SSID is in range.
 message WifiProfile {
-    string ssid          // network name
-    string psk           // WPA2 passphrase ("" = open)
-    uint32 priority      // higher wins when several known SSIDs are visible
+    string ssid [max_size:33]   // network name (≤32 octets per 802.11 + NUL)
+    string psk  [max_size:64]   // WPA2 passphrase ("" = open; ≤63 + NUL)
+    uint32 priority             // higher wins when several known SSIDs visible
 }
 
 message NmConfig {
@@ -76,7 +76,7 @@ message NmConfig {
     // The VPN tunnel interface NM observes (Tailscale's wg interface, e.g.
     // "tailscale0"). NM reads `tailscale status`/the iface state; it never brings
     // the tunnel up itself (tailscaled does). "" → auto ("tailscale0").
-    string vpn_interface = ""
+    string vpn_interface = "" [max_size:32]
     // Let NM DRIVE the connection (not just observe): when no usable link is up,
     // pick Ethernet if it has carrier, else auto-connect the highest-priority
     // known WiFi profile that's in range (via wpa_cli). false (default) = pure
@@ -84,7 +84,7 @@ message NmConfig {
     // known-WiFi-fallback policy.
     bool   auto_connect = false
     // The known WiFi networks NM may auto-connect (the CONNECT path).
-    repeated WifiProfile wifi_profiles
+    repeated WifiProfile wifi_profiles [max_count:8]
 }
 
 // ─── FSM events (posted by NmPoller into the FSM in-process) ───────────────
@@ -128,22 +128,22 @@ message NetStatusReq { }
 // NM does NOT perform 802.11 itself — it asks `iw dev <if> scan` for the
 // visible APs and reports them. One BSS row per AP seen in the last scan.
 message WifiBss {
-    string ssid          // network name ("" = hidden SSID)
-    string bssid         // AP MAC (aa:bb:cc:dd:ee:ff)
-    sint32 signal_dbm    // RSSI in dBm (e.g. -54); signed
-    uint32 freq_mhz      // channel centre frequency (e.g. 2412, 5180)
-    string security      // "open" | "WPA2" | "WPA3" | "WEP" (best-effort parse)
+    string ssid     [max_size:33]   // network name ("" = hidden SSID)
+    string bssid    [max_size:18]   // AP MAC (aa:bb:cc:dd:ee:ff = 17 + NUL)
+    sint32 signal_dbm               // RSSI in dBm (e.g. -54); signed
+    uint32 freq_mhz                 // channel centre frequency (2412, 5180)
+    string security [max_size:16]   // "open"|"WPA2"|"WPA3"|"WEP" (best-effort)
 }
 
 // WifiScan(interface) → the BSS list + the link's current association snapshot.
 // interface "" = the first wireless interface NM is monitoring.
-message WifiScanReq   { string interface }
+message WifiScanReq   { string interface [max_size:16] }
 message WifiScanReply {
-    string  interface              // the wifi link actually scanned
-    bool    associated             // is the link currently associated to an AP?
-    string  assoc_ssid             // the associated SSID ("" if not associated)
-    string  assoc_bssid            // the associated AP MAC ("" if not associated)
-    repeated WifiBss bss           // APs visible in the latest scan
+    string  interface  [max_size:16]   // the wifi link actually scanned
+    bool    associated                 // is the link currently associated?
+    string  assoc_ssid  [max_size:33]  // the associated SSID ("" if none)
+    string  assoc_bssid [max_size:18]  // the associated AP MAC ("" if none)
+    repeated WifiBss bss [max_count:48] // APs visible in the latest scan
 }
 
 // ─── WiFi connect wire types (the DRIVE path via wpa_cli) ──────────────────
@@ -152,14 +152,14 @@ message WifiScanReply {
 // NM never embeds 802.11 — it issues wpa_cli add/set/enable/select + a DHCP
 // lease, then the FSM observes the resulting assoc/addr edges. psk "" = open.
 message WifiConnectReq {
-    string interface     // "" = the first wireless interface
-    string ssid          // the network to join
-    string psk           // WPA2 passphrase ("" = open network)
+    string interface [max_size:16]   // "" = the first wireless interface
+    string ssid      [max_size:33]   // the network to join
+    string psk       [max_size:64]   // WPA2 passphrase ("" = open network)
 }
 message WifiConnectReply {
-    bool   ok            // the wpa_cli select succeeded (association is async)
-    string interface     // the wifi link driven
-    string message       // human detail ("associating to …" / the failure)
+    bool   ok                        // wpa_cli select succeeded (assoc is async)
+    string interface [max_size:16]   // the wifi link driven
+    string message   [max_size:128]  // human detail ("associating to …" / fail)
 }
 
 // ─── Interfaces ────────────────────────────────────────────────────────────

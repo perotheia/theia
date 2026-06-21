@@ -34,13 +34,13 @@ message FwConfig {
     bool   enabled        = true
     // The directory of hand-authored override fragments (*.nft), merged into the
     // generated baseline. Absent dir = baseline only.
-    string fw_d_dir       = "config/fw.d"
+    string fw_d_dir       = "config/fw.d" [max_size:128]
     // The DMZ allow-list (TCP dports). Defaults to com's gRPC servers + etcd; a
     // deployment narrows/widens it here. Comma-separated.
-    string dmz_tcp_ports  = "7700,7710,7711,2379"
+    string dmz_tcp_ports  = "7700,7710,7711,2379" [max_size:128]
     // The default inbound policy for the generated chain. "drop" (deny-by-default,
     // the secure default) or "accept" (audit/permissive mode).
-    string default_policy = "drop"
+    string default_policy = "drop" [max_size:16]
     // Re-apply cadence (ms) — FwDaemon re-asserts its table on a tick so a
     // foreign flush (another tool clobbering nft) self-heals. 0 = apply once.
     uint32 reassert_ms    = 0
@@ -54,20 +54,20 @@ message FwConfig {
     // CIDRs, e.g. "10.20.0.0/16,10.30.0.0/16"), the dport allow becomes
     // `ip saddr { <cidrs> } tcp dport { <ports> } accept` — only those networks
     // reach gRPC, instead of exposing the ports globally. Empty = global (today).
-    string grpc_client_cidrs = ""
+    string grpc_client_cidrs = "" [max_size:512]
     // Management-via-VPN: an interface (e.g. "wg0") that is fully trusted inbound
     // (`iif "wg0" accept`), so ssh/puppet/monitoring/diagnostics must arrive
     // through the VPN. Empty = no VPN allow rule.
-    string vpn_iface         = ""
+    string vpn_iface         = "" [max_size:32]
     // FORWARD chain policy for a routing/DMZ host. "" = no forward chain (the
     // default — a leaf host doesn't route). "drop" emits a default-drop forward
     // chain (established/related accept) so the host won't relay traffic.
-    string forward_policy    = ""
+    string forward_policy    = "" [max_size:16]
     // OUTPUT (egress) chain default policy when no per-FC egress_policy is set.
     // "" / "accept" = unrestricted egress (today). "drop" emits a default-drop
     // output chain (established/related + lo + DNS/NTP/PTP/VPN/backend allow via
     // the egress_policy CIDRs) — the FW.d "explicit egress" production pattern.
-    string output_policy     = ""
+    string output_policy     = "" [max_size:16]
     // Log + count dropped inbound packets for idsm/phm (probe detection). When
     // true the input chain ends with a rate-limited
     // `limit rate <N>/second log prefix "FW_DROP: " counter drop`. Default off
@@ -85,7 +85,7 @@ message FwConfig {
     // docs/autosar/services/idsm.md Cat B + project-linux-mapping-fcs.
     // Format: "fc=cidr,cidr;fc2=cidr" (per-FC allow CIDRs). Empty = no egress
     // enforcement (the default — opt-in, since it can break a misconfigured FC).
-    string egress_policy  = ""
+    string egress_policy  = "" [max_size:1024]
     // The cgroup v2 slice osi places FCs under (matches OsiConfig.slice_name).
     string egress_slice   = "theia.slice"
 }
@@ -96,7 +96,7 @@ message FwStatusMsg {
     FwState state
     uint32  rule_count       // rules in the live theia_fw table (0 if not applied)
     uint32  override_count   // config/fw.d/*.nft fragments merged
-    string  message          // human detail (last apply result / error)
+    string  message [max_size:192]          // human detail (last apply result / error)
     uint64  ts_ns
 }
 
@@ -105,7 +105,7 @@ message ReloadReq   { }   // force a regenerate + re-apply now
 
 message ReloadReply {
     bool   applied = 1
-    string message = 2
+    string message = 2 [max_size:192]
 }
 
 // ─── Interfaces ─────────────────────────────────────────────────────────────

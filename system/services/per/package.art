@@ -46,7 +46,7 @@ import system.platform.runtime.*
 // are encoded under. The CLIENT unpacks `config` with its own codec — per never
 // needs the node's proto type, it just stores/forwards bytes + digest.
 message ConfigSnapshot {
-    bytes  config           // serialized <Node>Config (binary proto)
+    bytes  config [max_size:4096]           // serialized <Node>Config (binary proto)
     string digest           // schema digest the bytes are encoded under
     uint64 mod_rev          // etcd revision (for CAS / staleness checks)
 }
@@ -65,7 +65,7 @@ message GetConfigReq {
 // transform. `expect_rev` enables compare-and-set (0 = unconditional).
 message PutConfigReq {
     string target_node
-    bytes  config           // serialized <Node>Config (binary proto)
+    bytes  config [max_size:4096]           // serialized <Node>Config (binary proto)
     string digest           // schema digest the bytes are encoded under
     uint64 expect_rev       // CAS guard (0 = unconditional)
 }
@@ -83,7 +83,7 @@ message WatchConfigReq {
 // Generic ack/error for the write + control ops.
 message PerReply {
     uint32 status           // 0 = ok; non-zero = error class
-    string message          // human-readable detail / reason
+    string message [max_size:160]          // human-readable detail / reason
     uint64 mod_rev          // resulting etcd revision (on Put)
 }
 
@@ -96,36 +96,36 @@ interface clientServer PerClientIf {
 // ─── Manager messages (schema registry + snapshot + bulk migrate) ────────
 
 message RegisterSchemaReq {
-    string config_type      // the node-config message FQN (e.g. "SupervisorConfig")
+    string config_type [max_size:96]      // the node-config message FQN (e.g. "SupervisorConfig")
     string digest           // proto digest for this version
 }
 
 message SchemaInfo {
-    string config_type
+    string config_type [max_size:96]
     string digest
 }
 
-message ListSchemasReq  { string config_type }     // "" = all
-message SchemaList      { repeated SchemaInfo schemas }
+message ListSchemasReq  { string config_type [max_size:96] }     // "" = all
+message SchemaList      { repeated SchemaInfo schemas [max_count:64] }
 
 // Bulk-rewrite every stored value of a config type from one schema to another,
 // through the registered transform chain. Progress logged to per's own sink;
 // crash-safe resume via a lease-bound marker (handler detail).
 message MigrateBulkReq {
-    string config_type
+    string config_type [max_size:96]
     string from_digest
     string to_digest
     // Path to the transform plugin (.so) the running per dlopen's to get the
     // from->to reshape code. The code is authored WITH the new (n+1) version but
     // must RUN inside the deployed (n) per — so it ships as a plugin, not baked
     // in. Empty = use whatever transforms are already registered.
-    string plugin_so
+    string plugin_so [max_size:256]
 }
 
 // Operational snapshot / restore of the whole datastore (wraps etcd
 // Maintenance). `label` tags the snapshot.
-message SnapshotReq        { string label }
-message RestoreSnapshotReq { string label }
+message SnapshotReq        { string label [max_size:96] }
+message RestoreSnapshotReq { string label [max_size:96] }
 
 // Read the CURRENT decoded config store (the /theia/config/ keyspace) — the
 // RAW rows from Store::scan(), no server-side decode. config_type="" returns
@@ -133,11 +133,11 @@ message RestoreSnapshotReq { string label }
 // PerView.GetSnapshot proxy (GUI/rtdb reads per's store over com, not etcd).
 // The client decodes each row's `config` bytes against the schema digest, the
 // same way tdb's decode_snapshot does it client-side.
-message GetStoreSnapshotReq { string config_type }   // "" = all rows
+message GetStoreSnapshotReq { string config_type [max_size:96] }   // "" = all rows
 message PerStoreRow {
-    string config_type      // the config owner node name (etcd key suffix)
+    string config_type [max_size:96]      // the config owner node name (etcd key suffix)
     string digest           // schema digest the bytes are encoded under
-    bytes  config           // serialized <Node>Config (binary proto bytes)
+    bytes  config [max_size:2048]           // serialized <Node>Config (binary proto bytes)
 }
 message PerStoreSnapshot   { repeated PerStoreRow rows }
 

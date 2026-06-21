@@ -660,7 +660,7 @@ private:
     // No-op when the child has no entries.
     void push_trace_config_to_child(const std::string& child_name);
 
-    // Per-child log level (#385). supdbg → services/com → here.
+    // Per-child log level (#385). tdb → services/com → here.
     // Same survives-restart contract as trace: store the level,
     // overwrite the child's spawn env THEIA_LOG_LEVEL so a (re)start
     // boots at the new level, and push a LogLevelConfig frame to the

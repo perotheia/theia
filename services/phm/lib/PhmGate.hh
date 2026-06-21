@@ -16,7 +16,7 @@
 // derived from the .art), so the struct lives in a WRITE-ONCE impl header
 // (seeded empty, never clobbered without --force) that the user fills in.
 // Included at GLOBAL scope (the header opens its own `namespace
-// system_services_phm`) so it isn't nested under this file's
+// ara::phm`) so it isn't nested under this file's
 // namespace block — bound as the GenServer State type below.
 #include "impl/PhmGate_state.hh"
 
@@ -122,7 +122,7 @@ public:
     // ---- handle_cast / handle_call — declared here, body in impl
     //
     // Deduplicated by message type: if two ports share the same
-    // interface (e.g. ctl_supdbg + ctl_com both providing
+    // interface (e.g. ctl_tdb + ctl_com both providing
     // TraceControl) the handler signature is identical and only
     // gets emitted once. handle_call/handle_cast dispatch by
     // request type, not by port.

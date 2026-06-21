@@ -450,6 +450,21 @@ def cmd_start(args: list[str]) -> int:
         if (_mroot / "machines.json").is_file():
             env["THEIA_MACHINE_MANIFEST"] = str(_mroot)
             break
+    # mTLS opt-in (mirrors deploy/run-supervisor.sh): when this machine's certs
+    # are staged (install/<machine>/certs or dist/manifest/<machine>/certs),
+    # export THEIA_COM_TLS_* so the forked com children SERVE mutual TLS. The
+    # supervisor inherits + passes it down. No certs → com stays plaintext (the
+    # local dev default). `theia observer` REQUIRES these, so staging certs is
+    # how you flip the whole loop (com server + GUI/rtdb clients) to TLS.
+    for _cdir in (dest / "certs", WORKSPACE / "dist" / "manifest" / dest.name / "certs"):
+        if (_cdir / "server.crt").is_file() and (_cdir / "server.key").is_file():
+            env["THEIA_COM_TLS_CERT"] = str(_cdir / "server.crt")
+            env["THEIA_COM_TLS_KEY"] = str(_cdir / "server.key")
+            if (_cdir / "ca.crt").is_file():
+                env["THEIA_COM_TLS_CA"] = str(_cdir / "ca.crt")
+            print(f"theia start: mTLS on — com serves TLS from {_cdir}",
+                  file=sys.stderr)
+            break
     # Bundled shared libs the FCs link at runtime (per → libetcd-cpp-api.so). In
     # sibling-source mode the .so lives under THEIA_ROOT (not on the loader path
     # + the bazel binary's RPATH breaks once staged to install/bin/); in deb mode
@@ -636,6 +651,116 @@ def cmd_stop(args: list[str]) -> int:
         pass
     pidfile.unlink(missing_ok=True)
     return 0
+
+
+# The wx supervisor-GUI binary. Bazel lays it out under a per-target bin/ dir.
+_OBSERVER_TARGET = "//tools/supervisor-gui:supervisor-gui"
+
+
+def _client_certs_dir() -> "Path | None":
+    """The mTLS material `theia manifest` stages for the local cluster:
+    <ws>/dist/manifest/<machine>/certs (preferred) or the install slice
+    <ws>/install/<machine>/certs. Returns the dir holding ca.crt + client.{crt,
+    key}, preferring 'central', else the first machine dir with a ca.crt; None
+    if no dev certs exist. Mirrors rtdb's _default_certs_dir so the GUI + rtdb
+    pick the SAME identity."""
+    for base in (WORKSPACE / "dist" / "manifest", WORKSPACE / "install"):
+        if not base.is_dir():
+            continue
+        names = ["central", *sorted(p.name for p in base.iterdir() if p.is_dir())]
+        for name in names:
+            d = base / name / "certs"
+            if (d / "ca.crt").is_file():
+                return d
+    return None
+
+
+def cmd_observer(args: list[str]) -> int:
+    """Launch the supervisor-GUI against the local cluster — ALWAYS over mTLS.
+
+        theia observer [<machine>]
+
+    The GUI binary falls back to an INSECURE channel when no CA is set; that is
+    a production-leak hazard, so this verb REFUSES to start it without the dev
+    mTLS material `theia manifest` stages under dist/manifest/<machine>/certs/.
+    It exports THEIA_COM_TLS_CA/_CLIENT_CERT/_CLIENT_KEY (com REQUIRES the
+    client cert when a CA is pinned) + THEIA_TRACE_DECODER_PATH (the pluggable
+    pb decoders: the framework's runtime/services .so + the workspace's app .so)
+    and points the GUI at the per-machine manifest dir. Build the GUI first
+    (bazel build //tools/supervisor-gui:supervisor-gui) — we exec the staged
+    binary, building it on demand if missing.
+
+    No certs → hard error with the one-liner to stage them. Never insecure."""
+    if "-h" in args or "--help" in args:
+        print(cmd_observer.__doc__, file=sys.stderr)
+        return 0
+
+    certs = _client_certs_dir()
+    need = ["ca.crt", "client.crt", "client.key"]
+    if certs is None or any(not (certs / f).is_file() for f in need):
+        # No staged mTLS material. The GUI must NEVER run insecure, so generate
+        # the dev cert set on demand into dist/manifest/central/certs (the same
+        # place `theia manifest` would stage it) rather than fall back to a
+        # plaintext channel.
+        # gen_dev_certs.sh is a FRAMEWORK tool (THEIA_ROOT/tools), not the
+        # consuming workspace's; the certs stage into the WORKSPACE's manifest.
+        gen = THEIA_ROOT / "tools" / "gen_dev_certs.sh"
+        target = WORKSPACE / "dist" / "manifest" / "central" / "certs"
+        if not gen.is_file():
+            print("theia observer: no mTLS certs and no tools/gen_dev_certs.sh "
+                  "— refusing to launch the GUI insecure.", file=sys.stderr)
+            return 2
+        print("theia observer: no mTLS certs staged — generating dev certs "
+              f"→ {target}", file=sys.stderr)
+        target.mkdir(parents=True, exist_ok=True)
+        if (rc := _run(["bash", str(gen), str(target), "localhost"])) != 0:
+            return rc
+        certs = target
+        missing = [f for f in need if not (certs / f).is_file()]
+        if missing:
+            print(f"theia observer: {certs} still missing {missing} after "
+                  "gen_dev_certs.sh — refusing to launch insecure.",
+                  file=sys.stderr)
+            return 2
+
+    # Build on demand, then resolve the staged binary (bazel nests it under a
+    # per-target bin/ dir: bazel-bin/tools/supervisor-gui/supervisor-gui/bin/…).
+    # The GUI is a FRAMEWORK tool (//tools/...), so it builds + lands under
+    # THEIA_ROOT, not the consuming workspace.
+    gui = (THEIA_ROOT / "bazel-bin" / "tools" / "supervisor-gui"
+           / "supervisor-gui" / "bin" / "supervisor-gui")
+    if not gui.is_file():
+        print("theia observer: building the GUI "
+              f"({_OBSERVER_TARGET})…", file=sys.stderr)
+        if (rc := _run(["bazel", "build", _OBSERVER_TARGET],
+                       cwd=THEIA_ROOT)) != 0:
+            return rc
+    if not gui.is_file():
+        print(f"theia observer: GUI binary not found at {gui} after build.",
+              file=sys.stderr)
+        return 1
+
+    manifest_dir = WORKSPACE / "dist" / "manifest"
+    env = {
+        **os.environ,
+        "THEIA_COM_TLS_CA": str(certs / "ca.crt"),
+        "THEIA_COM_TLS_CLIENT_CERT": str(certs / "client.crt"),
+        "THEIA_COM_TLS_CLIENT_KEY": str(certs / "client.key"),
+    }
+    # per links libetcd-cpp-api.so; the GUI doesn't, but keep the loader path
+    # consistent with `theia start` so a shared deps move doesn't bite.
+    _lib = THEIA_ROOT / "third_party" / "etcd-cpp-apiv3" / "install" / "lib"
+    if _lib.is_dir():
+        prev = env.get("LD_LIBRARY_PATH", "")
+        env["LD_LIBRARY_PATH"] = os.pathsep.join(
+            [str(_lib)] + ([prev] if prev else []))
+
+    gui_argv = [str(gui)]
+    if manifest_dir.is_dir():
+        gui_argv += ["--manifest-dir", str(manifest_dir)]
+    print(f"theia observer: mTLS via {certs} → {_OBSERVER_TARGET}",
+          file=sys.stderr)
+    os.execve(str(gui), gui_argv, env)
 
 
 def cmd_install(args: list[str]) -> int:
@@ -2134,6 +2259,7 @@ COMMANDS = {
     "dist":        (cmd_dist,        "per-host .ipk from dist/manifest/ JSON (no rig.py)"),
     "release":     (cmd_release,     "build the installable package set (.deb+.ipk) → dist/debian + dist/ipkg"),
     "compdb":      (cmd_compdb,      "regen compile_commands.json from bazel (clangd)"),
+    "observer":    (cmd_observer,    "launch the supervisor-GUI against the local cluster (always mTLS)"),
 }
 
 

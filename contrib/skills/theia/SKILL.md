@@ -116,8 +116,11 @@ theia init                             # bare: supervisor + your own apps
 artheia gen-app --kind fc system/apps/component.art --out apps --proto-out proto
 
 # 3. emit + serialize the manifests, install the runtime layout, run it.
-artheia gen-manifest system/apps/component.art manifest/app.py
-theia manifest && theia install && theia start
+#    `theia init` scaffolds manifest/bootstrap/rig.py — the smoke-test target
+#    addressed as `bootstrap`. Real per-target rigs (manifest/single/rig.py, …)
+#    come later and are run as `theia manifest <target>`.
+artheia gen-manifest system/apps/component.art manifest/apps/manifest.py
+theia manifest bootstrap && theia install && theia start
 ```
 
 What `theia init` creates in the CWD (never overwriting): `system/system.art`

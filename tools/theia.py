@@ -1540,8 +1540,9 @@ def cmd_init(args: list[str]) -> int:
         clusters (services / supervisor) you'll deploy, plus a stub you fill in
         by hand (link system/<yourthing> + add its cluster). You then `theia
         manifest` against it.
-      - manifest/rig.py      — a one-machine DeploymentLayer rig importing the
-        generated apps manifest (gen-manifest writes manifest/apps/manifest.py).
+      - manifest/bootstrap/rig.py — the one-machine BOOTSTRAP rig (smoke-test a
+        fresh workspace via `theia manifest bootstrap`); imports the generated
+        apps manifest (gen-manifest writes manifest/apps/manifest.py).
       - apps/, proto/        — homes for the GENERATED C++ (gen-app --out apps)
         and proto (gen-app --proto-out proto); never mixed with the framework.
       - .theia               — records THEIA_ROOT (the source it's bound to).
@@ -1668,7 +1669,13 @@ def cmd_init(args: list[str]) -> int:
     sys_art = (_INIT_SYSTEM_ART_SERVICES if with_services else _INIT_SYSTEM_ART)
     rig_py = (_INIT_RIG_PY_SERVICES if with_services else _INIT_RIG_PY)
     _write("system/system.art", sys_art.replace("@NAME@", name))
-    _write("manifest/rig.py", rig_py.replace("@NAME@", name))
+    # The BOOTSTRAP rig — a one-machine smoke-test target for verifying a fresh
+    # workspace's toolchain before it has real deploy targets. Lives at
+    # manifest/bootstrap/rig.py so it's addressable as `theia manifest bootstrap`
+    # (manifest.<target>.rig) and sits beside, not in competition with, the real
+    # per-target rigs (manifest/single/rig.py, …) a workspace grows later.
+    _write("manifest/bootstrap/__init__.py", "")
+    _write("manifest/bootstrap/rig.py", rig_py.replace("@NAME@", name))
     # Record THEIA_ROOT RELATIVE to the workspace when they share a prefix (keeps
     # the ws+theia pair relocatable, e.g. an in-repo demo/ committed with a
     # `../` link); fall back to absolute if they're on different roots.
@@ -1717,10 +1724,10 @@ def cmd_init(args: list[str]) -> int:
         print(f"  + {c}", file=sys.stderr)
     extra = ("\n  (the ARA services com/log/per/sm/ucm/shwa come up under the "
              "supervisor)" if with_services else "")
-    print("\nVerify the toolchain before adding apps:\n"
+    print("\nVerify the toolchain before adding apps (the bootstrap rig):\n"
           "  artheia gen-manifest system/apps/component.art "
           "manifest/apps/manifest.py\n"
-          f"  theia manifest && theia install && theia start{extra}\n"
+          f"  theia manifest bootstrap && theia install && theia start{extra}\n"
           "\nThen add a composition to system/apps/component.art and "
           "generate + build its C++:\n"
           "  artheia gen-app --kind fc system/apps/component.art "
@@ -1792,20 +1799,26 @@ cluster Applications { }
 '''
 
 _INIT_RIG_PY = '''\
-"""@NAME@ deploy rig — one machine ("central") running this workspace's apps.
+"""@NAME@ BOOTSTRAP rig — one machine ("central") running this workspace's apps.
+
+The smoke-test target for a FRESH workspace: it lets `theia manifest bootstrap
+&& theia install && theia start` run before you have any real deploy targets,
+so you can verify the toolchain end to end on a clean scaffold. Addressed as
+`bootstrap` because it lives at manifest/bootstrap/rig.py (manifest.<target>.rig);
+the real per-target rigs (manifest/single/rig.py, …) come later and sit beside
+it, never replacing it.
 
 A :class:`DeploymentLayer` on the orthogonal-ARA engine
 (:mod:`artheia.manifest.deployment`). It combines the workspace's generated
 apps manifest (the BASE — open machines) with a deploy delta: one machine and
-every process bound to it. `theia manifest` / `theia install` / `theia start`
-read the RIG export.
+every process bound to it. `theia manifest bootstrap` reads the RIG export.
 
 The apps manifest is gen-manifest output. Until you run it the import fails, so
 it is guarded — a fresh workspace resolves to an EMPTY deployment (one machine,
-no processes), which is enough to verify the toolchain (theia manifest / install
-/ start). As you add compositions to system/apps/component.art and regenerate
-(`artheia gen-manifest system/apps/component.art manifest/apps/manifest.py`),
-the processes + applications flow in automatically.
+no processes), which is enough to verify the toolchain. As you add compositions
+to system/apps/component.art and regenerate (`artheia gen-manifest
+system/apps/component.art manifest/apps/manifest.py`), the processes +
+applications flow in automatically.
 
 See $THEIA_ROOT/docs/skills/theia/references/deployment.md.
 """
@@ -1886,14 +1899,17 @@ cluster Platform {
 '''
 
 _INIT_RIG_PY_SERVICES = '''\
-"""@NAME@ deploy rig — one machine: the ARA services + this workspace's apps.
+"""@NAME@ BOOTSTRAP rig — one machine: the ARA services + this workspace's apps.
 
-WITH-SERVICES rig: a :class:`DeploymentLayer` (orthogonal-ARA engine) built by
-combining the framework's services manifest (the full FC set: com/log/per/sm/
-ucm/shwa…) with this workspace's generated apps manifest, then a deploy delta
-binding everything to one machine ("central"). `theia install` builds the FC
-binaries + the supervisor; `theia start` runs the whole service tree with your
-apps under it.
+The smoke-test target for a fresh WITH-SERVICES workspace, addressed as
+`bootstrap` (manifest/bootstrap/rig.py): `theia manifest bootstrap && theia
+install && theia start` verifies the toolchain before real deploy targets exist.
+
+A :class:`DeploymentLayer` (orthogonal-ARA engine) built by combining the
+framework's services manifest (the full FC set: com/log/per/sm/ucm/shwa…) with
+this workspace's generated apps manifest, then a deploy delta binding everything
+to one machine ("central"). `theia install` builds the FC binaries + the
+supervisor; `theia start` runs the whole service tree with your apps under it.
 
 As you add compositions to system/apps/component.art and regenerate
 (`artheia gen-manifest system/apps/component.art manifest/apps/manifest.py`),

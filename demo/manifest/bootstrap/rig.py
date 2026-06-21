@@ -62,3 +62,10 @@ try:
     from manifest.apps.executor import SUPERVISORS
 except Exception:
     SUPERVISORS = []
+
+# Per-process node/module metadata for the executor.json worker leaves.
+# gen-manifest emits it onto manifest.apps.manifest; empty until first run.
+try:
+    from manifest.apps.manifest import PROCESS_NODES
+except Exception:
+    PROCESS_NODES = {}

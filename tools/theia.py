@@ -1869,6 +1869,13 @@ try:
     from manifest.apps.executor import SUPERVISORS
 except Exception:
     SUPERVISORS = []
+
+# Per-process node/module metadata for the executor.json worker leaves.
+# gen-manifest emits PROCESS_NODES onto manifest.apps.manifest.
+try:
+    from manifest.apps.manifest import PROCESS_NODES
+except Exception:
+    PROCESS_NODES = {}
 '''
 
 # --- --with-services variants ---------------------------------------------
@@ -1979,6 +1986,18 @@ try:
     ]
 except Exception:
     SUPERVISORS = []
+
+# Merged per-process node/module metadata (services ⊕ apps) for the
+# executor.json worker leaves.
+try:
+    from manifest.services.manifest import PROCESS_NODES as _SVC_NODES
+    try:
+        from manifest.apps.manifest import PROCESS_NODES as _APP_NODES
+    except Exception:
+        _APP_NODES = {}
+    PROCESS_NODES = {**_SVC_NODES, **_APP_NODES}
+except Exception:
+    PROCESS_NODES = {}
 '''
 
 _INIT_README = '''\

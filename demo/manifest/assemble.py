@@ -20,11 +20,18 @@ from artheia.manifest.deployment import _members
 from artheia.manifest.supervisor import RestartStrategy, SupervisorNode
 from manifest.apps.executor import SUPERVISORS as _APPS_SUP
 from manifest.apps.manifest import DEPLOYMENT as APPS
+from manifest.apps.manifest import PROCESS_NODES as _APPS_NODES
 from manifest.services.executor import SUPERVISORS as _SVC_SUP
 from manifest.services.manifest import DEPLOYMENT as SERVICES
+from manifest.services.manifest import PROCESS_NODES as _SVC_NODES
 
 # The assembled deployment (machines still open — a target rig binds them).
 BASE = SERVICES.combine(APPS)
+
+# Merged per-process supervisor metadata (services FCs + demo apps). The deploy
+# rig re-exports this as PROCESS_NODES so serialize-manifest can populate the
+# executor.json worker leaves (nodes/tipc/modules).
+BASE_PROCESS_NODES = {**_SVC_NODES, **_APPS_NODES}
 
 # Every process name in the assembled base (services FCs + demo apps), for a
 # target rig to bind to machines.

@@ -15,7 +15,12 @@ from artheia.manifest.deployment import (
     MachineSetLayer,
     ProcessLayer,
 )
-from manifest.assemble import BASE, BASE_SUPERVISORS, PROCESS_NAMES
+from manifest.assemble import (
+    BASE,
+    BASE_PROCESS_NODES,
+    BASE_SUPERVISORS,
+    PROCESS_NAMES,
+)
 
 RIG = BASE.combine(DeploymentLayer(
     machines=MachineSetLayer(machines={
@@ -32,3 +37,4 @@ RIG = BASE.combine(DeploymentLayer(
 ))
 
 SUPERVISORS = BASE_SUPERVISORS
+PROCESS_NODES = BASE_PROCESS_NODES

@@ -165,9 +165,10 @@ Stage 6b — manifest schema sanity (#379, #380)
     ...                container key — the orthogonal-engine serializer
     ...                emits the bare payload (no `kind` discriminator),
     ...                so a file's identity IS its top key
-    ...                (execution→processes, executor→supervisors, …).
-    ...                Plus: no YAML emitted (#380 migrated the system
-    ...                to JSON-only).
+    ...                (execution→processes, …). executor.json is the
+    ...                NESTED supervisor tree: its root object is the
+    ...                `root` supervisor (name + children), the shape the
+    ...                C++ supervisor parses. Plus: no YAML (#380).
     [Tags]    demo-chain    hermetic    selftest    stage-6b
 
     ${root}=    Stage 6 Serialize Manifest
@@ -177,7 +178,8 @@ Stage 6b — manifest schema sanity (#379, #380)
     Json Top Key Is    ${root}    central    application    applications
     Json Top Key Is    ${root}    central    service        instances
     Json Top Key Is    ${root}    central    execution      processes
-    Json Top Key Is    ${root}    central    executor       supervisors
+    # executor.json is the nested tree — its root carries `children`.
+    Json Top Key Is    ${root}    central    executor       children
 
     # machines.json — the machine-name list the deploy bootstrap reads.
     Index Json Lists Machines    ${root}    central
@@ -187,16 +189,19 @@ Stage 6b — manifest schema sanity (#379, #380)
 
 
 Stage 7 — per-machine supervisor tree (executor.json slice)
-    [Documentation]    Per-machine supervisor tree. Root is always
-    ...                `one_for_all`. serialize-manifest writes it as
-    ...                the <machine>/executor.json slice (no standalone
-    ...                executor emit). This is the tree the C++
-    ...                supervisor reads at startup.
+    [Documentation]    Per-machine supervisor tree — the NESTED tree the
+    ...                C++ supervisor forks against (root one_for_all,
+    ...                children are nested supervisors or fully-populated
+    ...                worker leaves). serialize-manifest writes it as the
+    ...                <machine>/executor.json slice. Each worker leaf
+    ...                carries its .art nodes (tipc) from PROCESS_NODES —
+    ...                p1 hosts counter/driver/ticker.
     [Tags]    demo-chain    hermetic    selftest    stage-7
 
     ${root}=    Stage 6 Serialize Manifest
     ${y}=    Executor Slice For Machine    ${root}    central
     Executor Json Root Strategy Is    ${y}    one_for_all
+    Executor Worker Has Nodes    ${y}    p1    counter    driver    ticker
 
 
 Stage 8 — bazel build .ipk image (arch tag matches rig.py)

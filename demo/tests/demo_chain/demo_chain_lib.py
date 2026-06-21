@@ -398,22 +398,49 @@ class DemoChainLib:
 
     @keyword("Executor Json Root Strategy Is")
     def executor_root_strategy(self, path: str, expected: str) -> None:
-        """The supervisor tree's `root` node carries the top-level
-        restart strategy (the serializer nests the nodes under
-        `supervisors`, root first)."""
+        """executor.json IS the nested supervisor tree — the document's
+        top-level object is the `root` supervisor (name=root + strategy +
+        children[]), the exact shape the C++ supervisor's load_manifest
+        parses (root must have `children`). Assert root's strategy."""
         import json as _json
         doc = _json.loads(Path(path).read_text())
-        sups = doc.get("supervisors", [])
-        root = next((n for n in sups if n.get("name") == "root"), None)
-        if root is None:
+        if doc.get("name") != "root" or "children" not in doc:
             raise AssertionError(
-                f"{path} has no `root` supervisor; saw "
-                f"{[n.get('name') for n in sups]}"
+                f"{path} root is not a supervisor (name={doc.get('name')!r}, "
+                f"keys={sorted(doc)})"
             )
-        got = root.get("strategy")
+        got = doc.get("strategy")
         if got != expected:
             raise AssertionError(
                 f"{path} root strategy = {got!r}, expected {expected!r}"
+            )
+
+    @keyword("Executor Worker Has Nodes")
+    def executor_worker_has_nodes(self, path: str, worker: str,
+                                  *node_names: str) -> None:
+        """Find a worker leaf by name in the nested tree and assert it
+        carries the named .art nodes (tipc metadata). Proves PROCESS_NODES
+        flows into the executor.json the supervisor forks against."""
+        import json as _json
+        doc = _json.loads(Path(path).read_text())
+
+        def _find(n):
+            if n.get("name") == worker and n.get("type") == "worker":
+                return n
+            for c in n.get("children", []):
+                hit = _find(c)
+                if hit:
+                    return hit
+            return None
+
+        w = _find(doc)
+        if w is None:
+            raise AssertionError(f"{path} has no worker leaf {worker!r}")
+        got = {nd.get("name") for nd in w.get("nodes", [])}
+        missing = [n for n in node_names if n not in got]
+        if missing:
+            raise AssertionError(
+                f"{path} worker {worker!r} nodes = {got}; missing {missing}"
             )
 
     # ------------------------------------------------------------------

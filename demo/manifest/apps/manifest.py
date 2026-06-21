@@ -1,4 +1,4 @@
-"""AUTO-GENERATED from demo/system/apps/component.art, DO NOT EDIT (regen via gen-manifest).
+"""AUTO-GENERATED from system/apps/component.art, DO NOT EDIT (regen via gen-manifest).
 
 A base :class:`DeploymentLayer` on the orthogonal-ARA engine
 (:mod:`artheia.manifest.deployment`). Each cluster member maps to one
@@ -70,3 +70,40 @@ DEPLOYMENT = DeploymentLayer(
         ApplicationLayer(name='apps', processes={'p1', 'p2', 'p3', 'p4'}),
     }),
 )
+
+
+# Per-process supervisor metadata (modules + nodes) resolved from
+# the .art at gen-manifest time. serialize-manifest folds this into the
+# executor.json worker leaves. DeploymentLayer stays transport-free.
+PROCESS_NODES = {   'p1': {   'modules': ['apps/Demo3WayP1'],
+              'nodes': [   {   'name': 'counter',
+                               'reporting': True,
+                               'tipc_instance': '0',
+                               'tipc_type': '0xd0010001'},
+                           {   'name': 'driver',
+                               'reporting': True,
+                               'tipc_instance': '0',
+                               'tipc_type': '0xd0010002'},
+                           {   'name': 'ticker',
+                               'reporting': True,
+                               'tipc_instance': '0',
+                               'tipc_type': '0xd0010003'}]},
+    'p2': {   'modules': ['apps/Demo3WayP2'],
+              'nodes': [   {   'name': 'observer',
+                               'reporting': True,
+                               'tipc_instance': '0',
+                               'tipc_type': '0xd0010004'}]},
+    'p3': {   'modules': ['apps/Demo3WayP3'],
+              'nodes': [   {   'name': 'incrementer',
+                               'reporting': True,
+                               'tipc_instance': '0',
+                               'tipc_type': '0xd0010005'}]},
+    'p4': {   'modules': ['apps/Demo3WayP4'],
+              'nodes': [   {   'name': 'demo_fsm',
+                               'reporting': True,
+                               'tipc_instance': '0',
+                               'tipc_type': '0xd0010006'},
+                           {   'name': 'demo_gate',
+                               'reporting': True,
+                               'tipc_instance': '0',
+                               'tipc_type': '0xd0010007'}]}}

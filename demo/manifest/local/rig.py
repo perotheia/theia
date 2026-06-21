@@ -19,7 +19,11 @@ from artheia.manifest.deployment import (
     ServiceLayer,
     _members,
 )
-from manifest.single.rig import RIG as _SINGLE, SUPERVISORS as _SUP
+from manifest.single.rig import (
+    PROCESS_NODES as PROCESS_NODES,
+    RIG as _SINGLE,
+    SUPERVISORS as _SUP,
+)
 
 # the services app's process set, minus com (the bundled-process ref must not
 # dangle once com is removed from the execution axis).

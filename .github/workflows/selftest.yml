@@ -92,7 +92,7 @@ jobs:
       - name: Demo consuming-workspace hermetic tests
         env:
           # The demo workspace's own Python layer (manifest.rig + the generated
-          # manifest sidecars) must import; the framework's services.manifest
+          # manifest sidecars) must import; the framework's manifest.services
           # layer is one dir up (the @pero_theia checkout = the repo root).
           PYTHONPATH: ${{ github.workspace }}/demo:${{ github.workspace }}
           RF_THEIA_WORKSPACE: ${{ github.workspace }}/demo

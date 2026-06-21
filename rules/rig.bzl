@@ -1,42 +1,62 @@
-"""rig.bzl — bzlmod module extension wiring rig.py into Bazel.
+"""rig.bzl — bzlmod module extension wiring a TEST-TARGET rig into Bazel.
 
-A vendor's rig is described declaratively in a Python module
-(e.g. `apps/manifest/rig.py`) as a `SoftwareSpecification` literal.
-The module extension below runs `artheia rig-deps <module>` at
-module-load time, reads the resulting JSON, and materializes a
-synthetic repository (one per rig) exposing per-machine targets:
+A test target's deployment is described as a Python module on the manifest
+engine — `manifest.<target>.rig` (manifest.single.rig / manifest.split.rig /
+manifest.local.rig) — exporting a `DeploymentLayer` attribute (RIG; split also
+exports DOCKER / HW). The layer assembles the framework `manifest.services`
+with the demo `manifest.apps` (a PEP-420-style namespace package split across
+the framework root and the consuming workspace).
 
-    @rig_apps//demo_host:image       # opkg .ipk for demo_host
-    @rig_apps//demo_host:executor    # executor.json only
-    @rig_apps//demo_host:components  # filegroup of all binaries
-    @rig_apps//executor_json         # combined executor.json (multi-host)
-    @rig_apps//machines_json         # GUI manifest
+The module extension below runs
+
+    artheia serialize-manifest manifest.<target>.rig --attr <ATTR> --out <dir>
+
+at module-load time (which validate()s FIRST, refusing on any inconsistency),
+reads the resulting per-machine JSON, and materializes a synthetic repository
+(one per rig) exposing per-machine targets:
+
+    @rig_single//central:components   # filegroup of all process binaries
+    @rig_single//central:image        # opkg .ipk / .deb for central
+    @rig_single//central:executor     # executor.json only
+    @rig_single//:machines_json       # the machine NAME LIST
 
 Usage from MODULE.bazel:
 
-    rig_ext = use_extension("//rules:rig.bzl", "rig_ext")
-    rig_ext.declare(name = "rig_apps", rig_module = "apps.manifest.rig")
-    use_repo(rig_ext, "rig_apps")
+    rig_ext = use_extension("@pero_theia//rules:rig.bzl", "rig_ext")
+    rig_ext.declare(name = "rig_single", rig_module = "manifest.single.rig",
+                    rig_attr = "RIG")
+    use_repo(rig_ext, "rig_single")
 
 Then:
 
-    bazel build @rig_apps//demo_host:image      # the deploy bundle
-    bazel build @rig_apps//demo_host:executor   # just the supervisor manifest
+    bazel build @rig_single//central:components   # the per-machine binaries
+    bazel build @rig_single//central:image        # the deploy bundle
 
-The synthetic repo references the user's actual cc_binary / py_binary
-targets via the bazel_target strings declared in the rig's
-SwComponents. The user is responsible for those targets existing
-(e.g. `//apps:p1_main` resolves to a cc_binary in apps/BUILD.bazel).
+The synthetic repo references the user's actual cc_binary targets via the
+`executable` bazel-target string in each machine's execution.json. The user is
+responsible for those targets existing (`//services/com/main:com` resolves to a
+cc_binary in @pero_theia; `//apps/Demo3WayP1/main:apps` to one in the consuming
+workspace).
+
+Data source: this extension consumes `serialize-manifest`'s JSON, NOT the old
+`rig-deps` flat-component dict. The two relevant files per machine are:
+
+    <out>/machines.json                  {"machines": ["central", ...]}  NAME LIST
+    <out>/<machine>/machine.json         {"name","arch":"x86_64"|"aarch64",...}
+    <out>/<machine>/execution.json       {"processes":[{"name","executable",...}]}
+    <out>/<machine>/executor.json        the per-machine supervisor tree
 
 Implementation notes:
 - Module extensions run during MODULE.bazel resolution, BEFORE the
-  workspace-loading phase. So `artheia` must be reachable via $PATH —
-  the workspace .venv/bin must be on PATH before `bazel build`.
-- The synthetic repo's BUILD content is generated at extension-eval
-  time. If the rig.py changes, re-run `bazel mod tidy` or similar
-  to refresh.
-- Each rig generates a deterministic set of files; lockfile stability
-  is preserved.
+  workspace-loading phase. `artheia` is resolved from the consuming ws .venv,
+  then the @pero_theia framework venv, then PATH.
+- PYTHONPATH for the serialize-manifest subprocess mirrors theia.py's _run:
+  [framework_root/artheia, consuming_ws, framework_root]. BOTH the consuming ws
+  (manifest.apps + the rig module) and the framework root (manifest.services)
+  must be visible for the namespace package + rig import to resolve.
+- The DIST (no-python) path is a SEPARATE rule — see rules/dist_ipk.bzl's
+  dist_pkg, driven by `theia dist` from a committed serialized dir. This file is
+  only the DEV (serialize-at-eval) path.
 """
 
 # -----------------------------------------------------------------------------
@@ -44,14 +64,11 @@ Implementation notes:
 # -----------------------------------------------------------------------------
 
 _BUILD_HEADER = '''\
-# AUTO-GENERATED by //rules:rig.bzl from rig_module "{rig_module}".
+# AUTO-GENERATED by //rules:rig.bzl from rig_module "{rig_module}" (--attr {rig_attr}).
 # DO NOT EDIT — regenerate via `bazel mod tidy`.
 #
-# Vehicle: {vehicle_name} ({vehicle_make} / {vehicle_model})
 # Machines: {machine_names}
 
-load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
-load("@rules_pkg//pkg:deb.bzl", "pkg_deb")
 load("@pero_theia//rules:opkg.bzl", "pkg_opkg")
 
 package(default_visibility = ["//visibility:public"])
@@ -67,9 +84,9 @@ _FRAMEWORK_PREFIXES = ("//platform/", "//services/")
 
 
 def _abs_label(label):
-    """Make a bare `//…` SwComponent label absolute against the repo that
-    actually defines it. A rig declared from a CONSUMING workspace mixes two
-    origins: framework binaries (//platform/…, //services/…) live in the
+    """Make a bare `//…` process-`executable` label absolute against the repo
+    that actually defines it. A rig declared from a CONSUMING workspace mixes
+    two origins: framework binaries (//platform/…, //services/…) live in the
     @pero_theia module, while the workspace's OWN app binaries (//apps/…) live
     in the consuming (root) module. The synthetic @rig_<name>// repo resolves a
     bare //… against ITSELF (wrong for both), so partition explicitly:
@@ -85,135 +102,56 @@ def _abs_label(label):
     return "@@" + label
 
 
-def _host_machine_targets(machine, vehicle_name):
-    """BUILD content for a HOST machine — admin console .deb.
+def _machine_targets(machine_name, arch, processes):
+    """Emit BUILD content for one machine from its serialize-manifest JSON.
 
-    Contents:
-      /usr/bin/supervisor-gui              wxWidgets observer
-      /usr/bin/supdbg                      Python CLI (wrapper script)
-      /usr/share/applications/             .desktop entry
-        theia-supervisor-gui.desktop
-      /usr/share/icons/.../theia.png       (placeholder until real icon)
-      /etc/theia/machines.json             this rig's TARGET machines
+    `processes` is execution.json["processes"] — each a dict with at least
+    `name` (the deploy basename, e.g. "p1") and `executable` (the bazel target,
+    e.g. "//apps/Demo3WayP1/main:apps"). All targets land in:
 
-    Built via rules_pkg's pkg_tar + pkg_deb. Architecture is always
-    amd64 today — operator workstations are Ubuntu/Debian amd64.
+      :components   a filegroup of every process binary (via _abs_label).
+      :image        a pkg_opkg packaging each binary at /opt/theia/bin/<name>
+                    (matches the executor start_cmd `bin/<name>` resolved
+                    against THEIA_ROOT_DIR=/opt/theia) + the executor.json,
+                    with Architecture from machine.json (x86_64→amd64,
+                    aarch64→arm64 — done inside pkg_opkg's arch table).
+      :executor     the per-machine executor.json (supervisor tree).
+
+    `bin/<name>` uses the PROCESS name as the dest basename, not the bazel
+    target's own output name: the demo p1/p2/p3/p4 binaries are ALL the cc_binary
+    `:apps`, distinguished only by their package path, so the executor's
+    `bin/p1`…`bin/p4` must be the dest, with each label staged to its own slot.
     """
-    arch = machine.get("arch", "amd64")
     lines = []
-    lines.append("# --- HOST machine {name} (admin console .deb) ----".format(
-        name = machine["name"],
-    ))
-    lines.append('''
-# Stage the supervisor-gui binary at /usr/bin/supervisor-gui.
-pkg_tar(
-    name = "data_bin",
-    srcs = ["@pero_theia//tools/supervisor-gui:supervisor-gui"],
-    package_dir = "/usr/bin",
-    strip_prefix = "/tools/supervisor-gui/supervisor-gui/bin",
-)
-
-# Stage machines.json — generated by @rig_<n>//:machines_json.
-pkg_tar(
-    name = "data_cfg",
-    srcs = ["@rig_{rig_short}//:machines_json"],
-    package_dir = "/etc/theia",
-    remap_paths = {{"machines.json": "machines.json"}},
-)
-
-# Combine into a single data.tar.gz.
-pkg_tar(
-    name = "data",
-    deps = [":data_bin", ":data_cfg"],
-)
-
-# The .deb itself.
-pkg_deb(
-    name = "image",
-    data = ":data",
-    package = "theia-{vehicle}-{machine}",
-    version = "1.0.0",
-    architecture = "{arch}",
-    maintainer = "Theia <theia@example.com>",
-    description = "Theia admin console for vehicle {vehicle} (rig {machine}). " +
-                  "Installs supervisor-gui + machines.json; the operator " +
-                  "connects to TARGET machines listed in /etc/theia/machines.json.",
-    section = "admin",
-    priority = "optional",
-    # Runtime deps. supervisor-gui dynamically links against
-    # libwxgtk3 / libgrpc++ / libetcd-cpp-api. We declare the apt-
-    # available ones; libetcd-cpp-api ships out-of-band today (the
-    # tester sets LD_LIBRARY_PATH) — a future revision bundles the
-    # .so under /usr/lib and patchelf's the rpath.
-    depends = [
-        "libwxgtk3.0-gtk3-0v5 | libwxgtk3.2-1",
-        "libgrpc++1 | libgrpc++1.51",
-        "libyaml-cpp0.7 | libyaml-cpp0.8",
-        "libcpprest2.10",
-    ],
-)
-'''.format(
-        rig_short = vehicle_name,
-        vehicle = vehicle_name,
-        machine = machine["name"],
+    lines.append("# --- machine {name} ({arch}) ---------------------------".format(
+        name = machine_name,
         arch = arch,
     ))
-    return "".join(lines)
 
-
-def _machine_targets(machine, vehicle_name):
-    """Emit BUILD content for one machine.
-
-    For HOST machines, build a .deb with the admin console
-    (supervisor-gui + machines.json). For TARGET machines, the
-    existing .ipk path.
-
-    For TARGET: only ``bazel_buildable=True`` SwComponents land in
-    the filegroup and the opkg payload. Components with
-    ``bazel_buildable=False`` (legacy bash daemons, FCs not yet
-    bridged into Bazel) are skipped — their references stay in
-    the rig.py + executor.json so the supervisor knows about them,
-    but the deploy bundle doesn't try to package them.
-    """
-    if machine.get("kind") == "host":
-        return _host_machine_targets(machine, vehicle_name)
-
-    lines = []
-    lines.append("# --- machine {name} -----------------------------------".format(
-        name = machine["name"],
-    ))
-
-    buildable = [c for c in machine["all_components"] if c.get("bazel_buildable")]
-    skipped = [c for c in machine["all_components"] if not c.get("bazel_buildable")]
-
-    if skipped:
-        skipped_names = ", ".join([c["name"] for c in skipped])
-        lines.append(
-            "\n# Skipped (bazel_buildable=False): " + skipped_names + "\n",
-        )
-
-    if not buildable:
-        # Empty machine: keep the targets but with no srcs/files. This
-        # is the realistic state for an FC-only platform layer until
-        # the FC binaries get real Bazel targets.
+    if not processes:
+        # No processes on this machine: keep the targets but empty, so
+        # downstream `:all` references still resolve.
         lines.append('''
 filegroup(name = "components", srcs = [])
 
-# No buildable components on this machine; emit an empty filegroup
-# for `image` so downstream `:all` references still resolve.
-filegroup(
-    name = "image",
-    srcs = [],
-)
+filegroup(name = "image", srcs = [])
+
+exports_files(["executor.json"])
 ''')
         return "".join(lines)
 
-    # filegroup aggregating every component binary. All labels go via
-    # `_abs_label` so they reference the main pero_theia repo, not the
-    # synthetic @rig_<name>// one.
-    targets_str = ",\n        ".join(
-        ['"{}"'.format(_abs_label(c["bazel_target"])) for c in buildable],
-    )
+    # filegroup aggregating every process binary. All labels go via _abs_label
+    # so they reference @pero_theia (services) / @@ (apps), not the synthetic
+    # @rig_<name>// repo. Dedup: a single cc_binary (`:apps`) backs several
+    # processes — list each distinct label once in the filegroup.
+    seen = {}
+    distinct_labels = []
+    for p in processes:
+        lbl = _abs_label(p["executable"])
+        if lbl not in seen:
+            seen[lbl] = True
+            distinct_labels.append(lbl)
+    targets_str = ",\n        ".join(['"{}"'.format(l) for l in distinct_labels])
     lines.append('''
 filegroup(
     name = "components",
@@ -223,62 +161,49 @@ filegroup(
 )
 '''.format(targets = targets_str))
 
-    # pkg_opkg target packaging every binary into /opt/theia/bin/<name>.
-    # This MUST match the supervisor's child lookup: the executor.json
-    # start_cmd is a relative `bin/<name>` resolved against THEIA_ROOT_DIR
-    # (=/opt/theia in the deploy), i.e. /opt/theia/bin/<name>. (The local
-    # `theia install` path lands binaries at install/<machine>/bin/<name>
-    # for the same reason.) cc_binary's default output filename matches the
-    # target name, so //services/sm/main:sm → bazel-bin/.../sm. The opkg
-    # rule's `files` map expects {label: dest_path}. The supervisor itself
-    # also lands here so run-supervisor.sh's /usr/bin/theia-supervisor
-    # bind-mount (dev) and the packaged path coexist.
+    # pkg_opkg packaging every process binary into /opt/theia/bin/<name> (the
+    # process name, not the target name). The supervisor's child lookup uses the
+    # executor.json start_cmd `bin/<name>` resolved against THEIA_ROOT_DIR. The
+    # executor.json itself is staged at /opt/theia/executor.json. pkg_opkg's
+    # `files` map is {label: dest_path}; the arch token comes straight from
+    # machine.json (pkg_opkg's _DEB_ARCH maps x86_64→amd64, aarch64→arm64).
     files_entries = []
-    for c in buildable:
+    for p in processes:
         files_entries.append(
             '        "{label}": "/opt/theia/bin/{name}",'.format(
-                label = _abs_label(c["bazel_target"]),
-                name = c["name"],
+                label = _abs_label(p["executable"]),
+                name = p["name"],
             ),
         )
-
-    # Arch token comes from rig.py — Machine.hardware.cpu.architecture
-    # is emitted as "amd64"/"arm64" in rig.json by `artheia rig-deps`.
-    # The .ipk's metadata arch is independent of which Bazel platform
-    # is doing the build; what matters is what `dpkg` expects on the
-    # *target* machine, which is exactly what rig.py declares.
-    #
-    # That means:
-    #   bazel build @rig_apps//compute_host:image  → arm64 (ComputeHost
-    #                                                declared aarch64)
-    #   bazel build @rig_apps//central_host:image  → amd64
-    #
-    # --platforms=//rules/config:rpi4 is still meaningful — it drives the
-    # underlying cc_toolchain selection (so any cc_binary in the rig
-    # cross-compiles to aarch64). The .ipk metadata tag is fixed by
-    # rig.py because that's a declaration, not a build-time selection.
-    rig_arch = machine.get("arch", "amd64")
+    files_entries.append(
+        '        ":executor.json": "/opt/theia/executor.json",',
+    )
     lines.append('''
+exports_files(["executor.json"])
+
+alias(
+    name = "executor",
+    actual = ":executor.json",
+)
+
 pkg_opkg(
     name = "image",
-    package = "{vehicle}-{machine}",
+    package = "theia-{machine}",
     version = "1.0.0",
-    # Architecture comes from rig.py (Machine.hardware.cpu.architecture).
-    # This is a declaration of the target machine's arch — what `dpkg
-    # -i` expects to see on the box. Use --platforms=//rules/config:rpi4 to
-    # drive the underlying cc_toolchain when the rig has cross-built
-    # cc_binary components.
-    arch = "{rig_arch}",
-    description = "Deploy bundle for {vehicle} on {machine}",
+    # Architecture from machine.json (the target machine's declared CPU arch —
+    # what `dpkg -i` expects on the box). pkg_opkg maps x86_64→amd64,
+    # aarch64→arm64. Use --platforms=//rules/config:rpi4 to drive the underlying
+    # cc_toolchain when the rig cross-builds aarch64 cc_binary components.
+    arch = "{arch}",
+    description = "Deploy bundle for {machine}",
     section = "apps",
     files = {{
 {files}
     }},
 )
 '''.format(
-        vehicle = vehicle_name,
-        machine = machine["name"],
-        rig_arch = rig_arch,
+        machine = machine_name,
+        arch = arch,
         files = "\n".join(files_entries),
     ))
 
@@ -286,25 +211,23 @@ pkg_opkg(
 
 
 def _rig_repo_impl(ctx):
-    """repository_rule body: run `artheia rig-deps`, emit one BUILD.bazel
-    per machine subdir, plus a top-level BUILD.bazel with executor /
-    machines yaml targets."""
+    """repository_rule body: run `artheia serialize-manifest`, emit one
+    BUILD.bazel per machine subdir, plus a top-level BUILD.bazel with the
+    machines-name-list convenience target."""
 
-    # 1. Resolve artheia + the import root for the rig module.
+    # 1. Resolve artheia + the import roots for the rig module.
     #
-    # The rig MODULE (e.g. `manifest.rig`) is a Python module owned by the
-    # CONSUMING workspace — the ROOT module of this build (demo/, gataway_ws,
-    # …), NOT the @pero_theia framework module. So `artheia rig-deps
-    # manifest.rig` must run with the consuming workspace root on PYTHONPATH;
-    # `ctx.workspace_root` is exactly that root (the main repo dir). When the
-    # framework is itself the root (in-repo dev), workspace_root == the
-    # framework checkout and its own rig modules resolve the same way.
+    # The rig MODULE (e.g. `manifest.single.rig`) imports manifest.apps (owned
+    # by the CONSUMING workspace = the ROOT module: demo/) AND manifest.services
+    # (owned by the @pero_theia framework module). serialize-manifest must run
+    # with BOTH roots on PYTHONPATH so the `manifest` namespace package resolves
+    # across both. `ctx.workspace_root` is the consuming root (the main repo dir).
     consuming_ws = str(ctx.workspace_root)
+    framework_ws = str(ctx.path(Label("@pero_theia//:MODULE.bazel")).dirname)
 
     # artheia binary: prefer the consuming workspace's own .venv, then the
     # @pero_theia framework venv (the editable install lives there in a source
     # checkout), then PATH.
-    framework_ws = str(ctx.path(Label("@pero_theia//:MODULE.bazel")).dirname)
     candidates = [
         consuming_ws + "/.venv/bin/artheia",
         framework_ws + "/.venv/bin/artheia",
@@ -315,7 +238,6 @@ def _rig_repo_impl(ctx):
             artheia = cand
             break
     if artheia == None:
-        # Try PATH-resolved artheia.
         if ctx.execute(["which", "artheia"], quiet = True).return_code == 0:
             artheia = "artheia"
         else:
@@ -326,144 +248,102 @@ def _rig_repo_impl(ctx):
                 ),
             )
 
-    # 2. Run rig-deps to get the structure. `--rig <attr>` selects the spec
-    # when the module exports several (else the resolver's default).
-    #
-    # PYTHONPATH = consuming workspace root so `manifest.rig` (the demo's own
-    # module) imports. Also prepend the framework's `artheia/` source parent so
-    # the editable-installed `artheia` PACKAGE wins over the bare `artheia/`
-    # source DIRECTORY that would otherwise shadow it as a namespace portion
-    # (same guard theia.py applies). os.pathsep is ":" on the Linux dev/CI box.
-    pythonpath = [consuming_ws]
+    # 2. PYTHONPATH mirrors theia.py _run: prepend the framework's `artheia/`
+    # source parent (so the editable-installed `artheia` PACKAGE wins over the
+    # bare `artheia/` source DIRECTORY that would otherwise shadow it as a
+    # namespace portion), then the consuming ws (manifest.apps + the rig module),
+    # then the framework root (manifest.services). os.pathsep is ":" on Linux.
+    pythonpath = [consuming_ws, framework_ws]
     if ctx.path(framework_ws + "/artheia/artheia/__init__.py").exists:
         pythonpath.insert(0, framework_ws + "/artheia")
     rig_env = {"PYTHONPATH": ":".join(pythonpath)}
 
-    rig_json = "rig.json"
-    rig_deps_cmd = [artheia, "rig-deps", ctx.attr.rig_module, "--out", rig_json]
-    if ctx.attr.rig_attr:
-        rig_deps_cmd += ["--rig", ctx.attr.rig_attr]
-    result = ctx.execute(rig_deps_cmd, quiet = False, environment = rig_env)
+    # 3. serialize-manifest manifest.<target>.rig --attr <ATTR> --out <dir>.
+    # Write into a `manifest/` dir inside the repo rule's output.
+    out_dir = "manifest"
+    attr = ctx.attr.rig_attr if ctx.attr.rig_attr else "RIG"
+    cmd = [
+        artheia,
+        "serialize-manifest",
+        ctx.attr.rig_module,
+        "--attr",
+        attr,
+        "--out",
+        out_dir,
+    ]
+    result = ctx.execute(cmd, quiet = False, environment = rig_env)
     if result.return_code != 0:
-        fail("artheia rig-deps {} failed:\n{}\n{}".format(
+        fail("artheia serialize-manifest {} --attr {} failed:\n{}\n{}".format(
             ctx.attr.rig_module,
+            attr,
             result.stdout,
             result.stderr,
         ))
 
-    rig = json.decode(ctx.read(rig_json))
+    # 4. Read machines.json (a NAME LIST) → per-machine machine.json (arch) +
+    # execution.json (processes). Emit one subdir per machine.
+    machines = json.decode(ctx.read(out_dir + "/machines.json"))["machines"]
+    machine_names = ", ".join(machines)
+    for name in machines:
+        machine = json.decode(ctx.read("{}/{}/machine.json".format(out_dir, name)))
+        execution = json.decode(
+            ctx.read("{}/{}/execution.json".format(out_dir, name)),
+        )
+        arch = machine.get("arch", "x86_64")
+        processes = execution.get("processes", [])
 
-    # 3. Build per-machine `all_components` lists (the flat_components
-    # filtered by machine name), then emit BUILD content.
-    machines = rig["machines"]
-    flat = rig["flat_components"]
-    for m in machines:
-        m["all_components"] = [
-            c for c in flat if c["machine"] == m["name"]
-        ]
-
-    # 4. Emit one subdirectory per machine: @rig_apps//demo_host:image etc.
-    machine_names = ", ".join([m["name"] for m in machines])
-    for m in machines:
+        # Copy executor.json into the machine subdir so :executor / the image's
+        # /opt/theia/executor.json can reference it as a same-package source.
         ctx.file(
-            "{}/BUILD.bazel".format(m["name"]),
-            _BUILD_HEADER.format(
-                rig_module = ctx.attr.rig_module,
-                vehicle_name = rig["vehicle"]["name"],
-                vehicle_make = rig["vehicle"]["make"],
-                vehicle_model = rig["vehicle"]["model"],
-                machine_names = machine_names,
-            ) + _machine_targets(m, rig["vehicle"]["name"]),
+            "{}/executor.json".format(name),
+            ctx.read("{}/{}/executor.json".format(out_dir, name)),
         )
 
-    # 5. Top-level @rig_apps//:executor_json + machines_json via genrules.
-    # These call back into artheia at build time (so the JSON always
-    # reflects the current rig.py state) — they aren't read at
-    # module-extension-eval time.
+        ctx.file(
+            "{}/BUILD.bazel".format(name),
+            _BUILD_HEADER.format(
+                rig_module = ctx.attr.rig_module,
+                rig_attr = attr,
+                machine_names = machine_names,
+            ) + _machine_targets(name, arch, processes),
+        )
+
+    # 5. Top-level @rig_<name>//:machines_json (the machine NAME LIST, copied in
+    # from serialize-manifest) + an `all` summary filegroup of every :image.
+    ctx.file(
+        "machines.json",
+        ctx.read(out_dir + "/machines.json"),
+    )
     ctx.file("BUILD.bazel", '''\
-# AUTO-GENERATED by //rules:rig.bzl from rig_module "{rig_module}".
+# AUTO-GENERATED by //rules:rig.bzl from rig_module "{rig_module}" (--attr {rig_attr}).
 
 package(default_visibility = ["//visibility:public"])
 
-# executor.json — the supervisor tree (JSON-only since #380; the
-# supervisor binary parses JSON). The `executor_yaml` alias is kept so
-# older callers don't break, but it now points at the JSON output.
-genrule(
-    name = "executor_json",
-    outs = ["executor.json"],
-    cmd = "bash $(execpath @pero_theia//tools:artheia_wrapper.sh) executor emit {rig_module}{rig_arg} --out $@",
-    tools = ["@pero_theia//tools:artheia_wrapper.sh"],
-    # local: run un-sandboxed so the wrapper's PYTHONPATH=execroot/_main can
-    # import the consuming workspace's rig module (manifest/ is symlinked into
-    # the real execroot, not staged into a sandbox).
-    local = True,
-)
+# machines.json — the machine NAME LIST ({{"machines":[...]}}), as serialized by
+# `artheia serialize-manifest`. The GUI / supervisor-gui reads this to know the
+# deploy's target machines.
+exports_files(["machines.json"])
 
 alias(
-    name = "executor_yaml",
-    actual = ":executor_json",
-)
-
-# Per-machine supervisor trees. The rig module exports CentralRig /
-# ComputeRig (apps.manifest.rig), each a single-machine Rig with its own
-# supervision tree (central: platform tree minus shwa; compute: srv_sup ->
-# shwa, app_sup -> p3). The consuming workspace's //:install rule lays these
-# into install/central/executor.json and install/compute/executor.json.
-#
-# The output dirs are PREFIXED (`exec_central/` not `central/`) so they never
-# collide with a per-machine subpackage of the SAME name: a rig whose machine
-# is literally named `central` writes `central/BUILD.bazel`, which would make a
-# bare `central/executor.json` output cross a package boundary. The consuming
-# install rule strip_prefix's `exec_central` to land the file at
-# `central/executor.json`.
-genrule(
-    name = "executor_json_central",
-    outs = ["exec_central/executor.json"],
-    cmd = "bash $(execpath @pero_theia//tools:artheia_wrapper.sh) executor emit {rig_module} --rig CentralRig --out $@",
-    tools = ["@pero_theia//tools:artheia_wrapper.sh"],
-    local = True,
-)
-
-genrule(
-    name = "executor_json_compute",
-    outs = ["exec_compute/executor.json"],
-    cmd = "bash $(execpath @pero_theia//tools:artheia_wrapper.sh) executor emit {rig_module} --rig ComputeRig --out $@",
-    tools = ["@pero_theia//tools:artheia_wrapper.sh"],
-    local = True,
-)
-
-# machines.json — the GUI manifest (JSON; `artheia gui emit`). The
-# `machines_yaml` alias is kept for any straggler reference, like
-# executor_yaml above.
-genrule(
     name = "machines_json",
-    outs = ["machines.json"],
-    cmd = "bash $(execpath @pero_theia//tools:artheia_wrapper.sh) gui emit {rig_module}{rig_arg} --out $@",
-    tools = ["@pero_theia//tools:artheia_wrapper.sh"],
-    local = True,
-)
-
-alias(
-    name = "machines_yaml",
-    actual = ":machines_json",
+    actual = ":machines.json",
 )
 
 # A summary filegroup for `bazel build @{name}//:all`.
 filegroup(
     name = "all",
     srcs = [
-        ":executor_json",
         ":machines_json",
 {machine_image_targets}
     ],
 )
 '''.format(
         rig_module = ctx.attr.rig_module,
-        rig_arg = (" --rig " + ctx.attr.rig_attr) if ctx.attr.rig_attr else "",
+        rig_attr = attr,
         name = ctx.attr.name,
         machine_image_targets = "\n".join([
-            '        "//{name}:image",'.format(name = m["name"])
-            for m in machines
+            '        "//{name}:image",'.format(name = name)
+            for name in machines
         ]),
     ))
 
@@ -473,19 +353,18 @@ rig_repo = repository_rule(
     attrs = {
         "rig_module": attr.string(
             mandatory = True,
-            doc = "Python dotted import path to the rig module, e.g. apps.manifest.rig.",
+            doc = "Python dotted import path to the rig module, e.g. " +
+                  "manifest.single.rig.",
         ),
         "rig_attr": attr.string(
             default = "",
-            doc = "Which Rig/SoftwareSpecification export in the module to use " +
-                  "(passed as `--rig`). Empty = the resolver's default " +
-                  "(*Software > *Rig, alphabetical). Set this when a module has " +
-                  "several specs and the alphabetical winner is the wrong one " +
-                  "(e.g. zonal_rig exports CentralSoftware AND DemoSoftware; the " +
-                  "multi-machine one is DemoSoftware).",
+            doc = "Which DeploymentLayer export in the module to serialize " +
+                  "(passed as `--attr`). Empty = \"RIG\". e.g. manifest.split.rig " +
+                  "exports DOCKER and HW alongside RIG.",
         ),
     },
-    doc = "Materialize a per-rig synthetic Bazel repo from a Python rig spec.",
+    doc = "Materialize a per-rig synthetic Bazel repo from a Python rig spec " +
+          "via `artheia serialize-manifest`.",
 )
 
 
@@ -497,7 +376,7 @@ _declare = tag_class(
     attrs = {
         "name": attr.string(
             mandatory = True,
-            doc = "Synthetic-repo name (e.g. rig_apps).",
+            doc = "Synthetic-repo name (e.g. rig_single).",
         ),
         "rig_module": attr.string(
             mandatory = True,
@@ -505,8 +384,8 @@ _declare = tag_class(
         ),
         "rig_attr": attr.string(
             default = "",
-            doc = "Which Rig/SoftwareSpecification export to use (--rig). " +
-                  "Empty = resolver default. See rig_repo's rig_attr doc.",
+            doc = "Which DeploymentLayer export to serialize (--attr). " +
+                  "Empty = \"RIG\". See rig_repo's rig_attr doc.",
         ),
     },
 )
@@ -527,5 +406,5 @@ def _rig_ext_impl(module_ctx):
 rig_ext = module_extension(
     implementation = _rig_ext_impl,
     tag_classes = {"declare": _declare},
-    doc = "Module extension: declare one synthetic rig repo per rig.py.",
+    doc = "Module extension: declare one synthetic rig repo per test-target rig.",
 )

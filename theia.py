@@ -61,7 +61,7 @@ def _run(argv: list[str], cwd: "Path | None" = None) -> int:
 
     Injects WORKSPACE onto PYTHONPATH so a subprocess (`artheia
     generate-manifest manifest.rig`) can import the workspace's own rig +
-    generated manifest modules (manifest.rig imports apps.manifest.app). Python
+    generated manifest modules (manifest.rig imports manifest.apps.manifest). Python
     doesn't put cwd on sys.path for console-script entry points, so we do it.
 
     `cwd` overrides the working dir — e.g. a framework bazel build runs from
@@ -79,6 +79,13 @@ def _run(argv: list[str], cwd: "Path | None" = None) -> int:
     # real parent (THEIA_ROOT/artheia) so the installed package wins. Absent in a
     # pip-installed consuming workspace (no source tree) → harmless no-op.
     prefix = [ws]
+    # THEIA_ROOT itself on the path too: the manifest layer is a PEP-420
+    # namespace package split across the framework (manifest/services) and the
+    # workspace (manifest/apps) — a rig that imports both needs BOTH roots
+    # visible so `manifest.services` (framework) and `manifest.apps` (workspace)
+    # resolve into the one `manifest` namespace. Skipped when ws IS the framework.
+    if str(THEIA_ROOT) != ws:
+        prefix.append(str(THEIA_ROOT))
     artheia_parent = THEIA_ROOT / "artheia"
     if (artheia_parent / "artheia" / "__init__.py").is_file():
         prefix.insert(0, str(artheia_parent))
@@ -284,44 +291,49 @@ def _discover_rig_module(zonal: bool = False) -> "str | None":
     return None
 
 
-def _load_install_components(manifest_root: Path):
-    """Read the generated AUTOSAR application.json and return what to build/stage.
+#: The framework supervisor runtime binary. It is the platform runtime, NOT a
+#: process in any rig's manifest — `serialize-manifest` never emits it — so the
+#: install path carries it as a fixed target. It is built/staged separately and
+#: lands at install/<machine>/supervisor (not bin/).
+_SUPERVISOR_TARGET = "//platform/supervisor/main:supervisor"
+
+
+def _load_install_components(manifest_root: Path, machine: str):
+    """Read the generated AUTOSAR execution.json and return what to build/stage.
 
     The deploy MANIFEST is the single source of truth — no hardcoded binary
-    list. `artheia generate-manifest` writes
-    ``<manifest_root>/<host>/application.json`` whose ``applications[].components[]``
-    each carry ``name`` (the staged ``bin/<name>`` leaf), ``bazel_target`` (the
-    label), ``owner`` (``apps``/``services``/``platform``) and ``bazel_buildable``.
+    list. `artheia serialize-manifest` writes
+    ``<manifest_root>/<machine>/execution.json`` whose ``processes[]`` each carry
+    ``name`` (the staged ``bin/<name>`` leaf), ``executable`` (the bazel label),
+    ``machine`` and ``start_cmd`` (``bin/<name>``).
 
-    Returns ``(supervisor_target, {name: target})`` over the buildable components,
-    with the ``supervisor`` entry split out (it lands at ``<dest>/supervisor``,
-    not ``bin/``). Raises if no application.json is found."""
+    Returns ``(supervisor_target, {name: target})`` over the processes ON THIS
+    machine (install stages one machine at a time). The supervisor is the fixed
+    framework runtime (`_SUPERVISOR_TARGET`) — it is not in the manifest, so it's
+    returned split out (it lands at ``<dest>/supervisor``, not ``bin/``).
+
+    Returns ``(_SUPERVISOR_TARGET, {})`` for a host/admin machine (no processes
+    on it) — the caller stages just machines.json, no supervisor tree. Raises if
+    the per-machine execution.json is missing."""
     import json
 
-    appjsons = sorted(manifest_root.glob("*/application.json"))
-    if not appjsons:
+    execjson = manifest_root / machine / "execution.json"
+    if not execjson.is_file():
         raise FileNotFoundError(
-            f"no application.json under {manifest_root} — "
-            f"`artheia generate-manifest` must run first")
-    data = json.loads(appjsons[0].read_text())
-    supervisor_target = None
+            f"no execution.json at {execjson} — "
+            f"`artheia serialize-manifest` must run first")
+    data = json.loads(execjson.read_text())
     binaries: dict[str, str] = {}
-    for app in data.get("applications", []):
-        for c in app.get("components", []):
-            if not c.get("bazel_buildable", True):
-                continue
-            name, target = c.get("name"), c.get("bazel_target")
-            if not name or not target:
-                continue
-            if name == "supervisor":
-                supervisor_target = target
-            else:
-                binaries[name] = target
-    if supervisor_target is None:
-        raise ValueError(
-            f"{appjsons[0]} has no 'supervisor' component — the rig must "
-            f"include the supervisor in its application set")
-    return supervisor_target, binaries
+    for p in data.get("processes", []):
+        if p.get("machine") != machine:
+            continue
+        if not p.get("bazel_buildable", True):
+            continue
+        name, target = p.get("name"), p.get("executable")
+        if not name or not target:
+            continue
+        binaries[name] = target
+    return _SUPERVISOR_TARGET, binaries
 
 
 def _fc_art_path(fc: str, target: str):
@@ -627,87 +639,102 @@ def cmd_stop(args: list[str]) -> int:
 def cmd_install(args: list[str]) -> int:
     """LOCAL install: build + populate $WORKSPACE/install/<machine>/ via puppet.
 
-    The dev inner-loop counterpart of the remote .ipk deploy, and the inherited
-    home of apps/stage_local.sh. The deploy MANIFEST is the single source of
-    truth — `artheia generate-manifest` first emits the AUTOSAR manifests, then
-    the buildable binary set (supervisor + every child) is READ BACK from
-    application.json (no hardcoded binary list). bazel builds those targets +
-    artheia emits executor.json + per-FC params; then `puppet apply
-    theia::local_install` copies them into install/<machine>/ and applies the
-    SAME setcap contract (theia::postinstall) a real deploy uses — "bazel builds,
-    puppet orchestrates the host". Default machine: central. Pass a machine name
-    to override.
+        theia install [<target>] [--attr ATTR] [--machine M]
+
+    The dev inner-loop counterpart of the remote .ipk deploy. <target> names a
+    rig under manifest/<target>/rig.py (single / split / local; default
+    ``single``) — the SAME target model as `theia manifest`. The deploy MANIFEST
+    is the single source of truth: `artheia serialize-manifest manifest.<target>
+    .rig --attr ATTR` first emits the AUTOSAR manifests, then the buildable
+    binary set is READ BACK from the machine's execution.json (no hardcoded
+    binary list). bazel builds those targets + artheia emits per-FC params;
+    serialize-manifest already wrote executor.json (copied in); then `puppet
+    apply theia::local_install` copies the binaries into install/<machine>/ and
+    applies the SAME setcap contract a real deploy uses — "bazel builds, puppet
+    orchestrates the host".
+
+    The machine to stage: --machine M, else the positional after <target>, else
+    $THEIA_MACHINE, else the single machine in machines.json (a single-host
+    target needs no name). The supervisor is the fixed framework runtime
+    (//platform/supervisor/main:supervisor), built/staged separately.
 
     (`theia stage-local` is a back-compat alias for this verb.)"""
-    machine = next((a for a in args if not a.startswith("-")), None)
-    # Rig attr: $THEIA_RIG if set, else let the resolver auto-rank (*Software /
-    # *Rig). No hardcoded "CentralRig" — a consuming workspace names its own.
-    rig = os.environ.get("THEIA_RIG")
-    # Multi-machine fallback: installing a NON-central machine (e.g. compute) needs
-    # the full-vehicle spec that actually has that machine. The auto-ranker picks
-    # the alphabetically-first *Software (CentralSoftware), which has only central
-    # → an empty tree for `--machine compute`. When the zonal rig module is in play
-    # and the target isn't central, default to the all-machines spec
-    # (THEIA_ZONAL_RIG / DemoSoftware). central keeps auto-ranking (back-compat).
-    if rig is None and machine not in (None, "central"):
-        rig = os.environ.get("THEIA_ZONAL_RIG", _ZONAL_RIG_ATTR)
+    # Target-based, mirroring cmd_manifest. The first positional is the TARGET;
+    # the machine comes from --machine / $THEIA_MACHINE / machines.json (a 2nd
+    # positional after the target is accepted as the machine for convenience).
+    positionals = [a for a in args if not a.startswith("-")]
+    target = positionals[0] if positionals else _DEFAULT_TARGET
+    attr = next((args[i + 1] for i, a in enumerate(args) if a == "--attr"), "RIG")
+    machine = next((args[i + 1] for i, a in enumerate(args) if a == "--machine"),
+                   None)
+    if machine is None and len(positionals) > 1:
+        machine = positionals[1]
     manifest_root = WORKSPACE / "install" / "manifest"
-
-    # Name-independent rig discovery — apps.manifest.rig in the monorepo,
-    # manifest.rig in a downstream workspace, or $THEIA_RIG_MODULE. No hardcoded
-    # module name (so `theia` carries no project identity).
-    rig_module = _discover_rig_module()
-    if rig_module is None:
-        print("theia: no rig found — expected a `manifest/rig.py` (or set "
-              "$THEIA_RIG_MODULE). A workspace declares its deploy via "
-              "manifest/rig.py.", file=sys.stderr)
-        return 1
+    module = f"manifest.{target}.rig"
 
     # 0. Address-collision gate — fail BEFORE building/staging if two nodes
     #    share a TIPC (type, instance) anywhere in the deployed FC set.
     if (rc := _check_tipc_addresses()) != 0:
         return rc
 
-    # 1. The four AUTOSAR manifest kinds (machine/application/service/
-    #    execution.json) per machine → install/manifest/<host>/. This is the
-    #    source of truth for WHAT to build/stage — runs FIRST so the binary set
-    #    is derived from it, not hand-listed. Rig module discovered above.
+    # 1. The per-machine AUTOSAR manifest set (machine/application/service/
+    #    execution/executor.json) → install/manifest/<machine>/. The source of
+    #    truth for WHAT to build/stage — runs FIRST so the binary set is derived
+    #    from it, not hand-listed. SAME command as `theia manifest`.
     if (rc := _run([
-        "artheia", "generate-manifest", rig_module,
+        "artheia", "serialize-manifest", module, "--attr", attr,
         "--out", str(manifest_root),
     ])) != 0:
         return rc
 
-    # 1a. Resolve the machine to install: the arg, else $THEIA_MACHINE, else the
-    #     SINGLE target machine in machines.json (a single-host workspace needs no
-    #     name). No hardcoded "central".
+    # 1a. Resolve the machine to install: --machine / 2nd positional (above),
+    #     else $THEIA_MACHINE, else the SINGLE machine in machines.json (a
+    #     single-host target needs no name). machines.json is a LIST OF NAMES.
     if machine is None:
         import json as _json
         machine = os.environ.get("THEIA_MACHINE")
         if machine is None:
             try:
-                ms = _json.loads((manifest_root / "machines.json").read_text())["machines"]
-                targets_m = [m["name"] for m in ms if m.get("kind") != "host"]
-                if len(targets_m) == 1:
-                    machine = targets_m[0]
-                elif not targets_m:
-                    machine = ms[0]["name"] if ms else "central"
-                else:
-                    print(f"theia install: multiple machines {targets_m} — pass "
-                          "one (e.g. `theia install central`) or set $THEIA_MACHINE.",
-                          file=sys.stderr)
-                    return 2
-            except (FileNotFoundError, KeyError, IndexError):
-                machine = "central"
+                ms = _json.loads(
+                    (manifest_root / "machines.json").read_text())["machines"]
+            except (FileNotFoundError, KeyError):
+                ms = []
+            if len(ms) == 1:
+                machine = ms[0]
+            elif not ms:
+                print("theia install: no machines in "
+                      f"{manifest_root / 'machines.json'} — nothing to stage.",
+                      file=sys.stderr)
+                return 1
+            else:
+                print(f"theia install: multiple machines {ms} — pass one "
+                      "(e.g. `theia install single --machine central`) or set "
+                      "$THEIA_MACHINE.", file=sys.stderr)
+                return 2
     dest = WORKSPACE / "install" / machine
 
-    # 1b. Read the buildable binary set from the manifest: {bin-name: target}
-    #     plus the supervisor (split out — it lands at <dest>/supervisor).
+    # 1b. Read the buildable binary set for THIS machine from execution.json:
+    #     {bin-name: bazel target}, plus the fixed supervisor target (split out —
+    #     it lands at <dest>/supervisor, not bin/).
     try:
-        supervisor_target, binaries = _load_install_components(manifest_root)
+        supervisor_target, binaries = _load_install_components(
+            manifest_root, machine)
     except (FileNotFoundError, ValueError) as e:
         print(f"theia: {e}", file=sys.stderr)
         return 1
+
+    # 1c. Host/admin machine guard: a machine with NO processes (none in
+    #     execution.json) is a host/admin node (console, no supervisor tree). For
+    #     now stage just machines.json — no supervisor, no bin/, no executor.
+    if not binaries:
+        import json as _json
+        dest.mkdir(parents=True, exist_ok=True)
+        src_machines = manifest_root / "machines.json"
+        if src_machines.is_file():
+            shutil.copy2(src_machines, dest / "machines.json")
+        print(f"theia install: '{machine}' has no processes (host/admin) — "
+              f"staged {dest / 'machines.json'} only.", file=sys.stderr)
+        return 0
 
     # 2. bazel build — the supervisor + every child binary, partitioned by owner:
     #    FRAMEWORK targets (//platform/..., //services/...) build in THEIA_ROOT
@@ -745,15 +772,18 @@ def cmd_install(args: list[str]) -> int:
                        cwd=ws_build_root)) != 0:
             return rc
 
-    # 3. executor.json — the supervisor tree for this machine (same discovered
-    #    rig; --rig optional → resolver auto-ranks; --machine slices this host).
+    # 3. executor.json — the supervisor tree for this machine. serialize-manifest
+    #    ALREADY wrote install/manifest/<machine>/executor.json (step 1); copy it
+    #    into install/<machine>/ where `theia start` reads it.
     dest.mkdir(parents=True, exist_ok=True)
-    _emit = ["artheia", "executor", "emit", rig_module,
-             "--machine", machine, "--out", str(dest / "executor.json")]
-    if rig:
-        _emit += ["--rig", rig]
-    if (rc := _run(_emit)) != 0:
-        return rc
+    src_executor = manifest_root / machine / "executor.json"
+    if not src_executor.is_file():
+        print(f"theia install: no executor.json at {src_executor} — "
+              "serialize-manifest did not emit the supervisor tree.",
+              file=sys.stderr)
+        return 1
+    shutil.copy2(src_executor, dest / "executor.json")
+    print(f"staged {dest / 'executor.json'}", file=sys.stderr)
 
     # 3b. Per-FC static params JSON — config/<fc>.json, one per FC that declares
     #     a params {} block. Read once at boot by the runtime config singleton
@@ -817,7 +847,6 @@ def cmd_install(args: list[str]) -> int:
         f"--modulepath={PUPPET / 'modules'}",
         f"--hiera_config={PUPPET / 'hiera.yaml'}",
         "-e", manifest,
-        *[a for a in args if a.startswith("-")],
     ])
 
 
@@ -970,105 +999,96 @@ def _stage_local_no_puppet(dest: Path, supervisor_src: str,
     return 0
 
 
-# The distributed rig: one module + the full-vehicle SoftwareSpecification
-# export (DemoSoftware has all machines). This is the SOLE place the Python rig
-# is touched for deploy — `theia manifest` emits JSON, and `theia dist` then
-# works purely from that JSON (no rig.py). Dev iteration uses `bazel build
-# @rig_zonal//<host>:image` directly (rules/rig.bzl), unchanged.
-_ZONAL_RIG_MODULE = "apps.manifest.zonal_rig"   # arm64 hardware (rpi4 + jetson)
-_TEST_RIG_MODULE  = "apps.manifest.test_rig"    # all-x86 docker test rig
-_ZONAL_RIG_ATTR = "DemoSoftware"   # the full 2-machine spec (both rigs export it)
+# The deploy split: `theia manifest` runs `artheia serialize-manifest
+# manifest.<target>.rig` to emit the per-machine JSON, and `theia dist` then
+# works purely from that committed JSON (RULE 2 — rules/dist_ipk.bzl, no rig.py
+# eval at build time). Dev iteration uses `bazel build @rig_single//<host>:image`
+# directly (RULE 1 — rules/rig.bzl, serialize-at-eval).
+_DEFAULT_TARGET = "single"          # default test target (one-machine dev rig)
 _MANIFEST_DIR = "dist/manifest"
 
 # machine.json CPU arch → bazel platform label (for the per-host cross-build).
+# Qualified @pero_theia//… so it resolves from a CONSUMING workspace (whose own
+# //rules/config doesn't exist) as well as in-framework.
 _ARCH_PLATFORM = {
-    "x86_64": "//rules/config:host",
-    "aarch64": "//rules/config:rpi4",
+    "x86_64": "@pero_theia//rules/config:host",
+    "aarch64": "@pero_theia//rules/config:rpi4",
 }
 
 
-def _emit_manifest_build_files(mdir: Path, machines: list[dict]) -> None:
-    """Drop the bazel glue alongside the regenerated JSON so `theia dist` can
-    reference each host's manifest files as labels and build a dist_ipk target.
-    Written by `theia manifest` because it owns (the gitignored) dist/manifest/.
+def _emit_manifest_build_files(mdir: Path, machines: list[str]) -> None:
+    """Drop the bazel glue alongside the serialized JSON so `theia dist` can
+    reference each host's manifest files as labels and build a dist_pkg target
+    (RULE 2 — rules/dist_ipk.bzl). Written by `theia manifest` because it owns
+    (the gitignored) dist/manifest/.
 
-    Per-host BUILD exports the JSONs; the top-level BUILD declares one
-    dist_ipk(name=<host>) per `target` machine."""
-    for m in machines:
-        (mdir / m["name"] / "BUILD.bazel").write_text(
+    `machines` is the NAME LIST from machines.json (the serialize-manifest
+    shape). Per-host BUILD exports the JSONs; the top-level BUILD declares one
+    dist_pkg(name=<host>) per machine (the new shape has no host/target split —
+    every serialized machine is a deploy target)."""
+    for name in machines:
+        (mdir / name / "BUILD.bazel").write_text(
             "# AUTO-GENERATED by `theia manifest`. exports the JSON manifests "
             "as bazel labels.\n"
             'package(default_visibility = ["//visibility:public"])\n'
             'exports_files(["machine.json", "application.json", '
             '"service.json", "execution.json", "executor.json"])\n'
         )
-    targets = [m["name"] for m in machines if m.get("kind") == "target"]
     lines = [
-        "# AUTO-GENERATED by `theia manifest`. One .deb per target host, packed",
-        "# from that host's application.json (rules/dist_ipk.bzl). The <host>_pkg",
+        "# AUTO-GENERATED by `theia manifest`. One .deb per host, packed from",
+        "# that host's execution.json (rules/dist_ipk.bzl — RULE 2). The <host>_pkg",
         "# target emits .deb (default); pass format=\"ipk\" for the opkg hatch.",
-        'load("//rules:dist_ipk.bzl", "dist_pkg")',
+        "# Loaded via @pero_theia//rules so it resolves from a CONSUMING workspace",
+        "# (no rules/ dir of its own) as well as in-framework.",
+        'load("@pero_theia//rules:dist_ipk.bzl", "dist_pkg")',
         "",
     ]
-    lines += [f'dist_pkg(name = "{h}")' for h in targets]
+    lines += [f'dist_pkg(name = "{h}")' for h in machines]
     (mdir / "BUILD.bazel").write_text("\n".join(lines) + "\n")
 
 
 def cmd_manifest(args: list[str]) -> int:
-    """THE sole rig entry for deploy: run the Python rig once and emit the JSON
-    manifest set to dist/manifest/ — machines.json + per-host {machine,
-    application,service,execution}.json — plus the bazel glue (`theia dist`
-    consumes the JSON, never the rig). Default rig: apps.manifest.zonal_rig
-    --rig DemoSoftware. Pass a module / --rig / --out to override.
+    """Serialize a TEST TARGET's rig to the per-machine JSON manifest set.
 
-    Dev iteration stays on `bazel build @rig_zonal//<host>:image` (rules/rig.bzl)
-    — that path is untouched."""
+        theia manifest [<target>] [--attr ATTR] [--out DIR]
+
+    <target> names a rig under manifest/<target>/rig.py (single / split / local;
+    default ``single``); the rig assembles the services + apps manifests on the
+    orthogonal engine and applies that target's deploy transform. This runs
+    `artheia serialize-manifest manifest.<target>.rig --attr ATTR`, which
+    validate()s the unmaterialized deployment FIRST (refusing on any
+    inconsistency) then writes machines.json + per-machine
+    {machine,service,application,execution,executor}.json under <out>
+    (default dist/manifest/, i.e. install/manifest/ via theia install).
+
+    --attr selects the rig's DeploymentLayer export (default ``RIG``; e.g.
+    `theia manifest split --attr HW`)."""
     import json
     # Address-collision gate FIRST: a duplicate TIPC (type, instance) across FCs
     # silently mis-wires the runtime, so fail before emitting any manifest.
     if (rc := _check_tipc_addresses()) != 0:
         return rc
-    # Rig discovery (name-INDEPENDENT, workspace-scoped): prefer an explicit
-    # zonal_rig, else the workspace's plain manifest/rig.py, else the framework's
-    # bundled default. Only the framework default carries the fixed _ZONAL_RIG_ATTR
-    # (DemoSoftware); a discovered consuming-workspace rig lets the resolver
-    # auto-rank its *Software / *Rig export (--rig omitted).
-    discovered = _discover_rig_module(zonal=True) or _discover_rig_module()
-    default_module = discovered or _ZONAL_RIG_MODULE
-    module = next((a for a in args if not a.startswith("-")), default_module)
-    rig_arg = next((args[i + 1] for i, a in enumerate(args) if a == "--rig"), None)
-    out = WORKSPACE / _MANIFEST_DIR
-    cmd = ["artheia", "generate-manifest", module, "--out", str(out)]
-    # Pin the rig attr for the framework's 2-machine rigs: BOTH test_rig (x86
-    # docker) and zonal_rig (arm64 hardware) export several *Software specs —
-    # CentralSoftware/ComputeSoftware are per-machine intermediates, DemoSoftware
-    # is the full multi-machine one. Without the pin the resolver alphabetically
-    # picks CentralSoftware (central-only → 1 machine emitted). A discovered
-    # downstream rig with one export auto-resolves; an explicit --rig wins.
-    if rig_arg:
-        cmd += ["--rig", rig_arg]
-    elif module in (_ZONAL_RIG_MODULE, _TEST_RIG_MODULE):
-        cmd += ["--rig", _ZONAL_RIG_ATTR]
+
+    target = next((a for a in args if not a.startswith("-")), _DEFAULT_TARGET)
+    attr = next((args[i + 1] for i, a in enumerate(args) if a == "--attr"), "RIG")
+    out_arg = next((args[i + 1] for i, a in enumerate(args) if a == "--out"), None)
+    out = Path(out_arg) if out_arg else WORKSPACE / _MANIFEST_DIR
+    module = f"manifest.{target}.rig"
+
+    cmd = ["artheia", "serialize-manifest", module, "--attr", attr,
+           "--out", str(out)]
     if (rc := _run(cmd)) != 0:
         return rc
-    # Read back machines.json + drop the bazel glue for `theia dist`.
+
     machines = json.loads((out / "machines.json").read_text())["machines"]
-    # Per-machine static FC config (gen-params default + deep-merged
-    # deploy/config/<machine>/<fc>.json override) into <machine>/config/. The
-    # docker orchestration copies this into /opt/theia/config/ so each FC boots
-    # its REAL per-machine profile (the tsync GM/slave split, …). TARGET hosts
-    # only — admin/host has no supervisor tree.
-    for m in machines:
-        if m.get("kind") == "host":
-            continue
-        if (rc := _emit_machine_config(m["name"], out / m["name"])) != 0:
-            return rc
-    # Stage the dev mTLS certs into each machine dir (com↔GUI mutual TLS).
-    if (rc := _stage_certs(machines, out)) != 0:
-        return rc
-    _emit_manifest_build_files(out, machines)
-    print(f"theia manifest: {len(machines)} machines → {out}/ (+ BUILD glue)",
-          file=sys.stderr)
+    # Drop the dist BUILD glue alongside the JSON so `theia dist` (RULE 2 —
+    # rules/dist_ipk.bzl) can build //dist/manifest:<host>_pkg without re-running
+    # the Python rig. Only when writing into the in-tree dist/manifest/ (the
+    # default) — a custom --out is a throwaway serialize dir.
+    if out == WORKSPACE / _MANIFEST_DIR:
+        _emit_manifest_build_files(out, machines)
+    print(f"theia manifest [{target}]: {len(machines)} machine(s) "
+          f"{machines} → {out}/", file=sys.stderr)
     return 0
 
 
@@ -1090,17 +1110,16 @@ def cmd_dist(args: list[str]) -> int:
               "manifest` first to emit the JSON deploy manifests.", file=sys.stderr)
         return 1
     mdir = machines_json.parent
+    # machines.json is a NAME LIST ({"machines":["central",...]}) in the
+    # serialize-manifest shape; every machine is a deploy target.
     machines = json.loads(machines_json.read_text())["machines"]
     rc_final = 0
-    for m in machines:
-        if m.get("kind") != "target":
-            continue                       # host-role (admin) — nothing to pack
-        host = m["name"]
+    for host in machines:
         mj = mdir / host / "machine.json"
         if not mj.is_file():
             print(f"theia dist: missing {mj}", file=sys.stderr)
             return 1
-        arch = json.loads(mj.read_text())["machine"]["hardware"]["cpu"]["architecture"]
+        arch = json.loads(mj.read_text())["arch"]
         platform = _ARCH_PLATFORM.get(arch)
         if not platform:
             print(f"theia dist: {host}: no bazel platform for arch '{arch}'",
@@ -1515,8 +1534,8 @@ def cmd_init(args: list[str]) -> int:
         clusters (services / supervisor) you'll deploy, plus a stub you fill in
         by hand (link system/<yourthing> + add its cluster). You then `theia
         manifest` against it.
-      - manifest/rig.py      — a one-machine, one-app rig stub importing the
-        generated sidecars (gen-manifest writes manifest/app.py).
+      - manifest/rig.py      — a one-machine DeploymentLayer rig importing the
+        generated apps manifest (gen-manifest writes manifest/apps/manifest.py).
       - apps/, proto/        — homes for the GENERATED C++ (gen-app --out apps)
         and proto (gen-app --proto-out proto); never mixed with the framework.
       - .theia               — records THEIA_ROOT (the source it's bound to).
@@ -1619,7 +1638,7 @@ def cmd_init(args: list[str]) -> int:
     if supervisor_pkg.exists():
         _link("system/supervisor", supervisor_pkg)
     # --with-services: link the framework's ARA service FCs so `cluster Services`
-    # resolves + the rig can import services.manifest.{service,executor}.
+    # resolves + the rig can import manifest.services.{manifest,executor}.
     if with_services:
         _link("system/services", services_pkg)
     # The workspace's OWN empty app package (no compositions yet). gen-manifest
@@ -1632,14 +1651,16 @@ def cmd_init(args: list[str]) -> int:
     # writes the Python sidecar to manifest/ — all SEPARATE from this source dir.
     _write("system/apps/package.art", _INIT_APPS_PACKAGE_ART)
     _write("system/apps/component.art", _INIT_APPS_COMPONENT_ART)
-    # Python package markers for the generated C++ tree + the manifest layer.
+    # Python package marker for the generated C++ tree. NOTE: `manifest/` is
+    # deliberately a PEP-420 NAMESPACE package (NO manifest/__init__.py) so the
+    # `manifest` namespace spans BOTH this workspace (manifest.apps / manifest.rig)
+    # AND the framework root (manifest.services) — a regular __init__.py here would
+    # shadow manifest.services and break --with-services.
     _write("apps/__init__.py", "")
-    _write("manifest/__init__.py", "")
 
     sys_art = (_INIT_SYSTEM_ART_SERVICES if with_services else _INIT_SYSTEM_ART)
     rig_py = (_INIT_RIG_PY_SERVICES if with_services else _INIT_RIG_PY)
     _write("system/system.art", sys_art.replace("@NAME@", name))
-    _write("manifest/__init__.py", "")
     _write("manifest/rig.py", rig_py.replace("@NAME@", name))
     # Record THEIA_ROOT RELATIVE to the workspace when they share a prefix (keeps
     # the ws+theia pair relocatable, e.g. an in-repo demo/ committed with a
@@ -1691,7 +1712,7 @@ def cmd_init(args: list[str]) -> int:
              "supervisor)" if with_services else "")
     print("\nVerify the toolchain before adding apps:\n"
           "  artheia gen-manifest system/apps/component.art "
-          "manifest/app.py\n"
+          "manifest/apps/manifest.py\n"
           f"  theia manifest && theia install && theia start{extra}\n"
           "\nThen add a composition to system/apps/component.art and "
           "generate + build its C++:\n"
@@ -1764,78 +1785,70 @@ cluster Applications { }
 '''
 
 _INIT_RIG_PY = '''\
-"""@NAME@ deploy rig — one machine, a bare supervisor + this workspace's apps.
+"""@NAME@ deploy rig — one machine ("central") running this workspace's apps.
 
-EMPTY-workspace rig: imports the generated (initially empty) app manifest +
-its executor sidecar and runs a one-machine supervisor. Verify the toolchain
-NOW (theia manifest / install / start) — it works with zero apps. As you add
-compositions to system/apps/component.art and regenerate the manifest
-(`artheia gen-manifest system/apps/component.art manifest/app.py`),
-the app_sup children + processes appear here automatically.
+A :class:`DeploymentLayer` on the orthogonal-ARA engine
+(:mod:`artheia.manifest.deployment`). It combines the workspace's generated
+apps manifest (the BASE — open machines) with a deploy delta: one machine and
+every process bound to it. `theia manifest` / `theia install` / `theia start`
+read the RIG export.
+
+The apps manifest is gen-manifest output. Until you run it the import fails, so
+it is guarded — a fresh workspace resolves to an EMPTY deployment (one machine,
+no processes), which is enough to verify the toolchain (theia manifest / install
+/ start). As you add compositions to system/apps/component.art and regenerate
+(`artheia gen-manifest system/apps/component.art manifest/apps/manifest.py`),
+the processes + applications flow in automatically.
 
 See $THEIA_ROOT/docs/skills/theia/references/deployment.md.
 """
 from __future__ import annotations
 
-from typing import cast
-
-from artheia.manifest import (
-    ApplicationManifest, MachineManifest, SupervisorNode, SwComponent,
-    VehicleIdentity, Rig,
+from artheia.manifest.algebra import Append, Explicit
+from artheia.manifest.deployment import (
+    ApplicationLayer,
+    ApplicationSetLayer,
+    DeploymentLayer,
+    ExecutionLayer,
+    MachineLayer,
+    MachineSetLayer,
+    ProcessLayer,
 )
-from artheia.manifest.rig import SoftwareSpecification, Append, SetTransformTypes
-from artheia.manifest.machine import HardwareResource, CpuResource, CpuArchitecture
 
-# The generated app manifest (empty until you add apps). gen-manifest writes
-# manifest/app.py with APPLICATIONS_PROCESSES / APPLICATIONS_SHORTS +
-# an executor.py sidecar (app_sup with the app children). Both are empty for a
-# fresh workspace — import defensively so `theia init` → `theia manifest`
-# works before the first gen-manifest run.
+# The generated apps manifest (a base DeploymentLayer with machines left open).
+# Not present until the first `gen-manifest` — guard the import so a fresh
+# workspace still imports + serializes (an empty deployment).
 try:
-    from manifest.app import (
-        APPLICATIONS_PROCESSES as _APP_PROCESSES,
-        APPLICATIONS_SHORTS as _APP_SHORTS,
-    )
+    from manifest.apps.manifest import DEPLOYMENT as _APPS
 except Exception:               # not generated yet → empty workspace
-    _APP_PROCESSES, _APP_SHORTS = [], []
+    _APPS = DeploymentLayer()
 
-Host = MachineManifest(
-    name="@NAME@",
-    hardware=HardwareResource(cpu=CpuResource(architecture=CpuArchitecture.X86_64)),
-)
+# Every process the apps base declares (bind each to the one machine below).
+from artheia.manifest.deployment import _members as _set_members
+_PROCESS_NAMES = sorted(p.name for p in _set_members(_APPS.execution.processes))
 
-# The supervisor binary — the runtime fabric every machine runs. `theia install`
-# builds + stages it (as <machine>/supervisor, not bin/). The framework provides
-# the target //platform/supervisor/main:supervisor.
-_SUPERVISOR = SwComponent(
-    name="supervisor",
-    bazel_target="//platform/supervisor/main:supervisor",
-    owner="platform",
-    art_node="system.supervisor/Supervisor",
-    bazel_buildable=True,
-)
-
-# root → app_sup → <your apps> (empty list = bare supervisor, no app children).
-SUPERVISORS = [
-    SupervisorNode(name="root", children=["app_sup"]),
-    SupervisorNode(name="app_sup", children=list(_APP_SHORTS)),
-]
-
-# `*Software` is auto-ranked first by the rig resolver (--rig optional).
-Software = SoftwareSpecification(
-    vehicle=VehicleIdentity(name="@NAME@", make="theia", model="workspace"),
-    machines=cast(set[SetTransformTypes], {Append(Host)}),
-    applications=cast(set[SetTransformTypes], {
-        Append(ApplicationManifest(name="app", host_machine=Host.name,
-                                   components=[_SUPERVISOR])),
+# The deploy delta: one machine "central"; every app process bound to it; one
+# AA ("apps") grouping them on that host. Combined onto the apps base.
+RIG = _APPS.combine(DeploymentLayer(
+    machines=MachineSetLayer(machines={
+        MachineLayer(name="central", arch=Explicit("x86_64"),
+                     cores={0, 1, 2, 3}, machine_states={"Startup", "Running"}),
     }),
-    execution_manifests=cast(set[SetTransformTypes],
-                             {Append(p) for p in _APP_PROCESSES}),
-    supervisors=cast(set[SetTransformTypes], {Append(s) for s in SUPERVISORS}),
-)
+    execution=ExecutionLayer(processes={
+        Append(ProcessLayer(name=n, machine=Explicit("central")))
+        for n in _PROCESS_NAMES
+    }),
+    applications=ApplicationSetLayer(applications={
+        Append(ApplicationLayer(name="apps", host_machine=Explicit("central"))),
+    }),
+))
 
-# Materialized rig (for callers that isinstance-check on Rig).
-WorkspaceRig: Rig = Software.to_rig()
+# Optional supervisor sidecar (gen-manifest writes manifest/apps/executor.py).
+# serialize-manifest reads SUPERVISORS off this module if present.
+try:
+    from manifest.apps.executor import SUPERVISORS
+except Exception:
+    SUPERVISORS = []
 '''
 
 # --- --with-services variants ---------------------------------------------
@@ -1868,89 +1881,81 @@ cluster Platform {
 _INIT_RIG_PY_SERVICES = '''\
 """@NAME@ deploy rig — one machine: the ARA services + this workspace's apps.
 
-WITH-SERVICES rig: built on the framework's ServicesSoftware (the full FC set +
-the OTP supervisor tree from services.manifest.executor), with this workspace's
-apps Appended into app_sup. `theia install` builds the FC binaries (com/log/per/
-sm/ucm/shwa) + the supervisor; `theia start` runs the whole service tree.
+WITH-SERVICES rig: a :class:`DeploymentLayer` (orthogonal-ARA engine) built by
+combining the framework's services manifest (the full FC set: com/log/per/sm/
+ucm/shwa…) with this workspace's generated apps manifest, then a deploy delta
+binding everything to one machine ("central"). `theia install` builds the FC
+binaries + the supervisor; `theia start` runs the whole service tree with your
+apps under it.
 
 As you add compositions to system/apps/component.art and regenerate
-(`artheia gen-manifest system/apps/component.art manifest/app.py`),
-the app leaves appear under app_sup automatically.
+(`artheia gen-manifest system/apps/component.art manifest/apps/manifest.py`),
+the app processes + applications flow in automatically.
 
 See $THEIA_ROOT/docs/skills/theia/references/deployment.md.
 """
 from __future__ import annotations
 
-import dataclasses
-from typing import cast
-
-from artheia.manifest import (
-    ApplicationManifest, MachineManifest, SwComponent, VehicleIdentity, Rig,
-)
-from artheia.manifest.rig import SoftwareSpecification, Append, SetTransformTypes
-from artheia.manifest.machine import HardwareResource, CpuResource, CpuArchitecture
-
-# The framework's ARA services: the FC components/processes + the OTP supervisor
-# tree (root → ar_sup → core_sup → … with app_sup). ServicesSoftware is a full
-# SoftwareSpecification we combine our apps onto.
-from services.manifest.service import (
-    ServicesSoftware as _ServicesSoftware,   # private alias: keep `Software` the
-    SERVICES_COMPONENTS as _FC_COMPONENTS,   # ONLY public *Software export so the
-    SERVICES_PROCESSES as _FC_PROCESSES,     # rig resolver picks it unambiguously
-    SUPERVISORS as _PLATFORM_SUPERVISORS,
+from artheia.manifest.algebra import Append, Explicit
+from artheia.manifest.deployment import (
+    ApplicationLayer,
+    ApplicationSetLayer,
+    DeploymentLayer,
+    ExecutionLayer,
+    MachineLayer,
+    MachineSetLayer,
+    ProcessLayer,
+    _members as _set_members,
 )
 
-# The supervisor binary (the runtime fabric). SERVICES_COMPONENTS is the 6 FCs
-# only; theia install also needs the supervisor SwComponent to build + stage it.
-_SUPERVISOR = SwComponent(
-    name="supervisor",
-    bazel_target="//platform/supervisor/main:supervisor",
-    owner="platform",
-    art_node="system.supervisor/Supervisor",
-    bazel_buildable=True,
-)
+# The framework's ARA services manifest (a base DeploymentLayer, machines open).
+from manifest.services.manifest import DEPLOYMENT as _SERVICES
 
-# This workspace's generated app manifest (empty until you add apps).
+# This workspace's generated apps manifest (empty until you add apps). Guarded:
+# a fresh workspace has no manifest/apps/manifest.py yet → services-only.
 try:
-    from manifest.app import (
-        APPLICATIONS_PROCESSES as _APP_PROCESSES,
-        APPLICATIONS_COMPONENTS as _APP_COMPONENTS,
-        APPLICATIONS_SHORTS as _APP_SHORTS,
-    )
+    from manifest.apps.manifest import DEPLOYMENT as _APPS
 except Exception:               # not generated yet → services-only
-    _APP_PROCESSES, _APP_COMPONENTS, _APP_SHORTS = [], [], []
+    _APPS = DeploymentLayer()
 
-Host = MachineManifest(
-    name="@NAME@",
-    hardware=HardwareResource(cpu=CpuResource(architecture=CpuArchitecture.X86_64)),
-)
+# The assembled base: services ⊕ apps (machines still open).
+_BASE = _SERVICES.combine(_APPS)
+_PROCESS_NAMES = sorted(p.name for p in _set_members(_BASE.execution.processes))
 
-# The platform supervisor tree with app_sup carrying THIS workspace's apps.
-_supervisors = [
-    dataclasses.replace(s, children=list(_APP_SHORTS))
-    if s.name == "app_sup" else s
-    for s in _PLATFORM_SUPERVISORS
-]
-
-# Layer the workspace deltas (one machine, the FCs bound to it, the apps) onto
-# ServicesSoftware. `Software` is the only public *Software export → the rig
-# resolver picks it (the imported services spec is private as _ServicesSoftware).
-Software = _ServicesSoftware.mappend(SoftwareSpecification(
-    vehicle=VehicleIdentity(name="@NAME@", make="theia", model="workspace"),
-    machines=cast(set[SetTransformTypes], {Append(Host)}),
-    applications=cast(set[SetTransformTypes], {
-        # platform_app on this host: the FC components + the supervisor binary.
-        Append(ApplicationManifest(name="platform_app", host_machine=Host.name,
-                                   components=list(_FC_COMPONENTS) + [_SUPERVISOR])),
-        Append(ApplicationManifest(name="app", host_machine=Host.name,
-                                   components=list(_APP_COMPONENTS))),
+# The deploy delta: one machine "central"; every process bound to it; two AAs
+# (the platform services + this workspace's apps) hosted on it.
+RIG = _BASE.combine(DeploymentLayer(
+    machines=MachineSetLayer(machines={
+        MachineLayer(name="central", arch=Explicit("x86_64"),
+                     cores={0, 1, 2, 3}, machine_states={"Startup", "Running"}),
     }),
-    execution_manifests=cast(set[SetTransformTypes],
-                             {Append(p) for p in (_FC_PROCESSES + _APP_PROCESSES)}),
-    supervisors=cast(set[SetTransformTypes], {Append(s) for s in _supervisors}),
+    execution=ExecutionLayer(processes={
+        Append(ProcessLayer(name=n, machine=Explicit("central")))
+        for n in _PROCESS_NAMES
+    }),
+    applications=ApplicationSetLayer(applications={
+        Append(ApplicationLayer(name="services", host_machine=Explicit("central"))),
+        Append(ApplicationLayer(name="apps", host_machine=Explicit("central"))),
+    }),
 ))
 
-WorkspaceRig: Rig = Software.to_rig()
+# Merged supervisor sidecar (services + apps executor trees under one root).
+# Read by serialize-manifest off this module if present.
+try:
+    from artheia.manifest.supervisor import RestartStrategy, SupervisorNode
+    from manifest.services.executor import SUPERVISORS as _SVC_SUP
+    try:
+        from manifest.apps.executor import SUPERVISORS as _APP_SUP
+    except Exception:
+        _APP_SUP = []
+    _SUBTREES = [n for n in (_SVC_SUP + _APP_SUP) if n.name != "root"]
+    SUPERVISORS = [
+        SupervisorNode(name="root", strategy=RestartStrategy.ONE_FOR_ALL,
+                       children=[n.name for n in _SUBTREES]),
+        *_SUBTREES,
+    ]
+except Exception:
+    SUPERVISORS = []
 '''
 
 _INIT_README = '''\

@@ -1,0 +1,18 @@
+# manifest/services — the framework's ARA services manifest (orthogonal-ARA
+# engine: a base DeploymentLayer + its supervisor sidecar). The deb-mode
+# counterpart of the in-tree `manifest.services` namespace package: a
+# --with-services consuming workspace imports manifest.services.{manifest,executor}.
+#
+# `manifest/` is a PEP-420 NAMESPACE package (no manifest/__init__.py) so the
+# `manifest` namespace spans the framework (manifest.services) and the workspace
+# (manifest.apps / manifest.rig) — exporting only the sub-package's files here
+# keeps that property in the installed deb too.
+
+filegroup(
+    name = "service_sources",
+    srcs = glob(["**/*.py"]),
+    visibility = ["//visibility:public"],
+)
+
+# Individual files for the theia-services-dev deb (single-file labels).
+exports_files(["__init__.py", "manifest.py", "executor.py"])

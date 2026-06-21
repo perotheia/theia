@@ -19,49 +19,51 @@ bazel_dep(name = "pero_theia", version = "0.1.0")
 local_path_override(module_name = "pero_theia", path = "..")
 
 # ── Rig module extension ──────────────────────────────────────────────────
-# Materialize synthetic Bazel repos from this workspace's artheia rig.py
+# Materialize synthetic Bazel repos from this workspace's test-target rig
 # modules at MODULE-resolution time. Each `rig_ext.declare(...)` line below
 # becomes a `@<name>//` repo with per-machine deploy bundles
-# (`@<name>//<machine>:image`) plus combined executor.json / machines.json.
+# (`@<name>//<machine>:image`, `:components`) plus the machine NAME LIST
+# (`@<name>//:machines_json`).
 #
 # rig.bzl is a FRAMEWORK file: it lives in the pero_theia module, so we load it
 # as `@pero_theia//rules:rig.bzl` (the bare `//rules:rig.bzl` would resolve to
-# this `demo` module, which has no rules/ dir). The extension itself is
-# module-agnostic — it materializes a repo rule that resolves the Theia repo via
-# `@pero_theia//...` labels and runs `artheia rig-deps <module>` against THIS
-# workspace's rig modules (manifest.rig etc.).
+# this `demo` module, which has no rules/ dir). The extension runs
+# `artheia serialize-manifest manifest.<target>.rig --attr <ATTR>` against THIS
+# workspace's rig modules and consumes the per-machine JSON it emits.
 #
-# Requires this workspace's `.venv/bin/artheia` (or PATH-resolved artheia). The
-# rig modules (manifest.rig / manifest.test_rig / manifest.zonal_rig) are
-# importable because `manifest/` is a package at this workspace root.
+# Requires this workspace's `.venv/bin/artheia` (or the @pero_theia framework
+# venv, or PATH-resolved artheia). The rig modules (manifest.single.rig /
+# manifest.split.rig) assemble manifest.apps (this workspace) ⊕ manifest.services
+# (@pero_theia) — a PEP-420 namespace package across both module roots, both of
+# which the extension puts on PYTHONPATH.
 rig_ext = use_extension("@pero_theia//rules:rig.bzl", "rig_ext")
 
-# @rig_apps — SINGLE-MACHINE (central only), from manifest.rig. Drives the
-# local host install bundle (//:install → install/central/).
+# @rig_single — SINGLE-MACHINE (central only) running everything, from
+# manifest.single.rig's RIG. The dev-flow rig; drives the local host install
+# bundle. `bazel build @rig_single//central:components` (and :image).
 rig_ext.declare(
-    name = "rig_apps",
-    rig_module = "manifest.rig",
+    name = "rig_single",
+    rig_module = "manifest.single.rig",
+    rig_attr = "RIG",
 )
 
-# @rig_test — the 2-machine central+compute split, ALL-x86, from
-# manifest.test_rig. Drives the DOCKER provisioning/orchestration test
-# (`theia dist` → @rig_test//{central,compute}:image; docker-compose). x86 so it
-# builds + runs on the dev box without arm64 hardware. rig_attr=DemoSoftware (the
-# full multi-machine spec; CentralSoftware/ComputeSoftware are per-machine
-# intermediates the alphabetical default would wrongly pick).
+# @rig_docker — the 2-machine central+compute split, ALL-x86, from
+# manifest.split.rig's DOCKER export. Drives the docker-compose provisioning
+# test (`bazel build @rig_docker//{central,compute}:image`). x86 so it builds +
+# runs on the dev box without arm64 hardware.
 rig_ext.declare(
-    name = "rig_test",
-    rig_module = "manifest.test_rig",
-    rig_attr = "DemoSoftware",
+    name = "rig_docker",
+    rig_module = "manifest.split.rig",
+    rig_attr = "DOCKER",
 )
 
-# @rig_zonal — the SAME 2-machine split but for REAL HARDWARE (aarch64): central
-# = Raspberry Pi 4, compute = Jetson AGX Orin. Needs the rpi4/jetson sysroots +
-# cc-toolchains registered to build. Use @rig_test for docker; @rig_zonal for the
-# physical deploy.
+# @rig_hw — the SAME 2-machine split but for REAL HARDWARE (aarch64): central =
+# Raspberry Pi 4, compute = Jetson AGX Orin, from manifest.split.rig's HW export.
+# Needs the rpi4/jetson sysroots + cc-toolchains registered to build. Use
+# @rig_docker for docker; @rig_hw for the physical deploy.
 rig_ext.declare(
-    name = "rig_zonal",
-    rig_module = "manifest.zonal_rig",
-    rig_attr = "DemoSoftware",
+    name = "rig_hw",
+    rig_module = "manifest.split.rig",
+    rig_attr = "HW",
 )
-use_repo(rig_ext, "rig_apps", "rig_test", "rig_zonal")
+use_repo(rig_ext, "rig_single", "rig_docker", "rig_hw")

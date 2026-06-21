@@ -116,23 +116,24 @@ pkg_deb(
 # Everything a WORKSPACE needs from services to build/deploy against them: the
 # generated service protos, the consolidated .art manifest tree (relink
 # system/services → /opt/theia/services), and the Python manifest
-# (services.manifest.service + executor.py sidecar) for `gen-rig-combine`.
-# Folds in the former theia-services-manifest.
+# (manifest.services.{manifest,executor} — the orthogonal-ARA DeploymentLayer
+# base + its supervisor sidecar). Folds in the former theia-services-manifest.
 pkg_deb(
     name = "theia-services-dev_deb",
     package = "theia-services-dev",
     version = _VERSION,
-    description = "Theia services development files: protos, .art manifest tree, Python manifest (service.py + executor.py sidecar)",
+    description = "Theia services development files: protos, .art manifest tree, Python manifest (manifest.py + executor.py sidecar)",
     section = "devel",
     depends = "theia-services, theia-framework",
     # The .art manifest tree → /opt/theia/services (relink system/services here).
     data = ["//system/services:services_manifest"],
     prefix = "/opt/theia/services",
     strip_prefix = "system/services",
-    # protos → /opt/theia/proto/... ; the Python manifest → site-packages
-    # (importable as services.manifest.service once setup.bash puts it on
-    # PYTHONPATH). Explicit dests because they live under different source roots
-    # than the .art `data` tree above.
+    # protos → /opt/theia/proto/... ; the Python manifest → site-packages as the
+    # PEP-420 namespace package `manifest.services` (importable once setup.bash
+    # puts site-packages on PYTHONPATH — NO manifest/__init__.py so the namespace
+    # spans the workspace's manifest.apps too). Explicit dests because they live
+    # under different source roots than the .art `data` tree above.
     files = {
         "//platform/proto/system/services/com:com.proto": "/opt/theia/proto/system/services/com/com.proto",
         "//platform/proto/system/services/per:per.proto": "/opt/theia/proto/system/services/per/per.proto",
@@ -140,10 +141,9 @@ pkg_deb(
         "//platform/proto/system/services/ucm:ucm.proto": "/opt/theia/proto/system/services/ucm/ucm.proto",
         "//platform/proto/system/services/log:log.proto": "/opt/theia/proto/system/services/log/log.proto",
         "//platform/proto/system/services/shwa:shwa.proto": "/opt/theia/proto/system/services/shwa/shwa.proto",
-        "//services:__init__.py": "/opt/theia/lib/python3.10/site-packages/services/__init__.py",
-        "//services/manifest:__init__.py": "/opt/theia/lib/python3.10/site-packages/services/manifest/__init__.py",
-        "//services/manifest:service.py": "/opt/theia/lib/python3.10/site-packages/services/manifest/service.py",
-        "//services/manifest:executor.py": "/opt/theia/lib/python3.10/site-packages/services/manifest/executor.py",
+        "//manifest/services:__init__.py": "/opt/theia/lib/python3.10/site-packages/manifest/services/__init__.py",
+        "//manifest/services:manifest.py": "/opt/theia/lib/python3.10/site-packages/manifest/services/manifest.py",
+        "//manifest/services:executor.py": "/opt/theia/lib/python3.10/site-packages/manifest/services/executor.py",
     },
 )
 

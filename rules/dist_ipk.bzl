@@ -1,60 +1,69 @@
-"""dist_ipk.bzl — build a per-host .ipk from JSON manifests (the deploy half of
-the manifest-json pivot).
+"""dist_ipk.bzl — RULE 2 (DIST): per-host .ipk/.deb from a COMMITTED serialized
+manifest dir. No rig.py eval, no module extension — the reproducible deploy path.
 
-Unlike rules/rig.bzl (which runs `artheia rig-deps` against the Python rig at
-module-eval time, for the DEV `bazel build @rig//:image` path), dist_ipk reads
-the committed JSON manifests — `dist/manifest/<host>/{application,machine}.json`.
-No rig.py, no module extension. The bazel_targets live IN application.json; the
-arch lives IN machine.json.
+Unlike rules/rig.bzl (RULE 1 — runs `artheia serialize-manifest` against the
+Python rig at module-eval time, for the DEV `bazel build @rig//:image` path),
+dist_pkg reads the committed JSON `artheia serialize-manifest` already wrote:
+`dist/manifest/<host>/{execution,machine}.json`. The bazel targets live IN
+execution.json (`processes[].executable`); the arch lives IN machine.json
+(flat `arch`). Same JSON shapes as RULE 1, but from files — so dist needs no
+Python at build time.
 
 The bazel constraint: a rule's deps are fixed at analysis time, but the targets
-are named inside application.json (read at exec time). So `binaries` is a FIXED
-filegroup of ALL buildable binaries; pack_ipk.py parses application.json and
-copies only the ones this host wants (basename → component name).
+are named inside execution.json (read at exec time). So `binaries` is a FIXED
+filegroup of ALL buildable binaries; pack_ipk.py parses execution.json and
+copies only the ones this host wants (matched by the target's package path).
 
 Cross-arch: pass `--platforms=//rules/config:rpi4` (aarch64) etc. on the
 `bazel build` invocation; the binaries filegroup cross-compiles as a unit.
 `theia dist` derives the platform from machine.json and runs one invocation per
-host.
+host (one `bazel build //dist/manifest:<host>_pkg --platforms=…` each).
 
-Usage (one target per host, the (i) macro form):
-    dist_ipk(
-        name = "central",
-        application_json = "//dist/manifest/central:application.json",
-        machine_json     = "//dist/manifest/central:machine.json",
+Usage (one target per host, the macro form — `theia manifest` writes this glue):
+    dist_pkg(
+        name = "central",                 # → //dist/manifest:central_pkg
+        manifest_dir = "//dist/manifest/central",   # default //dist/manifest/<name>
     )
-→ bazel build //deploy:central_ipk --platforms=//rules/config:host
+→ bazel build //dist/manifest:central_pkg --platforms=//rules/config:host
 """
 
 # The full set of buildable binaries — the fixed filegroup that satisfies the
-# analysis-time dep requirement. pack_ipk picks the host's subset from the JSON.
-# Keep in sync with the rig's buildable components; an extra here is harmless
-# (skipped if no host wants it).
+# analysis-time dep requirement. pack_ipk picks the host's subset from the JSON
+# (by execution.json's process `executable` target). Keep in sync with the rig's
+# buildable processes; an extra here is harmless (skipped if no host wants it).
+#
+# Labels are REPO-QUALIFIED to match the same framework-vs-app partition rig.bzl's
+# _abs_label applies: this .bzl is a FRAMEWORK file (loaded as @pero_theia//rules:
+# from a consuming workspace), so a bare `//…` would resolve against @pero_theia.
+#   - framework services → @pero_theia//services/… (the framework module)
+#   - the demo apps       → @@//apps/…             (the ROOT/consuming module)
+# A consuming workspace with DIFFERENT apps passes its own `binaries=[…]` to
+# dist_pkg (the apps below are theia.git's own demo binaries).
 ALL_BINARIES = [
-    "//platform/supervisor/main:supervisor",
-    "//services/com/main:com",
-    "//services/crypto/main:crypto",
-    "//services/fw/main:fw",
-    "//services/idsm/main:idsm",
-    "//services/log/main:log",
-    "//services/nm/main:nm",
-    "//services/osi/main:osi",
-    "//services/per/main:per",
-    "//services/phm/main:phm",
-    "//services/rds/main:rds",
-    "//services/sm/main:sm",
-    "//services/tsync/main:tsync",
-    "//services/ucm/main:ucm",
-    "//services/shwa/main:shwa",
+    "@pero_theia//services/com/main:com",
+    "@pero_theia//services/crypto/main:crypto",
+    "@pero_theia//services/diag/main:diag",
+    "@pero_theia//services/fw/main:fw",
+    "@pero_theia//services/idsm/main:idsm",
+    "@pero_theia//services/log/main:log",
+    "@pero_theia//services/nm/main:nm",
+    "@pero_theia//services/osi/main:osi",
+    "@pero_theia//services/per/main:per",
+    "@pero_theia//services/phm/main:phm",
+    "@pero_theia//services/rds/main:rds",
+    "@pero_theia//services/sm/main:sm",
+    "@pero_theia//services/tsync/main:tsync",
+    "@pero_theia//services/ucm/main:ucm",
+    "@pero_theia//services/shwa/main:shwa",
     # NOTE: //platform/gateway is NOT here. Gateway (the PSP/AUTOSAR data plane)
     # is a CONSUMING-WORKSPACE concern, not part of standalone theia.git — and it
     # drags pcap/expat-dependent libs (cmpdecoder) that aren't in the rpi4 sysroot,
-    # breaking the cross-build. No zonal/test machine's application.json references
+    # breaking the cross-build. No zonal/test machine's execution.json references
     # it; a consuming workspace adds its own gateway binary to this list.
-    "//apps/Demo3WayP1/main:apps",
-    "//apps/Demo3WayP2/main:apps",
-    "//apps/Demo3WayP3/main:apps",
-    "//apps/Demo3WayP4/main:apps",
+    "@@//apps/Demo3WayP1/main:apps",
+    "@@//apps/Demo3WayP2/main:apps",
+    "@@//apps/Demo3WayP3/main:apps",
+    "@@//apps/Demo3WayP4/main:apps",
 ]
 
 # Shared libs bundled at /opt/theia/lib/<basename> for every host (harmless if a
@@ -71,7 +80,7 @@ def _dist_pkg_impl(ctx):
     bins = ctx.files.binaries
     libs = ctx.files.libs
     args = ctx.actions.args()
-    args.add("--app", ctx.file.application_json)
+    args.add("--exec", ctx.file.execution_json)
     args.add("--machine", ctx.file.machine_json)
     args.add("--out", out)
     args.add("--package", ctx.attr.package)
@@ -86,10 +95,10 @@ def _dist_pkg_impl(ctx):
         executable = ctx.executable._packer,
         arguments = [args],
         inputs = depset(
-            [ctx.file.application_json, ctx.file.machine_json] + bins + libs),
+            [ctx.file.execution_json, ctx.file.machine_json] + bins + libs),
         outputs = [out],
         mnemonic = "PackPkg",
-        progress_message = "Packing %s%s from application.json" % (ctx.attr.package, ext),
+        progress_message = "Packing %s%s from execution.json" % (ctx.attr.package, ext),
     )
     return [DefaultInfo(files = depset([out]))]
 
@@ -99,7 +108,7 @@ _dist_pkg = rule(
     attrs = {
         "package": attr.string(mandatory = True),
         "version": attr.string(default = "1.0.0"),
-        "application_json": attr.label(allow_single_file = [".json"], mandatory = True),
+        "execution_json": attr.label(allow_single_file = [".json"], mandatory = True),
         "machine_json": attr.label(allow_single_file = [".json"], mandatory = True),
         "binaries": attr.label_list(allow_files = True, default = ALL_BINARIES),
         "libs": attr.label_list(allow_files = True, default = DEFAULT_LIBS),
@@ -114,7 +123,7 @@ _dist_pkg = rule(
 
 
 def dist_pkg(name, manifest_dir = None, format = "deb", **kwargs):
-    """Per-host deploy bundle from dist/manifest/<name>/{application,machine}.json.
+    """Per-host deploy bundle from dist/manifest/<name>/{execution,machine}.json.
 
     `name` is the host (central / compute / …). Emits a .deb (default) or .ipk
     (format="ipk") — the SAME ar archive, dpkg-installed either way. The target is
@@ -124,7 +133,7 @@ def dist_pkg(name, manifest_dir = None, format = "deb", **kwargs):
         name = "%s_pkg" % name,
         package = name,
         format = format,
-        application_json = "%s:application.json" % mdir,
+        execution_json = "%s:execution.json" % mdir,
         machine_json = "%s:machine.json" % mdir,
         **kwargs
     )
@@ -139,7 +148,7 @@ def dist_ipk(name, manifest_dir = None, **kwargs):
         name = "%s_ipk" % name,
         package = name,
         format = "ipk",
-        application_json = "%s:application.json" % mdir,
+        execution_json = "%s:execution.json" % mdir,
         machine_json = "%s:machine.json" % mdir,
         **kwargs
     )

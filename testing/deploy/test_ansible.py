@@ -1,9 +1,10 @@
 """Ansible deploy-scaffold tests — provision/orchestrate playbooks (deploy/ansible/).
 
-The agentless Puppet replacement. These run WITHOUT a target rig: syntax-check +
-ansible-lint (production profile) + a structural check that the playbooks translate
-the Puppet phases (os-packages / etcd / mender / bundle / setcap / config). Live
-behaviour was hand-verified on rig1-central; this guards the scaffold from drift.
+The agentless deploy engine (Puppet is gone). These run WITHOUT a target rig:
+syntax-check + ansible-lint (production profile) + a structural check that the
+playbooks carry the deploy phases (os-packages / etcd / mender / bundle / setcap
+/ config). Live behaviour was hand-verified on rig1-central; this guards the
+scaffold from drift.
 """
 import os
 import shutil

@@ -13,10 +13,10 @@ Commands:
     theia rig down        docker compose down
     theia provision       ansible-playbook — Phase 1 (os pkgs + Mender client)
     theia orchestrate     ansible-playbook — Phase 2 (app rollout, no restart)
-                          (both agentless over SSH; --puppet = legacy engine)
+                          (both agentless over SSH)
     theia manifest        rig.py → dist/manifest/*.json (the SOLE rig entry)
     theia dist            per-host .ipk from dist/manifest/ JSON (no rig.py)
-    theia install         build + puppet-populate install/<machine>/ (local host)
+    theia install         build + populate install/<machine>/ (local host)
                           + manifests → install/manifest/<machine>/
     theia compdb          regen compile_commands.json from bazel (for clangd)
 
@@ -54,7 +54,6 @@ if not (WORKSPACE / "manifest").is_dir() and not (WORKSPACE / ".theia").is_file(
         WORKSPACE = THEIA_ROOT
 
 COMPOSE = THEIA_ROOT / "deploy" / "docker-compose.yml"
-PUPPET = THEIA_ROOT / "deploy" / "puppet"
 ANSIBLE = THEIA_ROOT / "deploy" / "ansible"
 
 
@@ -144,16 +143,6 @@ def cmd_rig(args: list[str]) -> int:
     return _run(["docker", "compose", "-f", str(COMPOSE), action, *extra])
 
 
-def _puppet(manifest: str, args: list[str]) -> int:
-    return _run([
-        "puppet", "apply",
-        f"--modulepath={PUPPET / 'modules'}",
-        str(PUPPET / manifest),
-        f"--hiera_config={PUPPET / 'hiera.yaml'}",
-        *args,
-    ])
-
-
 def _ansible(playbook: str, machine: str | None, args: list[str]) -> int:
     """Run an Ansible playbook from deploy/ansible/ (agentless, SSH-push).
     `machine` (the artheia machine name, e.g. central) is passed as -e machine=…;
@@ -182,20 +171,14 @@ def _split_machine(args: list[str]) -> tuple[str | None, list[str]]:
 
 def cmd_provision(args: list[str]) -> int:
     """Phase 1 — OS packages + Mender client, pushed over SSH (agentless).
-    `theia provision <machine> [ansible-args...]`. Reads dist/manifest/<machine>/.
-    Legacy: `theia provision --puppet [puppet-args...]` runs the old engine."""
-    if "--puppet" in args:
-        return _puppet("provisioning.pp", [a for a in args if a != "--puppet"])
+    `theia provision <machine> [ansible-args...]`. Reads dist/manifest/<machine>/."""
     machine, rest = _split_machine(args)
     return _ansible("provision.yml", machine, rest)
 
 
 def cmd_orchestrate(args: list[str]) -> int:
     """Phase 2 — app rollout (binaries + real config), pushed over SSH; no restart.
-    `theia orchestrate <machine> [ansible-args...]`.
-    Legacy: `theia orchestrate --puppet [puppet-args...]`."""
-    if "--puppet" in args:
-        return _puppet("orchestration.pp", [a for a in args if a != "--puppet"])
+    `theia orchestrate <machine> [ansible-args...]`."""
     machine, rest = _split_machine(args)
     return _ansible("orchestrate.yml", machine, rest)
 
@@ -764,7 +747,7 @@ def cmd_observer(args: list[str]) -> int:
 
 
 def cmd_install(args: list[str]) -> int:
-    """LOCAL install: build + populate $WORKSPACE/install/<machine>/ via puppet.
+    """LOCAL install: build + populate $WORKSPACE/install/<machine>/.
 
         theia install [<target>] [--attr ATTR] [--machine M]
 
@@ -775,10 +758,10 @@ def cmd_install(args: list[str]) -> int:
     .rig --attr ATTR` first emits the AUTOSAR manifests, then the buildable
     binary set is READ BACK from the machine's execution.json (no hardcoded
     binary list). bazel builds those targets + artheia emits per-FC params;
-    serialize-manifest already wrote executor.json (copied in); then `puppet
-    apply theia::local_install` copies the binaries into install/<machine>/ and
-    applies the SAME setcap contract a real deploy uses — "bazel builds, puppet
-    orchestrates the host".
+    serialize-manifest already wrote executor.json (copied in); then _stage_local
+    copies the binaries into install/<machine>/ and applies the SAME setcap
+    contract a real (Ansible) deploy uses — "bazel builds, Python/Ansible stages
+    the host". Puppet is gone.
 
     The machine to stage: --machine M, else the positional after <target>, else
     $THEIA_MACHINE, else the single machine in machines.json (a single-host
@@ -954,27 +937,11 @@ def cmd_install(args: list[str]) -> int:
     bins = {n: _src(n, t) for n, t in binaries.items()}
     sup_src = _src("supervisor", supervisor_target)
 
-    # Puppet owns the copy+setcap on a provisioned host (the SAME cap contract a
-    # real deploy uses). But a deb-installed CONSUMING workspace need not carry
-    # Puppet just to stage a local tree — when `puppet` is absent, do the
-    # identical copy + setcap directly in Python.
-    if shutil.which("puppet") is None:
-        return _stage_local_no_puppet(dest, sup_src, bins)
-
-    bins_pp = ", ".join(f"'{n}' => '{p}'" for n, p in bins.items())
-    manifest = (
-        "class { 'theia::local_install': "
-        f"dest => '{dest}', "
-        f"supervisor_src => '{sup_src}', "
-        f"binaries => {{ {bins_pp} }}, "
-        "}"
-    )
-    return _run([
-        "sudo", "puppet", "apply",
-        f"--modulepath={PUPPET / 'modules'}",
-        f"--hiera_config={PUPPET / 'hiera.yaml'}",
-        "-e", manifest,
-    ])
+    # Copy the binaries into install/<machine>/ + apply the setcap contract. This
+    # is the SAME copy+caps a real deploy does — but a real deploy runs it over
+    # SSH via Ansible (deploy/ansible/tasks/setcap.yml). Puppet is GONE; the
+    # local stage is a plain Python copy + setcap (no engine to install).
+    return _stage_local(dest, sup_src, bins)
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
@@ -1084,22 +1051,44 @@ def _emit_machine_config(machine: str, mdir: Path) -> int:
     return 0
 
 
-def _stage_local_no_puppet(dest: Path, supervisor_src: str,
-                           binaries: dict[str, str]) -> int:
-    """Copy the supervisor + child binaries into install/<machine>/ and setcap
-    the supervisor — the Puppet-free equivalent of theia::local_install, for a
-    deb-installed workspace with no Puppet. Mirrors local_install.pp exactly:
-    supervisor at <dest>/supervisor, children at <dest>/bin/<name>, all 0755,
-    then `setcap cap_sys_nice+eip` on the supervisor (bazel-out copies are
-    read-only and a fresh copy clears caps, so setcap runs AFTER)."""
+def _stage_local(dest: Path, supervisor_src: str,
+                 binaries: dict[str, str]) -> int:
+    """Copy the supervisor + child binaries into install/<machine>/ and apply
+    the setcap contract. The local equivalent of the deploy's Ansible
+    install-bundle + setcap (deploy/ansible/tasks/setcap.yml) — a plain Python
+    copy + setcap, no orchestration engine. supervisor at <dest>/supervisor,
+    children at <dest>/bin/<name>, all 0755; then setcap (bazel-out copies are
+    read-only and a fresh copy clears caps, so setcap runs AFTER).
+
+    Supervisor caps:
+      cap_sys_nice   — realtime sched (SCHED_FIFO/RR) + CPU affinity on FC
+                       node threads.
+      cap_net_admin  — TIPC admin ops the supervisor performs: `tipc node set
+                       clusterid` (rig isolation) + the topology-service
+                       presence subscription com relies on. (Plain TIPC name
+                       bind does NOT need it; cluster/topology admin does.)"""
     import shutil as _sh
     dest.mkdir(parents=True, exist_ok=True)
     (dest / "bin").mkdir(exist_ok=True)
 
+    # A legacy Puppet/sudo install left install/<machine>/ root-owned, so a
+    # user-run stage can't overwrite files OR create new ones in bin/. If the
+    # tree isn't writable by us, sudo-chown it back to the current user once.
+    if not os.access(dest / "bin", os.W_OK):
+        import getpass
+        _run(["sudo", "chown", "-R", f"{getpass.getuser()}:{getpass.getuser()}",
+              str(dest)])
+
     def _copy(src: str, dst: Path) -> None:
         if dst.exists():
-            dst.chmod(0o755)        # bazel-out staged read-only; allow overwrite
-            dst.unlink()
+            # A prior copy may be read-only (bazel-out) or root-owned (a legacy
+            # Puppet/sudo install). chmod+unlink as the user; on EPERM (root-
+            # owned leftover), sudo rm it so the fresh user-owned copy lands.
+            try:
+                dst.chmod(0o755)
+                dst.unlink()
+            except PermissionError:
+                _run(["sudo", "rm", "-f", str(dst)])
         _sh.copy2(src, dst)
         dst.chmod(0o755)
         print(f"  staged {dst}", file=sys.stderr)
@@ -1112,17 +1101,17 @@ def _stage_local_no_puppet(dest: Path, supervisor_src: str,
         print(f"theia install: staging failed — {e}", file=sys.stderr)
         return 1
 
-    # cap_sys_nice for the supervisor (realtime sched + affinity on FC threads).
-    # Needs root; skip gracefully if setcap/sudo unavailable (start still works,
-    # just without RT priority).
+    # Supervisor caps (see docstring). Needs root; skip gracefully if
+    # setcap/sudo unavailable (start still works, just without RT priority /
+    # TIPC cluster isolation).
     setcap = shutil.which("setcap") or "/usr/sbin/setcap"
     sup = dest / "supervisor"
-    rc = _run(["sudo", setcap, "cap_sys_nice+eip", str(sup)])
+    rc = _run(["sudo", setcap, "cap_sys_nice,cap_net_admin+eip", str(sup)])
     if rc != 0:
-        print("theia install: setcap cap_sys_nice failed (need root / "
-              "libcap2-bin?) — supervisor will run without realtime priority.",
-              file=sys.stderr)
-    print(f"theia install: staged {dest} (puppet-free)", file=sys.stderr)
+        print("theia install: setcap cap_sys_nice,cap_net_admin failed (need "
+              "root / libcap2-bin?) — supervisor runs without realtime priority "
+              "/ TIPC cluster isolation.", file=sys.stderr)
+    print(f"theia install: staged {dest}", file=sys.stderr)
     return 0
 
 
@@ -2249,9 +2238,9 @@ filegroup(name = "apps_proto", srcs = ["apps.proto"])
 COMMANDS = {
     "init":        (cmd_init,        "scaffold the CWD as a Theia consuming workspace (source or /opt/theia)"),
     "rig":         (cmd_rig,         "docker compose {up|down} the deploy stack"),
-    "provision":   (cmd_provision,   "ansible — Phase 1 (os pkgs + Mender; --puppet=legacy)"),
-    "orchestrate": (cmd_orchestrate, "ansible — Phase 2 remote app rollout (--puppet=legacy)"),
-    "install":     (cmd_install,     "build + puppet-populate install/<machine>/ (local host)"),
+    "provision":   (cmd_provision,   "ansible — Phase 1 (os pkgs + Mender)"),
+    "orchestrate": (cmd_orchestrate, "ansible — Phase 2 remote app rollout"),
+    "install":     (cmd_install,     "build + populate install/<machine>/ (local host)"),
     "stage-local": (cmd_install,     "alias for `install` (back-compat)"),
     "start":       (cmd_start,       "run the staged supervisor from install/<machine>/ (detached + pidfile)"),
     "stop":        (cmd_stop,        "stop the supervisor started by `theia start` (graceful)"),
@@ -2291,7 +2280,7 @@ def main(argv: list[str]) -> int:
     # Preserve the caller's CWD before chdir — `init` scaffolds THERE, not in
     # the Theia checkout. Every other verb wants workspace-relative paths.
     os.environ.setdefault("THEIA_INVOCATION_CWD", str(Path.cwd()))
-    os.chdir(WORKSPACE)  # bazel / compose / puppet paths are workspace-relative
+    os.chdir(WORKSPACE)  # bazel / compose / ansible paths are workspace-relative
     return fn(rest)
 
 

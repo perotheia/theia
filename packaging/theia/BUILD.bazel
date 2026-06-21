@@ -20,7 +20,8 @@
 # .ipk under dist/ipkg/ for embedded targets.
 #
 # Layout convention: everything lands under /opt/theia (THEIA_ROOT_DIR), bin/
-# entries become 0755. Mirrors deploy/puppet theia::local_install.
+# entries become 0755. Mirrors the install stage (_stage_local in theia.py /
+# deploy/ansible tasks install-bundle.yml + setcap.yml).
 
 load("//rules:deb.bzl", "pkg_deb")
 load("//rules:opkg.bzl", "pkg_opkg")

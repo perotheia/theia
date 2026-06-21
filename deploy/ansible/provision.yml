@@ -1,7 +1,7 @@
-# theia provision — Phase 1: the cheap, stable base (agentless analogue of
-# theia::provisioning). Pushed over SSH from the controller; no agent on the rig.
+# theia provision — Phase 1: the cheap, stable base. Pushed over SSH from the
+# controller; no agent on the rig.
 #
-# Translates deploy/puppet/modules/theia/manifests/provisioning.pp 1:1:
+# Phases:
 #   1. /opt/theia + /opt/theia/config dirs
 #   2. OS packages from <machine>/machine.json os_packages (apt source, minus
 #      etcd-server which is the cluster singleton below)

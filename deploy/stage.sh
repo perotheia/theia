@@ -104,10 +104,10 @@ for m in "${machines[@]}"; do
         log "  $m: copied $(basename "$ipk") → ${m}.ipk"
     else
         log "  $m: no .ipk built (no bazel_buildable components for this machine)"
-        # Drop an empty .ipk-like marker so Puppet's opkg::check-ipk
-        # can detect "intentional empty" vs "missing because forgot
-        # to bazel build". Empty file => Puppet skips opkg install
-        # gracefully (see theia::install).
+        # Drop an empty .ipk-like marker so the deploy can detect
+        # "intentional empty" vs "missing because forgot to bazel
+        # build". Empty file => the bundle install step skips opkg
+        # gracefully (deploy/ansible tasks/install-bundle.yml).
         : > "$dst_dir/${m}.ipk"
     fi
 

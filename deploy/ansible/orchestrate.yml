@@ -1,11 +1,11 @@
-# theia orchestrate — Phase 2: install the binaries + the REAL config (agentless
-# analogue of theia::orchestration). Pushed over SSH; the frequent work.
+# theia orchestrate — Phase 2: install the binaries + the REAL config. Pushed
+# over SSH; the frequent work.
 #
-# Translates deploy/puppet/modules/theia/manifests/orchestration.pp 1:1:
+# Phases:
 #   1. copy the per-machine <machine>.deb to the rig + dpkg --install (--force-
 #      overwrite); drops every binary at /opt/theia/bin/<name>
-#   2. setcap the binaries (theia::postinstall contract — caps clear on a fresh
-#      copy, so this runs AFTER install)
+#   2. setcap the binaries (the cap contract in tasks/setcap.yml — caps clear on
+#      a fresh copy, so this runs AFTER install)
 #   3. copy the REAL executor.json from <machine>/executor.json (replaces the
 #      empty tree Phase 1 seeded) + the per-FC config/<fc>.json profiles
 #   4. notify the supervisor to reload (tdb reload) — handler, fires only on change
@@ -41,7 +41,7 @@
     - name: "Include bundle install (.deb → /opt/theia/bin)"
       ansible.builtin.include_tasks: tasks/install-bundle.yml
 
-    - name: "Include setcap (the postinstall capability contract)"
+    - name: "Include setcap (the capability contract)"
       ansible.builtin.include_tasks: tasks/setcap.yml
 
     - name: "Include real config (executor.json + per-FC profiles)"

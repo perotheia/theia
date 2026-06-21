@@ -80,7 +80,7 @@ pkg_files(
 
 # Supervisor tree → install/central/. The host install bundle is
 # SINGLE-MACHINE (@rig_apps = manifest.rig, central hosts everything).
-# The 2-machine central+compute split is the distributed Docker/Puppet deploy
+# The 2-machine central+compute split is the distributed Docker/Ansible deploy
 # (@rig_zonal = manifest.zonal_rig), built via `theia dist`, not bundled
 # here.
 pkg_files(

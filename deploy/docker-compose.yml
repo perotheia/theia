@@ -14,7 +14,7 @@
 # config} are empty dirs from the image) and the entrypoint loops with a
 # "waiting for orchestration" message until provisioning has been pushed in
 # FROM OUTSIDE — an operator / CI runs `theia provision` + `theia orchestrate`
-# (puppet) against the container, which lays down /opt/theia/bin/supervisor +
+# (ansible) against the container, which lays down /opt/theia/bin/supervisor +
 # /opt/theia/config/executor.json. The entrypoint then runs the supervisor.
 # On `docker compose down` the container is destroyed → back to empty; a fresh
 # `up` waits again until re-provisioned. (No persistent volume by design.)
@@ -69,7 +69,7 @@ services:
     container_name: theia-central
     network_mode: host
     # Capabilities the Theia binaries hold (the setcap contract in
-    # theia::postinstall, applied at provisioning). cap_add raises the
+    # deploy/ansible tasks/setcap.yml, applied at provisioning). cap_add raises the
     # container's bounding/ambient set so the file caps (+eip) actually take on
     # exec; without it setcap'd binaries silently run uncapped under Docker's
     # default cap drop:

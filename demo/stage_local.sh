@@ -3,9 +3,9 @@
 # of the ara::exec supervisor (gen-app FC).
 #
 # THIN WRAPPER around `theia stage-local`: the build + install/ population +
-# setcap are owned by Puppet now (theia::local_install + theia::postinstall),
-# the SAME code path a real deploy uses — bazel only builds, Puppet orchestrates.
-# This script just adds the demo-specific netgraph emit + the run hint on top.
+# setcap are done by `theia install` (_stage_local) — the SAME copy + setcap
+# contract a real Ansible deploy uses (deploy/ansible/tasks/setcap.yml); bazel
+# only builds. This script adds the demo-specific netgraph emit + run hint.
 #
 #   install/central/
 #     supervisor     — //platform/supervisor/main:supervisor (cap_sys_nice)
@@ -24,8 +24,8 @@ cd "$REPO"
 unset PYTHONPATH
 export PATH="$REPO/.venv/bin:$PATH"
 
-# 1. Build + populate install/central/ + setcap — via Puppet (theia stage-local).
-#    bazel builds; Puppet copies the binaries in and applies the cap contract.
+# 1. Build + populate install/central/ + setcap — via `theia stage-local`.
+#    bazel builds; _stage_local copies the binaries in and applies the caps.
 "$REPO/theia" stage-local central
 
 # 2. Demo-specific: cluster netgraph.json for the log[trace] hub's src/dst

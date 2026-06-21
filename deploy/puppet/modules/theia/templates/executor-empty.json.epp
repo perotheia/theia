@@ -1,9 +1,0 @@
-<%- | String $tombstone_dir = '/var/log/theia/tombstones' | -%>
-{
-  "name": "root",
-  "strategy": "one_for_all",
-  "max_restarts": 3,
-  "max_seconds": 5,
-  "tombstone_dir": "<%= $tombstone_dir %>",
-  "children": []
-}

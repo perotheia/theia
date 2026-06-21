@@ -97,9 +97,11 @@ cc_library(
 filegroup(
     name = "runtime_dist_srcs",
     srcs = glob(["include/*.hh", "src/*.cc"]) + [
-        # The runtime .art now lives under //system (package
-        # system.platform.runtime); the deb stages it preserving its path.
-        "//system/platform/runtime:package.art",
+        # NOTE: the runtime .art (system.platform.runtime/package.art) ships in
+        # theia-system-dev as part of the whole system/ contract tree — NOT here
+        # — so runtime-dev and system-dev don't both own
+        # /opt/theia/system/platform/runtime/package.art (runtime-dev
+        # Depends: theia-system-dev for it).
         "proto/platform_runtime/runtime.proto",
         # Ship the BUILT nanopb codec too (genrule outputs) so a downstream
         # workspace compiles against it without re-running nanopb_generator —

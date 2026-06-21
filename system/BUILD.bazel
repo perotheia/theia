@@ -13,11 +13,27 @@
 # `package system.platform.runtime`, so its .art lives at
 # system/platform/runtime/package.art (FQN mirrors path here too).
 
+# NOTE: a `glob(["**/*.art"])` here would ONLY see this package's own files —
+# system/services, system/supervisor, system/platform/* and system/tools each
+# carry their own BUILD (sub-packages), and a glob never crosses a package
+# boundary. So aggregate the per-package .art exports explicitly; this is the
+# single dep a manifest build (or the theia-system-dev deb) takes to get the
+# WHOLE system/ contract tree at its FQN-mirrored short_paths.
 filegroup(
     name = "art_sources",
-    srcs = glob(
-        ["**/*.art"],
-        allow_empty = True,
-    ),
+    srcs = [
+        # This package's own .art (system.art + tools/tdb/tdb.art live here —
+        # tools/tdb has no BUILD, so it belongs to //system).
+        "system.art",
+        "tools/tdb/tdb.art",
+        # Sub-packages.
+        "//system/services:services_manifest",
+        "//system/supervisor:supervisor_art_srcs",
+        "//system/platform/runtime:package.art",
+        "//system/platform/msgs/std:package.art",
+        "//system/platform/msgs/sensor:package.art",
+        "//system/platform/msgs/geometry:package.art",
+        "//system/platform/msgs/nav:package.art",
+    ],
     visibility = ["//visibility:public"],
 )

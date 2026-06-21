@@ -67,7 +67,7 @@ pkg_deb(
     section = "devel",
     # libnanopb-dev: pb.h + libprotobuf-nanopb.a the runtime sources compile/link
     # against. build-essential: gcc/g++ for the workspace bazel build.
-    depends = "theia-runtime, theia-framework, libnanopb-dev, build-essential",
+    depends = "theia-runtime, theia-framework, theia-system-dev, libnanopb-dev, build-essential",
     files = {
         # Trimmed module BUILD files at their real package paths.
         "//packaging/theia/module:runtime.BUILD.bazel":
@@ -80,10 +80,9 @@ pkg_deb(
         # platform/... (drops the old `src/` so the module paths match the repo).
         "//platform/runtime:runtime_dist_srcs",
         "//platform/supervisor/tombstone:tombstone_dist_hdrs",
-        # The supervisor .art (system.supervisor package) — a consuming ws's
-        # system.art imports it (`import system.supervisor.*`) to deploy the
-        # fabric; ships so the resolver reaches it from /opt/theia.
-        "//system/supervisor:supervisor_art_srcs",
+        # NOTE: the supervisor .art (system.supervisor package) now ships in
+        # theia-system-dev as part of the whole system/ tree — NOT here — so the
+        # two debs don't both own /opt/theia/system/supervisor/*.
     ],
     prefix = "/opt/theia",
     strip_prefix = "",
@@ -148,6 +147,51 @@ pkg_deb(
     },
 )
 
+# ── theia-system-dev (build) ─────────────────────────────────────────────────
+# The whole top-level `system/` tree — the .art CONTRACTS (services, supervisor,
+# platform runtime, the tdb client model) at their FQN-mirrored paths
+# (/opt/theia/system/services/<fc>/…, /opt/theia/system/tools/tdb/tdb.art) plus
+# the .proto SOURCES under /opt/theia/platform/proto so a deb-installed host can
+# materialize a probe-backed client (tdb / rtdb / rf-theia's supervisor adapter)
+# straight from `$THEIA_ROOT/system/tools/tdb/tdb.art` + proto_root
+# `$THEIA_ROOT/platform/proto` — NO source checkout, NO sibling tools/ path.
+#
+# Why its own package: `system/` was consolidated out of the per-FC <component>/
+# system/ dirs into one top-level tree; this deb ships that tree as a unit
+# instead of scattering it across runtime-dev (supervisor.art) + services-dev
+# (services .art only). It Depends on services-dev (the matching protos/manifest)
+# and theia-framework (the artheia probe). The runtime control proto is laid out
+# flat under platform_runtime/ (matching `import "platform_runtime/runtime.proto"`
+# every consumer uses) so supervisor.proto's cross-package import resolves from
+# the proto_root — the committed platform/proto/platform_runtime symlink doesn't
+# survive packaging, so we place runtime.proto at that path explicitly.
+pkg_deb(
+    name = "theia-system-dev_deb",
+    package = "theia-system-dev",
+    version = _VERSION,
+    description = "Theia system contracts: the full system/ .art tree (services + supervisor + tools/tdb) + .proto sources, for probe-backed clients (tdb/rtdb/rf-theia)",
+    section = "devel",
+    depends = "theia-services-dev, theia-framework",
+    data = [
+        # The entire system/ .art tree → /opt/theia/system/... (short_path
+        # `system/...` mirrors the package FQN: system.services.<fc>,
+        # system.supervisor, system.tools.tdb, system.platform.runtime).
+        "//system:art_sources",
+        # All service + supervisor .proto SOURCES → /opt/theia/platform/proto/...
+        # (short_path `platform/proto/system/...`), the probe codec's proto_root.
+        "//platform/proto:proto_sources",
+    ],
+    # The runtime control proto at the flat platform_runtime/ path the
+    # `import "platform_runtime/runtime.proto"` convention resolves to under the
+    # proto_root (the repo uses a symlink here; packaging places the real file).
+    files = {
+        "//platform/runtime:proto/platform_runtime/runtime.proto":
+            "/opt/theia/platform/proto/platform_runtime/runtime.proto",
+    },
+    prefix = "/opt/theia",
+    strip_prefix = "",
+)
+
 # Matching .ipk for the embedded/opkg path (dist/ipkg/). Same binary set; the
 # runtime sources aren't shipped to embedded targets (they run prebuilt binaries),
 # so the runtime ipk is binary-only (supervisor).
@@ -187,6 +231,7 @@ filegroup(
         ":theia-runtime-dev_deb",
         ":theia-services_deb",
         ":theia-services-dev_deb",
+        ":theia-system-dev_deb",
     ],
 )
 

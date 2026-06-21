@@ -9,8 +9,10 @@ This is a DEMO-APP test and runs FROM the demo consuming workspace
 (demo/). All artheia paths are workspace-relative to demo/:
 
   * .art source        system/apps/component.art
-  * rig module         manifest.rig          (importable: manifest/ is a
-                                              package at the demo root)
+  * rig module         manifest.single.rig   (DeploymentLayer, attr RIG;
+                                              manifest/ is a namespace pkg at
+                                              the demo root — services half is
+                                              symlinked in from the framework)
 
 artheia is the FRAMEWORK's console script — there is no demo/.venv, so
 we put the framework venv (<demo>/../.venv/bin, i.e. THEIA_ROOT/.venv)
@@ -24,9 +26,19 @@ Pipeline stages (mirrors the architecture map):
   3. artheia gen-netgraph       — per-cluster signal routing JSON
   4. artheia gen-routing        — per-process LocalRef/RemoteRef hh
   5. artheia gen-app            — per-process app skeleton (lib/main/impl)
-  6. artheia generate-manifest  — dist/manifest/<m>/{4 jsons} + machines.json
-  7. artheia executor emit      — per-machine execution tree
+  6. artheia serialize-manifest — DeploymentLayer rig → dist/manifest/<m>/
+                                  {machine,execution,service,application,
+                                  executor}.json + a top-level machines.json.
+                                  (The orthogonal-engine redesign folded the
+                                  old `generate-manifest` + `executor emit`
+                                  into this one validate-then-write command;
+                                  the per-machine supervisor tree is now the
+                                  <machine>/executor.json slice.)
   8. bazel build ...:image      — .ipk with arch tag matching rig.py
+
+The rig is a dotted module path to a DeploymentLayer (manifest.single.rig,
+attr RIG) — NOT an .art file. `manifest.services` (framework) + `manifest.apps`
+(this workspace) resolve as one `manifest` namespace from the demo root.
 
 Only used by demo_chain_selftest.robot.
 """
@@ -83,10 +95,11 @@ class DemoChainLib:
         """Run `artheia ...` from the demo workspace root with the
         framework venv on PATH.
 
-        Sets PYTHONPATH=. so the demo's rig modules (manifest.rig etc.)
-        import — `manifest/` is a package at the workspace root. The
-        artheia package itself comes from the venv, so prepending '.'
-        doesn't shadow it."""
+        Sets PYTHONPATH=. so the demo's rig modules (manifest.single.rig
+        etc.) import — `manifest/` is a namespace package at the workspace
+        root spanning the demo's apps + the framework's services (the
+        latter symlinked in as manifest/services). The artheia package
+        itself comes from the venv, so prepending '.' doesn't shadow it."""
         assert self._workspace is not None, "call `Use Workspace` first"
         env = os.environ.copy()
         env["PATH"] = f"{self._venv_bin()}:{env.get('PATH', '')}"
@@ -138,7 +151,7 @@ class DemoChainLib:
         assert self._workdir is not None, "call `Use Workdir` first"
         out = self._workdir / "rig.json"
         r = self._artheia(
-            "rig-deps", "manifest.rig", "--out", str(out)
+            "rig-deps", "manifest.single.rig", "--out", str(out)
         )
         self._ok(r, "stage 2: artheia rig-deps")
         if not out.exists():
@@ -274,34 +287,37 @@ class DemoChainLib:
             )
 
     # ------------------------------------------------------------------
-    # Stage 6 — generate-manifest (per-machine JSON set)
+    # Stage 6 — serialize-manifest (per-machine JSON set)
     # ------------------------------------------------------------------
 
-    @keyword("Stage 6 Generate Manifest")
-    def stage6_generate_manifest(self) -> str:
-        """Emit the per-machine deploy manifest set:
-        <out>/<machine>/{machine,application,service,execution}.json +
-        a top-level machines.json index."""
+    @keyword("Stage 6 Serialize Manifest")
+    def stage6_serialize_manifest(self, rig: str = "manifest.single.rig",
+                                  attr: str = "RIG") -> str:
+        """Run the orthogonal-engine serializer: a DeploymentLayer rig
+        module → the per-machine deploy JSON set. Replaces the old
+        `generate-manifest` + `executor emit` pair — `validate()` runs
+        first (any error aborts non-zero), then it writes
+        <out>/<machine>/{machine,execution,service,application,
+        executor}.json + a top-level machines.json."""
         assert self._workdir is not None
         out = self._workdir / "manifest"
         r = self._artheia(
-            "generate-manifest", "manifest.rig",
-            "--out", str(out),
+            "serialize-manifest", rig, "--attr", attr, "--out", str(out),
         )
-        self._ok(r, "stage 6: artheia generate-manifest")
+        self._ok(r, f"stage 6: artheia serialize-manifest {rig} --attr {attr}")
         return str(out)
 
     @keyword("Manifest Has Machine Jsons")
     def manifest_has_machine_jsons(self, root: str, machine: str) -> None:
-        """Every machine dir must have the 4 AUTOSAR-adaptive manifest
-        JSON files. The supervisor and supervisor-gui both consume
-        these — see platform/supervisor/src/spec.cpp and
-        supervisor-gui/src/machines.cpp."""
+        """Every machine dir must have the 5 deploy JSON files. The
+        supervisor + supervisor-gui consume machine/execution/service/
+        application; executor.json is the per-machine supervisor tree
+        slice (formerly the standalone `executor emit` output)."""
         mdir = Path(root) / machine
         if not mdir.is_dir():
             raise AssertionError(f"no machine dir at {mdir}")
-        expected = ["machine.json", "application.json",
-                    "service.json", "execution.json"]
+        expected = ["machine.json", "application.json", "service.json",
+                    "execution.json", "executor.json"]
         missing = [f for f in expected if not (mdir / f).exists()]
         if missing:
             raise AssertionError(
@@ -319,34 +335,34 @@ class DemoChainLib:
                 f"YAML emit re-introduced — saw {[str(p) for p in yamls]}"
             )
 
-    @keyword("Json Kind Is")
-    def json_kind_is(self, root: str, machine: str, stem: str,
-                     expected_kind: str) -> None:
-        """Assert dist/manifest/<machine>/<stem>.json's top-level `kind`
-        equals the expected manifest type tag."""
+    @keyword("Json Top Key Is")
+    def json_top_key_is(self, root: str, machine: str, stem: str,
+                        expected_key: str) -> None:
+        """Assert dist/manifest/<machine>/<stem>.json carries its
+        defining top-level key. The orthogonal-engine serializer emits
+        the bare payload (no `kind` discriminator) — each file's identity
+        IS its top-level container key: execution.json→processes,
+        executor.json→supervisors, etc."""
         import json as _json
         jp = Path(root) / machine / f"{stem}.json"
         doc = _json.loads(jp.read_text())
-        kind = doc.get("kind")
-        if kind != expected_kind:
+        if expected_key not in doc:
             raise AssertionError(
-                f"{jp} kind = {kind!r}, expected {expected_kind!r}"
+                f"{jp} top keys = {sorted(doc)}; expected {expected_key!r}"
             )
 
     @keyword("Index Json Lists Machines")
     def index_json_lists_machines(self, root: str, *names: str) -> None:
-        """Top-level machines.json is the RigIndex — Puppet's bootstrap
-        uses it to find each machine's directory."""
+        """Top-level machines.json is the machine-name list — the deploy
+        bootstrap uses it to find each machine's directory. The
+        orthogonal-engine serializer writes a bare {"machines": [name,...]}
+        (no RigIndex `kind` wrapper)."""
         import json as _json
         jp = Path(root) / "machines.json"
         if not jp.exists():
             raise AssertionError(f"missing top-level machines.json: {jp}")
         doc = _json.loads(jp.read_text())
-        if doc.get("kind") != "RigIndex":
-            raise AssertionError(
-                f"{jp} kind = {doc.get('kind')!r}, expected 'RigIndex'"
-            )
-        got = {m["name"] for m in doc.get("machines", [])}
+        got = set(doc.get("machines", []))
         missing = [n for n in names if n not in got]
         if missing:
             raise AssertionError(
@@ -367,29 +383,34 @@ class DemoChainLib:
             )
 
     # ------------------------------------------------------------------
-    # Stage 7 — executor emit (per-machine supervisor tree)
+    # Stage 7 — per-machine supervisor tree (executor.json slice)
     # ------------------------------------------------------------------
 
-    @keyword("Stage 7 Executor Emit")
-    def stage7_executor_emit(self, machine: str) -> str:
-        """Emit the supervisor tree for ONE machine. This is the
-        per-machine slice (#287) — pinned SupervisorNodes whose host
-        doesn't match are dropped."""
-        assert self._workdir is not None
-        out = self._workdir / f"executor_{machine}.json"
-        r = self._artheia(
-            "executor", "emit", "manifest.rig",
-            "--machine", machine,
-            "--out", str(out),
-        )
-        self._ok(r, f"stage 7: artheia executor emit --machine {machine}")
-        return str(out)
+    @keyword("Executor Slice For Machine")
+    def executor_slice_for_machine(self, root: str, machine: str) -> str:
+        """The per-machine supervisor tree is no longer a standalone
+        `executor emit` — serialize-manifest writes it as
+        <root>/<machine>/executor.json. Returns that path."""
+        jp = Path(root) / machine / "executor.json"
+        if not jp.exists():
+            raise AssertionError(f"no executor.json slice at {jp}")
+        return str(jp)
 
     @keyword("Executor Json Root Strategy Is")
     def executor_root_strategy(self, path: str, expected: str) -> None:
+        """The supervisor tree's `root` node carries the top-level
+        restart strategy (the serializer nests the nodes under
+        `supervisors`, root first)."""
         import json as _json
         doc = _json.loads(Path(path).read_text())
-        got = doc.get("strategy")
+        sups = doc.get("supervisors", [])
+        root = next((n for n in sups if n.get("name") == "root"), None)
+        if root is None:
+            raise AssertionError(
+                f"{path} has no `root` supervisor; saw "
+                f"{[n.get('name') for n in sups]}"
+            )
+        got = root.get("strategy")
         if got != expected:
             raise AssertionError(
                 f"{path} root strategy = {got!r}, expected {expected!r}"

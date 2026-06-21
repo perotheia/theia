@@ -20,8 +20,9 @@ Documentation    End-to-end selftest of the Demo3Way generation
 ...                               │
 ...                              .json + .hh + .cc + BUILD.bazel
 ...                               │
-...                               │  artheia generate-manifest
-...                               │  artheia executor emit
+...                               │  artheia serialize-manifest
+...                               │  (validate → per-machine JSON, incl.
+...                               │   the executor.json supervisor slice)
 ...                               │
 ...                              dist/manifest/<machine>/*.json
 ...                               │
@@ -139,16 +140,19 @@ Stage 5 — gen-app per-process skeleton
     App Composition Has Process Dir    ${out}    Demo3WayP1
 
 
-Stage 6 — generate-manifest JSON set
-    [Documentation]    Per-machine deploy manifest set — 4 JSON files
-    ...                + a top-level machines.json index. The C++
+Stage 6 — serialize-manifest JSON set
+    [Documentation]    Per-machine deploy manifest set — 5 JSON files
+    ...                + a top-level machines.json index, emitted by the
+    ...                orthogonal-engine `serialize-manifest` (which
+    ...                folded the old generate-manifest + executor emit
+    ...                into one validate-then-write command). The C++
     ...                supervisor + supervisor-gui read from here
     ...                directly via nlohmann/json (no yaml-cpp dep
     ...                since #380). Asserts p1/p2/p3 land in central's
     ...                execution.json.
     [Tags]    demo-chain    hermetic    selftest    stage-6
 
-    ${root}=    Stage 6 Generate Manifest
+    ${root}=    Stage 6 Serialize Manifest
     Manifest Has Machine Jsons    ${root}    central
 
     Execution Json Lists Process    ${root}    central    p1
@@ -157,36 +161,41 @@ Stage 6 — generate-manifest JSON set
 
 
 Stage 6b — manifest schema sanity (#379, #380)
-    [Documentation]    Each JSON file declares the correct top-level
-    ...                `kind` tag — the only discriminator a generic
-    ...                JSON consumer has to tell the four manifest
-    ...                types apart. Plus: no YAML emitted (#380
-    ...                migrated the system to JSON-only).
+    [Documentation]    Each JSON file carries its defining top-level
+    ...                container key — the orthogonal-engine serializer
+    ...                emits the bare payload (no `kind` discriminator),
+    ...                so a file's identity IS its top key
+    ...                (execution→processes, executor→supervisors, …).
+    ...                Plus: no YAML emitted (#380 migrated the system
+    ...                to JSON-only).
     [Tags]    demo-chain    hermetic    selftest    stage-6b
 
-    ${root}=    Stage 6 Generate Manifest
+    ${root}=    Stage 6 Serialize Manifest
 
-    # Top-level kind tags (one consumer-facing identity per file).
-    Json Kind Is    ${root}    central    machine        MachineManifest
-    Json Kind Is    ${root}    central    application    ApplicationManifest
-    Json Kind Is    ${root}    central    service        ServiceManifest
-    Json Kind Is    ${root}    central    execution      ExecutionManifest
+    # Top-level container keys (one structural identity per file).
+    Json Top Key Is    ${root}    central    machine        name
+    Json Top Key Is    ${root}    central    application    applications
+    Json Top Key Is    ${root}    central    service        instances
+    Json Top Key Is    ${root}    central    execution      processes
+    Json Top Key Is    ${root}    central    executor       supervisors
 
-    # machines.json — the RigIndex Puppet uses for per-host lookup.
+    # machines.json — the machine-name list the deploy bootstrap reads.
     Index Json Lists Machines    ${root}    central
 
     # Hard wall against YAML re-emergence.
     No Yaml Emitted    ${root}
 
 
-Stage 7 — executor emit per-machine tree
+Stage 7 — per-machine supervisor tree (executor.json slice)
     [Documentation]    Per-machine supervisor tree. Root is always
-    ...                `one_for_all`; non-matching pinned
-    ...                SupervisorNodes are pruned out. This is the
-    ...                tree the C++ supervisor reads at startup.
+    ...                `one_for_all`. serialize-manifest writes it as
+    ...                the <machine>/executor.json slice (no standalone
+    ...                executor emit). This is the tree the C++
+    ...                supervisor reads at startup.
     [Tags]    demo-chain    hermetic    selftest    stage-7
 
-    ${y}=    Stage 7 Executor Emit    central
+    ${root}=    Stage 6 Serialize Manifest
+    ${y}=    Executor Slice For Machine    ${root}    central
     Executor Json Root Strategy Is    ${y}    one_for_all
 
 

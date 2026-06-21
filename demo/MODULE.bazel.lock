@@ -231,6 +231,36 @@
   },
   "selectedYankedVersions": {},
   "moduleExtensions": {
+    "@@pero_theia+//rules:rig.bzl%rig_ext": {
+      "general": {
+        "bzlTransitiveDigest": "elpBgJJEeGoKsk1jGkyT5jNWwmxUSfM0Cw7IlMjpVP0=",
+        "usagesDigest": "S4ZtJT02+KjioFjbZ2HuEa2O1q3v6IukpP1lsXoZJfI=",
+        "recordedInputs": [],
+        "generatedRepoSpecs": {
+          "rig_single": {
+            "repoRuleId": "@@pero_theia+//rules:rig.bzl%rig_repo",
+            "attributes": {
+              "rig_module": "manifest.single.rig",
+              "rig_attr": "RIG"
+            }
+          },
+          "rig_docker": {
+            "repoRuleId": "@@pero_theia+//rules:rig.bzl%rig_repo",
+            "attributes": {
+              "rig_module": "manifest.split.rig",
+              "rig_attr": "DOCKER"
+            }
+          },
+          "rig_hw": {
+            "repoRuleId": "@@pero_theia+//rules:rig.bzl%rig_repo",
+            "attributes": {
+              "rig_module": "manifest.split.rig",
+              "rig_attr": "HW"
+            }
+          }
+        }
+      }
+    },
     "@@pero_theia+//toolchains/aarch64_linux_gnu:extension.bzl%rpi4_sysroot_ext": {
       "general": {
         "bzlTransitiveDigest": "vPUOmvA7iFkV4KbfvtSwGe1trJdoyY79zj1T836g6PI=",

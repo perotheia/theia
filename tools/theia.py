@@ -31,10 +31,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-# THEIA_ROOT — the framework checkout (where theia.py lives, or $THEIA_ROOT when
-# a consuming workspace sourced setup.sh). Framework assets (deploy/, rules/)
-# resolve against it.
-THEIA_ROOT = Path(os.environ.get("THEIA_ROOT") or Path(__file__).resolve().parent)
+# THEIA_ROOT — the framework checkout (whose tools/ holds this script, or
+# $THEIA_ROOT when a consuming workspace sourced env.sh / the deb's setup.sh).
+# Framework assets
+# (deploy/, rules/) resolve against it. This file lives at <root>/tools/theia.py,
+# so the checkout root is its parent's parent.
+THEIA_ROOT = Path(os.environ.get("THEIA_ROOT") or Path(__file__).resolve().parent.parent)
 
 # WORKSPACE — the directory the user RAN `theia` from. For a consuming workspace
 # (gataway_ws, test_ws) that's the workspace itself; the rig, dist/manifest, and
@@ -1224,15 +1226,18 @@ def _build_framework_deb(out_dir: Path, version: str = "0.1.0") -> int:
         (opt / "BUILD.bazel").write_text(
             '# pero_theia module root (the installed /opt/theia).\n'
             'package(default_visibility = ["//visibility:public"])\n')
-    # theia.py itself (the workspace lifecycle driver) + setup scripts.
-    shutil.copy2(WORKSPACE / "theia.py", opt / "theia.py")
+    # theia.py itself (the workspace lifecycle driver) + setup scripts. It lives
+    # under tools/ in the source tree; mirror that into the deb so the in-root
+    # `theia` shim and the deb bin shim resolve it the same way.
+    (opt / "tools").mkdir(parents=True, exist_ok=True)
+    shutil.copy2(THEIA_ROOT / "tools" / "theia.py", opt / "tools" / "theia.py")
     for s in ("setup.bash", "setup.zsh"):
         shutil.copy2(pkg_root / s, opt / s)
 
     # `theia` launcher — PURE STDLIB (theia.py imports nothing from artheia), so
     # `theia init/manifest/install/start` work before the user has a venv.
     (opt / "bin" / "theia").write_text(
-        '#!/bin/sh\nexec python3 "$(dirname "$0")/../theia.py" "$@"\n')
+        '#!/bin/sh\nexec python3 "$(dirname "$0")/../tools/theia.py" "$@"\n')
     (opt / "bin" / "theia").chmod(0o755)
     # artheia / -lsp / -mcp shims — exec the artheia from the user's ACTIVE venv
     # (resolved on PATH, skipping THIS shim dir to avoid recursion). The Python
@@ -1516,10 +1521,11 @@ def cmd_init(args: list[str]) -> int:
     The catkin-`catkin init` / ROS-`colcon` analogue: turns an empty repo into
     a workspace that builds apps against a SIBLING Theia source checkout (or an
     installed /opt/theia prefix later). Run it from your workspace root after
-    `source /path/to/theia/setup.sh`:
+    sourcing the framework — `source ../theia/env.sh` for a source checkout, or
+    `source /opt/theia/setup.sh` for the installed deb:
 
         cd ~/repo/launch-box/gataway_ws
-        source ../theia/setup.sh           # exports THEIA_ROOT
+        source ../theia/env.sh             # exports THEIA_ROOT (source checkout)
         theia init [--name <ws>]           # bare workspace (supervisor + your apps)
         theia init --with-services         # + the ARA services (com/log/per/sm/ucm/shwa)
 
@@ -1553,8 +1559,9 @@ def cmd_init(args: list[str]) -> int:
 
     theia_root = os.environ.get("THEIA_ROOT")
     if not theia_root:
-        print("theia init: THEIA_ROOT is unset — `source /path/to/theia/setup.sh` "
-              "first so the workspace knows where the Theia source lives.",
+        print("theia init: THEIA_ROOT is unset — `source /path/to/theia/env.sh` "
+              "(source checkout) or `source /opt/theia/setup.sh` (deb) first so "
+              "the workspace knows where the Theia framework lives.",
               file=sys.stderr)
         return 2
     theia_root = Path(theia_root).resolve()
@@ -1585,7 +1592,7 @@ def cmd_init(args: list[str]) -> int:
         print(f"theia init: THEIA_ROOT={theia_root} doesn't look like a Theia "
               "source checkout OR an installed /opt/theia prefix "
               f"(no runtime package.art at {runtime_art}). Install the "
-              "theia-runtime-dev deb, or source a source checkout's setup.sh.",
+              "theia-runtime-dev deb, or source a source checkout's env.sh.",
               file=sys.stderr)
         return 2
 
@@ -1966,7 +1973,9 @@ not vendored. system/platform/runtime + system/supervisor (+ system/services
 with --with-services) are symlinks into it.
 
 ```sh
-source @THEIA_ROOT@/setup.sh     # exports THEIA_ROOT, puts `theia` on PATH
+source @THEIA_ROOT@/env.sh       # activate the sibling framework checkout:
+                                 # THEIA_ROOT + its .venv + `theia`/`tdb` on PATH,
+                                 # THEIA_WORKSPACE=this dir
 theia init                       # (already run — scaffolded this dir)
 # link your app/gateway spec, import it in system/system.art, then:
 theia manifest
@@ -1974,8 +1983,10 @@ theia install
 theia start && tdb ps
 ```
 
-When Theia ships as a deb, swap the sibling source for /opt/theia
-(THEIA_ROOT=/opt/theia) — the symlinks + rig stay the same.
+When Theia ships as a deb, swap the sibling source checkout for the installed
+prefix: `source /opt/theia/setup.sh` (THEIA_ROOT=/opt/theia) — the symlinks +
+rig stay the same. (env.sh is the source-checkout activation; setup.sh ships
+only inside the deb.)
 '''
 
 # ── Bazel-module scaffold (the workspace builds its OWN app C++) ────────────
@@ -2103,6 +2114,12 @@ def main(argv: list[str]) -> int:
     if not argv or argv[0] in ("-h", "--help"):
         _usage()
         return 0 if argv else 2
+    # Hidden hook: emit the verb list (one per line) for shell completion, so
+    # env.sh's completion stays in lockstep with COMMANDS instead of hardcoding
+    # a list that drifts. No chdir / workspace needed.
+    if argv[0] == "__complete":
+        print("\n".join(COMMANDS))
+        return 0
     name, rest = argv[0], argv[1:]
     entry = COMMANDS.get(name)
     if entry is None:

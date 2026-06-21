@@ -2107,6 +2107,12 @@ def main(argv: list[str]) -> int:
     if not argv or argv[0] in ("-h", "--help"):
         _usage()
         return 0 if argv else 2
+    # Hidden hook: emit the verb list (one per line) for shell completion, so
+    # env.sh's completion stays in lockstep with COMMANDS instead of hardcoding
+    # a list that drifts. No chdir / workspace needed.
+    if argv[0] == "__complete":
+        print("\n".join(COMMANDS))
+        return 0
     name, rest = argv[0], argv[1:]
     entry = COMMANDS.get(name)
     if entry is None:

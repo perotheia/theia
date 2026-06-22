@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
-# third_party/sysroot/setup_rpi4.sh — bootstrap an aarch64 Debian bookworm
+# third_party/sysroot/setup_rpi4.sh — bootstrap an aarch64 Debian trixie
 # sysroot for cross-compiling Theia C++ binaries to Raspberry Pi 4
-# (running Raspberry Pi OS 12 / Debian 12).
+# (running Raspberry Pi OS 13 / Debian 13 trixie, kernel 6.12, aarch64).
+#
+# NOTE: trixie keeps protobuf 3.21.12 / grpc 1.51.1 (the t64 ABI variant), so
+# the host-x86 codegen toolset below (bookworm 3.21.12 / grpc 1.51) STILL
+# matches the sysroot's libprotobuf — no protoc-version regen errors. Only the
+# debootstrap suite changed (bookworm → trixie) to track the live rpi4 OS.
 #
 # What ends up in the sysroot:
 #   - minbase Debian bookworm rootfs (~80 MB)
@@ -39,7 +44,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TARGET="$SCRIPT_DIR/rpi4"
-SUITE="bookworm"
+SUITE="trixie"   # Debian 13 — matches the live rpi4 (rig1-central). Was bookworm.
 MIRROR="http://deb.debian.org/debian"
 
 # The library set the supervisor + services-com link against. Match

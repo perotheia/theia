@@ -7,7 +7,7 @@ recreate them on demand.
 
 | Script | Target | Result |
 |---|---|---|
-| `setup_rpi4.sh` | Raspberry Pi 4 (aarch64, Debian bookworm) | `rpi4/` (~444 MB) |
+| `setup_rpi4.sh` | Raspberry Pi 4 (aarch64, Debian 13 trixie) | `rpi4/` (~444 MB) |
 
 Each sysroot pulls in the lib*-dev packages Theia links against
 (`libyaml-cpp-dev`, `libprotobuf-dev`, `libgrpc++-dev`, `libgrpc-dev`,

@@ -263,6 +263,27 @@ else
     fi
 fi
 
+# --- gRPC plugin at the SYSROOT path (for services/per's etcd cmake) --------
+# libgrpc-dev's CMake config (gRPCTargets.cmake) exports IMPORTED gRPC::grpc_*
+# _plugin targets at <sysroot>/bin/grpc_*_plugin, and FATAL-errors at
+# find_package(gRPC) if those files are absent — even etcd, which only LINKS the
+# libs, trips the check. Worse, etcd's CMakeLists reads the cpp plugin via
+# `get_target_property(GRPC_CPP_PLUGIN gRPC::grpc_cpp_plugin LOCATION)` and runs
+# it for codegen — so the file at that path must be a RUNNABLE binary on the
+# build host, i.e. the HOST-x86 plugin (the arm64 one can't exec, "Exec format
+# error"). So: drop the host-x86 grpc_cpp_plugin (from CG_DIR) at the sysroot
+# path, and stub the php/python/ruby plugins (existence-check only, never run).
+# The cpp plugin needs its host .so's — third_party/BUILD.bazel's etcd cmake env
+# already puts CG_DIR/lib on LD_LIBRARY_PATH.
+if [[ -x "$CG_DIR/bin/grpc_cpp_plugin" ]]; then
+    echo "==> staging host-x86 grpc_cpp_plugin at the sysroot path (etcd find_package)"
+    sudo mkdir -p "$TARGET/usr/bin"
+    sudo cp "$CG_DIR/bin/grpc_cpp_plugin" "$TARGET/usr/bin/grpc_cpp_plugin"
+    for p in grpc_php_plugin grpc_python_plugin grpc_ruby_plugin; do
+        sudo ln -sfn grpc_cpp_plugin "$TARGET/usr/bin/$p"
+    done
+fi
+
 # --- sanity check ---------------------------------------------------
 
 echo

@@ -8,6 +8,7 @@
 #include <unistd.h>
 #include <cerrno>
 #include <cstdio>
+#include <cstdlib>   // getenv — THEIA_TIPC_SCOPE
 #include <cstring>
 #include <utility>
 #include <vector>
@@ -37,13 +38,29 @@ TipcMux::~TipcMux() {
     }
 }
 
+// TIPC publication scope for node service binds. Default NODE_SCOPE — a single
+// machine's nodes are visible only locally (the common case; keeps rigs on a
+// shared clusterid from seeing each other's services). Set THEIA_TIPC_SCOPE=
+// cluster to publish CLUSTER_SCOPE so the service is reachable across a TIPC
+// link from another machine — needed when a remote client (tdb/rtdb on the
+// host, a cross-machine fusion node) must reach this node's services over a
+// UDP/eth TIPC bearer. Read once.
+static unsigned tipc_bind_scope() {
+    static unsigned s = [] {
+        const char* v = ::getenv("THEIA_TIPC_SCOPE");
+        return (v && (v[0] == 'c' || v[0] == 'C')) ? TIPC_CLUSTER_SCOPE
+                                                    : TIPC_NODE_SCOPE;
+    }();
+    return s;
+}
+
 int TipcMux::bind_listen_(uint32_t type, uint32_t instance) {
     int fd = ::socket(AF_TIPC, SOCK_SEQPACKET, 0);
     if (fd < 0) { std::perror("[TipcMux] socket"); return -1; }
     struct sockaddr_tipc addr{};
     addr.family   = AF_TIPC;
     addr.addrtype = TIPC_SERVICE_ADDR;
-    addr.scope    = TIPC_NODE_SCOPE;
+    addr.scope    = tipc_bind_scope();
     addr.addr.name.name.type     = type;
     addr.addr.name.name.instance = instance;
     if (::bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {

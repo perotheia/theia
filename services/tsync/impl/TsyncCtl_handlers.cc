@@ -70,13 +70,33 @@ void maybe_discipline(TsyncCtl& self, TsyncCtlState& s, uint64_t gps_utc_ns) {
     }
 }
 
+// TIPC EGRESS for the broadcasts: emit each published message as a Send trace
+// record to the log[trace] firehose. The generated broadcast_* fan-out is
+// IN-PROCESS only (subscriber callbacks); this is what carries the data OFF the
+// node — over TIPC to log[trace], where any observer (tdb tracecat, the GUI, a
+// fusion node on another machine) subscribes. Gated by the node's Tracer: zero
+// cost until the supervisor flips tracing on for tsync_ctl (`tdb trace tsync`),
+// then every NavSatFix/Odometry lands on the firehose, decoded by the .proto.
+// Mirrors GenServer's auto-trace on a cast (encode_for_trace + tracer.emit).
+template <class Msg>
+void trace_emit(const Msg& m) noexcept {
+    auto& tr = ::theia::runtime::tracer_for(TsyncCtl::kNodeName);
+    if (!tr.enabled()) return;
+    uint8_t scratch[256];
+    uint16_t n = ::theia::runtime::encode_for_trace(
+        m, scratch, static_cast<uint16_t>(sizeof(scratch)));
+    tr.emit(::theia::runtime::TraceEvent::Send,
+            ::theia::runtime::msg_type_name<Msg>(),
+            ::theia::runtime::next_trace_corr_id(), scratch, n);
+}
+
 // --- ROS-shaped GNSS broadcasts -------------------------------------------
 //
 // Re-publish a valid fix as NavSatFix (position) + Odometry (velocity+heading)
 // for a localization/fusion app. Both are senderReceiver broadcasts; the
-// in-process broadcast_* fan-out delivers to subscribers. A camera/fusion FC
-// that wants them over TIPC subscribes via the probe/com path (same model as
-// shwa's AccelTelemetry). The covariance diagonals come from the receiver's
+// in-process broadcast_* fan-out delivers to subscribers; trace_emit (above)
+// carries them OVER TIPC to the log[trace] firehose (tdb tracecat, GUI, a
+// cross-machine fusion node). The covariance diagonals come from the receiver's
 // reported 1-sigma accuracies (variance = sigma^2); off-diagonals stay 0 and
 // covariance_type = APPROXIMATED.
 void publish_gnss(TsyncCtl& self, const GnssFix& fix, uint64_t now) {
@@ -103,6 +123,7 @@ void publish_gnss(TsyncCtl& self, const GnssFix& fix, uint64_t now) {
             ? platform_msgs_sensor_NavSatCovarianceType_NavSatCovarianceType_COVARIANCE_TYPE_DIAGONAL_KNOWN
             : platform_msgs_sensor_NavSatCovarianceType_NavSatCovarianceType_COVARIANCE_TYPE_UNKNOWN;
     self.broadcast_navsatfix_fix(nf);
+    trace_emit(nf);   // → log[trace] firehose (tdb tracecat) when tracing is on
 
     if (!fix.velocity_valid) return;
 
@@ -171,6 +192,7 @@ void publish_gnss(TsyncCtl& self, const GnssFix& fix, uint64_t now) {
     od.twist.covariance[28] = -1.0; // pitch rate unknown
     od.twist.covariance[35] = -1.0; // yaw rate unknown
     self.broadcast_gnss_odom_odom(od);
+    trace_emit(od);   // → log[trace] firehose (tdb tracecat) when tracing is on
 
     // Visibility for a live (in-car) test: a concise line per published fix.
     // INFO so it lands in the supervisor/stderr log without a wired subscriber.

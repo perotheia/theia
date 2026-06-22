@@ -52,10 +52,10 @@ message ChildState {
     uint32  restart_count
     sint32  last_exit_code   // most recent observed return code; 0 if never exited
     uint64  uptime_ms        // since current start_ts; 0 if not running
-    string  strategy         // supervisor only: one_for_one | one_for_all | rest_for_one | simple_one_for_one
+    string  strategy [max_size:24]   // supervisor only: one_for_one | one_for_all | rest_for_one | simple_one_for_one
     uint32  max_restarts     // supervisor only
     uint32  max_seconds      // supervisor only
-    string  start_cmd        // worker only — argv joined by space (informational)
+    string  start_cmd [max_size:128] // worker only — argv joined by space (informational)
 
     // Resource samples (worker only; 0 for supervisors / stopped workers).
     //
@@ -97,12 +97,12 @@ message ChildState {
     // /proc/<pid>/task/<tid>/{stat,status,sched,comm}). The `threads`
     // field above is the count; this is the breakdown the GUI shows
     // as expandable child rows.
-    repeated ThreadSample threads_detail
+    repeated ThreadSample threads_detail [max_count:0]
 
     // Open TCP/TIPC sockets owned by this pid (full per-socket detail). Kept
     // OFF the GetTree wire (max_count:0) — the scalar tipc_rx/tipc_tx above are
     // what the snapshot carries; this stays for a future per-socket view.
-    repeated SocketInfo sockets
+    repeated SocketInfo sockets [max_count:0]
 }
 
 // One open socket from /proc/<pid>/net/tcp{,6}. Fields are a flat
@@ -117,8 +117,8 @@ message SocketInfo {
     uint32  family          // AF_INET=2, AF_INET6=10, AF_TIPC=30
     uint32  proto           // IPPROTO_TCP=6 ; informational
     uint32  state           // see comment above
-    string  local           // "addr:port" or TIPC name
-    string  remote          // "addr:port" or "" for LISTEN/TIPC server
+    string  local [max_size:20]   // "addr:port" or TIPC name
+    string  remote [max_size:20]  // "addr:port" or "" for LISTEN/TIPC server
     uint64  inode           // socket inode (matches /proc/<pid>/fd entry)
     uint32  rx_queue        // bytes in receive queue
     uint32  tx_queue        // bytes in transmit queue
@@ -134,7 +134,7 @@ message SocketInfo {
 // and bookkeeping threads.
 message ThreadSample {
     uint32  tid                 // task id (Linux LWP)
-    string  comm                // /proc/<pid>/task/<tid>/comm
+    string  comm [max_size:16]    // /proc/<pid>/task/<tid>/comm
     uint32  cpu_pct             // per-thread CPU, hundredths of % (1234 == 12.34%)
     uint32  sched_policy        // sched_getscheduler() returns 0=OTHER,
     // 1=FIFO, 2=RR, 3=BATCH, 5=IDLE, 6=DEADLINE
@@ -151,7 +151,7 @@ message ThreadSample {
 message TreeSnapshot {
     uint64  generation       // monotonically increasing
     uint64  timestamp_ms     // wallclock at snapshot time
-    repeated ChildState children
+    repeated ChildState children [max_count:64]
 }
 
 // ---- #429 topo-pair firehose stream --------------------------------------
@@ -232,9 +232,9 @@ message SupervisionEvent {
     string  supervisor_name
     sint32  pid
     sint32  exit_code
-    string  strategy
-    string  tombstone_path
-    string  detail
+    string  strategy [max_size:24]
+    string  tombstone_path [max_size:256]
+    string  detail [max_size:256]
 }
 
 // Periodic heartbeat. Doubles as keep-alive — the GUI declares the
@@ -281,10 +281,10 @@ message GetSystemInfoRequest {
 // kept stable (4,5,6,10-13 reserved) so the wire stays compatible.
 message SystemInfo {
     string  hostname            // uname(2).nodename
-    string  kernel              // sysname + release + machine
-    string  os_pretty_name      // /etc/os-release PRETTY_NAME
+    string  kernel [max_size:128]         // sysname + release + machine
+    string  os_pretty_name [max_size:128] // /etc/os-release PRETTY_NAME
     string  theia_git_sha       // -DTHEIA_GIT_SHA at build time
-    string  build_timestamp     // -DTHEIA_BUILD_TIMESTAMP
+    string  build_timestamp [max_size:48] // -DTHEIA_BUILD_TIMESTAMP
     uint64  start_timestamp_ms  // wall-clock millis when supervisor started
 }
 
@@ -310,7 +310,7 @@ message ChildSelector {
 message ChildSpec {
     string  name
     string  parent_supervisor   // name of the SupervisorNode to add into
-    repeated string start_cmd   // argv (only meaningful for type=worker)
+    repeated string start_cmd [max_size:128, max_count:8]  // argv (only meaningful for type=worker)
     uint32  restart             // 0/1/2 — see above
     sint32  shutdown            // ms or sentinel
     uint32  type                // 0=worker / 1=supervisor
@@ -386,7 +386,7 @@ message GetTraceConfigRequest {
 }
 
 message TraceConfigList {
-    repeated TraceConfig configs
+    repeated TraceConfig configs [max_count:64]
 }
 
 // Per-child log-level config (#385). Same supervisor-mediated path as
@@ -427,10 +427,10 @@ message GetTombstoneRequest {
 // cored, or the file aged out).
 message GetTombstoneReply {
     bool   found
-    string path          // on-host path of the full file
+    string path [max_size:256]  // on-host path of the full file
     bool   truncated     // content is shorter than the file
     uint32 total_bytes   // full file size (so the GUI shows what it's missing)
-    bytes  content       // the (capped) tombstone text
+    bytes  content [max_size:40960]  // the (capped) tombstone text
 }
 
 // One node's effective log level for the read-back (tdb loglevel). `level` is
@@ -445,7 +445,7 @@ message LogLevelStatus {
 }
 
 message LogLevelConfigList {
-    repeated LogLevelStatus configs
+    repeated LogLevelStatus configs [max_count:64]
 }
 
 // ---- logger policy (the log[] hose's "what do I tail?" query) -------------
@@ -462,8 +462,8 @@ message LogLevelConfigList {
 //               otherwise. (file: lines carry the tag inline; syslog indexes on it.)
 message LoggerEntry {
     string node
-    string sink
-    string path
+    string sink [max_size:16]
+    string path [max_size:256]
     string tag
 }
 
@@ -477,7 +477,7 @@ message GetLoggerPolicyRequest {
 // the right journald filter without guessing.
 message LoggerPolicy {
     string             machine_sink
-    repeated LoggerEntry entries
+    repeated LoggerEntry entries [max_count:64]
 }
 
 // Generic ack/error payload for action RPCs.
@@ -487,7 +487,7 @@ message LoggerPolicy {
 //           6=child_busy (delete/start while restart cascade in flight)
 message ControlReply {
     uint32  status
-    string  message          // optional human-readable diagnostic
+    string  message [max_size:160]   // optional human-readable diagnostic
     // Echo back the resulting child name when it's meaningful
     // (StartChild's return needs to confirm the assigned id, for
     // instance — observer's start_child returns {ok, pid} in OTP).
@@ -495,7 +495,7 @@ message ControlReply {
     // GetTraceConfig reply: the serialized TraceConfigList carried INLINE
     // in the single ControlReply (one frame). Empty for every other op.
     // Crash-investigation read-back: tdb → GetTraceConfig → supervisor → here.
-    bytes   trace_config_list
+    bytes   trace_config_list [max_size:1024]
 }
 
 // NB: there is NO monolithic ControlRequest envelope. Each control op is its

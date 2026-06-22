@@ -79,9 +79,9 @@ message TraceControlPush {
 // the previous value (services/per computes it from etcd's prev_kv); empty on
 // the first delivery (whole snapshot is new).
 message ConfigUpdated {
-    bytes           config              // serialized <Node>Config; node unpacks
+    bytes           config [max_size:4096]  // serialized <Node>Config; node unpacks
     string          digest              // schema digest the bytes are encoded under
-    repeated string changed             // dotted field paths that changed (FieldMask)
+    repeated string changed [max_count:32, max_size:96]  // dotted field paths that changed (FieldMask)
 }
 
 // The CONTROL plane pushed to every reporting node, as one interface bundling

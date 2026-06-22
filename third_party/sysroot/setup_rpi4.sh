@@ -181,30 +181,60 @@ else
     mkdir -p "$CG_DIR/bin" "$CG_DIR/lib"
     cgtmp="$(mktemp -d)"
     BW="http://ftp.debian.org/debian/pool/main"
-    # (deb path, …) — bookworm AMD64. apt-get download needs the host on bookworm;
-    # fetch the pool .debs directly so this works from any host distro.
-    DEBS=(
-        "$BW/p/protobuf/protobuf-compiler_3.21.12-3_amd64.deb"
-        "$BW/p/protobuf/libprotoc32_3.21.12-3_amd64.deb"
-        "$BW/p/protobuf/libprotobuf32_3.21.12-3_amd64.deb"
-        "$BW/g/grpc/protobuf-compiler-grpc_1.51.1-3_amd64.deb"
-        "$BW/g/grpc/libgrpc++1.51_1.51.1-3_amd64.deb"
-        "$BW/g/grpc/libgrpc29_1.51.1-3_amd64.deb"
-        "$BW/g/grpc/libgpr29_1.51.1-3_amd64.deb"
-        "$BW/a/abseil/libabsl20220623_20220623.1-1_amd64.deb"
-        "$BW/r/re2/libre2-9_20220601-1_amd64.deb"
-        "$BW/c/c-ares/libc-ares2_1.18.1-3_amd64.deb"
+    # Resolve each .deb DYNAMICALLY by <name>_<upstream-version> prefix, picking
+    # the highest Debian revision currently in the pool. Hardcoding a full
+    # filename (…_3.21.12-3_amd64.deb) rots: Debian point-releases bump the
+    # revision suffix (-3 → -3+b1 → -16) and drop the old file → 404. The SONAME
+    # is unchanged across revisions of one upstream version (libprotoc.so.32,
+    # libgrpc++.so.1.51), so any revision of 3.21.12 / 1.51.1 is ABI-compatible
+    # with the (same-upstream) arm64 sysroot — exactly what the codegen needs.
+    #
+    # Each entry: "<pool-subdir> <name>_<upstream-prefix>". The upstream prefix
+    # is anchored so e.g. libgrpc29 never matches libgrpc++1.51.
+    SPECS=(
+        "p/protobuf protobuf-compiler_3.21.12"
+        "p/protobuf libprotoc32_3.21.12"
+        "p/protobuf libprotobuf32_3.21.12"
+        "g/grpc protobuf-compiler-grpc_1.51.1"
+        "g/grpc libgrpc++1.51_1.51.1"
+        "g/grpc libgrpc29_1.51.1"
+        # NB: libgpr is no longer a separate package — newer grpc revisions bundle
+        # libgpr.so into libgrpc29, so do not fetch libgpr29 (it 404s in the pool).
+        "a/abseil libabsl20220623_20220623.1"
+        "r/re2 libre2-9_2022"
+        "c/c-ares libc-ares2_1.18"
     )
-    for url in "${DEBS[@]}"; do
-        f="$cgtmp/$(basename "$url")"
-        curl -fsSL "$url" -o "$f" || { err "fetch failed: $url"; exit 3; }
+    for spec in "${SPECS[@]}"; do
+        subdir="${spec%% *}"; prefix="${spec##* }"
+        # List the pool dir, keep amd64 debs whose name starts with the prefix,
+        # version-sort, take the newest.
+        fname="$(curl -fsSL "$BW/$subdir/" 2>/dev/null \
+            | grep -oE "${prefix//+/\\+}[^\"]*_amd64\.deb" \
+            | sort -V | tail -1)"
+        if [[ -z "$fname" ]]; then
+            err "could not resolve a .deb for '$prefix' in pool/main/$subdir"
+            exit 3
+        fi
+        f="$cgtmp/$fname"
+        curl -fsSL "$BW/$subdir/$fname" -o "$f" || { err "fetch failed: $BW/$subdir/$fname"; exit 3; }
         dpkg-deb -x "$f" "$cgtmp/root"
     done
     cp "$cgtmp/root/usr/bin/protoc"          "$CG_DIR/bin/"
     cp "$cgtmp/root/usr/bin/grpc_cpp_plugin" "$CG_DIR/bin/"
-    # protoc bundles the well-known protos (google/protobuf/*.proto) it needs on
-    # its import path; ship them so etcd's gogoproto imports resolve.
-    cp -r "$cgtmp/root/usr/include" "$CG_DIR/"
+    # The well-known protos (google/protobuf/*.proto) must be on protoc's import
+    # path so etcd's `.proto`s (which import google/protobuf/* + gogoproto) resolve.
+    # The protobuf-compiler deb does NOT ship them under /usr/include (that's
+    # libprotobuf-dev) — but the arm64 SYSROOT already has them (same upstream
+    # 3.21.12), so copy from there. gogoproto comes vendored in the etcd tree.
+    mkdir -p "$CG_DIR/include"
+    if [[ -d "$TARGET/usr/include/google/protobuf" ]]; then
+        cp -r "$TARGET/usr/include/google" "$CG_DIR/include/"
+    elif [[ -d "$cgtmp/root/usr/include/google" ]]; then
+        cp -r "$cgtmp/root/usr/include/google" "$CG_DIR/include/"
+    else
+        err "WARN: google/protobuf well-known protos not found (sysroot or deb) — "\
+"etcd cross-codegen may fail on google/protobuf imports"
+    fi
     # the .so closure both bins dlopen/link (libprotoc, libgrpc_plugin_support,
     # the abseil/grpc/protobuf/re2/c-ares runtimes).
     find "$cgtmp/root/usr/lib" -name '*.so*' -exec cp -P {} "$CG_DIR/lib/" \;

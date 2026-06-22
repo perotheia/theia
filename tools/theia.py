@@ -1153,11 +1153,21 @@ def _emit_manifest_build_files(mdir: Path, machines: list[str]) -> None:
     import json as _json
 
     # Repo-qualify a process `executable` label the way dist_ipk.bzl's
-    # ALL_BINARIES does: framework services/platform live in @pero_theia, the app
-    # binaries in the ROOT/consuming module (@@). A bare `//services/...` from a
-    # consuming workspace would resolve against @pero_theia, so qualify it.
+    # ALL_BINARIES does: FRAMEWORK binaries live in @pero_theia, a consuming
+    # workspace's OWN binaries in the ROOT module (@@). A bare `//services/...`
+    # from a consuming workspace would resolve against @pero_theia, so qualify it.
+    #
+    # The framework owns ALL of //services/* but only the platform SUBDIRS it
+    # actually ships: runtime/supervisor/proto/config. A consuming workspace may
+    # carry its OWN //platform/<x> (e.g. gateway_ws's //platform/gateway — the
+    # gateway lives in the private ws because it has PSP deps that can't be
+    # exposed in the framework). Those are LOCAL (@@), NOT @pero_theia. So match
+    # the real framework platform packages, not every `//platform/`.
+    _FRAMEWORK_PLATFORM = ("//platform/runtime", "//platform/supervisor",
+                           "//platform/proto", "//platform/config")
     def _qualify(label: str) -> str:
-        if label.startswith("//services/") or label.startswith("//platform/"):
+        if label.startswith("//services/") or \
+                any(label.startswith(p) for p in _FRAMEWORK_PLATFORM):
             return "@pero_theia" + label
         return "@@" + label if label.startswith("//") else label
 

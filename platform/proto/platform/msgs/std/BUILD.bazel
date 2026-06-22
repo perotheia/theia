@@ -1,0 +1,28 @@
+# Generated nanopb sources for the platform.msgs.std package (ROS std_msgs
+# analogue: Header + SI-unit value types). .pb.{c,h} produced by the genrule
+# from std.proto; not committed. std has NO cross-package imports, so the genrule
+# uses the package dir as the include root (same as a leaf FC proto).
+
+package(default_visibility = ["//visibility:public"])
+
+genrule(
+    name = "std_pb",
+    srcs = [
+        "std.proto",
+        "std.options",
+    ],
+    outs = [
+        "std.pb.c",
+        "std.pb.h",
+    ],
+    cmd = "set -e;"
+        + " in_dir=$$(dirname $(location std.proto));"
+        + " out_dir=$$(dirname $(location std.pb.c));"
+        + " nanopb_generator -I $$in_dir -D $$out_dir std.proto;",
+    local = True,
+)
+
+filegroup(name = "std_pb_c", srcs = ["std.pb.c"])
+filegroup(name = "std_pb_h", srcs = ["std.pb.h"])
+filegroup(name = "std_proto", srcs = ["std.proto"])
+filegroup(name = "std_options", srcs = ["std.options"])

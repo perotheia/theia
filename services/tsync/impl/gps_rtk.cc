@@ -21,12 +21,14 @@
 #include "impl/gps_backend.hpp"
 
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <string>
 #include <vector>
 
 #include <fcntl.h>
+#include <termios.h>
 #include <unistd.h>
 
 namespace ara::tsync {
@@ -34,6 +36,48 @@ namespace ara::tsync {
 namespace {
 
 constexpr const char* kDefaultDev = "/dev/serial0";
+
+// The ZED-F9P UART1 baud the receiver is configured for (SparkFun default that
+// we set in CFG-UART1-BAUDRATE). Overridable at runtime via THEIA_GPS_BAUD so a
+// re-flashed receiver doesn't need a rebuild. The earlier driver assumed the
+// port was pre-set; on a fresh /dev/serial0 it defaults to 9600 → garbage, so
+// we set the line discipline here.
+constexpr speed_t kDefaultBaud = B38400;
+
+speed_t baud_constant(long b) {
+    switch (b) {
+        case 9600:   return B9600;
+        case 19200:  return B19200;
+        case 38400:  return B38400;
+        case 57600:  return B57600;
+        case 115200: return B115200;
+        case 230400: return B230400;
+        case 460800: return B460800;
+        case 921600: return B921600;
+        default:     return 0;   // unknown → caller keeps kDefaultBaud
+    }
+}
+
+// Put the serial fd into raw 8N1 at the configured baud. No-op (returns true)
+// on a non-tty (e.g. a regression test feeding a regular file). Best-effort:
+// failure to set termios is logged via the fix note, not fatal.
+bool configure_serial(int fd) {
+    if (!::isatty(fd)) return true;   // file/pipe under test — nothing to set
+    struct termios tio;
+    if (::tcgetattr(fd, &tio) != 0) return false;
+    ::cfmakeraw(&tio);
+    speed_t baud = kDefaultBaud;
+    if (const char* env = std::getenv("THEIA_GPS_BAUD")) {
+        speed_t c = baud_constant(std::strtol(env, nullptr, 10));
+        if (c) baud = c;
+    }
+    ::cfsetispeed(&tio, baud);
+    ::cfsetospeed(&tio, baud);
+    tio.c_cflag |= (CLOCAL | CREAD);
+    tio.c_cc[VMIN]  = 0;     // non-blocking read (we poll with O_NONBLOCK too)
+    tio.c_cc[VTIME] = 0;
+    return ::tcsetattr(fd, TCSANOW, &tio) == 0;
+}
 
 uint16_t rd_u16(const uint8_t* p) { return p[0] | (p[1] << 8); }
 int32_t  rd_i32(const uint8_t* p) {
@@ -73,8 +117,15 @@ GnssFix GpsBackend::poll(const std::string& dev_in) {
     GnssFix f;
     const std::string dev = dev_in.empty() ? kDefaultDev : dev_in;
 
-    int fd = ::open(dev.c_str(), O_RDONLY | O_NONBLOCK);
+    // O_RDWR (not O_RDONLY): tcsetattr needs write access to the tty to set the
+    // baud/line discipline. O_NOCTTY so the serial port never becomes our
+    // controlling terminal.
+    int fd = ::open(dev.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK);
     if (fd < 0) { f.note = "rtk: open(" + dev + ") failed"; return f; }
+    if (!configure_serial(fd)) {
+        f.note = "rtk: tcsetattr(" + dev + ") failed (baud not set)";
+        // keep going — a pre-configured port may still yield data
+    }
 
     std::vector<uint8_t> buf;
     uint8_t rd[2048];
@@ -111,6 +162,25 @@ GnssFix GpsBackend::poll(const std::string& dev_in) {
     f.lat = rd_i32(found + 28) * 1e-7;
     f.alt = rd_i32(found + 36) * 1e-3;            // hMSL mm → m
     f.rtk_fix = (carrSoln != 0);
+
+    // Position accuracy (NAV-PVT off 40 U4 hAcc, 44 U4 vAcc — mm, 1-sigma).
+    f.h_acc_m = static_cast<uint32_t>(rd_i32(found + 40)) * 1e-3;
+    f.v_acc_m = static_cast<uint32_t>(rd_i32(found + 44)) * 1e-3;
+
+    // Velocity + heading (off 48 I4 velN, 52 I4 velE, 56 I4 velD — mm/s;
+    // 60 I4 gSpeed mm/s; 64 I4 headMot 1e-5 deg; 68 U4 sAcc mm/s;
+    // 72 U4 headAcc 1e-5 deg). Present on any 2D/3D fix (carrSoln not required).
+    if (fixType >= 2) {
+        f.velocity_valid  = true;
+        f.vel_n           = rd_i32(found + 48) * 1e-3;
+        f.vel_e           = rd_i32(found + 52) * 1e-3;
+        f.vel_d           = rd_i32(found + 56) * 1e-3;
+        f.ground_speed    = rd_i32(found + 60) * 1e-3;
+        f.heading_deg     = rd_i32(found + 64) * 1e-5;
+        f.speed_acc_m_s   = static_cast<uint32_t>(rd_i32(found + 68)) * 1e-3;
+        f.heading_acc_deg = static_cast<uint32_t>(rd_i32(found + 72)) * 1e-5;
+    }
+
     if (utc && fixType >= 2) {
         f.valid = true; f.utc_ns = utc;
         f.note = std::string("rtk fix type=") + std::to_string(fixType) +

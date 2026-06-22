@@ -49,12 +49,18 @@ using OffsetReq = system_services_tsync_OffsetReq;
 using OffsetReply = system_services_tsync_OffsetReply;
 using GmInfoReq = system_services_tsync_GmInfoReq;
 using GrandmasterReply = system_services_tsync_GrandmasterReply;
+using NavSatFix = platform_msgs_sensor_NavSatFix;
+using Odometry = platform_msgs_nav_Odometry;
 
 
 
 // One subscriber on every sender-port broadcast. Free-function so
 // the daemon doesn't care whether delivery is in-process, TIPC, or
 // gRPC. Subscribers MUST be best-effort.
+using NavsatfixFixSubscriber =
+    std::function<void(const NavSatFix&)>;
+using Gnss_odomOdomSubscriber =
+    std::function<void(const Odometry&)>;
 
 
 class TsyncCtl : public ::theia::runtime::GenServer<TsyncCtl, TsyncCtlState> {
@@ -103,6 +109,16 @@ public:
 
 
     // ---- Subscriber registration ----------------------------------
+
+    // navsatfix.fix broadcast subscribers.
+    uint32_t subscribe_navsatfix_fix(
+        NavsatfixFixSubscriber s);
+    void     unsubscribe_navsatfix_fix(uint32_t id);
+
+    // gnss_odom.odom broadcast subscribers.
+    uint32_t subscribe_gnss_odom_odom(
+        Gnss_odomOdomSubscriber s);
+    void     unsubscribe_gnss_odom_odom(uint32_t id);
 
 
     // ---- GenServer plumbing: terminate default
@@ -171,13 +187,97 @@ public:
 
     // ---- send helpers — bodies in impl (the broadcast fan-out)
 
+    void broadcast_navsatfix_fix(const NavSatFix& msg);
+
+    void broadcast_gnss_odom_odom(const Odometry& msg);
+
 
 private:
+
+    struct NavsatfixFixEntry {
+        uint32_t id;
+        NavsatfixFixSubscriber fn;
+    };
+    std::mutex navsatfix_fix_mu_;
+    uint32_t navsatfix_fix_next_id_{1};
+    std::vector<NavsatfixFixEntry>
+        navsatfix_fix_subs_;
+
+    struct Gnss_odomOdomEntry {
+        uint32_t id;
+        Gnss_odomOdomSubscriber fn;
+    };
+    std::mutex gnss_odom_odom_mu_;
+    uint32_t gnss_odom_odom_next_id_{1};
+    std::vector<Gnss_odomOdomEntry>
+        gnss_odom_odom_subs_;
 
 };
 
 // Subscriber registration — defined in the lib slice (not impl) so
 // it stays auto-generated. The user touches handle_* in impl.
+
+inline uint32_t TsyncCtl::subscribe_navsatfix_fix(
+        NavsatfixFixSubscriber s) {
+    std::lock_guard<std::mutex> lk(navsatfix_fix_mu_);
+    uint32_t id = navsatfix_fix_next_id_++;
+    navsatfix_fix_subs_.push_back({id, std::move(s)});
+    return id;
+}
+
+inline void TsyncCtl::unsubscribe_navsatfix_fix(uint32_t id) {
+    std::lock_guard<std::mutex> lk(navsatfix_fix_mu_);
+    auto& v = navsatfix_fix_subs_;
+    v.erase(std::remove_if(v.begin(), v.end(),
+              [id](const auto& e) { return e.id == id; }), v.end());
+}
+
+inline void TsyncCtl::broadcast_navsatfix_fix(const NavSatFix& msg) {
+    std::vector<NavsatfixFixEntry> snap;
+    {
+        std::lock_guard<std::mutex> lk(navsatfix_fix_mu_);
+        snap = navsatfix_fix_subs_;
+    }
+    for (const auto& e : snap) {
+        try { e.fn(msg); }
+        catch (...) {
+            std::fprintf(stderr,
+                "[%s] subscriber %u threw on navsatfix.fix — dropping\n",
+                kNodeName, e.id);
+        }
+    }
+}
+
+inline uint32_t TsyncCtl::subscribe_gnss_odom_odom(
+        Gnss_odomOdomSubscriber s) {
+    std::lock_guard<std::mutex> lk(gnss_odom_odom_mu_);
+    uint32_t id = gnss_odom_odom_next_id_++;
+    gnss_odom_odom_subs_.push_back({id, std::move(s)});
+    return id;
+}
+
+inline void TsyncCtl::unsubscribe_gnss_odom_odom(uint32_t id) {
+    std::lock_guard<std::mutex> lk(gnss_odom_odom_mu_);
+    auto& v = gnss_odom_odom_subs_;
+    v.erase(std::remove_if(v.begin(), v.end(),
+              [id](const auto& e) { return e.id == id; }), v.end());
+}
+
+inline void TsyncCtl::broadcast_gnss_odom_odom(const Odometry& msg) {
+    std::vector<Gnss_odomOdomEntry> snap;
+    {
+        std::lock_guard<std::mutex> lk(gnss_odom_odom_mu_);
+        snap = gnss_odom_odom_subs_;
+    }
+    for (const auto& e : snap) {
+        try { e.fn(msg); }
+        catch (...) {
+            std::fprintf(stderr,
+                "[%s] subscriber %u threw on gnss_odom.odom — dropping\n",
+                kNodeName, e.id);
+        }
+    }
+}
 
 
 

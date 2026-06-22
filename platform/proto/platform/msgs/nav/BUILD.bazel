@@ -1,0 +1,36 @@
+# Generated nanopb sources for the platform.msgs.nav package. nav.proto imports
+# platform/msgs/{std,geometry}.proto, so nanopb runs with -I <bin>/platform/proto
+# and is handed the imported protos + .options. .pb.{c,h} not committed.
+
+package(default_visibility = ["//visibility:public"])
+
+genrule(
+    name = "nav_pb",
+    srcs = [
+        "nav.proto",
+        "nav.options",
+        "//platform/proto/platform/msgs/std:std_proto",
+        "//platform/proto/platform/msgs/std:std_options",
+        "//platform/proto/platform/msgs/geometry:geometry_proto",
+        "//platform/proto/platform/msgs/geometry:geometry_options",
+    ],
+    outs = [
+        "nav.pb.c",
+        "nav.pb.h",
+    ],
+    cmd = "set -e;"
+        + " src=$(location nav.proto);"
+        + " root=$${src%/platform/msgs/nav/nav.proto};"
+        + " out_dir=$$(dirname $(location nav.pb.c));"
+        + " nanopb_generator -I $$root -D $$out_dir"
+        + "   platform/msgs/nav/nav.proto;"
+        + " if [ -f $$out_dir/platform/msgs/nav/nav.pb.c ]; then"
+        + "   mv $$out_dir/platform/msgs/nav/nav.pb.* $$out_dir/;"
+        + " fi;",
+    local = True,
+)
+
+filegroup(name = "nav_pb_c", srcs = ["nav.pb.c"])
+filegroup(name = "nav_pb_h", srcs = ["nav.pb.h"])
+filegroup(name = "nav_proto", srcs = ["nav.proto"])
+filegroup(name = "nav_options", srcs = ["nav.options"])

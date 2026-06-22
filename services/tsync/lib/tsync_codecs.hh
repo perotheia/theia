@@ -26,6 +26,8 @@
 #include "RemoteCodec.hh"   // THEIA_DECLARE_REMOTE_CODEC
 #include "system/services/tsync/tsync.pb.h"
 
+#include "platform/msgs/sensor/sensor.pb.h"
+#include "platform/msgs/nav/nav.pb.h"
 
 
 
@@ -39,3 +41,5 @@ THEIA_DECLARE_REMOTE_CODEC(system_services_tsync_OffsetReq)
 THEIA_DECLARE_REMOTE_CODEC(system_services_tsync_OffsetReply)
 THEIA_DECLARE_REMOTE_CODEC(system_services_tsync_GmInfoReq)
 THEIA_DECLARE_REMOTE_CODEC(system_services_tsync_GrandmasterReply)
+THEIA_DECLARE_REMOTE_CODEC(platform_msgs_sensor_NavSatFix)
+THEIA_DECLARE_REMOTE_CODEC(platform_msgs_nav_Odometry)

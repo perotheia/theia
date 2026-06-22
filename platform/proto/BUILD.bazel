@@ -37,6 +37,10 @@ filegroup(
         "//platform/proto/system/services/tsync:tsync.proto",
         "//platform/proto/system/services/ucm:ucm.proto",
         "//platform/proto/system/supervisor:supervisor.proto",
+        "//platform/proto/platform/msgs/std:std_proto",
+        "//platform/proto/platform/msgs/geometry:geometry_proto",
+        "//platform/proto/platform/msgs/sensor:sensor_proto",
+        "//platform/proto/platform/msgs/nav:nav_proto",
     ],
     visibility = ["//visibility:public"],
 )
@@ -62,6 +66,13 @@ cc_library(
         "//platform/proto/system/services/tsync:tsync_pb_c",
         "//platform/proto/system/services/ucm:ucm_pb_c",
         "//platform/proto/system/supervisor:supervisor_pb_c",
+        # ROS-shaped common message packages (platform.msgs.*) — std/geometry
+        # are deps of sensor/nav. tsync's NavSatFix/Odometry streams are the
+        # first consumer.
+        "//platform/proto/platform/msgs/std:std_pb_c",
+        "//platform/proto/platform/msgs/geometry:geometry_pb_c",
+        "//platform/proto/platform/msgs/sensor:sensor_pb_c",
+        "//platform/proto/platform/msgs/nav:nav_pb_c",
     ],
     hdrs = [
         "//platform/proto/system/services/com:com_pb_h",
@@ -82,6 +93,10 @@ cc_library(
         "//platform/proto/system/services/tsync:tsync_pb_h",
         "//platform/proto/system/services/ucm:ucm_pb_h",
         "//platform/proto/system/supervisor:supervisor_pb_h",
+        "//platform/proto/platform/msgs/std:std_pb_h",
+        "//platform/proto/platform/msgs/geometry:geometry_pb_h",
+        "//platform/proto/platform/msgs/sensor:sensor_pb_h",
+        "//platform/proto/platform/msgs/nav:nav_pb_h",
     ],
     # platform/proto is the include root: callers write
     # #include "gateway/system/status.pb.h"

@@ -68,6 +68,81 @@ void maybe_discipline(TsyncCtl& self, TsyncCtlState& s, uint64_t gps_utc_ns) {
     }
 }
 
+// --- ROS-shaped GNSS broadcasts -------------------------------------------
+//
+// Re-publish a valid fix as NavSatFix (position) + Odometry (velocity+heading)
+// for a localization/fusion app. Both are senderReceiver broadcasts; the
+// in-process broadcast_* fan-out delivers to subscribers. A camera/fusion FC
+// that wants them over TIPC subscribes via the probe/com path (same model as
+// shwa's AccelTelemetry). The covariance diagonals come from the receiver's
+// reported 1-sigma accuracies (variance = sigma^2); off-diagonals stay 0 and
+// covariance_type = APPROXIMATED.
+void publish_gnss(TsyncCtl& self, const GnssFix& fix, uint64_t now) {
+    // ---- NavSatFix (position) ----
+    NavSatFix nf = platform_msgs_sensor_NavSatFix_init_zero;
+    nf.has_header = true;
+    nf.header.timestamp_ns = fix.utc_ns ? fix.utc_ns : now;
+    std::snprintf(nf.header.frame_id, sizeof(nf.header.frame_id), "gps");
+    nf.status    = fix.rtk_fix
+        ? platform_msgs_sensor_NavSatStatus_NavSatStatus_STATUS_GBAS_FIX
+        : platform_msgs_sensor_NavSatStatus_NavSatStatus_STATUS_FIX;
+    nf.latitude  = fix.lat;
+    nf.longitude = fix.lon;
+    nf.altitude  = fix.alt;
+    // 3x3 ENU covariance: variance on the diagonal from hAcc (E,N) / vAcc (U).
+    nf.position_covariance_count = 9;
+    const double hv = fix.h_acc_m * fix.h_acc_m;
+    const double vv = fix.v_acc_m * fix.v_acc_m;
+    nf.position_covariance[0] = hv;   // E
+    nf.position_covariance[4] = hv;   // N
+    nf.position_covariance[8] = vv;   // U
+    nf.position_covariance_type =
+        (fix.h_acc_m > 0.0)
+            ? platform_msgs_sensor_NavSatCovarianceType_NavSatCovarianceType_COVARIANCE_TYPE_DIAGONAL_KNOWN
+            : platform_msgs_sensor_NavSatCovarianceType_NavSatCovarianceType_COVARIANCE_TYPE_UNKNOWN;
+    self.broadcast_navsatfix_fix(nf);
+
+    if (!fix.velocity_valid) return;
+
+    // ---- Odometry (velocity + heading) ----
+    // pose carries the same geodetic position (WGS84, not a metric local frame in
+    // v1); twist.linear is the NED velocity (m/s) in child_frame_id "gps".
+    // twist.angular stays 0 (a single-antenna receiver reports no body rates).
+    Odometry od = platform_msgs_nav_Odometry_init_zero;
+    od.has_header = true;
+    od.header.timestamp_ns = fix.utc_ns ? fix.utc_ns : now;
+    std::snprintf(od.header.frame_id, sizeof(od.header.frame_id), "map");
+    std::snprintf(od.child_frame_id, sizeof(od.child_frame_id), "gps");
+    od.has_pose = true;
+    od.pose.has_pose = true;
+    od.pose.pose.has_position = true;
+    od.pose.pose.position.x = fix.lon;   // geodetic; consumer fuses NavSatFix instead
+    od.pose.pose.position.y = fix.lat;
+    od.pose.pose.position.z = fix.alt;
+    od.has_twist = true;
+    od.twist.has_twist = true;
+    od.twist.twist.has_linear = true;
+    od.twist.twist.linear.x = fix.vel_e;   // ENU-ish: x=East, y=North, z=Up(-down)
+    od.twist.twist.linear.y = fix.vel_n;
+    od.twist.twist.linear.z = -fix.vel_d;
+    od.twist.twist.has_angular = true;     // zeroed
+    // 6x6 twist covariance: linear variances from sAcc (split across the 3 axes
+    // as an isotropic approximation); angular unknown (-1 on the diagonal).
+    od.twist.covariance_count = 36;
+    const double sv = fix.speed_acc_m_s * fix.speed_acc_m_s;
+    od.twist.covariance[0]  = sv;   // vx
+    od.twist.covariance[7]  = sv;   // vy
+    od.twist.covariance[14] = sv;   // vz
+    od.twist.covariance[21] = -1.0; // roll rate unknown
+    od.twist.covariance[28] = -1.0; // pitch rate unknown
+    od.twist.covariance[35] = -1.0; // yaw rate unknown
+    self.broadcast_gnss_odom_odom(od);
+}
+
+}  // namespace
+
+namespace {
+
 // One status poll → update State. ACQUIRE from GPS first (the source on central);
 // if there's no GPS fix, fall through to the PTP backend (the slave lock on
 // compute). Logs only on a STATE EDGE; a downward edge from LOCKED is the loss-of-
@@ -87,6 +162,7 @@ void poll_once(TsyncCtl& self, TsyncCtlState& s) {
                         (fix.rtk_fix ? " RTK" : "");
         s.interface   = "";
         s.message     = fix.note;
+        publish_gnss(self, fix, now);   // ROS-shaped NavSatFix + Odometry
     } else if (s.last_fix_ns && now - s.last_fix_ns <
                (uint64_t)s.gps_fix_timeout_ms * 1000000ULL) {
         // Recent fix lost momentarily — hold GPS HOLDOVER (free-run) until timeout.

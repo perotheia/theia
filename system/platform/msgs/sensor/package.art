@@ -8,12 +8,14 @@
 // msgs.geometry.{Quaternion,Vector3}, so this package imports both;
 // cross-package refs qualify in the proto via the imports.
 //
-// Variable-length fields (Image.data, the fixed-size covariance/intrinsic
-// matrices) are bounded inline with [max_size:N] / [max_count:N] so nanopb
-// renders them as fixed in-struct arrays — no pb_callback_t, no heap — the
-// same constraint the TIPC transport places on every wire message. A frame
-// exceeding a bound is truncated at encode time, never an overrun. Image.data
-// is capped at 2 MiB (a 1024x512 RGB frame); raise per the sensor if needed.
+// The fixed-size matrices (covariance, intrinsics) are bounded inline with
+// [max_count:N] so nanopb renders them as in-struct arrays — no pb_callback_t,
+// no heap — the same constraint the TIPC transport places on every wire message.
+// Image.data is the exception: a multi-MiB frame cannot be a fixed in-struct
+// member (nanopb caps a single field at 64 KiB without PB_FIELD_32BIT, and a
+// 2 MiB struct on every node is wrong anyway), so it is a [callback] — the
+// producer streams the bytes. A camera FC that needs raw frames over TIPC sets
+// the callback; consumers that only want NavSatFix/Imu never touch it.
 
 package platform.msgs.sensor
 
@@ -32,7 +34,7 @@ message Image {
     string encoding [max_size:16]
     bool   is_bigendian
     uint32 step
-    bytes  data [max_size:2097152]        // row-major, `step` * `height` bytes
+    bytes  data [callback]                // row-major, `step` * `height` bytes — streamed
 }
 
 // Pinhole-camera intrinsics for the image stream from this frame_id. The

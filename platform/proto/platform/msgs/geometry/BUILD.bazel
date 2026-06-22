@@ -1,0 +1,43 @@
+# Generated nanopb sources for the platform.msgs.geometry package (ROS
+# geometry_msgs analogue: Vector3/Point/Quaternion/Pose/Twist/Transform).
+# geometry.proto imports platform/msgs/std/std.proto, so nanopb runs with
+# -I <bin>/platform/proto (the bundled proto root) and is handed the imported
+# std.proto + .options staged at their import path. .pb.{c,h} not committed.
+
+package(default_visibility = ["//visibility:public"])
+
+genrule(
+    name = "geometry_pb",
+    srcs = [
+        "geometry.proto",
+        "geometry.options",
+        "//platform/proto/platform/msgs/std:std_proto",
+        "//platform/proto/platform/msgs/std:std_options",
+    ],
+    outs = [
+        "geometry.pb.c",
+        "geometry.pb.h",
+    ],
+    # The proto ROOT is platform/proto: geometry.proto lives at
+    # platform/proto/platform/msgs/geometry/geometry.proto and imports
+    # "platform/msgs/std/std.proto". Derive the root by stripping the package
+    # path-suffix from the source file's dir, then run nanopb with -I <root> and
+    # the import-relative target path.
+    cmd = "set -e;"
+        + " src=$(location geometry.proto);"
+        + " root=$${src%/platform/msgs/geometry/geometry.proto};"
+        + " out_dir=$$(dirname $(location geometry.pb.c));"
+        + " nanopb_generator -I $$root -D $$out_dir"
+        + "   platform/msgs/geometry/geometry.proto;"
+        # nanopb emits geometry.pb.{c,h} under out_dir/platform/msgs/geometry/;
+        # flatten to the package dir the outs declare.
+        + " if [ -f $$out_dir/platform/msgs/geometry/geometry.pb.c ]; then"
+        + "   mv $$out_dir/platform/msgs/geometry/geometry.pb.* $$out_dir/;"
+        + " fi;",
+    local = True,
+)
+
+filegroup(name = "geometry_pb_c", srcs = ["geometry.pb.c"])
+filegroup(name = "geometry_pb_h", srcs = ["geometry.pb.h"])
+filegroup(name = "geometry_proto", srcs = ["geometry.proto"])
+filegroup(name = "geometry_options", srcs = ["geometry.options"])

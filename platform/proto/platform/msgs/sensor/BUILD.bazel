@@ -1,0 +1,36 @@
+# Generated nanopb sources for the platform.msgs.sensor package. sensor.proto imports
+# platform/msgs/{std,geometry}.proto, so nanopb runs with -I <bin>/platform/proto
+# and is handed the imported protos + .options. .pb.{c,h} not committed.
+
+package(default_visibility = ["//visibility:public"])
+
+genrule(
+    name = "sensor_pb",
+    srcs = [
+        "sensor.proto",
+        "sensor.options",
+        "//platform/proto/platform/msgs/std:std_proto",
+        "//platform/proto/platform/msgs/std:std_options",
+        "//platform/proto/platform/msgs/geometry:geometry_proto",
+        "//platform/proto/platform/msgs/geometry:geometry_options",
+    ],
+    outs = [
+        "sensor.pb.c",
+        "sensor.pb.h",
+    ],
+    cmd = "set -e;"
+        + " src=$(location sensor.proto);"
+        + " root=$${src%/platform/msgs/sensor/sensor.proto};"
+        + " out_dir=$$(dirname $(location sensor.pb.c));"
+        + " nanopb_generator -I $$root -D $$out_dir"
+        + "   platform/msgs/sensor/sensor.proto;"
+        + " if [ -f $$out_dir/platform/msgs/sensor/sensor.pb.c ]; then"
+        + "   mv $$out_dir/platform/msgs/sensor/sensor.pb.* $$out_dir/;"
+        + " fi;",
+    local = True,
+)
+
+filegroup(name = "sensor_pb_c", srcs = ["sensor.pb.c"])
+filegroup(name = "sensor_pb_h", srcs = ["sensor.pb.h"])
+filegroup(name = "sensor_proto", srcs = ["sensor.proto"])
+filegroup(name = "sensor_options", srcs = ["sensor.options"])

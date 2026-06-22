@@ -19,6 +19,14 @@
 
 package system.services.tsync
 
+// ROS-shaped sensor/nav payloads the RTK receiver feeds an autonomy stack:
+// NavSatFix (position) + Odometry/Twist (velocity+heading). The GNSS driver
+// (UBX-NAV-PVT) carries all of it in one frame; TsyncCtl re-publishes it.
+import system.platform.msgs.sensor.*    // NavSatFix, NavSatStatus, NavSatCovarianceType
+import system.platform.msgs.nav.*       // Odometry, TwistWithCovariance
+import system.platform.msgs.geometry.*  // Twist, Vector3 (embedded by Odometry)
+import system.platform.msgs.std.*       // Header
+
 // ─── Sync state + source ───────────────────────────────────────────────────
 
 // The clock's discipline state — what a consumer checks before trusting the
@@ -123,6 +131,30 @@ interface clientServer TsyncCtlIf {
     operation GetGrandmasterInfo(in r: GmInfoReq)          returns GrandmasterReply
 }
 
+// ─── GNSS data streams (ROS-shaped pub/sub) ─────────────────────────────────
+//
+// On each poll TsyncCtl re-publishes the RTK receiver's fix as ROS-compatible
+// payloads — senderReceiver (fire-and-forget broadcast), the same pattern as
+// shwa's AccelTelemetry. A localization/fusion app subscribes; nothing is
+// required of TsyncCtl's time-discipline path (these are a parallel output).
+//
+// NavSatFix = position (lat/lon/alt + ENU covariance from the receiver's
+// hAcc/vAcc). Only emitted when the fix is valid.
+interface senderReceiver GnssFixStream {
+    data NavSatFix fix
+}
+
+// Odometry = velocity + heading. UBX-NAV-PVT gives NED velocity + ground speed +
+// heading-of-motion; we map it to nav.Odometry — pose.position carries the same
+// lat/lon/alt (WGS84, NOT a metric local frame in v1), twist.linear is the NED
+// velocity (m/s) in child_frame_id, twist.angular left zero (a single-antenna
+// receiver has no body angular rate). Covariance diagonals from sAcc/headAcc.
+// A localization node typically consumes the twist (velocity) and ignores the
+// geodetic pose, fusing NavSatFix for position instead.
+interface senderReceiver GnssOdomStream {
+    data Odometry odom
+}
+
 // ─── Nodes ─────────────────────────────────────────────────────────────────
 //
 // The {Provider; Controller} standard shape (same as composition Rds): the
@@ -192,5 +224,9 @@ node atomic TsyncCtl {
     config TsyncConfig
     ports {
         server status provides TsyncCtlIf
+        // ROS-shaped GNSS broadcasts (RTK variant fills them; NMEA/fake emit
+        // position-only / nothing). A fusion app subscribes.
+        sender navsatfix provides GnssFixStream
+        sender gnss_odom provides GnssOdomStream
     }
 }

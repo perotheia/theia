@@ -183,6 +183,16 @@ def cmd_orchestrate(args: list[str]) -> int:
     return _ansible("orchestrate.yml", machine, rest)
 
 
+def cmd_cleanup(args: list[str]) -> int:
+    """Uninstall any prior Theia from a rig (the inverse of provision+orchestrate).
+    `theia cleanup <machine> [ansible-args...]`. Stops the supervisor, removes
+    /opt/theia + the dpkg bundle + the systemd units; keeps etcd/Mender data
+    unless `-e wipe_etcd=true` / `-e wipe_mender=true`. Run before re-rolling a
+    box onto a different stack (e.g. wiping a Pi to install gateway_ws)."""
+    machine, rest = _split_machine(args)
+    return _ansible("cleanup.yml", machine, rest)
+
+
 def _bazel_root() -> Path:
     """The dir bazel builds run in. A consuming workspace with its OWN
     MODULE.bazel (e.g. gataway_ws → @pero_theia) builds in place; an empty /
@@ -2272,6 +2282,7 @@ COMMANDS = {
     "rig":         (cmd_rig,         "docker compose {up|down} the deploy stack"),
     "provision":   (cmd_provision,   "ansible — Phase 1 (os pkgs + Mender)"),
     "orchestrate": (cmd_orchestrate, "ansible — Phase 2 remote app rollout"),
+    "cleanup":     (cmd_cleanup,     "ansible — uninstall a prior Theia from a rig"),
     "install":     (cmd_install,     "build + populate install/<machine>/ (local host)"),
     "stage-local": (cmd_install,     "alias for `install` (back-compat)"),
     "start":       (cmd_start,       "run the staged supervisor from install/<machine>/ (detached + pidfile)"),

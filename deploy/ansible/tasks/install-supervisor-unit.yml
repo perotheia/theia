@@ -1,0 +1,31 @@
+# install-supervisor-unit.yml — boot-time autostart for a baremetal rig. Ships
+# run-supervisor.sh to /opt/theia + installs the theia-supervisor.service unit
+# that exec's it. Use for a headless outdoor Pi (reached only over VPN) that must
+# come up on power-on. NOT for the docker-compose path (run-supervisor.sh is the
+# container entrypoint there).
+#
+# Run via a deploy play, or:
+#   ansible-playbook orchestrate.yml -l <host> -e machine=<m> -e autostart=true
+- name: "Ship run-supervisor.sh to the rig"
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../run-supervisor.sh"
+    dest: /opt/theia/run-supervisor.sh
+    mode: "0755"
+
+- name: "Render the theia-supervisor.service unit"
+  ansible.builtin.template:
+    src: templates/theia-supervisor.service.j2
+    dest: /etc/systemd/system/theia-supervisor.service
+    mode: "0644"
+  register: _unit
+
+- name: "Reload systemd + enable the unit"
+  ansible.builtin.systemd:
+    name: theia-supervisor.service
+    daemon_reload: true
+    enabled: true
+
+- name: "Start (or restart on unit change) the supervisor"
+  ansible.builtin.systemd:
+    name: theia-supervisor.service
+    state: "{{ 'restarted' if _unit.changed else 'started' }}"

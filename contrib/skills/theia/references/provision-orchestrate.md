@@ -1,99 +1,74 @@
-# Provisioning & orchestration
+# Provisioning & orchestration (the handoff build→deploy flow)
 
-Stage 4 of the [pipeline](artheia-gen-system.md). Once Bazel has produced
-per-machine `.ipk` bundles + `executor.yaml` + `machines.yaml`, Puppet
-(or `tools/deploy_rpi4.sh` for bare metal) installs them and brings the
-stack up. There are two real paths today: the **Docker compose dev rig**
-(end-to-end working) and the **bare-metal Pi 4 push** (working for the
-gateway). The bare-metal Puppet body for production targets is still
-aspirational scaffolding.
+Stage 4 of the [pipeline](artheia-gen-system.md): once the `.art` is generated
+and the FCs build, this is how a rig reaches a machine. It is **manifest-driven
+and agentless (SSH/Ansible)**. Puppet is retired; `.ipk`/`.yaml` are gone — the
+unit is the per-machine **`.deb`** and the manifests are **JSON**.
 
-## The two-phase Puppet model
-
-`deploy/puppet/` splits provisioning by frequency and blast radius:
-
-| manifest | when to use | what it touches |
-| --- | --- | --- |
-| `provisioning.pp` | greenfield install, supervisor / gateway / etcd bump, schema-delta release | OS packages, supervisor + gateway `.ipk`, `executor.yaml`, restarts everything |
-| `orchestration.pp` | day-to-day **application** pushes | re-installs `.ipk`s under `/opt/theia/apps/` only — supervisor reloads its child table after the swap |
-
-Both resolve the target via `$THEIA_MACHINE` env (falling back to
-`$facts['hostname']`) and drive the `theia` module in
-`deploy/puppet/modules/`.
+## The flow — three commands, in order
 
 ```sh
-# greenfield / full update
-puppet apply --modulepath=deploy/puppet/modules \
-             deploy/puppet/provisioning.pp \
-             --hiera_config=/dev/null
+# 1. SERIALIZE the rig → per-machine JSON manifests + the dist BUILD glue.
+theia manifest <rig>
+#    writes dist/manifest/{machines.json, <machine>/{machine,execution,service,
+#    application,executor}.json, BUILD.bazel}. The validate-before-serialize
+#    gate runs FIRST (refuses on any deployment inconsistency).
 
-# app-only push (no service downtime)
-puppet apply --modulepath=deploy/puppet/modules \
-             deploy/puppet/orchestration.pp \
-             --hiera_config=/dev/null
+# 2. DIST — cross-build the per-machine .deb from those manifests.
+theia dist
+#    builds //dist/manifest:<machine>_pkg (rules/dist_ipk.bzl), cross-compiled
+#    for the machine.json arch, packed from execution.json. → dist/manifest/
+#    <machine>/<machine>.deb
+
+# 3. ORCHESTRATE — push + install the .deb, drop executor.json + config, reload.
+theia orchestrate <machine>          # = ansible-playbook deploy/ansible/orchestrate.yml
+#    provisioning (OS pkgs + etcd + Mender) is the one-time `theia provision`.
 ```
 
-The supervisor's child reload after an `orchestration.pp` apply is what
-makes it safe on a live system — but it relies on the new `.ipk` having
-the same FC catalog as the previous one. A schema-delta release goes
-through `provisioning.pp`.
+`theia provision`/`orchestrate` wrap `ansible-playbook` against
+`deploy/ansible/{provision,orchestrate}.yml`, limiting to the host whose
+inventory `machine=` matches. The inventory (machine→ssh host/user) is
+`deploy/ansible/inventory/hosts` — the ONE deploy fact the manifest can't carry.
 
-## The Docker compose dev rig — end to end
+## ⚠ Footguns (these have bitten — read them)
 
-`deploy/docker-compose.yml` brings up Theia as two containers (`central`
-+ `compute`) on a shared bridge network — matching `apps/manifest/rig.py`'s
-two-machine split. Quick start (from the repo root, with the workspace
-venv on PATH):
+- **Do NOT pass `theia manifest --out <dir>`** for a real deploy. The dist BUILD
+  glue (`dist/manifest/BUILD.bazel`, which `theia dist` needs) is only emitted
+  when the out-dir is the default `dist/manifest`; `--out` makes a *throwaway*
+  serialize dir and the glue is skipped → `theia dist` fails with "no such
+  package dist/manifest". Use the bare `theia manifest <rig>`.
+- **`dist_pkg` binaries come from the manifest, not the rule default.** `theia
+  manifest` emits `dist_pkg(binaries=[…])` derived from execution.json. The
+  rule's fallback `ALL_BINARIES` hardcodes the demo apps (`@@//apps/Demo3WayP*`)
+  — absent in a service-only / consuming workspace → analysis fails. A rig that
+  has no apps (e.g. the rpi4 service-test rig) must `Remove()` them from BASE so
+  they're not in execution.json (see manifest-py-syntax.md).
+- **The workspace must contain the binaries the manifest references.** If a rig
+  binds `p1..p4` but the demo apps were never `gen-app`'d here, `theia dist`
+  can't build them. Either gen them (`artheia gen-app --kind fc
+  demo/system/apps/component.art --out apps`) or use a rig that doesn't include
+  them.
+- **Ad-hoc binary testing ≠ the deploy flow.** For a one-off "does this binary
+  run on the Pi" check, just `scp bazel-out/.../bin <host>:` and launch it with
+  `THEIA_SUPERVISOR_MANIFEST=<executor.json>` (+ `THEIA_CONFIG_DIR`,
+  `THEIA_TIPC_SCOPE`). Don't stand up a parallel playbook.
 
-```sh
-# 1. Build the supervisor (still CMake, not Bazel-targeted yet).
-cd platform/supervisor && cmake -S . -B build && cmake --build build -j
-cd ../..
+## Cross-compile note (rpi4 / aarch64)
 
-# 2. Build the per-machine .ipks + the two YAMLs.
-bazel build @rig_apps//:all
-
-# 3. Stage Bazel output into deploy/.staging/ (docker-compose bind-mounts it).
-./deploy/stage.sh                       # default rig = rig_apps
-
-# 4. Build the per-host Docker images.
-docker compose -f deploy/docker-compose.yml build
-
-# 5. Bring it up.
-docker compose -f deploy/docker-compose.yml up    # Ctrl-C to stop
-```
-
-Each container's entrypoint is `deploy/run-supervisor.sh`:
-
-1. Picks `/etc/puppet/manifests/$HOSTNAME.pp` (`central.pp` or
-   `compute.pp`).
-2. `puppet apply` runs the `theia` module — `theia::install`
-   (`opkg install /opt/theia/ipk/<machine>.ipk`), `theia::config`
-   (drops `executor.yaml` + `machines.yaml` into `/etc/theia/`),
-   `theia::service` (placeholder — supervisor runs foreground in the
-   dev compose).
-3. Verifies `/usr/bin/theia-supervisor` exists + `/etc/theia/executor.yaml`
-   is present.
-4. `exec`s the supervisor in foreground so Docker signals
-   (`docker stop` → SIGTERM) reach it directly for graceful shutdown.
-
-Port map: GUI talks to **`host:7700`** for central, **`host:7701`** for
-compute (both inside the bridge network at `172.30.0.0/24`).
-
-## Bare-metal push (Pi 4, gateway)
-
-`tools/deploy_rpi4.sh` is the working bare-metal path — cross-build,
-`scp`, `dpkg -i`, with a TIPC `modprobe` sanity check on the target.
-Use it for one-shot pushes to a Pi 4 dev rig; production targets go
-through Puppet once the modulepath body lands.
+`theia dist` reads `machine.json` `arch` and cross-builds with
+`--platforms=//rules/config:rpi4` against `third_party/sysroot/rpi4` (built by
+`setup_rpi4.sh`). The `bazel-bin` symlink points at the LAST build's arch — run
+`file -L bazel-bin/.../<bin>` to confirm aarch64 before staging by hand.
 
 ## Mental model
 
-- The **`.ipk` is the deploy unit** — one per machine, opkg'd in by
-  Puppet under `/opt/theia/`.
-- The **`executor.yaml` is the supervisor's input** — the
-  `service`/`execution` slice of the rig for this host.
-- The **`machines.yaml` is the GUI's input** — per-machine gRPC
-  endpoints, nothing more.
-- Puppet only lays files down; the **supervisor** is the one that
-  actually starts, watches, and reloads FC processes.
+- The **`.deb` is the deploy unit** — one per machine, `dpkg -i`'d under
+  `/opt/theia/` by orchestrate.yml.
+- **`executor.json` is the supervisor's input** — the supervision tree for this
+  host (`THEIA_SUPERVISOR_MANIFEST`).
+- **`config/<fc>.json`** are the per-FC static params (`THEIA_CONFIG_DIR`).
+- Ansible only lays files down; the **supervisor** starts, watches, and reloads
+  FC processes (a `theia orchestrate` re-push notifies a reload, no downtime).
+
+See [manifest-py-syntax.md](manifest-py-syntax.md) for how a rig.py composes the
+deployment (the `Append`/`Remove` monoid algebra).

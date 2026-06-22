@@ -23,10 +23,11 @@ Read this page to orient. For a specific task, load the matching reference:
 | --- | --- |
 | **Removing / simplifying / rewriting code** (read first) | [references/requirements.md](references/requirements.md) — functional vs non-functional |
 | Writing or editing `.art` files | [references/art-lang-grammar.md](references/art-lang-grammar.md) |
+| Writing or editing a deploy rig (`manifest/<rig>/rig.py`): the DeploymentLayer / Append-Remove monoid algebra | [references/manifest-py-syntax.md](references/manifest-py-syntax.md) |
 | Generating / regenerating an application C++ (lib/main/impl) | [references/artheia-gen-app.md](references/artheia-gen-app.md) |
 | Regenerating the system: .art → manifests (stages 1–2) | [references/artheia-gen-system.md](references/artheia-gen-system.md) |
 | Bazel build: rig extension, FC daemons, bundles | [references/build-system.md](references/build-system.md) |
-| Provisioning & orchestration: Puppet, docker compose, Pi 4 push | [references/provision-orchestrate.md](references/provision-orchestrate.md) |
+| Provisioning & orchestration: the `theia manifest → dist → orchestrate` handoff flow (Ansible, per-machine `.deb`) | [references/provision-orchestrate.md](references/provision-orchestrate.md) |
 | Deployment: the installable `.deb` framework (dev/runtime/services/workspace split, `theia release`, `/opt/theia`) | [references/deployment.md](references/deployment.md) |
 | AUTOSAR PSP import: DBC/FIBEX → `.art` + netgraph | [references/autosar.md](references/autosar.md) |
 | Config schema migration: per-node `config <Msg>` evolution, transform.json, gen-transform plugin, the dev workflow + RF wrapper | [references/migration.md](references/migration.md) |

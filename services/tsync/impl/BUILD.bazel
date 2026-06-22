@@ -61,6 +61,10 @@ cc_library(
         "-Wextra",
         "-fPIC",
     ],
+    # NAV-ATT → quaternion uses std::cos/std::sin (TsyncCtl_handlers.cc). The host
+    # gcc links libm implicitly, but the aarch64 cross-link does not — propagate
+    # -lm to the final binary so `cos@@GLIBC` resolves on the rpi4 build.
+    linkopts = ["-lm"],
     deps = [
         "//services/tsync/lib:tsync_lib",
     ],

@@ -138,18 +138,24 @@ GnssFix GpsBackend::poll(const std::string& dev_in) {
     ::close(fd);
     if (buf.empty()) { f.note = "rtk: no UBX data on " + dev; return f; }
 
-    // Scan for the most recent valid NAV-PVT frame.
-    const uint8_t* found = nullptr;
+    // Scan for the most recent valid NAV-PVT (0x01/0x07) AND NAV-ATT (0x01/0x05,
+    // F9R fusion attitude) frames in this poll's buffer — one pass, take the LAST
+    // valid of each. NAV-ATT is optional (F9R only, once fusion converges).
+    const uint8_t* found = nullptr;   // NAV-PVT payload
+    const uint8_t* att   = nullptr;   // NAV-ATT payload
     for (size_t i = 0; i + 8 <= buf.size(); ++i) {
         if (buf[i] != 0xB5 || buf[i + 1] != 0x62) continue;
         uint8_t cls = buf[i + 2], id = buf[i + 3];
         uint16_t len = rd_u16(&buf[i + 4]);
         size_t total = 6 + len + 2;               // sync..checksum
         if (i + total > buf.size()) continue;      // truncated tail
-        if (cls != 0x01 || id != 0x07 || len < 92) continue;
-        if (!ubx_cksum_ok(&buf[i], 4 + len)) continue;  // body = class..payload
-        found = &buf[i + 6];                        // payload start
-        // keep scanning — take the LAST valid frame this poll
+        if (cls != 0x01) continue;
+        if (id == 0x07 && len >= 92) {             // NAV-PVT
+            if (ubx_cksum_ok(&buf[i], 4 + len)) found = &buf[i + 6];
+        } else if (id == 0x05 && len >= 32) {      // NAV-ATT
+            if (ubx_cksum_ok(&buf[i], 4 + len)) att = &buf[i + 6];
+        }
+        // keep scanning — take the LAST valid frame of each this poll
     }
 
     if (!found) { f.note = "rtk: no valid NAV-PVT on " + dev; return f; }
@@ -181,10 +187,29 @@ GnssFix GpsBackend::poll(const std::string& dev_in) {
         f.heading_acc_deg = static_cast<uint32_t>(rd_i32(found + 72)) * 1e-5;
     }
 
+    // Vehicle attitude (UBX-NAV-ATT, F9R fusion — off 8 I4 roll, 12 I4 pitch,
+    // 16 I4 heading — all 1e-5 deg; 20 U4 accRoll, 24 U4 accPitch, 28 U4
+    // accHeading — 1e-5 deg). Only present once fusion converges (fusionMode>0,
+    // needs motion); absent on F9P/stationary. accHeading==0 is the "not yet
+    // valid" sentinel u-blox uses before the attitude solution settles.
+    if (att) {
+        double acc_head = static_cast<uint32_t>(rd_i32(att + 28)) * 1e-5;
+        if (acc_head > 0.0) {
+            f.attitude_valid       = true;
+            f.roll_deg             = rd_i32(att + 8)  * 1e-5;
+            f.pitch_deg            = rd_i32(att + 12) * 1e-5;
+            f.att_heading_deg      = rd_i32(att + 16) * 1e-5;
+            f.roll_acc_deg         = static_cast<uint32_t>(rd_i32(att + 20)) * 1e-5;
+            f.pitch_acc_deg        = static_cast<uint32_t>(rd_i32(att + 24)) * 1e-5;
+            f.heading_att_acc_deg  = acc_head;
+        }
+    }
+
     if (utc && fixType >= 2) {
         f.valid = true; f.utc_ns = utc;
         f.note = std::string("rtk fix type=") + std::to_string(fixType) +
-                 (carrSoln == 2 ? " RTK-fixed" : carrSoln == 1 ? " RTK-float" : "");
+                 (carrSoln == 2 ? " RTK-fixed" : carrSoln == 1 ? " RTK-float" : "") +
+                 (f.attitude_valid ? " +ATT" : "");
     } else {
         f.note = "rtk: NAV-PVT no time/fix yet";
     }

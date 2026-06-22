@@ -17,6 +17,7 @@
 
 #include <chrono>
 #include <cerrno>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -119,6 +120,38 @@ void publish_gnss(TsyncCtl& self, const GnssFix& fix, uint64_t now) {
     od.pose.pose.position.x = fix.lon;   // geodetic; consumer fuses NavSatFix instead
     od.pose.pose.position.y = fix.lat;
     od.pose.pose.position.z = fix.alt;
+    // Orientation: from the F9R fusion attitude (NAV-ATT roll/pitch/heading) when
+    // valid; else identity. ROS uses ENU + a yaw measured CCW from East, while
+    // u-blox heading is CW from North — convert (yaw_enu = 90° - heading). Build
+    // the quaternion from the Z-Y-X (yaw-pitch-roll) Euler sequence.
+    od.pose.pose.has_orientation = true;
+    if (fix.attitude_valid) {
+        const double deg2rad = 3.14159265358979323846 / 180.0;
+        const double roll  = fix.roll_deg  * deg2rad;
+        const double pitch = fix.pitch_deg * deg2rad;
+        const double yaw   = (90.0 - fix.att_heading_deg) * deg2rad;  // CW-from-N → CCW-from-E
+        const double cr = std::cos(roll * 0.5),  sr = std::sin(roll * 0.5);
+        const double cp = std::cos(pitch * 0.5), sp = std::sin(pitch * 0.5);
+        const double cy = std::cos(yaw * 0.5),   sy = std::sin(yaw * 0.5);
+        od.pose.pose.orientation.w = cr * cp * cy + sr * sp * sy;
+        od.pose.pose.orientation.x = sr * cp * cy - cr * sp * sy;
+        od.pose.pose.orientation.y = cr * sp * cy + sr * cp * sy;
+        od.pose.pose.orientation.z = cr * cp * sy - sr * sp * cy;
+        // 6x6 pose covariance: position from hAcc/vAcc, orientation from the
+        // NAV-ATT accuracies (variance = sigma^2, deg→rad). x,y,z then r,p,y.
+        od.pose.covariance_count = 36;
+        const double hv = fix.h_acc_m * fix.h_acc_m, vv = fix.v_acc_m * fix.v_acc_m;
+        const double rr = fix.roll_acc_deg * deg2rad, pp = fix.pitch_acc_deg * deg2rad,
+                     yy = fix.heading_att_acc_deg * deg2rad;
+        od.pose.covariance[0]  = hv;        // x
+        od.pose.covariance[7]  = hv;        // y
+        od.pose.covariance[14] = vv;        // z
+        od.pose.covariance[21] = rr * rr;   // roll
+        od.pose.covariance[28] = pp * pp;   // pitch
+        od.pose.covariance[35] = yy * yy;   // yaw
+    } else {
+        od.pose.pose.orientation.w = 1.0;   // identity (no attitude solution yet)
+    }
     od.has_twist = true;
     od.twist.has_twist = true;
     od.twist.twist.has_linear = true;

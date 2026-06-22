@@ -54,6 +54,18 @@ struct GnssFix {
     double   speed_acc_m_s   = 0.0;   // 1-sigma speed accuracy (m/s), sAcc
     double   heading_acc_deg = 0.0;   // 1-sigma heading accuracy (deg), headAcc
 
+    // Vehicle ATTITUDE (UBX-NAV-ATT, ZED-F9R sensor fusion only). Body
+    // orientation in degrees + 1-sigma accuracies. attitude_valid is false on
+    // the F9P/NMEA/fake (no fusion) and on the F9R until fusion converges
+    // (fusionMode>0, which needs motion). Feeds Odometry.pose.orientation.
+    bool     attitude_valid  = false;
+    double   roll_deg        = 0.0;   // rotation about the vehicle x (forward) axis
+    double   pitch_deg       = 0.0;   // about y (left)
+    double   att_heading_deg = 0.0;   // about z (up) — fused heading (vs headMot)
+    double   roll_acc_deg    = 0.0;   // 1-sigma accuracies
+    double   pitch_acc_deg   = 0.0;
+    double   heading_att_acc_deg = 0.0;
+
     std::string note;         // human note for the status line / log
 };
 

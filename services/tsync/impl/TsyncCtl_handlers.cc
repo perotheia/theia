@@ -170,6 +170,27 @@ void publish_gnss(TsyncCtl& self, const GnssFix& fix, uint64_t now) {
     od.twist.covariance[28] = -1.0; // pitch rate unknown
     od.twist.covariance[35] = -1.0; // yaw rate unknown
     self.broadcast_gnss_odom_odom(od);
+
+    // Visibility for a live (in-car) test: a concise line per published fix.
+    // INFO so it lands in the supervisor/stderr log without a wired subscriber.
+    // Rate is the poll cadence (~1 Hz default), so it's not spammy.
+    char line[256];
+    std::snprintf(line, sizeof(line),
+        "GNSS fix: lat=%.7f lon=%.7f alt=%.1fm %s hAcc=%.2fm | "
+        "vel(N,E,D)=%.2f,%.2f,%.2f m/s spd=%.2f hdg=%.1f%s",
+        fix.lat, fix.lon, fix.alt, fix.rtk_fix ? "RTK" : "3D", fix.h_acc_m,
+        fix.vel_n, fix.vel_e, fix.vel_d, fix.ground_speed, fix.heading_deg,
+        fix.attitude_valid ? "" : " (no-att)");
+    self.log().info(line);
+    if (fix.attitude_valid) {
+        char att[160];
+        std::snprintf(att, sizeof(att),
+            "GNSS att: roll=%.2f pitch=%.2f heading=%.2f deg "
+            "(acc r=%.2f p=%.2f h=%.2f)",
+            fix.roll_deg, fix.pitch_deg, fix.att_heading_deg,
+            fix.roll_acc_deg, fix.pitch_acc_deg, fix.heading_att_acc_deg);
+        self.log().info(att);
+    }
 }
 
 }  // namespace

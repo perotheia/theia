@@ -27,7 +27,10 @@
 #include <string>
 #include <vector>
 
+#include <cerrno>
+
 #include <fcntl.h>
+#include <poll.h>
 #include <termios.h>
 #include <unistd.h>
 
@@ -127,13 +130,32 @@ GnssFix GpsBackend::poll(const std::string& dev_in) {
         // keep going — a pre-configured port may still yield data
     }
 
+    // Collect ~one nav cycle of bytes. The receiver emits NAV-PVT (+NAV-ATT) at
+    // the nav rate (1 Hz default), so at the instant we open the port there may
+    // be NOTHING buffered yet — a plain non-blocking read loop would return 0 and
+    // give "no UBX data". Wait with poll() up to a budget (>1 nav period) and
+    // drain whatever arrives, so a full frame lands every poll.
     std::vector<uint8_t> buf;
     uint8_t rd[2048];
-    for (int i = 0; i < 16; ++i) {
+    const int budget_ms = 1500;   // > one 1 Hz period; covers PVT+ATT of a cycle
+    struct pollfd pfd { fd, POLLIN, 0 };
+    int waited = 0;
+    while (waited < budget_ms && buf.size() < 65536) {
+        int pr = ::poll(&pfd, 1, 200);
+        if (pr < 0) break;
+        if (pr == 0) { waited += 200; continue; }   // idle slice
         ssize_t r = ::read(fd, rd, sizeof(rd));
-        if (r <= 0) break;
+        if (r < 0) { if (errno == EAGAIN) { waited += 5; continue; } break; }
+        if (r == 0) break;
         buf.insert(buf.end(), rd, rd + r);
-        if (buf.size() > 65536) break;
+        // Got data — once we hold a plausible full frame (a NAV-PVT is ~100 B),
+        // give a brief grace for a trailing NAV-ATT then stop.
+        if (buf.size() >= 100) {
+            ::poll(&pfd, 1, 120);
+            ssize_t r2 = ::read(fd, rd, sizeof(rd));
+            if (r2 > 0) buf.insert(buf.end(), rd, rd + r2);
+            break;
+        }
     }
     ::close(fd);
     if (buf.empty()) { f.note = "rtk: no UBX data on " + dev; return f; }

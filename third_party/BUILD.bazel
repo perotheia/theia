@@ -11,6 +11,7 @@
 load("@rules_cc//cc:defs.bzl", "cc_library")
 load("@rules_foreign_cc//foreign_cc:defs.bzl", "cmake")
 load("@rpi4_sysroot//:path.bzl", "RPI4_SYSROOT")
+load(":patch_tree.bzl", "patched_source_tree")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -103,7 +104,7 @@ alias(
 # the package loadable on a fresh clone where the submodule isn't checked out
 # yet (per's etcd_store is the only consumer and builds this on demand).
 filegroup(
-    name = "etcd-cpp-apiv3-srcs",
+    name = "etcd-cpp-apiv3-raw-srcs",
     srcs = glob(
         ["etcd-cpp-apiv3/**"],
         exclude = [
@@ -112,6 +113,18 @@ filegroup(
         ],
         allow_empty = True,
     ),
+)
+
+# lib_source = the submodule tree with third_party/etcd-cpp-apiv3.patch applied
+# (adds ETCD_BUILD_CORE_ONLY → drops Client.cpp + cpprestsdk). Emitted as ONE
+# TreeArtifact so foreign_cc's detect_root finds a single source root; the
+# submodule on disk stays PRISTINE.
+patched_source_tree(
+    name = "etcd-cpp-apiv3-srcs",
+    srcs = ":etcd-cpp-apiv3-raw-srcs",
+    strip_prefix = "etcd-cpp-apiv3/CMakeLists.txt",  # its dir = the copy root
+    patch = "etcd-cpp-apiv3.patch",
+    out_dir = "etcd-cpp-apiv3-patched",
 )
 
 # Hermetic from-scratch CMake build of the vendored etcd client, STATIC.
@@ -135,6 +148,9 @@ filegroup(
 cmake(
     name = "etcd_cpp",
     lib_source = ":etcd-cpp-apiv3-srcs",
+    # lib_source is a TreeArtifact dir; detect_root resolves to its PARENT
+    # (third_party), so point cmake at the tree itself (where CMakeLists.txt is).
+    working_directory = "etcd-cpp-apiv3-patched",
     cache_entries = {
         # Static libs (.a), PIC so they slot into our PIC binaries; tests off so
         # we don't compile/run the etcd test suite; -Werror off so a newer host
@@ -145,14 +161,15 @@ cmake(
         "ETCD_W_STRICT": "OFF",
         # The client API is C++17 in our tree (matches services/per copts).
         "ETCD_CMAKE_CXX_STANDARD": "17",
+        # Theia patch: build ONLY the synchronous -core library. Skips Client.cpp
+        # (the async client) + its find_package(cpprestsdk), so the build needs NO
+        # cpprestsdk in the sysroot at all. per links etcd::SyncClient/Watcher
+        # only, so -core is complete. Also kills the gogoproto double-registration
+        # hazard for free: only ONE archive is ever built.
+        "ETCD_BUILD_CORE_ONLY": "ON",
     } | _ETCD_CROSS_CACHE,   # aarch64: redirect find_package to the rpi4 sysroot
-    # Build BOTH archives the vendored install(TARGETS ...) rule references
-    # (etcd-cpp-api-core AND etcd-cpp-api), so `cmake --install` finds them — but
-    # we EXPORT only -core via out_static_libs below. Building the async
-    # etcd-cpp-api.a here is harmless (it's just an archive on disk); the
-    # double-registration hazard is at the FINAL per-binary link, and per links
-    # ONLY -core. (cpprest is a host apt dep, so the async archive still links.)
-    targets = ["etcd-cpp-api-core", "etcd-cpp-api"],
+    # Only -core exists now (ETCD_BUILD_CORE_ONLY skips the async etcd-cpp-api).
+    targets = ["etcd-cpp-api-core"],
     out_static_libs = ["libetcd-cpp-api-core.a"],
     # The vendored CMakeLists auto-enables ccache if it finds it on PATH, but
     # ccache's temp dir (/run/user/.../ccache-tmp) is read-only in the Bazel

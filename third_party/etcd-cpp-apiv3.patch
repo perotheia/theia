@@ -1,0 +1,72 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 8c568a5..a56f580 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -116,13 +116,22 @@ if(Protobuf_PROTOC_EXECUTABLE)
+         endif()
+     endif()
+ endif()
+-find_package(cpprestsdk QUIET)
+-if(cpprestsdk_FOUND)
+-    set(CPPREST_INCLUDE_DIR)
+-    set(CPPREST_LIB cpprestsdk::cpprest)
+-else()
+-    find_library(CPPREST_LIB NAMES cpprest)
+-    find_path(CPPREST_INCLUDE_DIR NAMES cpprest/http_client.h)
++# Theia patch: ETCD_BUILD_CORE_ONLY skips the asynchronous client (Client.cpp),
++# the SOLE consumer of cpprestsdk (pplx::task). services/per links only the
++# synchronous -core library (SyncClient + Watcher, pure gRPC), so cpprestsdk and
++# its dependency weight are unnecessary. OFF by default (upstream behaviour
++# preserved); Theia's foreign_cc cmake() passes it ON.
++option(ETCD_BUILD_CORE_ONLY
++       "Build only the synchronous -core library; skip Client.cpp + cpprestsdk" OFF)
++if(NOT ETCD_BUILD_CORE_ONLY)
++    find_package(cpprestsdk QUIET)
++    if(cpprestsdk_FOUND)
++        set(CPPREST_INCLUDE_DIR)
++        set(CPPREST_LIB cpprestsdk::cpprest)
++    else()
++        find_library(CPPREST_LIB NAMES cpprest)
++        find_path(CPPREST_INCLUDE_DIR NAMES cpprest/http_client.h)
++    endif()
+ endif()
+ 
+ find_package(gRPC QUIET)
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index e77e92a..3db6354 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -39,7 +39,9 @@ target_link_libraries(etcd-cpp-api-core PUBLIC
+ )
+ include_generated_protobuf_files(etcd-cpp-api-core)
+ 
+-# add the client with asynchronus client
++# add the client with asynchronus client — Theia patch: skipped under
++# ETCD_BUILD_CORE_ONLY (Client.cpp is the only cpprestsdk user; per links -core).
++if(NOT ETCD_BUILD_CORE_ONLY)
+ add_library(etcd-cpp-api $<TARGET_OBJECTS:etcd-cpp-api-core-objects>
+                          "${CMAKE_CURRENT_SOURCE_DIR}/Client.cpp")
+ use_cxx(etcd-cpp-api)
+@@ -51,14 +53,20 @@ target_link_libraries(etcd-cpp-api PUBLIC
+                       ${GRPC_LIBRARIES}
+ )
+ include_generated_protobuf_files(etcd-cpp-api)
++endif()
+ 
++# Install: include etcd-cpp-api only when it was built (Theia patch).
++set(_etcd_install_targets etcd-cpp-api-core)
++if(NOT ETCD_BUILD_CORE_ONLY)
++    list(APPEND _etcd_install_targets etcd-cpp-api)
++endif()
+ if("${CMAKE_VERSION}" VERSION_LESS "3.14")
+-    install(TARGETS etcd-cpp-api-core etcd-cpp-api
++    install(TARGETS ${_etcd_install_targets}
+             EXPORT etcd-targets
+             RUNTIME DESTINATION bin
+             LIBRARY DESTINATION lib
+             ARCHIVE DESTINATION lib)
+ else()
+-    install(TARGETS etcd-cpp-api-core etcd-cpp-api
++    install(TARGETS ${_etcd_install_targets}
+             EXPORT etcd-targets)
+ endif()

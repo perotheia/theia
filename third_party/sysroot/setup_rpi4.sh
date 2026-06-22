@@ -60,9 +60,12 @@ MIRROR="http://deb.debian.org/debian"
 # on a clean Debian bookworm install.
 #
 # services/per static-links etcd-cpp-apiv3 (//third_party:etcd_cpp, a foreign_cc
-# cmake build). Its CMakeLists find_package()s Boost (system/thread/random) +
-# cpprestsdk + OpenSSL — so the cross-build needs THOSE -dev packages in the
-# sysroot too, or `cmake -DCMAKE_TOOLCHAIN_FILE=…` fails at find_package(Boost).
+# cmake build) — but ONLY the `-core` library (SyncClient + Watcher, pure gRPC).
+# cpprestsdk is used ONLY by etcd's Client.cpp (the ASYNC wrapper, pplx::task) —
+# which is NOT in -core and NOT used by per. find_package(cpprestsdk) is QUIET
+# (optional), so we do NOT install libcpprest-dev: it's a dead dep (verified —
+# per's binary has 0 cpprest/pplx symbols). Boost (system/thread/random) IS
+# needed: -core's SyncClient uses boost::algorithm::split, Watcher boost::asio.
 PACKAGES=(
     libyaml-cpp-dev
     libprotobuf-dev
@@ -78,12 +81,12 @@ PACKAGES=(
     # toolset). protobuf-compiler likewise provides bin/protoc.
     protobuf-compiler-grpc
     protobuf-compiler
-    # etcd-cpp-apiv3 (services/per) static-link deps — its CMakeLists
-    # find_package()s these; the grpc-chain (re2/c-ares) comes with libgrpc-dev:
+    # etcd-cpp-apiv3 -core (services/per) static-link deps — boost + openssl.
+    # NO libcpprest-dev: cpprest is only Client.cpp's async wrapper, which -core
+    # excludes (see the header note above).
     libboost-system-dev
     libboost-thread-dev
     libboost-random-dev
-    libcpprest-dev
     libssl-dev
     # Per-FC native libs (the Linux-mapping FCs link these directly):
     libnftables-dev    # services/fw  — nftables ruleset (libnftables.h)
@@ -143,7 +146,7 @@ sudo chroot "$TARGET" /debootstrap/debootstrap --second-stage
 
 # --- prefix-compat symlinks ------------------------------------------
 # Debian puts everything under /usr (/usr/include, /usr/lib). Some CMake
-# package configs (gRPC, cpprestsdk — pulled in by etcd-cpp-apiv3) bake
+# package configs (gRPC, pulled in by etcd-cpp-apiv3) bake
 # INTERFACE_INCLUDE_DIRECTORIES as "<prefix>/include"; with CMAKE_SYSROOT set
 # that resolves to "<sysroot>/include", which doesn't exist on a /usr-only
 # Debian layout → "Imported target includes non-existent path". Symlink the

@@ -48,6 +48,15 @@ jobs:
             libssl-dev libprotobuf-dev protobuf-compiler \
             libgrpc++-dev protobuf-compiler-grpc libabsl-dev \
             libcpprest-dev
+          # The runtime/FC protos #include <pb.h> at the TOP level, but Ubuntu
+          # 24.04's libnanopb-dev (0.4.8) nests the headers under
+          # /usr/include/nanopb/. 22.04 ships them top-level. Symlink them up so
+          # `#include <pb.h>` resolves on both — no-op when already top-level.
+          if [ -f /usr/include/nanopb/pb.h ] && [ ! -e /usr/include/pb.h ]; then
+            for h in pb.h pb_common.h pb_decode.h pb_encode.h; do
+              sudo ln -sfn nanopb/"$h" /usr/include/"$h"
+            done
+          fi
 
       - name: Install Bazelisk (pins Bazel via .bazelversion)
         run: |

@@ -64,12 +64,15 @@ speed_t baud_constant(long b) {
 // Put the serial fd into raw 8N1 at the configured baud. No-op (returns true)
 // on a non-tty (e.g. a regression test feeding a regular file). Best-effort:
 // failure to set termios is logged via the fix note, not fatal.
-bool configure_serial(int fd) {
+bool configure_serial(int fd, uint32_t baud_req) {
     if (!::isatty(fd)) return true;   // file/pipe under test — nothing to set
     struct termios tio;
     if (::tcgetattr(fd, &tio) != 0) return false;
     ::cfmakeraw(&tio);
+    // Baud precedence: THEIA_GPS_BAUD env (runtime override) > the deploy param
+    // (config/tsync.json:gps_baud, passed in) > the driver default (38400).
     speed_t baud = kDefaultBaud;
+    if (baud_req) { speed_t c = baud_constant(baud_req); if (c) baud = c; }
     if (const char* env = std::getenv("THEIA_GPS_BAUD")) {
         speed_t c = baud_constant(std::strtol(env, nullptr, 10));
         if (c) baud = c;
@@ -116,48 +119,53 @@ uint64_t navpvt_utc_ns(const uint8_t* pl) {
 
 }  // namespace
 
-GnssFix GpsBackend::poll(const std::string& dev_in) {
+GnssFix GpsBackend::poll(const std::string& dev_in, uint32_t baud) {
     GnssFix f;
     const std::string dev = dev_in.empty() ? kDefaultDev : dev_in;
 
-    // O_RDWR (not O_RDONLY): tcsetattr needs write access to the tty to set the
-    // baud/line discipline. O_NOCTTY so the serial port never becomes our
-    // controlling terminal.
-    int fd = ::open(dev.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK);
-    if (fd < 0) { f.note = "rtk: open(" + dev + ") failed"; return f; }
-    if (!configure_serial(fd)) {
-        f.note = "rtk: tcsetattr(" + dev + ") failed (baud not set)";
-        // keep going — a pre-configured port may still yield data
+    // PERSISTENT fd, held open across polls. poll() runs on the FC's single node
+    // thread, so a function-static fd needs no lock. Open-read-close PER POLL
+    // (the v1 model) churned the port and dropped frames at high nav rates
+    // (10 Hz) — closing discards the kernel rx buffer, so a poll landing between
+    // frames saw nothing → HOLDOVER flapping. Holding the fd open lets the kernel
+    // buffer accumulate the full stream between polls; we just drain it.
+    static int s_fd = -1;
+    static std::string s_dev;
+    static uint32_t s_baud = 0;
+    if (s_fd >= 0 && (dev != s_dev || baud != s_baud)) {   // dev/baud changed → reopen
+        ::close(s_fd); s_fd = -1;
     }
+    if (s_fd < 0) {
+        // O_RDWR: tcsetattr needs write to set the baud. O_NOCTTY: never our
+        // controlling terminal. O_NONBLOCK: drain returns immediately.
+        s_fd = ::open(dev.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK);
+        if (s_fd < 0) { f.note = "rtk: open(" + dev + ") failed"; return f; }
+        if (!configure_serial(s_fd, baud))
+            f.note = "rtk: tcsetattr(" + dev + ") failed (baud not set)";
+        s_dev = dev; s_baud = baud;
+    }
+    int fd = s_fd;
 
-    // Collect ~one nav cycle of bytes. The receiver emits NAV-PVT (+NAV-ATT) at
-    // the nav rate (1 Hz default), so at the instant we open the port there may
-    // be NOTHING buffered yet — a plain non-blocking read loop would return 0 and
-    // give "no UBX data". Wait with poll() up to a budget (>1 nav period) and
-    // drain whatever arrives, so a full frame lands every poll.
+    // Drain everything buffered since the last poll (non-blocking). At the nav
+    // rate the kernel holds ≥1 full NAV-PVT(+NAV-ATT) cycle between our polls;
+    // on the very first poll the buffer may be partial, so allow a brief wait
+    // for one cycle to land. We do NOT close — the fd persists.
     std::vector<uint8_t> buf;
     uint8_t rd[2048];
-    const int budget_ms = 1500;   // > one 1 Hz period; covers PVT+ATT of a cycle
     struct pollfd pfd { fd, POLLIN, 0 };
     int waited = 0;
-    while (waited < budget_ms && buf.size() < 65536) {
-        int pr = ::poll(&pfd, 1, 200);
-        if (pr < 0) break;
-        if (pr == 0) { waited += 200; continue; }   // idle slice
+    while (buf.size() < 65536) {
         ssize_t r = ::read(fd, rd, sizeof(rd));
-        if (r < 0) { if (errno == EAGAIN) { waited += 5; continue; } break; }
+        if (r > 0) { buf.insert(buf.end(), rd, rd + r); continue; }   // drain all ready
         if (r == 0) break;
-        buf.insert(buf.end(), rd, rd + r);
-        // Got data — once we hold a plausible full frame (a NAV-PVT is ~100 B),
-        // give a brief grace for a trailing NAV-ATT then stop.
-        if (buf.size() >= 100) {
-            ::poll(&pfd, 1, 120);
-            ssize_t r2 = ::read(fd, rd, sizeof(rd));
-            if (r2 > 0) buf.insert(buf.end(), rd, rd + r2);
-            break;
-        }
+        if (errno != EAGAIN && errno != EWOULDBLOCK) break;
+        // Nothing ready right now. If we already drained a frame, stop; else wait
+        // briefly for the first cycle (covers a cold start / sub-frame timing).
+        if (buf.size() >= 100) break;
+        if (waited >= 1200) break;
+        int pr = ::poll(&pfd, 1, 200);
+        if (pr <= 0) { waited += 200; if (pr < 0) break; }
     }
-    ::close(fd);
     if (buf.empty()) { f.note = "rtk: no UBX data on " + dev; return f; }
 
     // Scan for the most recent valid NAV-PVT (0x01/0x07) AND NAV-ATT (0x01/0x05,

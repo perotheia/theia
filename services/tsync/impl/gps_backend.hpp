@@ -70,10 +70,13 @@ struct GnssFix {
 };
 
 // The selected variant defines these two. `dev` is the serial/tty device the
-// driver reads (ignored by FakeGPS); "" → the variant's own default.
+// driver reads (ignored by FakeGPS); "" → the variant's own default. `baud` is
+// the line rate the driver sets on the tty (0 → the variant default, e.g. the
+// RTK driver's 38400); the deploy param config/tsync.json:gps_baud feeds it
+// (the ZED-F9R UART1 is flashed to 460800). THEIA_GPS_BAUD still overrides.
 class GpsBackend {
 public:
-    static GnssFix poll(const std::string& dev);
+    static GnssFix poll(const std::string& dev, uint32_t baud = 0);
     static const char* name();   // "rtk" | "nmea" | "fake" — for the status line
 };
 

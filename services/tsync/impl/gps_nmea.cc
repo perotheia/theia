@@ -79,7 +79,7 @@ uint64_t rmc_utc_ns(const char* t, const char* date) {
 
 }  // namespace
 
-GnssFix GpsBackend::poll(const std::string& dev_in) {
+GnssFix GpsBackend::poll(const std::string& dev_in, uint32_t /*baud*/) {
     GnssFix f;
     const std::string dev = dev_in.empty() ? kDefaultDev : dev_in;
 

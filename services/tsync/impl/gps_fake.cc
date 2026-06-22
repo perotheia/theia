@@ -14,7 +14,7 @@
 
 namespace ara::tsync {
 
-GnssFix GpsBackend::poll(const std::string& /*dev*/) {
+GnssFix GpsBackend::poll(const std::string& /*dev*/, uint32_t /*baud*/) {
     GnssFix f;
     f.valid = true;
     f.utc_ns = static_cast<uint64_t>(

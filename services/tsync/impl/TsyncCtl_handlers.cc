@@ -26,6 +26,7 @@
 #include <pb_decode.h>
 
 #include "TimerService.hh"   // post_info / send_after / process_timers
+#include "ParamsConfig.hh"   // get_config() — gps_serial_dev / gps_baud / poll_ms
 
 namespace ara::tsync {
 
@@ -205,7 +206,7 @@ void poll_once(TsyncCtl& self, TsyncCtlState& s) {
     const uint64_t now = wall_now_ns();
 
     // --- GNSS acquisition (the in-process driver) -----------------------------
-    GnssFix fix = GpsBackend::poll(s.ptp_interface /*reuse as serial dev hint*/);
+    GnssFix fix = GpsBackend::poll(s.gps_serial_dev, s.gps_baud);
     if (fix.valid && fix.utc_ns) {
         s.last_fix_ns = now;
         maybe_discipline(self, s, fix.utc_ns);
@@ -253,9 +254,17 @@ void poll_once(TsyncCtl& self, TsyncCtlState& s) {
 }
 }  // namespace
 
-// init: schedule the first poll tick (requires_timers gives us send_after).
+// init: read the static deploy params (config/tsync.json), then schedule the
+// first poll tick (requires_timers gives us send_after).
 void TsyncCtl::init(TsyncCtlState& s) {
+    auto cfg = ::theia::runtime::get_config().node(TsyncCtl::kNodeName);
+    s.gps_serial_dev = cfg.str("gps_serial_dev", "");        // "" → driver default
+    s.gps_baud       = cfg.u32("gps_baud", 0);               // 0 → driver default
+    s.poll_ms        = cfg.u32("poll_ms", s.poll_ms);        // 100 (10 Hz) default
     log().info(std::string("tsync up — GNSS driver=") + GpsBackend::name() +
+               " dev=" + (s.gps_serial_dev.empty() ? "(default)" : s.gps_serial_dev) +
+               " baud=" + (s.gps_baud ? std::to_string(s.gps_baud) : "(default)") +
+               " poll_ms=" + std::to_string(s.poll_ms) +
                " + linuxptp distribution (discipline_clock=" +
                (s.discipline_clock ? "true" : "false") + ")");
     ::theia::runtime::post_info(*this, "poll");

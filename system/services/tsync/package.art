@@ -59,7 +59,9 @@ message TsyncConfig {
     // central (GM) = "gps" (the in-process GNSS driver disciplines the clock);
     // compute (slave) = "ptp" (locks to central over Ethernet).
     string source        = "ptp" [max_size:16]
-    // Status poll cadence (ms) — how often the FC re-reads the GPS driver / ptp4l.
+    // SUPERSEDED by the `poll_ms` PARAM (config/tsync.json) — the poll cadence is
+    // a static deploy knob, not runtime config. Field kept for proto-tag
+    // stability; the impl reads the param, not this. (Was 1000; param is 100.)
     uint32 poll_ms       = 1000
     // Offset (ns) above which LOCKED degrades to UNLOCKED (lock quality gate).
     uint32 lock_offset_ns = 100000
@@ -228,5 +230,24 @@ node atomic TsyncCtl {
         // position-only / nothing). A fusion app subscribes.
         sender navsatfix provides GnssFixStream
         sender gnss_odom provides GnssOdomStream
+    }
+    // Static DEPLOY knobs (lifecycle: param, not runtime-observable config) —
+    // serialized into config/tsync.json, read once at boot via the runtime
+    // config singleton. The GNSS receiver wiring + poll cadence are fixed per
+    // deployment (which tty, what baud the receiver's UART1 is flashed to, how
+    // often we drain it), so they're params, not the etcd-backed TsyncConfig.
+    // (Grammar order: config → ports → params.)
+    params {
+        // Serial device the RTK/NMEA GNSS driver reads. "" → the driver default
+        // (/dev/serial0). FakeGPS ignores it.
+        gps_serial_dev : string = ""
+        // Baud the receiver's UART1 is configured for (ZED-F9R: 460800 after
+        // CFG-UART1-BAUDRATE). The driver sets the tty to this. 0 → driver
+        // default (38400). THEIA_GPS_BAUD still overrides at runtime.
+        gps_baud       : uint32 = 460800
+        // Poll cadence (ms) — how often TsyncCtl drains the receiver + republishes
+        // NavSatFix/Odometry. Match the receiver's nav rate (CFG-RATE-MEAS) for
+        // 1:1 publishing; 100 = 10 Hz. Supersedes TsyncConfig.poll_ms.
+        poll_ms        : uint32 = 100
     }
 }

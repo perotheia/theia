@@ -1,12 +1,19 @@
 #!/usr/bin/env bash
-# third_party/sysroot/setup_rpi4.sh — bootstrap an aarch64 Debian trixie
-# sysroot for cross-compiling Theia C++ binaries to Raspberry Pi 4
-# (running Raspberry Pi OS 13 / Debian 13 trixie, kernel 6.12, aarch64).
+# third_party/sysroot/setup_rpi4.sh — bootstrap an aarch64 Debian BOOKWORM
+# sysroot for cross-compiling Theia C++ binaries to Raspberry Pi 4.
 #
-# NOTE: trixie keeps protobuf 3.21.12 / grpc 1.51.1 (the t64 ABI variant), so
-# the host-x86 codegen toolset below (bookworm 3.21.12 / grpc 1.51) STILL
-# matches the sysroot's libprotobuf — no protoc-version regen errors. Only the
-# debootstrap suite changed (bookworm → trixie) to track the live rpi4 OS.
+# SUITE = bookworm DELIBERATELY, even though the live rpi4 (rig1-central) runs
+# trixie (Debian 13). The build host (Ubuntu 22.04) only has the gcc-11/12
+# aarch64 cross-toolchain (glibc ≤2.36 / GLIBCXX_3.4.30); a TRIXIE sysroot's
+# libgrpc/libprotobuf reference glibc 2.38 + GLIBCXX_3.4.32 symbols
+# (__isoc23_*, std::ios_base_library_init, __cxa_call_terminate) that gcc-11
+# cannot resolve → the link FAILS. bookworm (glibc 2.36) matches gcc-11/12, and
+# glibc is FORWARD-compatible: a bookworm-linked aarch64 binary runs fine on the
+# trixie Pi. (A trixie sysroot would need a gcc-13+ cross-toolchain, which isn't
+# packaged for 22.04 — revisit if the build host moves to 24.04+.)
+#
+# bookworm keeps protobuf 3.21.12 / grpc 1.51.1, so the host-x86 codegen toolset
+# below (bookworm 3.21.12 / grpc 1.51) matches the sysroot's libprotobuf.
 #
 # What ends up in the sysroot:
 #   - minbase Debian bookworm rootfs (~80 MB)
@@ -44,7 +51,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TARGET="$SCRIPT_DIR/rpi4"
-SUITE="trixie"   # Debian 13 — matches the live rpi4 (rig1-central). Was bookworm.
+SUITE="bookworm"   # Debian 12 — matches the gcc-11/12 cross-toolchain; runs on the
+                   # trixie Pi via glibc forward-compat. See the header note.
 MIRROR="http://deb.debian.org/debian"
 
 # The library set the supervisor + services-com link against. Match
@@ -61,6 +69,15 @@ PACKAGES=(
     libgrpc++-dev
     libgrpc-dev
     libabsl-dev
+    # libgrpc-dev ships grpc's CMake config (gRPCTargets.cmake), which exports
+    # an IMPORTED gRPC::grpc_cpp_plugin pointing at <sysroot>/bin/grpc_cpp_plugin
+    # and FATAL-errors if that file is absent — even a consumer like etcd that
+    # only links the libs trips the imported-target existence check at
+    # find_package(gRPC). protobuf-compiler-grpc provides that (aarch64) binary,
+    # satisfying the check (we never EXEC it cross — codegen uses the host
+    # toolset). protobuf-compiler likewise provides bin/protoc.
+    protobuf-compiler-grpc
+    protobuf-compiler
     # etcd-cpp-apiv3 (services/per) static-link deps — its CMakeLists
     # find_package()s these; the grpc-chain (re2/c-ares) comes with libgrpc-dev:
     libboost-system-dev

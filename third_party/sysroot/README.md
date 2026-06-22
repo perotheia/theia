@@ -7,7 +7,12 @@ recreate them on demand.
 
 | Script | Target | Result |
 |---|---|---|
-| `setup_rpi4.sh` | Raspberry Pi 4 (aarch64, Debian 13 trixie) | `rpi4/` (~444 MB) |
+| `setup_rpi4.sh` | Raspberry Pi 4 (aarch64, Debian 12 bookworm) | `rpi4/` (~444 MB) |
+
+> Sysroot suite is **bookworm**, not the Pi's trixie: the host's gcc-11/12 cross
+> toolchain can't resolve trixie's glibc-2.38 / GLIBCXX-3.4.32 symbols. bookworm
+> matches gcc-11/12 and runs on trixie via glibc forward-compat. See
+> `setup_rpi4.sh`'s header.
 
 Each sysroot pulls in the lib*-dev packages Theia links against
 (`libyaml-cpp-dev`, `libprotobuf-dev`, `libgrpc++-dev`, `libgrpc-dev`,

@@ -63,7 +63,14 @@ void forward_to_fsm(const char* node, const char* name, Evt evt) {
 // ---- OTP init/1 — passive ingest. Seed the thresholds from the .art
 //      PhmConfig defaults (per casts a ConfigUpdated when etcd changes them).
 void PhmGate::init(PhmGateState& s) {
-    s.config = system_services_phm_PhmConfig_init_zero;
+    // Reset to zero, then seed the non-default thresholds. Use value-init `= {}`
+    // (a valid assignment) rather than `= ..._init_zero` (a brace-INIT list): the
+    // nanopb macro is fine as a declaration initializer but assigning it to an
+    // already-constructed struct is rejected by stricter toolchains (the rpi4
+    // aarch64-linux-gnu-g++ does, the host g++ tolerates it). The state member is
+    // already _init_zero at construction (PhmGate_state.hh), so this is just an
+    // explicit re-seed for a reused state.
+    s.config = {};
     s.config.restart_window_ms = 30000;
     s.config.restart_warn      = 1;
     s.config.restart_degrade   = 3;

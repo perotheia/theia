@@ -210,23 +210,8 @@ void ctl_set_log_level(const std::string& child, uint32_t level) {
     resolve_and_cast(child, m);
 }
 
-// pg membership push: build the PgMembership proto + cast it to a watcher's
-// RECEIVE address (given explicitly by the engine — no name resolution). Same
-// control-only-touches-transport + short-budget rules as resolve_and_cast.
-void ctl_push_pg(uint32_t watcher_type, uint32_t watcher_instance,
-                 uint32_t group_id, const uint32_t* members, uint32_t n) {
-    if (!g_ctl) return;
-    system_supervisor_PgMembership m{};
-    m.group_id      = group_id;
-    m.members_count = (n > 64u) ? 64u : n;     // PgMember max_count:64
-    for (uint32_t i = 0; i < m.members_count; ++i) {
-        m.members[i].tipc_type     = members[2 * i];
-        m.members[i].tipc_instance = members[2 * i + 1];
-    }
-    ::theia::runtime::cast(*g_ctl, m,
-                           ::theia::runtime::TipcAddr{watcher_type, watcher_instance},
-                           /*dst_name=*/nullptr, /*connect_timeout_ms=*/250);
-}
+// (pg has no push: delivery is TIPC name-sequence multicast by the broadcaster.
+//  The supervisor only allocates type+instance in the PgJoin CALL reply below.)
 
 }  // namespace
 
@@ -247,10 +232,6 @@ void SupervisorCtl::init(SupervisorCtlState& /*s*/) {
     };
     fwd.set_log_level     = [](const char* c, uint32_t l) {
         ctl_set_log_level(c, l);
-    };
-    fwd.push_pg           = [](uint32_t wt, uint32_t wi, uint32_t gid,
-                               const uint32_t* members, uint32_t n) {
-        ctl_push_pg(wt, wi, gid, members, n);
     };
     ::supervisor::set_emit_forwarder(fwd);
 }
@@ -289,50 +270,47 @@ void SupervisorCtl::handle_cast(const SendTimeoutReport& msg,
     e->enqueue(std::move(c));
 }
 
-// pg join/leave/watch (node → supervisor) → engine ExecCommands. The engine
-// owns the registry; the watchdog reaps a dead member. group_id = the wire
-// message-type service_id the joining node receives / the watcher broadcasts.
-void SupervisorCtl::handle_cast(const PgJoin& msg, SupervisorCtlState& /*s*/) {
+// pg join/resolve (node → supervisor, CALL). The supervisor allocates the group's
+// 0x8003 type (once per group_name = the wire message-type name) + a unique
+// instance (join=true) or returns the type with instance 0 (resolve-only). The
+// member binds {group_type, instance}; a broadcaster sends to {group_type, 0..~0}.
+// pid is bookkeeping for the watchdog reap (frees the instance), NOT identity.
+PgJoinReply SupervisorCtl::handle_call(const PgJoinReq& req,
+                                       SupervisorCtlState& /*s*/) {
     using Op = ::supervisor::ExecCommand::Op;
-    auto* e = engine();
-    if (!e) return;
+    PgJoinReply rep{};
+    auto* eng = engine();
+    if (!eng) { rep.status = 4; return rep; }   // invalid_request (no engine)
     ::supervisor::ExecCommand c;
-    c.op            = Op::PgJoin;
-    c.name          = s(msg.node_name);
-    c.pid           = static_cast<pid_t>(msg.pid);
-    c.group_id      = msg.group_id;
-    c.tipc_type     = msg.tipc_type;
-    c.tipc_instance = msg.tipc_instance;
-    e->enqueue(std::move(c));
+    c.op         = Op::PgJoin;
+    c.name       = s(req.node_name);
+    c.pid        = static_cast<pid_t>(req.pid);   // member's pid → watchdog reap
+    c.group_name = s(req.group_name);
+    c.pg_join    = req.join;
+    auto r = eng->call(std::move(c));
+    rep.status     = r.status;
+    rep.group_type = r.pg_group_type;
+    rep.instance   = r.pg_instance;
+    return rep;
 }
 
-void SupervisorCtl::handle_cast(const PgLeave& msg, SupervisorCtlState& /*s*/) {
+ControlReply SupervisorCtl::handle_call(const PgLeaveReq& req,
+                                        SupervisorCtlState& /*s*/) {
     using Op = ::supervisor::ExecCommand::Op;
-    auto* e = engine();
-    if (!e) return;
-    ::supervisor::ExecCommand c;
-    c.op       = Op::PgLeave;
-    c.name     = s(msg.node_name);
-    c.pid      = static_cast<pid_t>(msg.pid);
-    c.group_id = msg.group_id;
-    e->enqueue(std::move(c));
-}
-
-void SupervisorCtl::handle_cast(const PgWatch& msg, SupervisorCtlState& /*s*/) {
-    using Op = ::supervisor::ExecCommand::Op;
-    auto* e = engine();
-    if (!e) return;
-    ::supervisor::ExecCommand c;
-    c.op            = Op::PgWatch;
-    c.name          = s(msg.node_name);
-    c.pid           = static_cast<pid_t>(msg.pid);
-    c.group_id      = msg.group_id;
-    // The watcher's RECEIVE address for PgMembership = its SupervisorEventIf
-    // receiver. A broadcaster watches from its own node addr; the engine stores
-    // (tipc_type, tipc_instance) to push membership back. PgWatch carries them.
-    c.tipc_type     = msg.tipc_type;
-    c.tipc_instance = msg.tipc_instance;
-    e->enqueue(std::move(c));
+    auto* eng = engine();
+    uint32_t status = 4;
+    if (eng) {
+        ::supervisor::ExecCommand c;
+        c.op          = Op::PgLeave;
+        c.name        = s(req.node_name);
+        c.group_name  = s(req.group_name);
+        c.group_type  = req.group_type;
+        c.pg_instance = req.instance;
+        status = eng->call(std::move(c)).status;
+    }
+    ControlReply rep;
+    set_reply(rep, status, s(req.node_name));
+    return rep;
 }
 
 

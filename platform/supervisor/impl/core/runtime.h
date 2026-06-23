@@ -218,6 +218,8 @@ struct ExecReply {
     std::string                 logger_machine_sink;  // GetLoggerPolicy (the
                                              // un-expanded machine THEIA_LOGGER_POLICY)
     SystemInfoData              sysinfo;     // GetSystemInfo
+    uint32_t                    pg_group_type{0};  // PgJoin reply: allocated 0x8003 type
+    uint32_t                    pg_instance{0};    // PgJoin reply: allocated instance
     // GetTombstone — the crashed child's tombstone text (capped) + metadata.
     bool                        tomb_found{false};
     std::string                 tomb_path;       // on-host path of the file
@@ -233,10 +235,10 @@ struct ExecCommand {
         TerminateChild, OnHeartbeat, OnSendTimeout, ConfigureTrace,
         ConfigureLogLevel, GetTree, GetSystemInfo, GetTraceConfig,
         GetLogLevelConfig, GetLoggerPolicy, GetTombstone, GetHealth, Shutdown,
-        // process groups (pg): a node joins/leaves a group (= a wire message
-        // type) to receive its broadcasts; a broadcaster watches a group to be
-        // pushed its membership. Reaped by the watchdog on heartbeat-miss/SIGCHLD.
-        PgJoin, PgLeave, PgWatch,
+        // process groups (pg): CALLs. PgJoin allocates the group_type (0x8003) +
+        // a unique instance (or resolve-only); PgLeave frees the instance. The
+        // watchdog frees a dead member's instances. Delivery is TIPC multicast.
+        PgJoin, PgLeave,
     };
     Op op;
 
@@ -263,11 +265,13 @@ struct ExecCommand {
     uint32_t                 kind{0};       // ConfigureTrace
     uint32_t                 level{0};      // ConfigureLogLevel
 
-    // pg (PgJoin / PgLeave / PgWatch). group_id = the wire message-type service_id.
-    // tipc_type/tipc_instance = the joining member's RECEIVE address (PgJoin only).
-    uint32_t                 group_id{0};
-    uint32_t                 tipc_type{0};
-    uint32_t                 tipc_instance{0};
+    // pg (PgJoin / PgLeave CALLs). group_name = the wire message-type name (the
+    // group identity). join=true allocs an instance; false = resolve-only.
+    // group_type/pg_instance below carry a PgLeave's address to free.
+    std::string              group_name;
+    bool                     pg_join{true};
+    uint32_t                 group_type{0};
+    uint32_t                 pg_instance{0};
 
     // reply channel — set ONLY by call(); null for enqueue() casts.
     std::promise<ExecReply>* reply{nullptr};
@@ -295,14 +299,9 @@ struct EmitSink {
                        bool /*enabled*/)>            set_trace;
     std::function<void(const std::string& /*child*/, uint32_t /*level*/)>
                                                      set_log_level;
-    // Ask CONTROL to push a group's membership to ONE watcher (broadcaster). The
-    // engine owns the pg registry but does NOT cast: SupervisorCtl builds the
-    // PgMembership proto + casts it to the watcher's SupervisorEventIf receiver
-    // at (watcher_type, watcher_instance). members = each member's RECEIVE addr.
-    struct PgMemberAddr { uint32_t tipc_type; uint32_t tipc_instance; };
-    std::function<void(uint32_t /*watcher_type*/, uint32_t /*watcher_instance*/,
-                       uint32_t /*group_id*/,
-                       const std::vector<PgMemberAddr>& /*members*/)> push_pg;
+    // (pg has NO emit callback: delivery is TIPC name-sequence multicast done by
+    // the broadcaster directly; the supervisor only allocates type+instance via
+    // the PgJoin CALL reply — no membership push.)
 };
 
 class Supervisor {
@@ -626,27 +625,41 @@ private:
     std::map<pid_t, HeartbeatState>  heartbeats_;
     void check_heartbeats();
 
-    // ---- process groups (pg) — OTP-style broadcast fan-out ------------------
+    // ---- process groups (pg) — TIPC name-sequence multicast -----------------
     //
-    // A group is keyed by group_id = the wire message-type service_id (the same
-    // djb2 register_cast demuxes on). pg_groups_[group_id][pid] = the member's
-    // RECEIVE address. pg_watchers_[group_id][pid] = a broadcaster of that type
-    // (so we know whom to push membership to). Both are reaped by the watchdog:
-    // pg_reap_pid() drops a dead pid from every group + watcher set and re-pushes
-    // membership to affected groups — liveness is the heartbeat, NOT a per-member
-    // socket. This makes pg available to ANY heartbeating node, not just children.
-    struct PgMemberRec { uint32_t tipc_type{0}; uint32_t tipc_instance{0}; };
-    std::map<uint32_t, std::map<pid_t, PgMemberRec>> pg_groups_;    // group→members
-    std::map<uint32_t, std::map<pid_t, PgMemberRec>> pg_watchers_;  // group→broadcasters
+    // The supervisor is the pg NAMESPACE AUTHORITY. A group is identified by its
+    // NAME (= the wire message-type name, a well-known FC-header constant). The
+    // supervisor allocates the group's TIPC TYPE (from the 0x8003 space) on first
+    // use + a UNIQUE INSTANCE per member; both are reused after a member leaves /
+    // is reaped. A member binds {group_type, instance} as its receive port; a
+    // broadcaster sends ONE datagram to the name-sequence {group_type, 0..~0} →
+    // the kernel multicasts to every member. NO PID identity (the instance is the
+    // group-domain id), NO per-member cast loop, NO membership push for delivery.
+    // The registry exists for: the allocator, watchdog liveness (a reaped member's
+    // instance is freed), and introspection (who's in a group).
+    struct PgGroup {
+        uint32_t group_type{0};                  // 0x8003xxxx — allocated once
+        // instance -> the pid that holds it (for watchdog reap → free). Instance
+        // is the group identity; pid is bookkeeping for liveness only, not identity.
+        std::map<uint32_t, pid_t> members;
+        uint32_t next_instance{1};               // 0 reserved (resolve-only sentinel)
+        std::vector<uint32_t> free_instances;    // freed-and-reusable instances
+    };
+    std::map<std::string, PgGroup> pg_groups_;   // group_name -> group
+    uint32_t pg_next_type_{0x80030001u};         // next free 0x8003 group type
+    static constexpr uint32_t kPgTypeBase = 0x80030000u;
 
-    void ctl_pg_join(const std::string& node, pid_t pid, uint32_t group_id,
-                     uint32_t tipc_type, uint32_t tipc_instance);
-    void ctl_pg_leave(pid_t pid, uint32_t group_id);
-    void ctl_pg_watch(const std::string& node, pid_t pid, uint32_t group_id,
-                      uint32_t tipc_type, uint32_t tipc_instance);
-    void pg_reap_pid(pid_t pid);                 // drop pid from all groups (watchdog)
-    void push_pg_membership(uint32_t group_id);  // push to every watcher of group_id
-    bool pg_has_pid(pid_t pid) const;            // is pid in any group/watcher set?
+    // CALL handlers. join (alloc instance) or resolve-only (instance 0); both
+    // return {status, group_type, instance}. leave frees the instance. The
+    // supervisor allocates the type on first use of group_name.
+    void ctl_pg_join(const std::string& node, pid_t pid,
+                     const std::string& group_name, bool join,
+                     uint32_t& out_status, uint32_t& out_type,
+                     uint32_t& out_instance);
+    void ctl_pg_leave(const std::string& group_name, uint32_t group_type,
+                      uint32_t instance, uint32_t& out_status);
+    void pg_reap_pid(pid_t pid);                 // free every instance held by pid (watchdog)
+    bool pg_has_pid(pid_t pid) const;            // does pid hold any group instance?
 
     // ---- Trace config (#361, #403) -----------------------------------------
     //

@@ -587,78 +587,75 @@ void Supervisor::ctl_on_heartbeat(const std::string& node_name, pid_t pid,
 }
 
 // ---------------------------------------------------------------------------
-// Process groups (pg) — OTP-style broadcast fan-out, watchdog-monitored.
+// Process groups (pg) — TIPC name-sequence multicast, supervisor-allocated.
 //
-// A node JOINs a group (= a wire message type) to receive its broadcasts; a
-// broadcaster WATCHEs the groups it sends to be pushed the membership. The
-// engine owns the registry + decides WHO to push; SupervisorCtl (via emit_.
-// push_pg) does the actual cast. Liveness is the heartbeat: pg_reap_pid drops a
-// dead member from every group on watchdog-miss / SIGCHLD (no per-member socket).
+// The supervisor is the pg NAMESPACE AUTHORITY: it allocates a group's TIPC TYPE
+// (0x8003 space, once per group NAME = the wire message-type name) + a UNIQUE
+// INSTANCE per member, reusing freed instances. A member binds {group_type,
+// instance}; a broadcaster sends to {group_type, 0..~0} (kernel multicast). NO
+// PID identity — the instance is the group-domain id; pid is bookkeeping for the
+// watchdog reap only. NO membership push / per-member loop: the kernel fans out.
 // ---------------------------------------------------------------------------
 
+// PgJoin/Resolve: allocate (or look up) the group's type; for join, allocate a
+// unique instance + record the holding pid (so the watchdog can free it). For
+// resolve-only (join=false) just return the type with instance 0.
 void Supervisor::ctl_pg_join(const std::string& node, pid_t pid,
-                             uint32_t group_id, uint32_t tipc_type,
-                             uint32_t tipc_instance) {
-    // Arm the watchdog for this member from its first join (tree-independent:
-    // a sidecar like tdb gets monitored even though it's not a forked child).
-    // Its keepalive heartbeats keep the entry alive; a miss evicts it from pg.
+                             const std::string& group_name, bool join,
+                             uint32_t& out_status, uint32_t& out_type,
+                             uint32_t& out_instance) {
+    PgGroup& g = pg_groups_[group_name];
+    if (g.group_type == 0) {                     // first use of this group name
+        g.group_type = pg_next_type_++;          // allocate a fresh 0x8003 type
+    }
+    out_type = g.group_type;
+    out_instance = 0;
+    out_status = 0;
+    if (!join) return;                           // resolve-only (a pure sender)
+
+    // Allocate an instance: reuse a freed one, else bump next_instance.
+    uint32_t inst;
+    if (!g.free_instances.empty()) {
+        inst = g.free_instances.back();
+        g.free_instances.pop_back();
+    } else {
+        inst = g.next_instance++;
+    }
+    g.members[inst] = pid;
+    out_instance = inst;
+    // Arm the watchdog for this member (tree-independent: a sidecar like tdb is
+    // monitored too). Its keepalive heartbeats keep it alive; a miss frees the
+    // instance via pg_reap_pid.
     heartbeats_[pid].last_seen = std::chrono::steady_clock::now();
-    pg_groups_[group_id][pid] = PgMemberRec{tipc_type, tipc_instance};
-    engine_log().debug("pg join node=" + node + " group=" +
-                       std::to_string(group_id) + " addr=" +
-                       std::to_string(tipc_type) + "/" +
-                       std::to_string(tipc_instance));
-    push_pg_membership(group_id);
+    engine_log().debug("pg join node=" + node + " group=" + group_name +
+                       " type=" + std::to_string(g.group_type) +
+                       " instance=" + std::to_string(inst));
 }
 
-void Supervisor::ctl_pg_leave(pid_t pid, uint32_t group_id) {
-    auto g = pg_groups_.find(group_id);
-    if (g == pg_groups_.end()) return;
-    if (g->second.erase(pid) == 0) return;
-    push_pg_membership(group_id);
+void Supervisor::ctl_pg_leave(const std::string& group_name, uint32_t /*group_type*/,
+                              uint32_t instance, uint32_t& out_status) {
+    out_status = 0;
+    auto it = pg_groups_.find(group_name);
+    if (it == pg_groups_.end()) return;
+    PgGroup& g = it->second;
+    if (g.members.erase(instance) > 0)
+        g.free_instances.push_back(instance);    // reuse the freed instance
 }
 
-void Supervisor::ctl_pg_watch(const std::string& node, pid_t pid,
-                              uint32_t group_id, uint32_t tipc_type,
-                              uint32_t tipc_instance) {
-    heartbeats_[pid].last_seen = std::chrono::steady_clock::now();  // arm watchdog
-    pg_watchers_[group_id][pid] = PgMemberRec{tipc_type, tipc_instance};
-    engine_log().debug("pg watch node=" + node + " group=" +
-                       std::to_string(group_id));
-    // Push the CURRENT membership to the new watcher immediately so it can
-    // broadcast without waiting for the next join.
-    push_pg_membership(group_id);
-}
-
-// Drop a dead pid from EVERY group + watcher set; re-push affected groups. Called
-// from the watchdog SIGTERM path and the SIGCHLD reap — the heartbeat IS the
-// liveness signal, so a crashed/killed member leaves all its groups at once.
+// Free EVERY group instance held by a dead pid (watchdog SIGTERM path + SIGCHLD
+// reap). The heartbeat IS the liveness signal: a crashed/killed member's
+// instances are returned to the free-list at once, reusable by the next joiner.
 void Supervisor::pg_reap_pid(pid_t pid) {
-    for (auto& [group_id, members] : pg_groups_) {
-        if (members.erase(pid) > 0) push_pg_membership(group_id);
+    for (auto& [name, g] : pg_groups_) {
+        for (auto mit = g.members.begin(); mit != g.members.end(); ) {
+            if (mit->second == pid) {
+                g.free_instances.push_back(mit->first);
+                mit = g.members.erase(mit);
+            } else {
+                ++mit;
+            }
+        }
     }
-    for (auto& [group_id, watchers] : pg_watchers_) {
-        watchers.erase(pid);
-    }
-}
-
-// Push group_id's current membership to every watcher (broadcaster) of it. The
-// engine hands SupervisorCtl the watcher's addr + the member list; the control
-// node builds + casts the PgMembership proto.
-void Supervisor::push_pg_membership(uint32_t group_id) {
-    if (!emit_.push_pg) return;
-    auto w = pg_watchers_.find(group_id);
-    if (w == pg_watchers_.end() || w->second.empty()) return;
-
-    std::vector<EmitSink::PgMemberAddr> members;
-    auto g = pg_groups_.find(group_id);
-    if (g != pg_groups_.end()) {
-        members.reserve(g->second.size());
-        for (const auto& [mpid, rec] : g->second)
-            members.push_back({rec.tipc_type, rec.tipc_instance});
-    }
-    for (const auto& [wpid, wrec] : w->second)
-        emit_.push_pg(wrec.tipc_type, wrec.tipc_instance, group_id, members);
 }
 
 // SendTimeoutReport ingress — ported from the old on_inbound_frame
@@ -1308,15 +1305,12 @@ void Supervisor::dispatch(ExecCommand& cmd) {
                                 cmd.budget_ms, cmd.observed_ms);
             break;
         case Op::PgJoin:
-            ctl_pg_join(cmd.name, cmd.pid, cmd.group_id,
-                        cmd.tipc_type, cmd.tipc_instance);
+            ctl_pg_join(cmd.name, cmd.pid, cmd.group_name, cmd.pg_join,
+                        rep.status, rep.pg_group_type, rep.pg_instance);
             break;
         case Op::PgLeave:
-            ctl_pg_leave(cmd.pid, cmd.group_id);
-            break;
-        case Op::PgWatch:
-            ctl_pg_watch(cmd.name, cmd.pid, cmd.group_id,
-                         cmd.tipc_type, cmd.tipc_instance);
+            ctl_pg_leave(cmd.group_name, cmd.group_type, cmd.pg_instance,
+                         rep.status);
             break;
         case Op::ConfigureTrace:
             rep.ok = ctl_configure_trace(cmd.name, cmd.enabled, cmd.kind);
@@ -2452,10 +2446,9 @@ void Supervisor::check_heartbeats() {
 // Is this pid a member or watcher of ANY pg group? (Keeps a sidecar's watchdog
 // entry alive even though it isn't in the worker tree.)
 bool Supervisor::pg_has_pid(pid_t pid) const {
-    for (const auto& [gid, members] : pg_groups_)
-        if (members.count(pid)) return true;
-    for (const auto& [gid, watchers] : pg_watchers_)
-        if (watchers.count(pid)) return true;
+    for (const auto& [name, g] : pg_groups_)
+        for (const auto& [inst, mpid] : g.members)
+            if (mpid == pid) return true;
     return false;
 }
 

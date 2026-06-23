@@ -539,57 +539,51 @@ message SendTimeoutReport {
     uint32  observed_ms
 }
 
-// ---- process groups (pg) — OTP-style broadcast fan-out -------------------
+// ---- process groups (pg) — TIPC name-sequence multicast fan-out ----------
 //
-// The ONE in-Theia fan-out mechanism (gen_event-style in-process subscriber
-// lists are retired; external pub/sub lives at the gRPC edge in com). A node
-// JOINS a group keyed by the wire MESSAGE TYPE (group_id = the djb2 service_id
-// the RemoteCodec already computes — the same id register_cast demuxes on). A
-// broadcaster WATCHES the groups it sends, the supervisor pushes membership on
-// change, and the broadcaster re-reads + casts to each member. Liveness is the
-// WATCHDOG: the supervisor reaps a member from ALL groups on heartbeat-miss /
-// SIGCHLD — no per-subscriber socket-EOF bookkeeping, no unsubscribe races.
+// The ONE in-Theia broadcast mechanism (gen_event-style subscriber lists are
+// retired; external pub/sub lives at the gRPC edge in com). A group is the set of
+// nodes interested in one wire MESSAGE TYPE. Delivery is TIPC name-sequence
+// MULTICAST: every member binds {group_type, unique_instance} and the broadcaster
+// sends ONE datagram to the range {group_type, 0..~0} → the kernel delivers a copy
+// to every member (NOT anycast — distinct instances of a shared type). The
+// SUPERVISOR is the namespace authority: it allocates the group_type (0x8003xxxx)
+// + a unique instance per member, keyed by the group NAME = the wire message-type
+// name string (a WELL-KNOWN constant in the FC's RemoteCodec header, e.g.
+// "system_services_log_TraceRecord" — NOT a free-form string; pg_join<T>() derives
+// it from T). Liveness = the WATCHDOG: a reaped member's instance is freed +
+// reused. No PID identity (PID is an unrelated OS domain), no per-member cast loop,
+// no membership push for delivery (the broadcaster multicasts to the range).
 
-// node → supervisor: "add me to group_id; deliver its messages to my receiver
-// at (tipc_type, tipc_instance)". Sent at node init for each receiver-port type.
-message PgJoin {
+// node → supervisor (CALL): "join the group named `group_name` (= the message-type
+// name) — allocate me a unique instance and tell me the group_type to bind." A
+// pure broadcaster passes join=false (PgResolve via the same op) to just LEARN the
+// type without taking an instance.
+message PgJoinReq {
     string  node_name
-    sint32  pid
-    uint32  group_id           // RemoteCodec<Msg>::service_id of the wire type
-    uint32  tipc_type          // the member's RECEIVE address for this group
-    uint32  tipc_instance
+    sint32  pid                        // the member's pid — the watchdog reap
+                                       // correlates it with the member's heartbeat
+                                       // to free its instance on death (liveness
+                                       // bookkeeping only; NOT the group identity)
+    string  group_name [max_size:64]   // the wire message-type name (well-known)
+    bool    join                       // true=join (alloc instance); false=resolve only
 }
 
-// node → supervisor: "remove me from group_id" (a node leaving a group at will;
-// crash/stop is handled by the watchdog reap, no PgLeave needed).
-message PgLeave {
+// supervisor → node (CALL reply): the group's allocated TIPC type + (for join) the
+// member's allocated instance. The member binds {group_type, instance}; a
+// broadcaster sends to {group_type, 0..~0}. status: 0=ok.
+message PgJoinReply {
+    uint32  status
+    uint32  group_type                 // 0x8003xxxx — the group's TIPC service type
+    uint32  instance                   // this member's unique instance (0 for resolve-only)
+}
+
+// node → supervisor (CALL): "leave the group; free my instance for reuse."
+message PgLeaveReq {
     string  node_name
-    sint32  pid
-    uint32  group_id
-}
-
-// node → supervisor: "I BROADCAST group_id — push me its membership on change".
-// Sent at node init for each sender-port type. The supervisor replies with the
-// current PgMembership and re-pushes whenever the group changes.
-message PgWatch {
-    string  node_name
-    sint32  pid
-    uint32  group_id
-    uint32  tipc_type          // the watcher's RECEIVE addr for PgMembership push
-    uint32  tipc_instance
-}
-
-// One group member's receive address.
-message PgMember {
-    uint32  tipc_type
-    uint32  tipc_instance
-}
-
-// supervisor → broadcaster: the current members of group_id. Pushed on every
-// membership change (join / leave / watchdog reap) to each watcher of the group.
-message PgMembership {
-    uint32   group_id
-    repeated PgMember members [max_count:64]
+    string  group_name [max_size:64]
+    uint32  group_type
+    uint32  instance
 }
 
 // ---- interfaces ----------------------------------------------------------
@@ -605,6 +599,12 @@ interface clientServer SupervisorControlIf {
     // probe; StartChild clears the hold. (Replaces SuspendChild/ResumeChild.)
     operation TerminateChild(in sel: ChildSelector) returns ControlReply
     operation Stop() returns ControlReply
+    // process groups: join/resolve a group by NAME → {group_type, instance} the
+    // member binds; leave frees the instance. The supervisor allocates the
+    // 0x8003 group_type + the per-member instance (no PID). Delivery is TIPC
+    // name-sequence multicast to {group_type, 0..~0} — not via the supervisor.
+    operation PgJoin(in req: PgJoinReq) returns PgJoinReply
+    operation PgLeave(in req: PgLeaveReq) returns ControlReply
     operation GetSystemInfo(in req: GetSystemInfoRequest) returns SystemInfo
     // Latest HealthBeacon (workers/restarts/tombstones/uptime). com polls this
     // alongside GetTree to feed the GUI Load panel; the supervisor returns its
@@ -653,9 +653,6 @@ interface senderReceiver SupervisorEventIf {
     data NodeEdge         edge
     data NodeState        node_state
     data SnapshotEnd      snap_end
-    // pg membership push (supervisor → broadcaster): the current members of a
-    // group, sent to each watcher of that group whenever it changes.
-    data PgMembership     pg_membership
 }
 
 // Inbound — every running node sends to this receiver. The supervisor
@@ -665,11 +662,6 @@ interface senderReceiver SupervisorEventIf {
 interface senderReceiver NodeReportIf {
     data HeartbeatReport   heartbeat
     data SendTimeoutReport send_timeout
-    // pg membership control (node → supervisor): join a group / leave a group /
-    // watch a group's membership (for broadcasters). Keyed by message-type id.
-    data PgJoin            pg_join
-    data PgLeave           pg_leave
-    data PgWatch           pg_watch
 }
 
 // The Supervisor node type and the wiring composition live in the sibling

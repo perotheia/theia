@@ -149,34 +149,34 @@ public:
 
     // ---- process groups (pg): MANUAL pub/sub, the node decides WHEN ------
     //
-    // OTP pg:join/leave shape. Declaring a port wires the CAPABILITY (codec +
-    // broadcast_*); JOINING a group to actually receive, or WATCHING it before
-    // broadcasting, is a DELIBERATE call the node makes from init()/a handler —
-    // never automatic. group_id = RemoteCodec<T>::service_id (the wire type).
-    //   pg_join<T>()   — consume T's broadcast group (deliver to this node).
-    //   pg_watch<T>()  — be pushed T's membership (call before broadcast_*<...>).
-    //   pg_leave<T>()  — stop consuming T.
-    //   pg_members<T>()— this node's current view of T's group (broadcaster loop).
-    // pg_set_addr() is called once by main.cc with this node's resolved TIPC addr
-    // so join/watch tell the supervisor where to deliver.
-    void pg_set_addr(uint32_t t, uint32_t i) { pg_rx_type_ = t; pg_rx_inst_ = i; }
-    template <typename T> void pg_join() {
-        ::theia::runtime::PgClient::instance().join(
-            ::theia::runtime::RemoteCodec<T>::service_id, pg_rx_type_, pg_rx_inst_);
+    // OTP pg:join/leave shape over TIPC name-sequence MULTICAST. A group's
+    // identity is its message TYPE T (group name = msg_type_name<T>(), a
+    // generated .art-derived wire constant — no strings, no collision). The
+    // SUPERVISOR is the namespace authority: pg_join<T>() CALLs it, gets a
+    // {group_type, unique instance}, and binds a recv socket — received group
+    // frames flow into this node's normal handle_cast via its demux. A
+    // broadcaster pg_resolve<T>()s the type once, then broadcast<T>() multicasts
+    // ONE datagram to the whole group (the kernel fans out — no per-member loop).
+    // JOINING/RESOLVING/BROADCASTING are DELIBERATE node calls (from init()/a
+    // handler), never automatic.
+    //   pg_join<T>()    — consume T's group (deliver to this node's handle_cast).
+    //   pg_resolve<T>() — learn T's group_type before broadcasting (sender only).
+    //   pg_leave<T>()   — stop consuming T (frees the instance).
+    //   broadcast_<port>_<data>(msg) — multicast to T's whole group.
+    // pg_attach() is called once by main.cc with this node's name + demux binding
+    // so PgClient can route received frames into the node and label CALLs.
+    void pg_attach(const char* node_name, ::theia::runtime::NodeBinding* b) {
+        pg_.attach(node_name, b);
     }
-    template <typename T> void pg_watch() {
-        ::theia::runtime::PgClient::instance().watch(
-            ::theia::runtime::RemoteCodec<T>::service_id, pg_rx_type_, pg_rx_inst_);
+    template <typename T> ::theia::runtime::PgClient::Group pg_join() {
+        return pg_.join<T>();
     }
-    template <typename T> void pg_leave() {
-        ::theia::runtime::PgClient::instance().leave(
-            ::theia::runtime::RemoteCodec<T>::service_id);
+    template <typename T> ::theia::runtime::PgClient::Group pg_resolve() {
+        if (!pg_groups_[::theia::runtime::RemoteCodec<T>::service_id].ok)
+            pg_groups_[::theia::runtime::RemoteCodec<T>::service_id] = pg_.resolve<T>();
+        return pg_groups_[::theia::runtime::RemoteCodec<T>::service_id];
     }
-    template <typename T>
-    std::vector<::theia::runtime::PgClient::Member> pg_members() {
-        return ::theia::runtime::PgClient::instance().members(
-            ::theia::runtime::RemoteCodec<T>::service_id);
-    }
+    template <typename T> void pg_leave() { pg_.leave<T>(); }
 
 
     // ---- Subscriber registration ----------------------------------
@@ -339,10 +339,12 @@ public:
 
 
 private:
-    // This node's TIPC receive address — where pg_join/pg_watch<T>() tell the
-    // supervisor to deliver. Set once by main.cc via pg_set_addr().
-    uint32_t pg_rx_type_ = kTipcType;
-    uint32_t pg_rx_inst_ = kTipcInstance;
+    // The node's process-group client: owns the recv thread for joined groups and
+    // the supervisor CALL channel. Attached to this node's demux via pg_attach()
+    // from main.cc. Idle (no thread, no socket) until the first pg_join/broadcast.
+    ::theia::runtime::PgClient pg_;
+    // group_type cache for broadcasters: service_id(T) -> resolved {type,inst}.
+    std::map<uint16_t, ::theia::runtime::PgClient::Group> pg_groups_;
 
     struct EventsEventEntry {
         uint32_t id;
@@ -446,19 +448,19 @@ inline void SupervisorCtl::unsubscribe_events_event(uint32_t id) {
 }
 
 inline void SupervisorCtl::broadcast_events_event(const SupervisionEvent& msg) {
-    // OTP-pg fan-out: cast `msg` to every member of its TYPE's process group
-    // (group_id = RemoteCodec<SupervisionEvent>::service_id, the same id the receiver's
-    // register_cast demuxes on). The supervisor maintains membership via the
-    // watchdog + pushes it to this broadcaster (which watches the group at init).
-    // Best-effort, short connect budget — a slow/absent member never stalls us;
-    // the in-process subscriber list (above) is retained but unused (gen_event
-    // retired). 250ms/cast keeps the node thread responsive (defer-from-handler).
-    const uint32_t _gid = ::theia::runtime::RemoteCodec<SupervisionEvent>::service_id;
-    for (const auto& _m : ::theia::runtime::PgClient::instance().members(_gid)) {
-        ::theia::runtime::cast(*this, msg,
-            ::theia::runtime::TipcAddr{_m.tipc_type, _m.tipc_instance},
-            /*dst_name=*/nullptr, /*connect_timeout_ms=*/250);
-    }
+    // OTP-pg multicast: encode `msg` once and send ONE datagram to its TYPE's
+    // process group {group_type, 0..~0} — the TIPC kernel fans out a copy to every
+    // bound member (no per-member loop). group identity = msg_type_name<SupervisionEvent>()
+    // (the .art wire name); the supervisor allocates group_type the first time we
+    // resolve it. Members receive it via register_cast<SupervisionEvent> (same service_id),
+    // so the receive path is the node's normal handle_cast. Best-effort (lossy).
+    auto _g = pg_resolve<SupervisionEvent>();
+    if (!_g.ok) return;                       // supervisor unreachable — drop
+    uint8_t _buf[8192];
+    pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
+    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<SupervisionEvent>::fields(), &msg))
+        return;
+    pg_.broadcast<SupervisionEvent>(_g.type, _buf, static_cast<uint16_t>(_os.bytes_written));
 }
 
 inline uint32_t SupervisorCtl::subscribe_events_health(
@@ -477,19 +479,19 @@ inline void SupervisorCtl::unsubscribe_events_health(uint32_t id) {
 }
 
 inline void SupervisorCtl::broadcast_events_health(const HealthBeacon& msg) {
-    // OTP-pg fan-out: cast `msg` to every member of its TYPE's process group
-    // (group_id = RemoteCodec<HealthBeacon>::service_id, the same id the receiver's
-    // register_cast demuxes on). The supervisor maintains membership via the
-    // watchdog + pushes it to this broadcaster (which watches the group at init).
-    // Best-effort, short connect budget — a slow/absent member never stalls us;
-    // the in-process subscriber list (above) is retained but unused (gen_event
-    // retired). 250ms/cast keeps the node thread responsive (defer-from-handler).
-    const uint32_t _gid = ::theia::runtime::RemoteCodec<HealthBeacon>::service_id;
-    for (const auto& _m : ::theia::runtime::PgClient::instance().members(_gid)) {
-        ::theia::runtime::cast(*this, msg,
-            ::theia::runtime::TipcAddr{_m.tipc_type, _m.tipc_instance},
-            /*dst_name=*/nullptr, /*connect_timeout_ms=*/250);
-    }
+    // OTP-pg multicast: encode `msg` once and send ONE datagram to its TYPE's
+    // process group {group_type, 0..~0} — the TIPC kernel fans out a copy to every
+    // bound member (no per-member loop). group identity = msg_type_name<HealthBeacon>()
+    // (the .art wire name); the supervisor allocates group_type the first time we
+    // resolve it. Members receive it via register_cast<HealthBeacon> (same service_id),
+    // so the receive path is the node's normal handle_cast. Best-effort (lossy).
+    auto _g = pg_resolve<HealthBeacon>();
+    if (!_g.ok) return;                       // supervisor unreachable — drop
+    uint8_t _buf[8192];
+    pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
+    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<HealthBeacon>::fields(), &msg))
+        return;
+    pg_.broadcast<HealthBeacon>(_g.type, _buf, static_cast<uint16_t>(_os.bytes_written));
 }
 
 inline uint32_t SupervisorCtl::subscribe_events_snap_begin(
@@ -508,19 +510,19 @@ inline void SupervisorCtl::unsubscribe_events_snap_begin(uint32_t id) {
 }
 
 inline void SupervisorCtl::broadcast_events_snap_begin(const SnapshotBegin& msg) {
-    // OTP-pg fan-out: cast `msg` to every member of its TYPE's process group
-    // (group_id = RemoteCodec<SnapshotBegin>::service_id, the same id the receiver's
-    // register_cast demuxes on). The supervisor maintains membership via the
-    // watchdog + pushes it to this broadcaster (which watches the group at init).
-    // Best-effort, short connect budget — a slow/absent member never stalls us;
-    // the in-process subscriber list (above) is retained but unused (gen_event
-    // retired). 250ms/cast keeps the node thread responsive (defer-from-handler).
-    const uint32_t _gid = ::theia::runtime::RemoteCodec<SnapshotBegin>::service_id;
-    for (const auto& _m : ::theia::runtime::PgClient::instance().members(_gid)) {
-        ::theia::runtime::cast(*this, msg,
-            ::theia::runtime::TipcAddr{_m.tipc_type, _m.tipc_instance},
-            /*dst_name=*/nullptr, /*connect_timeout_ms=*/250);
-    }
+    // OTP-pg multicast: encode `msg` once and send ONE datagram to its TYPE's
+    // process group {group_type, 0..~0} — the TIPC kernel fans out a copy to every
+    // bound member (no per-member loop). group identity = msg_type_name<SnapshotBegin>()
+    // (the .art wire name); the supervisor allocates group_type the first time we
+    // resolve it. Members receive it via register_cast<SnapshotBegin> (same service_id),
+    // so the receive path is the node's normal handle_cast. Best-effort (lossy).
+    auto _g = pg_resolve<SnapshotBegin>();
+    if (!_g.ok) return;                       // supervisor unreachable — drop
+    uint8_t _buf[8192];
+    pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
+    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<SnapshotBegin>::fields(), &msg))
+        return;
+    pg_.broadcast<SnapshotBegin>(_g.type, _buf, static_cast<uint16_t>(_os.bytes_written));
 }
 
 inline uint32_t SupervisorCtl::subscribe_events_edge(
@@ -539,19 +541,19 @@ inline void SupervisorCtl::unsubscribe_events_edge(uint32_t id) {
 }
 
 inline void SupervisorCtl::broadcast_events_edge(const NodeEdge& msg) {
-    // OTP-pg fan-out: cast `msg` to every member of its TYPE's process group
-    // (group_id = RemoteCodec<NodeEdge>::service_id, the same id the receiver's
-    // register_cast demuxes on). The supervisor maintains membership via the
-    // watchdog + pushes it to this broadcaster (which watches the group at init).
-    // Best-effort, short connect budget — a slow/absent member never stalls us;
-    // the in-process subscriber list (above) is retained but unused (gen_event
-    // retired). 250ms/cast keeps the node thread responsive (defer-from-handler).
-    const uint32_t _gid = ::theia::runtime::RemoteCodec<NodeEdge>::service_id;
-    for (const auto& _m : ::theia::runtime::PgClient::instance().members(_gid)) {
-        ::theia::runtime::cast(*this, msg,
-            ::theia::runtime::TipcAddr{_m.tipc_type, _m.tipc_instance},
-            /*dst_name=*/nullptr, /*connect_timeout_ms=*/250);
-    }
+    // OTP-pg multicast: encode `msg` once and send ONE datagram to its TYPE's
+    // process group {group_type, 0..~0} — the TIPC kernel fans out a copy to every
+    // bound member (no per-member loop). group identity = msg_type_name<NodeEdge>()
+    // (the .art wire name); the supervisor allocates group_type the first time we
+    // resolve it. Members receive it via register_cast<NodeEdge> (same service_id),
+    // so the receive path is the node's normal handle_cast. Best-effort (lossy).
+    auto _g = pg_resolve<NodeEdge>();
+    if (!_g.ok) return;                       // supervisor unreachable — drop
+    uint8_t _buf[8192];
+    pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
+    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<NodeEdge>::fields(), &msg))
+        return;
+    pg_.broadcast<NodeEdge>(_g.type, _buf, static_cast<uint16_t>(_os.bytes_written));
 }
 
 inline uint32_t SupervisorCtl::subscribe_events_node_state(
@@ -570,19 +572,19 @@ inline void SupervisorCtl::unsubscribe_events_node_state(uint32_t id) {
 }
 
 inline void SupervisorCtl::broadcast_events_node_state(const NodeState& msg) {
-    // OTP-pg fan-out: cast `msg` to every member of its TYPE's process group
-    // (group_id = RemoteCodec<NodeState>::service_id, the same id the receiver's
-    // register_cast demuxes on). The supervisor maintains membership via the
-    // watchdog + pushes it to this broadcaster (which watches the group at init).
-    // Best-effort, short connect budget — a slow/absent member never stalls us;
-    // the in-process subscriber list (above) is retained but unused (gen_event
-    // retired). 250ms/cast keeps the node thread responsive (defer-from-handler).
-    const uint32_t _gid = ::theia::runtime::RemoteCodec<NodeState>::service_id;
-    for (const auto& _m : ::theia::runtime::PgClient::instance().members(_gid)) {
-        ::theia::runtime::cast(*this, msg,
-            ::theia::runtime::TipcAddr{_m.tipc_type, _m.tipc_instance},
-            /*dst_name=*/nullptr, /*connect_timeout_ms=*/250);
-    }
+    // OTP-pg multicast: encode `msg` once and send ONE datagram to its TYPE's
+    // process group {group_type, 0..~0} — the TIPC kernel fans out a copy to every
+    // bound member (no per-member loop). group identity = msg_type_name<NodeState>()
+    // (the .art wire name); the supervisor allocates group_type the first time we
+    // resolve it. Members receive it via register_cast<NodeState> (same service_id),
+    // so the receive path is the node's normal handle_cast. Best-effort (lossy).
+    auto _g = pg_resolve<NodeState>();
+    if (!_g.ok) return;                       // supervisor unreachable — drop
+    uint8_t _buf[8192];
+    pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
+    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<NodeState>::fields(), &msg))
+        return;
+    pg_.broadcast<NodeState>(_g.type, _buf, static_cast<uint16_t>(_os.bytes_written));
 }
 
 inline uint32_t SupervisorCtl::subscribe_events_snap_end(
@@ -601,19 +603,19 @@ inline void SupervisorCtl::unsubscribe_events_snap_end(uint32_t id) {
 }
 
 inline void SupervisorCtl::broadcast_events_snap_end(const SnapshotEnd& msg) {
-    // OTP-pg fan-out: cast `msg` to every member of its TYPE's process group
-    // (group_id = RemoteCodec<SnapshotEnd>::service_id, the same id the receiver's
-    // register_cast demuxes on). The supervisor maintains membership via the
-    // watchdog + pushes it to this broadcaster (which watches the group at init).
-    // Best-effort, short connect budget — a slow/absent member never stalls us;
-    // the in-process subscriber list (above) is retained but unused (gen_event
-    // retired). 250ms/cast keeps the node thread responsive (defer-from-handler).
-    const uint32_t _gid = ::theia::runtime::RemoteCodec<SnapshotEnd>::service_id;
-    for (const auto& _m : ::theia::runtime::PgClient::instance().members(_gid)) {
-        ::theia::runtime::cast(*this, msg,
-            ::theia::runtime::TipcAddr{_m.tipc_type, _m.tipc_instance},
-            /*dst_name=*/nullptr, /*connect_timeout_ms=*/250);
-    }
+    // OTP-pg multicast: encode `msg` once and send ONE datagram to its TYPE's
+    // process group {group_type, 0..~0} — the TIPC kernel fans out a copy to every
+    // bound member (no per-member loop). group identity = msg_type_name<SnapshotEnd>()
+    // (the .art wire name); the supervisor allocates group_type the first time we
+    // resolve it. Members receive it via register_cast<SnapshotEnd> (same service_id),
+    // so the receive path is the node's normal handle_cast. Best-effort (lossy).
+    auto _g = pg_resolve<SnapshotEnd>();
+    if (!_g.ok) return;                       // supervisor unreachable — drop
+    uint8_t _buf[8192];
+    pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
+    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<SnapshotEnd>::fields(), &msg))
+        return;
+    pg_.broadcast<SnapshotEnd>(_g.type, _buf, static_cast<uint16_t>(_os.bytes_written));
 }
 
 inline uint32_t SupervisorCtl::subscribe_child_ctrl_trace_ctrl(
@@ -632,19 +634,19 @@ inline void SupervisorCtl::unsubscribe_child_ctrl_trace_ctrl(uint32_t id) {
 }
 
 inline void SupervisorCtl::broadcast_child_ctrl_trace_ctrl(const TraceControlPush& msg) {
-    // OTP-pg fan-out: cast `msg` to every member of its TYPE's process group
-    // (group_id = RemoteCodec<TraceControlPush>::service_id, the same id the receiver's
-    // register_cast demuxes on). The supervisor maintains membership via the
-    // watchdog + pushes it to this broadcaster (which watches the group at init).
-    // Best-effort, short connect budget — a slow/absent member never stalls us;
-    // the in-process subscriber list (above) is retained but unused (gen_event
-    // retired). 250ms/cast keeps the node thread responsive (defer-from-handler).
-    const uint32_t _gid = ::theia::runtime::RemoteCodec<TraceControlPush>::service_id;
-    for (const auto& _m : ::theia::runtime::PgClient::instance().members(_gid)) {
-        ::theia::runtime::cast(*this, msg,
-            ::theia::runtime::TipcAddr{_m.tipc_type, _m.tipc_instance},
-            /*dst_name=*/nullptr, /*connect_timeout_ms=*/250);
-    }
+    // OTP-pg multicast: encode `msg` once and send ONE datagram to its TYPE's
+    // process group {group_type, 0..~0} — the TIPC kernel fans out a copy to every
+    // bound member (no per-member loop). group identity = msg_type_name<TraceControlPush>()
+    // (the .art wire name); the supervisor allocates group_type the first time we
+    // resolve it. Members receive it via register_cast<TraceControlPush> (same service_id),
+    // so the receive path is the node's normal handle_cast. Best-effort (lossy).
+    auto _g = pg_resolve<TraceControlPush>();
+    if (!_g.ok) return;                       // supervisor unreachable — drop
+    uint8_t _buf[8192];
+    pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
+    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<TraceControlPush>::fields(), &msg))
+        return;
+    pg_.broadcast<TraceControlPush>(_g.type, _buf, static_cast<uint16_t>(_os.bytes_written));
 }
 
 inline uint32_t SupervisorCtl::subscribe_child_ctrl_log_level(
@@ -663,19 +665,19 @@ inline void SupervisorCtl::unsubscribe_child_ctrl_log_level(uint32_t id) {
 }
 
 inline void SupervisorCtl::broadcast_child_ctrl_log_level(const LogLevelPush& msg) {
-    // OTP-pg fan-out: cast `msg` to every member of its TYPE's process group
-    // (group_id = RemoteCodec<LogLevelPush>::service_id, the same id the receiver's
-    // register_cast demuxes on). The supervisor maintains membership via the
-    // watchdog + pushes it to this broadcaster (which watches the group at init).
-    // Best-effort, short connect budget — a slow/absent member never stalls us;
-    // the in-process subscriber list (above) is retained but unused (gen_event
-    // retired). 250ms/cast keeps the node thread responsive (defer-from-handler).
-    const uint32_t _gid = ::theia::runtime::RemoteCodec<LogLevelPush>::service_id;
-    for (const auto& _m : ::theia::runtime::PgClient::instance().members(_gid)) {
-        ::theia::runtime::cast(*this, msg,
-            ::theia::runtime::TipcAddr{_m.tipc_type, _m.tipc_instance},
-            /*dst_name=*/nullptr, /*connect_timeout_ms=*/250);
-    }
+    // OTP-pg multicast: encode `msg` once and send ONE datagram to its TYPE's
+    // process group {group_type, 0..~0} — the TIPC kernel fans out a copy to every
+    // bound member (no per-member loop). group identity = msg_type_name<LogLevelPush>()
+    // (the .art wire name); the supervisor allocates group_type the first time we
+    // resolve it. Members receive it via register_cast<LogLevelPush> (same service_id),
+    // so the receive path is the node's normal handle_cast. Best-effort (lossy).
+    auto _g = pg_resolve<LogLevelPush>();
+    if (!_g.ok) return;                       // supervisor unreachable — drop
+    uint8_t _buf[8192];
+    pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
+    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<LogLevelPush>::fields(), &msg))
+        return;
+    pg_.broadcast<LogLevelPush>(_g.type, _buf, static_cast<uint16_t>(_os.bytes_written));
 }
 
 inline uint32_t SupervisorCtl::subscribe_child_ctrl_config_push(
@@ -694,19 +696,19 @@ inline void SupervisorCtl::unsubscribe_child_ctrl_config_push(uint32_t id) {
 }
 
 inline void SupervisorCtl::broadcast_child_ctrl_config_push(const ConfigUpdated& msg) {
-    // OTP-pg fan-out: cast `msg` to every member of its TYPE's process group
-    // (group_id = RemoteCodec<ConfigUpdated>::service_id, the same id the receiver's
-    // register_cast demuxes on). The supervisor maintains membership via the
-    // watchdog + pushes it to this broadcaster (which watches the group at init).
-    // Best-effort, short connect budget — a slow/absent member never stalls us;
-    // the in-process subscriber list (above) is retained but unused (gen_event
-    // retired). 250ms/cast keeps the node thread responsive (defer-from-handler).
-    const uint32_t _gid = ::theia::runtime::RemoteCodec<ConfigUpdated>::service_id;
-    for (const auto& _m : ::theia::runtime::PgClient::instance().members(_gid)) {
-        ::theia::runtime::cast(*this, msg,
-            ::theia::runtime::TipcAddr{_m.tipc_type, _m.tipc_instance},
-            /*dst_name=*/nullptr, /*connect_timeout_ms=*/250);
-    }
+    // OTP-pg multicast: encode `msg` once and send ONE datagram to its TYPE's
+    // process group {group_type, 0..~0} — the TIPC kernel fans out a copy to every
+    // bound member (no per-member loop). group identity = msg_type_name<ConfigUpdated>()
+    // (the .art wire name); the supervisor allocates group_type the first time we
+    // resolve it. Members receive it via register_cast<ConfigUpdated> (same service_id),
+    // so the receive path is the node's normal handle_cast. Best-effort (lossy).
+    auto _g = pg_resolve<ConfigUpdated>();
+    if (!_g.ok) return;                       // supervisor unreachable — drop
+    uint8_t _buf[8192];
+    pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
+    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<ConfigUpdated>::fields(), &msg))
+        return;
+    pg_.broadcast<ConfigUpdated>(_g.type, _buf, static_cast<uint16_t>(_os.bytes_written));
 }
 
 

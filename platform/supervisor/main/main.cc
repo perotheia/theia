@@ -190,20 +190,14 @@ int main(int argc, char** argv) {
         config_mux.register_cast<SendTimeoutReport>(supervisor_ctl_cfg, supervisor_ctl);
         // ---- process groups (pg): MANUAL pub/sub control ------------------
         // The node OWNS its group membership: it calls pg_join<T>() to consume a
-        // broadcast group, pg_watch<T>() before it intends to broadcast, and
+        // broadcast group, pg_resolve<T>()/broadcast_*() to publish, and
         // pg_leave<T>() to stop — from its OWN logic (init()/handlers), NOT
-        // automatically here. We only wire the CAPABILITY to receive membership
-        // pushes (a raw inline dispatch entry → PgClient cache); a node that never
-        // joins/watches gets no pushes. This is manual, like OTP pg:join/leave —
-        // declaring a port means "I CAN", not "subscribe me".
-        config_mux.register_raw_inline(supervisor_ctl_cfg,
-            ::theia::runtime::PgClient::kMembershipSid,
-            [](const uint8_t* p, uint16_t l) {
-                ::theia::runtime::PgClient::instance().on_membership(p, l);
-            });
-        // Record this node's receive address so its pg_join/pg_watch<T>() calls
-        // can tell the supervisor where to deliver (set once the addr is known).
-        supervisor_ctl.pg_set_addr(supervisor_ctl_type, supervisor_ctl_inst);
+        // automatically here. We only ATTACH the node's PgClient to its demux
+        // binding so a received group datagram routes into the node's normal
+        // handle_cast (entries[service_id] filled by register_cast above) and the
+        // supervisor CALL is labelled with this node's name. Manual, like OTP
+        // pg:join/leave — declaring a port means "I CAN", not "subscribe me".
+        supervisor_ctl.pg_attach(SupervisorCtl::kNodeName, supervisor_ctl_cfg);
     } else {
         supervisor_ctl.log().warn("config service bind failed; live log-level "
                                  "push + signal inject disabled");

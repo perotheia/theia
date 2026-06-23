@@ -121,15 +121,23 @@ public:
             watched_[sid].on_change = std::move(on_change);
             watched_[sid].group_name = gname;
         }
-        // Receive the supervisor's PgMembership pushes. A GenServer watcher has a
-        // binding (the push arrives on its mux → dispatch_frame_); a runnable
-        // watcher (e.g. the LOG pump) has none, so bind a bare recv socket at the
-        // watcher addr + run the recv thread (the push routes to apply_membership_
-        // by kMembershipSid). Both end at apply_membership_.
-        if (binding_) install_membership_handler_();
-        else if (watcher_type) bind_recv_(watcher_type, watcher_instance,
-                                          "__pg_watch__");
-        Group g = call_watch_(gname, watcher_type, watcher_instance, /*watch=*/true);
+        // The supervisor pushes PgMembership as an RDM datagram (PG recv sockets
+        // are RDM), so we MUST receive it on an RDM socket — NOT a GenServer's
+        // SEQPACKET mux binding (an RDM sendto to a SEQPACKET-bound name is
+        // dropped). So ALWAYS self-bind a dedicated RDM watcher socket, and bind
+        // it at a DISTINCT instance from the node's own bind (pid-derived, high
+        // bit set) so the push can't land on the node's SEQPACKET socket. Reuse
+        // one watcher socket across all watched groups (set once).
+        if (!pg_watch_bound_) {
+            uint32_t wtype = watcher_type ? watcher_type : 0x80060000u;
+            uint32_t winst = (static_cast<uint32_t>(self_pid_) & 0x7FFFu) | 0x8000u;
+            bind_recv_(wtype, winst, "__pg_watch__");
+            pg_watch_addr_type_ = wtype;
+            pg_watch_addr_inst_ = winst;
+            pg_watch_bound_ = true;
+        }
+        Group g = call_watch_(gname, pg_watch_addr_type_, pg_watch_addr_inst_,
+                              /*watch=*/true);
         return g;   // members already cached by call_watch_'s reply parse
     }
     // The producer's current view of group T's members (the watch cache).
@@ -587,6 +595,9 @@ private:
     std::mutex                       wmu_;   // guards watched_
     std::map<uint16_t, Watched>      watched_;   // service_id(T) → watch cache
     bool                             membership_handler_installed_{false};
+    bool                             pg_watch_bound_{false};  // RDM watcher socket up
+    uint32_t                         pg_watch_addr_type_{0};  // its addr (→ supervisor)
+    uint32_t                         pg_watch_addr_inst_{0};
 };
 
 }}  // namespace theia::runtime

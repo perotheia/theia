@@ -4,21 +4,23 @@
 // loop on in_records (0x80010013, the address every node's Tracer submits to).
 // For each inbound TraceRecord datagram it pulls the RAW proto-wire payload
 // (never decodes — TraceRecord strings/bytes are nanopb pb_callback fields) and
-// hands it to the process-global TraceHub: ring + fan-out to subscribers. The
-// atomic TraceCtl node feeds the same hub from the Subscribe side.
+// PG-MULTICASTS it VERBATIM to the TraceRecord group: one TIPC name-sequence
+// datagram → the kernel fans out a copy to every observer that pg_joined. No
+// ring, no Subscribe RPC, no per-subscriber unicast registry (all removed —
+// tracecat is a LIVE tail; the supervisor allocates each observer's address).
 //
-// SOCK_DGRAM (NOT SEQPACKET): the sender side — Tracer::TraceSubmitter — is a
-// connectionless SOCK_DGRAM that sendto()s the collector's TIPC name per record
-// (lossy-OK firehose, never blocks the dispatch thread). The two MUST agree on
-// socket type — a DGRAM sendto() to a SEQPACKET listener is silently dropped by
-// the kernel (no connection, wrong type), which is exactly why records never
-// arrived. So the pump binds DGRAM and recvfrom()s; no listen/accept.
+// SOCK_DGRAM (NOT SEQPACKET) on the INGEST side: Tracer::TraceSubmitter is a
+// connectionless SOCK_DGRAM that sendto()s the collector's name per record
+// (lossy-OK firehose). The pump binds DGRAM and recvfrom()s; no listen/accept.
 //
-// GenRunnable has no State struct, so the bound fd is a do_loop() local; the
-// loop exits cooperatively on stop_requested() (the 100ms select timeout makes
-// it responsive without a wake socket).
+// The EGRESS side is PgClient: resolve the TraceRecord group's type once (a CALL
+// to the supervisor allocator — log[] is a normal FC here, NOT the allocator,
+// so the self-CALL hazard does not apply), then multicast each record by raw
+// bytes (PgClient::broadcast takes the encoded payload + service_id — no decode).
 //
-// See docs/tasks/TODO/composition-isolation-test.md.
+// GenRunnable has no State struct, so the bound fd + PgClient are do_loop()
+// locals; the loop exits cooperatively on stop_requested() (the 100ms select
+// timeout makes it responsive without a wake socket).
 
 #include "lib/TraceStreamPump.hh"
 
@@ -32,9 +34,14 @@
 #include <cstring>
 
 #include "TheiaMsgHeader.hh"
-#include "impl/trace_hub.hpp"
+#include "PgClient.hh"          // PG name-sequence multicast egress
+#include "lib/log_codecs.hh"    // RemoteCodec<system_services_log_TraceRecord>
 
 namespace ara::log {
+
+// The TraceRecord wire type — its NAME is the PG group identity (the same
+// msg_type_name<T>() an observer's pg_join uses).
+using TraceRecord = system_services_log_TraceRecord;
 
 namespace {
 constexpr int kRecvBuf = 4096;
@@ -70,6 +77,14 @@ void TraceStreamPump::do_loop() {
                      kNodeName, kTipcType);
         return;
     }
+    // PG egress: the pump is the TraceRecord group's broadcaster. Resolve the
+    // group_type LAZILY on the first record (the supervisor may not be up at
+    // boot); re-resolve until it succeeds. log[] is a normal FC (not the
+    // allocator), so this CALL is fine.
+    ::theia::runtime::PgClient pg;
+    pg.attach(kNodeName, /*binding=*/nullptr);   // pure broadcaster: no recv side
+    uint32_t group_type = 0;
+
     uint8_t buf[kRecvBuf];
     while (!stop_requested()) {
         fd_set rfds;
@@ -91,8 +106,15 @@ void TraceStreamPump::do_loop() {
         // Guard proto_len against a short/truncated datagram.
         size_t avail = static_cast<size_t>(r) - sizeof(hdr);
         size_t plen  = hdr.proto_len <= avail ? hdr.proto_len : avail;
-        TraceHub::instance().submit(
-            std::string(reinterpret_cast<const char*>(payload), plen));
+
+        if (group_type == 0) {                       // not yet resolved
+            auto g = pg.resolve<TraceRecord>();
+            if (!g.ok) continue;                     // supervisor down — drop record
+            group_type = g.type;
+        }
+        // ONE name-sequence multicast → every observer that pg_joined the group.
+        pg.broadcast<TraceRecord>(group_type, payload,
+                                  static_cast<uint16_t>(plen));
     }
     ::close(fd);
     std::fprintf(stderr, "[%s] trace pump loop exiting\n", kNodeName);

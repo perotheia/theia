@@ -3,7 +3,8 @@ package system.services.log
 
 // The LOG/TRACE FC. Two parallel firehoses, each a runnable pump + an atomic
 // control node sharing a process-global hub:
-//   - TRACE: TraceStreamPump (raw record fan-out) + TraceCtl (Subscribe),
+//   - TRACE: TraceStreamPump (raw record PG multicast; no Subscribe — observers
+//            pg_join the TraceRecord group),
 //            sharing TraceHub.
 //   - LOG:   LogStreamPump (tails node log files, fan-out) + LogDaemon
 //            (Subscribe + supervisor GetLoggerPolicy), sharing LogHub.
@@ -13,5 +14,4 @@ composition Log {
     prototype LogDaemon       log_daemon
     prototype LogStreamPump    log_pump
     prototype TraceStreamPump trace_pump
-    prototype TraceCtl        trace_ctl
 }

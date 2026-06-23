@@ -1,17 +1,17 @@
-// trace_link — com's subscriber to log[trace]'s TIPC trace hub (Phase C).
+// trace_link — com's PG member for log[trace]'s TraceRecord group.
 //
-// The trace egress moved INTO com (TraceForwarder runnable). TraceLink is the
-// TIPC half: it binds a SEQPACKET subscriber socket, gen_calls SubscribeReq to
-// log[trace]'s TraceCtl (0x80010014/0) with that address, then accepts the
-// hub's connection and receives raw TraceRecord casts (the SAME path tdb
-// logcat / artheia.observer uses). Each record's raw proto-wire bytes are
-// handed to a sink callback — TraceForwarder_handlers.cc parses them into a
-// libprotobuf services.com.TraceRecord and fans out to gRPC subscribers.
+// The trace egress lives IN com (TraceForwarder runnable). TraceLink is the
+// in-Theia half: it pg_joins the TraceRecord group — the supervisor allocates
+// com's delivery address — and TraceStreamPump PG-multicasts every record to it
+// (the SAME live stream tdb tracecat / artheia.observer get). Each record's raw
+// proto-wire bytes are handed to a sink callback; TraceForwarder_handlers.cc
+// parses them into a libprotobuf services.com.TraceRecord and fans out to gRPC
+// subscribers. (Pre-PG this was a SEQPACKET Subscribe to TraceCtl — both gone.)
 //
-// Like sup_link, the nanopb world (SubscribeReq encode, the TipcMux/RemoteRef)
-// is confined to trace_link.cc so it never meets the libprotobuf gRPC edge.
-// The sink takes RAW bytes (no proto type crosses this header), so the gRPC
-// side re-parses them into its own libprotobuf TraceRecord — byte-identical.
+// The PgClient world is confined to trace_link.cc so this header stays free of
+// runtime/TIPC types. The sink takes RAW bytes (no proto type crosses this
+// header), so the gRPC side re-parses them into its own libprotobuf
+// TraceRecord — byte-identical.
 
 #pragma once
 

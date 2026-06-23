@@ -134,22 +134,10 @@ message TraceRecord {
 // supervisor.ConfigureTrace owns the typed TraceConfig + survives restart.
 // log[trace] is subscription-only. See feedback-trace-config-ownership.)
 
-message TraceEmpty { }
-
-// Subscribe request — an observer (artheia.observer / tdb) registering for
-// the trace firehose. The collector adds the (sub_type, sub_instance) to its
-// subscriber registry, spills the ring buffer backlog to it, then casts every
-// live TraceRecord to it (application-level fan-out — TIPC service addressing
-// is competing-consumer, so broadcast is explicit per-subscriber unicast).
-// Liveness is by the SEQPACKET connection: when the observer's socket closes,
-// the collector demonitors it (OTP monitor). kind/target_node are optional
-// server-side filters (0/"" = everything).
-message SubscribeReq {
-    uint32 sub_type        // the observer's bound TIPC service type
-    uint32 sub_instance    // its instance (distinct per observer)
-    uint32 kind            // TraceKind filter; 0 = all kinds
-    string target_node [callback]     // node-name filter; "" = all nodes
-}
+// (TraceEmpty / SubscribeReq REMOVED — the Subscribe RPC + per-subscriber
+// unicast fan-out is gone. Observers now pg_join the TraceRecord group and the
+// pump PG-multicasts each record. kind/node filtering is client-side. No ring
+// backlog: tracecat is a LIVE tail (logs are readable from files/syslog).)
 
 
 // ─── Trace interfaces ─────────────────────────────────────────────────
@@ -173,14 +161,9 @@ interface senderReceiver TraceRecordSubmit {
     data TraceRecord rec
 }
 
-// Observer subscription control. An observer calls Subscribe with its own
-// (type,instance); the collector registers it, spills the ring backlog, then
-// fans live records to it. This is the REMOTE subscribe surface (the generated
-// in-process subscribe_stream_out_rec callback is unreachable by a remote
-// node). Unsubscribe is implicit: the SEQPACKET connection closing demonitors.
-interface clientServer TraceStreamSub {
-    operation Subscribe(in r:SubscribeReq) returns TraceEmpty
-}
+// (TraceStreamSub interface REMOVED — replaced by PG. An observer pg_joins the
+// TraceRecord group; the supervisor allocates its delivery address; the pump
+// multicasts. No Subscribe RPC, no per-subscriber registry, no ring spill.)
 
 
 // ─── Log stream (logcat) wire types ──────────────────────────────────
@@ -302,21 +285,22 @@ node runnable LogStreamPump {
 //                          flows so it survives restart
 //   (operational events — e.g. "subscriber attached" — log to the node's
 //    own runtime sink, not a TIPC port)
-// The trace hub is TWO nodes sharing one process-global TraceHub (ring +
-// subscriber registry, mutex-guarded; impl/trace_hub.hpp):
+// The trace hub is now ONE node (TraceCtl + the ring/subscriber registry are
+// gone — replaced by PG multicast):
 //
 //   TraceStreamPump (runnable)  — the hot path. Owns a thread + its own loop
-//     reading RAW TraceRecord wire off in_records; pushes each into the ring
-//     and fans it out VERBATIM to every subscriber. Never decodes (TraceRecord
-//     strings/bytes are nanopb pb_callback fields — only the observer decodes,
-//     via libprotobuf + JSON). A dumb fast byte pipe.
-//
-//   TraceCtl (atomic)           — the control plane. gen_server handle_call for
-//     Subscribe (register an observer into the hub) and Configure (relay trace
-//     config to the supervisor). Request/reply shaped, low rate.
+//     reading RAW TraceRecord wire off in_records (the address every node's
+//     Tracer submits to), and PG-MULTICASTS each record VERBATIM to the
+//     TraceRecord group (one name-sequence datagram → the kernel fans out to
+//     every observer that pg_joined). Never decodes (TraceRecord strings/bytes
+//     are nanopb pb_callback fields — only the observer decodes). A dumb fast
+//     byte pipe: producers in, one multicast out. NO ring (tracecat is a live
+//     tail), NO Subscribe RPC, NO per-subscriber unicast registry.
 
 // Runnable: the raw record stream pump. tipc 0x80010013 (the address Tracer
-// submits to — kCollectorTipcType).
+// submits to — kCollectorTipcType). `stream_out provides TraceRecordStream`
+// declares the TraceRecord type the pump multicasts — its wire NAME is the PG
+// group identity (msg_type_name<TraceRecord>()) observers pg_join.
 node runnable TraceStreamPump {
     tipc type=0x80010013 instance=0
     tag = "LOG"
@@ -324,24 +308,8 @@ node runnable TraceStreamPump {
         receiver in_records     requires TraceRecordSubmit
         sender   stream_out     provides TraceRecordStream
     }
-    // Always-on circular trace buffer (logcat-style ring). The pump is
-    // subscriber #0: every submitted record lands in the ring, so a late
-    // observer gets backlog on Subscribe. Tunable per deployment (etcd-backed).
-    params {
-        trace_ring_records : uint32 = 4096
-    }
 }
 
-// Atomic: the subscribe/config control plane. tipc 0x80010014.
-node atomic TraceCtl {
-    tipc type=0x80010014 instance=0
-    tag = "LOG"
-    ports {
-        // Subscription-only: trace CONFIG is the supervisor's job now
-        // (tdb → supervisor.ConfigureTrace → node, survives restart). TraceCtl
-        // owns only the observer SUBSCRIPTION. The old ctl_tdb/ctl_com
-        // (TraceControl.Configure) + to_supervisor relay were dropped — see
-        // feedback-trace-config-ownership.
-        server   ctl_sub        provides TraceStreamSub
-    }
-}
+// (TraceCtl node REMOVED — the Subscribe/ctl_sub control plane is gone. Trace
+// CONFIG was already the supervisor's job (tdb → supervisor.ConfigureTrace →
+// node). The observer SUBSCRIPTION is now PG: pg_join the TraceRecord group.)

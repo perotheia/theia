@@ -35,6 +35,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <string>
@@ -93,6 +94,18 @@ public:
     }
     template <typename T> void leave() {
         unbind_recv_(msg_type_name<T>());
+    }
+
+    // RECEIVER (non-node consumer, e.g. com's trace_link): join group T and route
+    // each received record's RAW proto bytes to `sink` — no NodeBinding/demux
+    // needed. The sink runs on the recv thread; keep it cheap (copy + enqueue).
+    // Used where the consumer is not a GenServer node (a gRPC bridge, a tool).
+    template <typename T>
+    Group join_raw(std::function<void(const uint8_t*, uint16_t)> sink) {
+        raw_sink_ = std::move(sink);
+        Group g = call_join_(msg_type_name<T>(), /*join=*/true);
+        if (g.ok) bind_recv_(g.type, g.instance, msg_type_name<T>());
+        return g;
     }
 
     // Broadcast `payload` (already proto-encoded T) to the WHOLE group: one
@@ -270,16 +283,17 @@ private:
             }
         }
     }
-    // Route a received group frame through the node's OWN demux table — the same
-    // entries[service_id].dispatch the mux would invoke for a SEQPACKET cast.
+    // Route a received group frame: to a raw sink (non-node consumer) if set,
+    // else through the node's OWN demux table — the same entries[service_id]
+    // .dispatch the mux would invoke for a SEQPACKET cast.
     void dispatch_frame_(const uint8_t* frame, size_t n) {
-        if (!binding_) return;
         TheiaMsgHeader hdr{};
         std::memcpy(&hdr, frame, sizeof(hdr));
-        uint16_t sid = hdr.rpc.service_id;
         uint16_t len = hdr.proto_len;
         if (sizeof(hdr) + len > n) len = static_cast<uint16_t>(n - sizeof(hdr));
-        auto it = binding_->entries.find(sid);
+        if (raw_sink_) { raw_sink_(frame + sizeof(hdr), len); return; }
+        if (!binding_) return;
+        auto it = binding_->entries.find(hdr.rpc.service_id);
         if (it == binding_->entries.end()) return;   // not a type this node takes
         it->second.dispatch(frame + sizeof(hdr), len, /*reply_fd=*/-1,
                             hdr.rpc.correlation_id);
@@ -356,6 +370,7 @@ private:
     pid_t              self_pid_;
     std::string        node_name_;
     NodeBinding*       binding_ = nullptr;   // the node's demux (not owned)
+    std::function<void(const uint8_t*, uint16_t)> raw_sink_;  // non-node consumer
     int                call_fd_ = -1;
     uint32_t           corr_ = 0;
 

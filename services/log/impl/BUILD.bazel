@@ -16,7 +16,6 @@ cc_library(
     name = "log_state",
     hdrs = [
         "LogDaemon_state.hh",
-        "TraceCtl_state.hh",
         "LogStreamPump_state.hh",
         # TraceStreamPump / LogStreamPump are GenRunnables — the LogStreamPump
         # State header is a write-once stub (runnable has no real state) but the
@@ -35,16 +34,14 @@ cc_library(
         "LogDaemon_handlers.cc",
         "LogStreamPump_handlers.cc",
         "TraceStreamPump_handlers.cc",
-        "TraceCtl_handlers.cc",
     ],
-    # Each pair of nodes shares a process-global hub (ring + subscriber
-    # registry). `..` so they resolve `#include "impl/<hub>.hpp"` from the
-    # services/log/ root.
-    #   trace_hub.hpp  — TraceStreamPump + TraceCtl
+    # The LOG nodes share a process-global hub (ring + subscriber registry).
+    # `..` so they resolve `#include "impl/<hub>.hpp"` from the services/log/
+    # root. (The TRACE side no longer has a hub — TraceStreamPump PG-multicasts
+    # each record directly; the old trace_hub.hpp + TraceCtl were removed.)
     #   log_hub.hpp    — LogStreamPump + LogDaemon (also calls the supervisor's
     #                    GetLoggerPolicy, so it pulls the supervisor proto).
     hdrs = [
-        "trace_hub.hpp",
         "log_hub.hpp",
     ],
     includes = [".."],

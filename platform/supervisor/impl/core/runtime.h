@@ -646,6 +646,7 @@ private:
                       uint32_t tipc_type, uint32_t tipc_instance);
     void pg_reap_pid(pid_t pid);                 // drop pid from all groups (watchdog)
     void push_pg_membership(uint32_t group_id);  // push to every watcher of group_id
+    bool pg_has_pid(pid_t pid) const;            // is pid in any group/watcher set?
 
     // ---- Trace config (#361, #403) -----------------------------------------
     //

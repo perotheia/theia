@@ -599,6 +599,10 @@ void Supervisor::ctl_on_heartbeat(const std::string& node_name, pid_t pid,
 void Supervisor::ctl_pg_join(const std::string& node, pid_t pid,
                              uint32_t group_id, uint32_t tipc_type,
                              uint32_t tipc_instance) {
+    // Arm the watchdog for this member from its first join (tree-independent:
+    // a sidecar like tdb gets monitored even though it's not a forked child).
+    // Its keepalive heartbeats keep the entry alive; a miss evicts it from pg.
+    heartbeats_[pid].last_seen = std::chrono::steady_clock::now();
     pg_groups_[group_id][pid] = PgMemberRec{tipc_type, tipc_instance};
     engine_log().debug("pg join node=" + node + " group=" +
                        std::to_string(group_id) + " addr=" +
@@ -617,6 +621,7 @@ void Supervisor::ctl_pg_leave(pid_t pid, uint32_t group_id) {
 void Supervisor::ctl_pg_watch(const std::string& node, pid_t pid,
                               uint32_t group_id, uint32_t tipc_type,
                               uint32_t tipc_instance) {
+    heartbeats_[pid].last_seen = std::chrono::steady_clock::now();  // arm watchdog
     pg_watchers_[group_id][pid] = PgMemberRec{tipc_type, tipc_instance};
     engine_log().debug("pg watch node=" + node + " group=" +
                        std::to_string(group_id));
@@ -2399,12 +2404,19 @@ void Supervisor::check_heartbeats() {
     }
 
     for (auto it = heartbeats_.begin(); it != heartbeats_.end(); ) {
-        if (by_pid.find(it->first) == by_pid.end()) {
+        const pid_t hb_pid = it->first;
+        WorkerNode* w = (by_pid.count(hb_pid)) ? by_pid[hb_pid] : nullptr;
+        const bool pg_member = pg_has_pid(hb_pid);
+
+        // A heartbeats_ entry whose pid is NOT in the worker tree is a SIDECAR
+        // (tdb / GUI) that joined a pg — the watchdog monitors it the SAME way,
+        // tree-independent (joining a pg ⇒ "monitor me"). Only drop a non-tree
+        // entry if it's ALSO not a pg member (truly stale).
+        if (!w && !pg_member) {
             it = heartbeats_.erase(it);
             continue;
         }
-        WorkerNode* held_w = by_pid[it->first];
-        if (held_w && held_w->held) {
+        if (w && w->held) {
             // HELD for test mocking — not expected to beat. Drop the entry so
             // it isn't watchdogged; ResumeChild restarts + re-arms.
             it = heartbeats_.erase(it);
@@ -2412,23 +2424,39 @@ void Supervisor::check_heartbeats() {
         }
         auto age = duration_cast<milliseconds>(now - it->second.last_seen);
         if (age > kMaxAge) {
-            WorkerNode* w = by_pid[it->first];
-            std::ostringstream msg;
-            msg << "watchdog: " << w->name << " (pid=" << w->pid
-                << ") missed heartbeats (last seen "
-                << age.count() << " ms ago); SIGTERMing";
-            log_warn(msg.str());
-            // Surface as a supervision event with kind=8 (watchdog).
-            emit_event(/*kind=*/8, w, supervisor_of(*w), 0, "", msg.str());
-            // Kill — the normal SIGCHLD reap + restart strategy applies.
-            ::kill(w->pid, SIGTERM);
-            // Drop the entry now; the next heartbeat (from the
-            // restarted instance, if it heartbeats at all) re-arms.
+            if (w) {
+                std::ostringstream msg;
+                msg << "watchdog: " << w->name << " (pid=" << w->pid
+                    << ") missed heartbeats (last seen " << age.count()
+                    << " ms ago); SIGTERMing";
+                log_warn(msg.str());
+                emit_event(/*kind=*/8, w, supervisor_of(*w), 0, "", msg.str());
+                ::kill(w->pid, SIGTERM);   // SIGCHLD reap + restart strategy
+            } else {
+                // Sidecar pg member missed its keepalive — evict it from pg (no
+                // worker to SIGTERM). The shrunk membership push tells watchers.
+                log_warn("watchdog: sidecar pg member (pid=" +
+                         std::to_string(static_cast<int>(hb_pid)) +
+                         ") missed heartbeats; evicting from pg");
+            }
+            // Reap from ALL pg groups now (prompt eviction; the worker path also
+            // pg_reaps on SIGCHLD, but a missed-but-alive worker leaves promptly).
+            pg_reap_pid(hb_pid);
             it = heartbeats_.erase(it);
         } else {
             ++it;
         }
     }
+}
+
+// Is this pid a member or watcher of ANY pg group? (Keeps a sidecar's watchdog
+// entry alive even though it isn't in the worker tree.)
+bool Supervisor::pg_has_pid(pid_t pid) const {
+    for (const auto& [gid, members] : pg_groups_)
+        if (members.count(pid)) return true;
+    for (const auto& [gid, watchers] : pg_watchers_)
+        if (watchers.count(pid)) return true;
+    return false;
 }
 
 // ---------------------------------------------------------------------------

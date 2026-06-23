@@ -229,8 +229,28 @@ void ctl_set_log_level(const std::string& child, uint32_t level) {
     resolve_and_cast(child, m);
 }
 
-// (pg has no push: delivery is TIPC name-sequence multicast by the broadcaster.
-//  The supervisor only allocates type+instance in the PgJoin CALL reply below.)
+// OTP pg:monitor — cast a PgMembership to ONE watcher's EXPLICIT address (not a
+// node name; the watcher gave its bound addr in PgWatch). Builds the nanopb
+// PgMembership from the flat member array the engine handed us. Same 250ms
+// fast-fail connect budget as resolve_and_cast.
+void ctl_push_pg_membership(uint32_t watcher_type, uint32_t watcher_instance,
+                            const char* group_name, uint32_t group_type,
+                            const uint32_t* members_flat, uint32_t count) {
+    if (!g_ctl) return;
+    PgMembership m{};
+    m.status     = 0;
+    std::snprintf(m.group_name, sizeof(m.group_name), "%s",
+                  group_name ? group_name : "");
+    m.group_type = group_type;
+    m.members_count = count > 64 ? 64 : count;
+    for (uint32_t i = 0; i < m.members_count; ++i) {
+        m.members[i].tipc_type     = members_flat[2 * i];
+        m.members[i].tipc_instance = members_flat[2 * i + 1];
+    }
+    ::theia::runtime::cast(*g_ctl, m,
+        ::theia::runtime::TipcAddr{watcher_type, watcher_instance},
+        /*dst_name=*/nullptr, /*connect_timeout_ms=*/250);
+}
 
 }  // namespace
 
@@ -252,6 +272,7 @@ void SupervisorCtl::init(SupervisorCtlState& /*s*/) {
     fwd.set_log_level     = [](const char* c, uint32_t l) {
         ctl_set_log_level(c, l);
     };
+    fwd.push_pg_membership = &ctl_push_pg_membership;   // OTP pg:monitor push
     ::supervisor::set_emit_forwarder(fwd);
 }
 
@@ -329,6 +350,37 @@ ControlReply SupervisorCtl::handle_call(const PgLeaveReq& req,
     }
     ControlReply rep;
     set_reply(rep, status, s(req.node_name));
+    return rep;
+}
+
+// pg watch (OTP pg:monitor). A PRODUCER asks to monitor `group_name`: register
+// its address as a watcher and return the current PgMembership; thereafter the
+// engine casts a fresh PgMembership to that address on every join/leave/reap.
+// watch=false demonitors. The reply IS the initial member list.
+PgMembership SupervisorCtl::handle_call(const PgWatchReq& req,
+                                        SupervisorCtlState& /*s*/) {
+    using Op = ::supervisor::ExecCommand::Op;
+    PgMembership rep{};
+    auto* eng = engine();
+    if (!eng) { rep.status = 4; return rep; }
+    ::supervisor::ExecCommand c;
+    c.op                 = Op::PgWatch;
+    c.name               = s(req.node_name);
+    c.pid                = static_cast<pid_t>(::getpid());  // watcher's process — for reap; overwritten below if probe
+    c.group_name         = s(req.group_name);
+    c.pg_member_type     = req.watcher_type;       // where to push updates
+    c.pg_member_instance = req.watcher_instance;
+    c.pg_watch           = req.watch;
+    auto r = eng->call(std::move(c));
+    rep.status     = r.status;
+    std::snprintf(rep.group_name, sizeof(rep.group_name), "%s", s(req.group_name).c_str());
+    rep.group_type = r.pg_group_type;
+    rep.members_count = static_cast<pb_size_t>(
+        r.pg_members.size() > 64 ? 64 : r.pg_members.size());
+    for (pb_size_t i = 0; i < rep.members_count; ++i) {
+        rep.members[i].tipc_type     = r.pg_members[i].first;
+        rep.members[i].tipc_instance = r.pg_members[i].second;
+    }
     return rep;
 }
 

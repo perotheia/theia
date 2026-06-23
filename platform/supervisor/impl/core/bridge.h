@@ -48,8 +48,16 @@ struct EmitForwarder {
     void (*set_trace)(const char* /*child*/, uint32_t /*kind*/,
                       bool /*enabled*/) = nullptr;
     void (*set_log_level)(const char* /*child*/, uint32_t /*level*/) = nullptr;
-    // (no pg push hook — pg delivery is TIPC multicast by the broadcaster; the
-    // engine only allocates type+instance in the PgJoin CALL reply.)
+    // OTP pg:monitor — push a group's current membership to ONE watcher. The
+    // engine (on join/leave/reap, or the PgWatch CALL) asks control to cast a
+    // system_supervisor_PgMembership to {watcher_type, watcher_instance}.
+    // members is a flat [t0,i0, t1,i1, …] array of `count` PAIRS (2*count u32s) —
+    // a plain C ABI so the EmitForwarder stays capture-free function pointers.
+    void (*push_pg_membership)(uint32_t /*watcher_type*/,
+                               uint32_t /*watcher_instance*/,
+                               const char* /*group_name*/, uint32_t /*group_type*/,
+                               const uint32_t* /*members_flat*/,
+                               uint32_t /*count*/) = nullptr;
 };
 void set_emit_forwarder(const EmitForwarder& fwd);
 const EmitForwarder& emit_forwarder();

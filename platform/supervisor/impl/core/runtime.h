@@ -218,8 +218,9 @@ struct ExecReply {
     std::string                 logger_machine_sink;  // GetLoggerPolicy (the
                                              // un-expanded machine THEIA_LOGGER_POLICY)
     SystemInfoData              sysinfo;     // GetSystemInfo
-    uint32_t                    pg_group_type{0};  // PgJoin reply: allocated 0x8003 type
+    uint32_t                    pg_group_type{0};  // PgJoin/PgWatch reply: 0x8003 type
     uint32_t                    pg_instance{0};    // PgJoin reply: allocated instance
+    std::vector<std::pair<uint32_t,uint32_t>> pg_members;  // PgWatch reply: member addrs
     // GetTombstone — the crashed child's tombstone text (capped) + metadata.
     bool                        tomb_found{false};
     std::string                 tomb_path;       // on-host path of the file
@@ -238,7 +239,7 @@ struct ExecCommand {
         // process groups (pg): CALLs. PgJoin allocates the group_type (0x8003) +
         // a unique instance (or resolve-only); PgLeave frees the instance. The
         // watchdog frees a dead member's instances. Delivery is TIPC multicast.
-        PgJoin, PgLeave,
+        PgJoin, PgLeave, PgWatch,
     };
     Op op;
 
@@ -272,6 +273,11 @@ struct ExecCommand {
     bool                     pg_join{true};
     uint32_t                 group_type{0};
     uint32_t                 pg_instance{0};
+    // PgJoin: the member's delivery addr (where producers cast). PgWatch: the
+    // watcher's addr (where the supervisor pushes PgMembership) + watch flag.
+    uint32_t                 pg_member_type{0};
+    uint32_t                 pg_member_instance{0};
+    bool                     pg_watch{true};
 
     // reply channel — set ONLY by call(); null for enqueue() casts.
     std::promise<ExecReply>* reply{nullptr};
@@ -299,9 +305,15 @@ struct EmitSink {
                        bool /*enabled*/)>            set_trace;
     std::function<void(const std::string& /*child*/, uint32_t /*level*/)>
                                                      set_log_level;
-    // (pg has NO emit callback: delivery is TIPC name-sequence multicast done by
-    // the broadcaster directly; the supervisor only allocates type+instance via
-    // the PgJoin CALL reply — no membership push.)
+    // OTP pg:monitor — push a group's current membership to ONE watcher. The
+    // engine owns the group registry but does NOT encode/socket; SupervisorCtl
+    // builds a system_supervisor_PgMembership and casts it to {watcher_type,
+    // watcher_instance}. Called on every join/leave/reap for each watcher of the
+    // affected group, and once (initially) from the PgWatch CALL handler.
+    std::function<void(uint32_t /*watcher_type*/, uint32_t /*watcher_instance*/,
+                       const std::string& /*group_name*/, uint32_t /*group_type*/,
+                       const std::vector<std::pair<uint32_t,uint32_t>>& /*members*/)>
+                                                     push_pg_membership;
 };
 
 class Supervisor {
@@ -649,13 +661,27 @@ private:
     // group-domain id), NO per-member cast loop, NO membership push for delivery.
     // The registry exists for: the allocator, watchdog liveness (a reaped member's
     // instance is freed), and introspection (who's in a group).
+    struct PgMemberRec {                          // a joined member's delivery addr
+        pid_t    pid{0};                          // watchdog-reap correlation
+        uint32_t tipc_type{0};                    // where producers cast records
+        uint32_t tipc_instance{0};
+    };
+    struct PgWatcherRec {                         // a producer monitoring the group
+        pid_t    pid{0};
+        uint32_t tipc_type{0};                    // where we push PgMembership
+        uint32_t tipc_instance{0};
+    };
     struct PgGroup {
         uint32_t group_type{0};                  // 0x8003xxxx — allocated once
-        // instance -> the pid that holds it (for watchdog reap → free). Instance
-        // is the group identity; pid is bookkeeping for liveness only, not identity.
-        std::map<uint32_t, pid_t> members;
+        // instance -> {pid, delivery addr}. Instance is the group identity; pid is
+        // liveness bookkeeping (watchdog reap → free), NOT identity.
+        std::map<uint32_t, PgMemberRec> members;
         uint32_t next_instance{1};               // 0 reserved (resolve-only sentinel)
         std::vector<uint32_t> free_instances;    // freed-and-reusable instances
+        // OTP pg:monitor — producers watching this group. Keyed by pid so a
+        // watchdog reap drops them too. The supervisor casts PgMembership to each
+        // on every join/leave/reap (the {pg_join}/{pg_leave} notification).
+        std::map<pid_t, PgWatcherRec> watchers;
     };
     std::map<std::string, PgGroup> pg_groups_;   // group_name -> group
     uint32_t pg_next_type_{0x80030001u};         // next free 0x8003 group type
@@ -666,12 +692,23 @@ private:
     // supervisor allocates the type on first use of group_name.
     void ctl_pg_join(const std::string& node, pid_t pid,
                      const std::string& group_name, bool join,
+                     uint32_t member_type, uint32_t member_instance,
                      uint32_t& out_status, uint32_t& out_type,
                      uint32_t& out_instance);
     void ctl_pg_leave(const std::string& group_name, uint32_t group_type,
                       uint32_t instance, uint32_t& out_status);
+    // OTP pg:monitor: register/drop a watcher + return the current member list.
+    void ctl_pg_watch(pid_t pid, const std::string& group_name,
+                      uint32_t watcher_type, uint32_t watcher_instance, bool watch,
+                      uint32_t& out_status, uint32_t& out_group_type,
+                      std::vector<std::pair<uint32_t,uint32_t>>& out_members);
     void pg_reap_pid(pid_t pid);                 // free every instance held by pid (watchdog)
     bool pg_has_pid(pid_t pid) const;            // does pid hold any group instance?
+
+    // The group's current member delivery addresses (type,instance).
+    std::vector<std::pair<uint32_t,uint32_t>> pg_member_list_(const PgGroup& g) const;
+    // Cast a fresh PgMembership to every watcher of `group_name` (join/leave/reap).
+    void pg_push_to_watchers_(const std::string& group_name);
 
     // ---- Trace config (#361, #403) -----------------------------------------
     //

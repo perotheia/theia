@@ -100,8 +100,20 @@ std::unique_ptr<::supervisor::Supervisor> g_engine;
     s.set_log_level = [](const std::string& child, uint32_t level) {
         if (auto fn = emit_forwarder().set_log_level) fn(child.c_str(), level);
     };
-    // (no pg push — pg delivery is TIPC multicast by the broadcaster; the engine
-    // only allocates type+instance in the PgJoin CALL reply.)
+    // OTP pg:monitor membership push — DEFER to the forwarder (same reason as
+    // set_trace: the worker is a bare thread, only SupervisorCtl may cast). Flatten
+    // the member pairs into [t0,i0,t1,i1,…] for the capture-free function pointer.
+    s.push_pg_membership = [](uint32_t wt, uint32_t wi,
+                              const std::string& group, uint32_t gtype,
+                              const std::vector<std::pair<uint32_t,uint32_t>>& mem) {
+        auto fn = emit_forwarder().push_pg_membership;
+        if (!fn) return;
+        std::vector<uint32_t> flat;
+        flat.reserve(mem.size() * 2);
+        for (const auto& [t, i] : mem) { flat.push_back(t); flat.push_back(i); }
+        fn(wt, wi, group.c_str(), gtype, flat.data(),
+           static_cast<uint32_t>(mem.size()));
+    };
     return s;
 }
 

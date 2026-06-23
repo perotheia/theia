@@ -63,3 +63,7 @@ system_supervisor.PgJoinReq.node_name   max_size:64
 system_supervisor.PgJoinReq.group_name   max_size:64
 system_supervisor.PgLeaveReq.node_name   max_size:64
 system_supervisor.PgLeaveReq.group_name   max_size:64
+system_supervisor.PgWatchReq.node_name   max_size:64
+system_supervisor.PgWatchReq.group_name   max_size:64
+system_supervisor.PgMembership.group_name   max_size:64
+system_supervisor.PgMembership.members   max_count:64

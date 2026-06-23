@@ -586,6 +586,48 @@ message PgLeaveReq {
     uint32  instance
 }
 
+// ---- OTP pg:monitor — explicit membership for a PRODUCER ----------------------
+//
+// The OTP `pg` shape: a producer pg:monitor(group)s and reacts to {pg_join,Pid}/
+// {pg_leave,Pid}. Theia equivalent: PgWatch(group_name) CALL returns the current
+// member list (= pg:get_members) AND registers the caller as a WATCHER; the
+// supervisor then PUSHES a fresh PgMembership cast whenever the group changes
+// (join / leave / watchdog-reap) — the {pg_join}/{pg_leave} notification, sent
+// list-shaped so it's idempotent (the producer just replaces its cached list).
+//
+// This is what gives a STATEFUL producer impl CONTROL: it sees the member list,
+// so broadcast_*() fans out by looping cast over it, and the impl can branch on
+// "list empty → stop tailing" (logcat) or on its own state (sm). Delivery is the
+// producer's own per-member cast loop, NOT a blind kernel multicast.
+
+// One group member's delivery address (where the producer casts records).
+message PgMember {
+    uint32  tipc_type
+    uint32  tipc_instance
+}
+
+// node → supervisor (CALL): "I want to BROADCAST to `group_name` — give me its
+// current members and monitor it for me." watcher_type/instance = where the
+// supervisor pushes PgMembership updates (the producer's own bound address).
+message PgWatchReq {
+    string  node_name
+    string  group_name     [max_size:64]
+    uint32  watcher_type               // where to push PgMembership updates
+    uint32  watcher_instance
+    bool    watch                      // true=start monitoring; false=demonitor
+}
+
+// supervisor → node: the full current member set of `group_name`. Returned by the
+// PgWatch CALL (initial) AND cast to every watcher on each change. The producer
+// REPLACES its cached list with `members` (idempotent — no join/leave deltas to
+// track). group_type lets a watcher that hasn't joined still know the type.
+message PgMembership {
+    uint32   status
+    string   group_name [max_size:64]
+    uint32   group_type
+    repeated PgMember members [max_count:64]
+}
+
 // ---- interfaces ----------------------------------------------------------
 
 interface clientServer SupervisorControlIf {
@@ -605,6 +647,10 @@ interface clientServer SupervisorControlIf {
     // name-sequence multicast to {group_type, 0..~0} — not via the supervisor.
     operation PgJoin(in req: PgJoinReq) returns PgJoinReply
     operation PgLeave(in req: PgLeaveReq) returns ControlReply
+    // PgWatch: a PRODUCER monitors a group (OTP pg:monitor). Returns the current
+    // PgMembership; the supervisor then casts a fresh PgMembership to the
+    // watcher's address on every join/leave/reap. watch=false demonitors.
+    operation PgWatch(in req: PgWatchReq) returns PgMembership
     operation GetSystemInfo(in req: GetSystemInfoRequest) returns SystemInfo
     // Latest HealthBeacon (workers/restarts/tombstones/uptime). com polls this
     // alongside GetTree to feed the GUI Load panel; the supervisor returns its

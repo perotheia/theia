@@ -293,6 +293,28 @@ message PgLeaveReq {
     uint32 instance = 4;
 }
 
+// OTP pg:monitor — explicit membership for a producer. Hand-added additively
+// (supervisor.proto is regen-hazardous; never full-regen). See package.art.
+message PgMember {
+    uint32 tipc_type = 1;
+    uint32 tipc_instance = 2;
+}
+
+message PgWatchReq {
+    string node_name = 1;
+    string group_name = 2;
+    uint32 watcher_type = 3;
+    uint32 watcher_instance = 4;
+    bool   watch = 5;
+}
+
+message PgMembership {
+    uint32 status = 1;
+    string group_name = 2;
+    uint32 group_type = 3;
+    repeated PgMember members = 4;
+}
+
 message Stop {
     // empty body
 }

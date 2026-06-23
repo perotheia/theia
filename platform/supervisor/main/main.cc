@@ -170,6 +170,8 @@ int main(int argc, char** argv) {
             supervisor_ctl_cfg, supervisor_ctl);
         config_mux.register_call<PgLeaveReq, ControlReply>(
             supervisor_ctl_cfg, supervisor_ctl);
+        config_mux.register_call<PgWatchReq, PgMembership>(
+            supervisor_ctl_cfg, supervisor_ctl);
         config_mux.register_call<GetSystemInfoRequest, SystemInfo>(
             supervisor_ctl_cfg, supervisor_ctl);
         config_mux.register_call<GetHealthRequest, HealthBeacon>(

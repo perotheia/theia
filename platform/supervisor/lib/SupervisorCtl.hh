@@ -53,6 +53,8 @@ using Stop = system_supervisor_Stop;
 using PgJoinReq = system_supervisor_PgJoinReq;
 using PgJoinReply = system_supervisor_PgJoinReply;
 using PgLeaveReq = system_supervisor_PgLeaveReq;
+using PgWatchReq = system_supervisor_PgWatchReq;
+using PgMembership = system_supervisor_PgMembership;
 using GetSystemInfoRequest = system_supervisor_GetSystemInfoRequest;
 using SystemInfo = system_supervisor_SystemInfo;
 using GetHealthRequest = system_supervisor_GetHealthRequest;
@@ -80,28 +82,10 @@ using ConfigUpdated = platform_runtime_ConfigUpdated;
 
 
 
-// One subscriber on every sender-port broadcast. Free-function so
-// the daemon doesn't care whether delivery is in-process, TIPC, or
-// gRPC. Subscribers MUST be best-effort.
-using EventsEventSubscriber =
-    std::function<void(const SupervisionEvent&)>;
-using EventsHealthSubscriber =
-    std::function<void(const HealthBeacon&)>;
-using EventsSnap_beginSubscriber =
-    std::function<void(const SnapshotBegin&)>;
-using EventsEdgeSubscriber =
-    std::function<void(const NodeEdge&)>;
-using EventsNode_stateSubscriber =
-    std::function<void(const NodeState&)>;
-using EventsSnap_endSubscriber =
-    std::function<void(const SnapshotEnd&)>;
-using Child_ctrlTrace_ctrlSubscriber =
-    std::function<void(const TraceControlPush&)>;
-using Child_ctrlLog_levelSubscriber =
-    std::function<void(const LogLevelPush&)>;
-using Child_ctrlConfig_pushSubscriber =
-    std::function<void(const ConfigUpdated&)>;
-
+// (The in-process subscriber-list / gen_event pattern is RETIRED — OTP
+// deprecated gen_event. A sender-port broadcast_*() is PURE PG multicast now;
+// consumers pg_join the message type's group. No std::function subscriber
+// typedef, no subscribe_*/unsubscribe_*, no per-node _subs_ list.)
 
 class SupervisorCtl : public ::theia::runtime::GenServer<SupervisorCtl, SupervisorCtlState> {
 public:
@@ -193,54 +177,6 @@ public:
     }
 
 
-    // ---- Subscriber registration ----------------------------------
-
-    // events.event broadcast subscribers.
-    uint32_t subscribe_events_event(
-        EventsEventSubscriber s);
-    void     unsubscribe_events_event(uint32_t id);
-
-    // events.health broadcast subscribers.
-    uint32_t subscribe_events_health(
-        EventsHealthSubscriber s);
-    void     unsubscribe_events_health(uint32_t id);
-
-    // events.snap_begin broadcast subscribers.
-    uint32_t subscribe_events_snap_begin(
-        EventsSnap_beginSubscriber s);
-    void     unsubscribe_events_snap_begin(uint32_t id);
-
-    // events.edge broadcast subscribers.
-    uint32_t subscribe_events_edge(
-        EventsEdgeSubscriber s);
-    void     unsubscribe_events_edge(uint32_t id);
-
-    // events.node_state broadcast subscribers.
-    uint32_t subscribe_events_node_state(
-        EventsNode_stateSubscriber s);
-    void     unsubscribe_events_node_state(uint32_t id);
-
-    // events.snap_end broadcast subscribers.
-    uint32_t subscribe_events_snap_end(
-        EventsSnap_endSubscriber s);
-    void     unsubscribe_events_snap_end(uint32_t id);
-
-    // child_ctrl.trace_ctrl broadcast subscribers.
-    uint32_t subscribe_child_ctrl_trace_ctrl(
-        Child_ctrlTrace_ctrlSubscriber s);
-    void     unsubscribe_child_ctrl_trace_ctrl(uint32_t id);
-
-    // child_ctrl.log_level broadcast subscribers.
-    uint32_t subscribe_child_ctrl_log_level(
-        Child_ctrlLog_levelSubscriber s);
-    void     unsubscribe_child_ctrl_log_level(uint32_t id);
-
-    // child_ctrl.config_push broadcast subscribers.
-    uint32_t subscribe_child_ctrl_config_push(
-        Child_ctrlConfig_pushSubscriber s);
-    void     unsubscribe_child_ctrl_config_push(uint32_t id);
-
-
     // ---- GenServer plumbing: terminate default
     //
     // terminate keeps an inline no-op default; impl may shadow it.
@@ -288,6 +224,9 @@ public:
                                             SupervisorCtlState& s);
 
     ControlReply handle_call(const PgLeaveReq& req,
+                                            SupervisorCtlState& s);
+
+    PgMembership handle_call(const PgWatchReq& req,
                                             SupervisorCtlState& s);
 
     SystemInfo handle_call(const GetSystemInfoRequest& req,
@@ -359,107 +298,10 @@ private:
     ::theia::runtime::PgClient pg_;
     // group_type cache for broadcasters: service_id(T) -> resolved {type,inst}.
     std::map<uint16_t, ::theia::runtime::PgClient::Group> pg_groups_;
-
-    struct EventsEventEntry {
-        uint32_t id;
-        EventsEventSubscriber fn;
-    };
-    std::mutex events_event_mu_;
-    uint32_t events_event_next_id_{1};
-    std::vector<EventsEventEntry>
-        events_event_subs_;
-
-    struct EventsHealthEntry {
-        uint32_t id;
-        EventsHealthSubscriber fn;
-    };
-    std::mutex events_health_mu_;
-    uint32_t events_health_next_id_{1};
-    std::vector<EventsHealthEntry>
-        events_health_subs_;
-
-    struct EventsSnap_beginEntry {
-        uint32_t id;
-        EventsSnap_beginSubscriber fn;
-    };
-    std::mutex events_snap_begin_mu_;
-    uint32_t events_snap_begin_next_id_{1};
-    std::vector<EventsSnap_beginEntry>
-        events_snap_begin_subs_;
-
-    struct EventsEdgeEntry {
-        uint32_t id;
-        EventsEdgeSubscriber fn;
-    };
-    std::mutex events_edge_mu_;
-    uint32_t events_edge_next_id_{1};
-    std::vector<EventsEdgeEntry>
-        events_edge_subs_;
-
-    struct EventsNode_stateEntry {
-        uint32_t id;
-        EventsNode_stateSubscriber fn;
-    };
-    std::mutex events_node_state_mu_;
-    uint32_t events_node_state_next_id_{1};
-    std::vector<EventsNode_stateEntry>
-        events_node_state_subs_;
-
-    struct EventsSnap_endEntry {
-        uint32_t id;
-        EventsSnap_endSubscriber fn;
-    };
-    std::mutex events_snap_end_mu_;
-    uint32_t events_snap_end_next_id_{1};
-    std::vector<EventsSnap_endEntry>
-        events_snap_end_subs_;
-
-    struct Child_ctrlTrace_ctrlEntry {
-        uint32_t id;
-        Child_ctrlTrace_ctrlSubscriber fn;
-    };
-    std::mutex child_ctrl_trace_ctrl_mu_;
-    uint32_t child_ctrl_trace_ctrl_next_id_{1};
-    std::vector<Child_ctrlTrace_ctrlEntry>
-        child_ctrl_trace_ctrl_subs_;
-
-    struct Child_ctrlLog_levelEntry {
-        uint32_t id;
-        Child_ctrlLog_levelSubscriber fn;
-    };
-    std::mutex child_ctrl_log_level_mu_;
-    uint32_t child_ctrl_log_level_next_id_{1};
-    std::vector<Child_ctrlLog_levelEntry>
-        child_ctrl_log_level_subs_;
-
-    struct Child_ctrlConfig_pushEntry {
-        uint32_t id;
-        Child_ctrlConfig_pushSubscriber fn;
-    };
-    std::mutex child_ctrl_config_push_mu_;
-    uint32_t child_ctrl_config_push_next_id_{1};
-    std::vector<Child_ctrlConfig_pushEntry>
-        child_ctrl_config_push_subs_;
-
 };
 
-// Subscriber registration — defined in the lib slice (not impl) so
-// it stays auto-generated. The user touches handle_* in impl.
-
-inline uint32_t SupervisorCtl::subscribe_events_event(
-        EventsEventSubscriber s) {
-    std::lock_guard<std::mutex> lk(events_event_mu_);
-    uint32_t id = events_event_next_id_++;
-    events_event_subs_.push_back({id, std::move(s)});
-    return id;
-}
-
-inline void SupervisorCtl::unsubscribe_events_event(uint32_t id) {
-    std::lock_guard<std::mutex> lk(events_event_mu_);
-    auto& v = events_event_subs_;
-    v.erase(std::remove_if(v.begin(), v.end(),
-              [id](const auto& e) { return e.id == id; }), v.end());
-}
+// Broadcast fan-out — defined in the lib slice (not impl) so it stays
+// auto-generated. The user touches handle_* in impl.
 
 inline void SupervisorCtl::broadcast_events_event(const SupervisionEvent& msg) {
     // OTP-pg multicast: encode `msg` once and send ONE datagram to its TYPE's
@@ -475,21 +317,6 @@ inline void SupervisorCtl::broadcast_events_event(const SupervisionEvent& msg) {
     if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<SupervisionEvent>::fields(), &msg))
         return;
     pg_.broadcast<SupervisionEvent>(_g.type, _buf, static_cast<uint16_t>(_os.bytes_written));
-}
-
-inline uint32_t SupervisorCtl::subscribe_events_health(
-        EventsHealthSubscriber s) {
-    std::lock_guard<std::mutex> lk(events_health_mu_);
-    uint32_t id = events_health_next_id_++;
-    events_health_subs_.push_back({id, std::move(s)});
-    return id;
-}
-
-inline void SupervisorCtl::unsubscribe_events_health(uint32_t id) {
-    std::lock_guard<std::mutex> lk(events_health_mu_);
-    auto& v = events_health_subs_;
-    v.erase(std::remove_if(v.begin(), v.end(),
-              [id](const auto& e) { return e.id == id; }), v.end());
 }
 
 inline void SupervisorCtl::broadcast_events_health(const HealthBeacon& msg) {
@@ -508,21 +335,6 @@ inline void SupervisorCtl::broadcast_events_health(const HealthBeacon& msg) {
     pg_.broadcast<HealthBeacon>(_g.type, _buf, static_cast<uint16_t>(_os.bytes_written));
 }
 
-inline uint32_t SupervisorCtl::subscribe_events_snap_begin(
-        EventsSnap_beginSubscriber s) {
-    std::lock_guard<std::mutex> lk(events_snap_begin_mu_);
-    uint32_t id = events_snap_begin_next_id_++;
-    events_snap_begin_subs_.push_back({id, std::move(s)});
-    return id;
-}
-
-inline void SupervisorCtl::unsubscribe_events_snap_begin(uint32_t id) {
-    std::lock_guard<std::mutex> lk(events_snap_begin_mu_);
-    auto& v = events_snap_begin_subs_;
-    v.erase(std::remove_if(v.begin(), v.end(),
-              [id](const auto& e) { return e.id == id; }), v.end());
-}
-
 inline void SupervisorCtl::broadcast_events_snap_begin(const SnapshotBegin& msg) {
     // OTP-pg multicast: encode `msg` once and send ONE datagram to its TYPE's
     // process group {group_type, 0..~0} — the TIPC kernel fans out a copy to every
@@ -537,21 +349,6 @@ inline void SupervisorCtl::broadcast_events_snap_begin(const SnapshotBegin& msg)
     if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<SnapshotBegin>::fields(), &msg))
         return;
     pg_.broadcast<SnapshotBegin>(_g.type, _buf, static_cast<uint16_t>(_os.bytes_written));
-}
-
-inline uint32_t SupervisorCtl::subscribe_events_edge(
-        EventsEdgeSubscriber s) {
-    std::lock_guard<std::mutex> lk(events_edge_mu_);
-    uint32_t id = events_edge_next_id_++;
-    events_edge_subs_.push_back({id, std::move(s)});
-    return id;
-}
-
-inline void SupervisorCtl::unsubscribe_events_edge(uint32_t id) {
-    std::lock_guard<std::mutex> lk(events_edge_mu_);
-    auto& v = events_edge_subs_;
-    v.erase(std::remove_if(v.begin(), v.end(),
-              [id](const auto& e) { return e.id == id; }), v.end());
 }
 
 inline void SupervisorCtl::broadcast_events_edge(const NodeEdge& msg) {
@@ -570,21 +367,6 @@ inline void SupervisorCtl::broadcast_events_edge(const NodeEdge& msg) {
     pg_.broadcast<NodeEdge>(_g.type, _buf, static_cast<uint16_t>(_os.bytes_written));
 }
 
-inline uint32_t SupervisorCtl::subscribe_events_node_state(
-        EventsNode_stateSubscriber s) {
-    std::lock_guard<std::mutex> lk(events_node_state_mu_);
-    uint32_t id = events_node_state_next_id_++;
-    events_node_state_subs_.push_back({id, std::move(s)});
-    return id;
-}
-
-inline void SupervisorCtl::unsubscribe_events_node_state(uint32_t id) {
-    std::lock_guard<std::mutex> lk(events_node_state_mu_);
-    auto& v = events_node_state_subs_;
-    v.erase(std::remove_if(v.begin(), v.end(),
-              [id](const auto& e) { return e.id == id; }), v.end());
-}
-
 inline void SupervisorCtl::broadcast_events_node_state(const NodeState& msg) {
     // OTP-pg multicast: encode `msg` once and send ONE datagram to its TYPE's
     // process group {group_type, 0..~0} — the TIPC kernel fans out a copy to every
@@ -599,21 +381,6 @@ inline void SupervisorCtl::broadcast_events_node_state(const NodeState& msg) {
     if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<NodeState>::fields(), &msg))
         return;
     pg_.broadcast<NodeState>(_g.type, _buf, static_cast<uint16_t>(_os.bytes_written));
-}
-
-inline uint32_t SupervisorCtl::subscribe_events_snap_end(
-        EventsSnap_endSubscriber s) {
-    std::lock_guard<std::mutex> lk(events_snap_end_mu_);
-    uint32_t id = events_snap_end_next_id_++;
-    events_snap_end_subs_.push_back({id, std::move(s)});
-    return id;
-}
-
-inline void SupervisorCtl::unsubscribe_events_snap_end(uint32_t id) {
-    std::lock_guard<std::mutex> lk(events_snap_end_mu_);
-    auto& v = events_snap_end_subs_;
-    v.erase(std::remove_if(v.begin(), v.end(),
-              [id](const auto& e) { return e.id == id; }), v.end());
 }
 
 inline void SupervisorCtl::broadcast_events_snap_end(const SnapshotEnd& msg) {
@@ -632,21 +399,6 @@ inline void SupervisorCtl::broadcast_events_snap_end(const SnapshotEnd& msg) {
     pg_.broadcast<SnapshotEnd>(_g.type, _buf, static_cast<uint16_t>(_os.bytes_written));
 }
 
-inline uint32_t SupervisorCtl::subscribe_child_ctrl_trace_ctrl(
-        Child_ctrlTrace_ctrlSubscriber s) {
-    std::lock_guard<std::mutex> lk(child_ctrl_trace_ctrl_mu_);
-    uint32_t id = child_ctrl_trace_ctrl_next_id_++;
-    child_ctrl_trace_ctrl_subs_.push_back({id, std::move(s)});
-    return id;
-}
-
-inline void SupervisorCtl::unsubscribe_child_ctrl_trace_ctrl(uint32_t id) {
-    std::lock_guard<std::mutex> lk(child_ctrl_trace_ctrl_mu_);
-    auto& v = child_ctrl_trace_ctrl_subs_;
-    v.erase(std::remove_if(v.begin(), v.end(),
-              [id](const auto& e) { return e.id == id; }), v.end());
-}
-
 inline void SupervisorCtl::broadcast_child_ctrl_trace_ctrl(const TraceControlPush& msg) {
     // OTP-pg multicast: encode `msg` once and send ONE datagram to its TYPE's
     // process group {group_type, 0..~0} — the TIPC kernel fans out a copy to every
@@ -663,21 +415,6 @@ inline void SupervisorCtl::broadcast_child_ctrl_trace_ctrl(const TraceControlPus
     pg_.broadcast<TraceControlPush>(_g.type, _buf, static_cast<uint16_t>(_os.bytes_written));
 }
 
-inline uint32_t SupervisorCtl::subscribe_child_ctrl_log_level(
-        Child_ctrlLog_levelSubscriber s) {
-    std::lock_guard<std::mutex> lk(child_ctrl_log_level_mu_);
-    uint32_t id = child_ctrl_log_level_next_id_++;
-    child_ctrl_log_level_subs_.push_back({id, std::move(s)});
-    return id;
-}
-
-inline void SupervisorCtl::unsubscribe_child_ctrl_log_level(uint32_t id) {
-    std::lock_guard<std::mutex> lk(child_ctrl_log_level_mu_);
-    auto& v = child_ctrl_log_level_subs_;
-    v.erase(std::remove_if(v.begin(), v.end(),
-              [id](const auto& e) { return e.id == id; }), v.end());
-}
-
 inline void SupervisorCtl::broadcast_child_ctrl_log_level(const LogLevelPush& msg) {
     // OTP-pg multicast: encode `msg` once and send ONE datagram to its TYPE's
     // process group {group_type, 0..~0} — the TIPC kernel fans out a copy to every
@@ -692,21 +429,6 @@ inline void SupervisorCtl::broadcast_child_ctrl_log_level(const LogLevelPush& ms
     if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<LogLevelPush>::fields(), &msg))
         return;
     pg_.broadcast<LogLevelPush>(_g.type, _buf, static_cast<uint16_t>(_os.bytes_written));
-}
-
-inline uint32_t SupervisorCtl::subscribe_child_ctrl_config_push(
-        Child_ctrlConfig_pushSubscriber s) {
-    std::lock_guard<std::mutex> lk(child_ctrl_config_push_mu_);
-    uint32_t id = child_ctrl_config_push_next_id_++;
-    child_ctrl_config_push_subs_.push_back({id, std::move(s)});
-    return id;
-}
-
-inline void SupervisorCtl::unsubscribe_child_ctrl_config_push(uint32_t id) {
-    std::lock_guard<std::mutex> lk(child_ctrl_config_push_mu_);
-    auto& v = child_ctrl_config_push_subs_;
-    v.erase(std::remove_if(v.begin(), v.end(),
-              [id](const auto& e) { return e.id == id; }), v.end());
 }
 
 inline void SupervisorCtl::broadcast_child_ctrl_config_push(const ConfigUpdated& msg) {

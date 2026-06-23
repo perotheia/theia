@@ -1195,12 +1195,17 @@ def _emit_manifest_build_files(mdir: Path, machines: list[str]) -> None:
     ]
     for h in machines:
         execu = _json.loads((mdir / h / "execution.json").read_text())
-        labels = sorted({
+        labels = {
             _qualify(p["executable"])
             for p in execu.get("processes", [])
             if p.get("executable")
-        })
-        bins = "".join(f'\n        "{lbl}",' for lbl in labels)
+        }
+        # EVERY machine runs the supervisor — it's the runtime that boots the
+        # executor.json tree + is the PG allocator. It is NOT a process in
+        # execution.json (it's the implicit root), so add it explicitly or the
+        # .deb has the services but nothing to fork/supervise them.
+        labels.add(_qualify(_SUPERVISOR_TARGET))
+        bins = "".join(f'\n        "{lbl}",' for lbl in sorted(labels))
         lines.append(f'dist_pkg(\n    name = "{h}",\n    binaries = [{bins}\n    ],\n)')
     (mdir / "BUILD.bazel").write_text("\n".join(lines) + "\n")
 

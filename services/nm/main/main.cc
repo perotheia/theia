@@ -142,10 +142,12 @@ int main(int argc, char** argv) {
             nm_daemon_cfg, nm_daemon);
         config_mux.register_call<WifiConnectReq, WifiConnectReply>(
             nm_daemon_cfg, nm_daemon);
-        // PG (manual pub/sub): attach this statem node's PgClient to its demux
-        // binding so a joined group's multicast datagrams route into its normal
-        // handle_cast (register_cast above). The node pg_join<T>()s from init().
-        nm_daemon.pg_attach(NmDaemon::kNodeName, nm_daemon_cfg);
+        // PG (manual pub/sub, OTP shape): attach this statem node's PgClient to
+        // its demux binding (joined-group frames + PgMembership pushes route into
+        // handle_cast) + pass its bound addr as the watcher address (where the
+        // supervisor casts PgMembership when this node pg_watch'es a group).
+        nm_daemon.pg_attach(NmDaemon::kNodeName, nm_daemon_cfg,
+                                nm_daemon_type, nm_daemon_inst);
     } else {
         nm_daemon.log().warn("config service bind failed; live log-level "
                                  "push + signal inject disabled");
@@ -213,10 +215,12 @@ int main(int argc, char** argv) {
         // types so a real peer — or a robot-test inject via services/com
         // — lands on the same handle_call / handle_cast path. clientServer
         // ops → register_call; senderReceiver `in` data → register_cast.
-        // PG (manual pub/sub): attach this statem node's PgClient to its demux
-        // binding so a joined group's multicast datagrams route into its normal
-        // handle_cast (register_cast above). The node pg_join<T>()s from init().
-        nm_poller.pg_attach(NmPoller::kNodeName, nm_poller_cfg);
+        // PG (manual pub/sub, OTP shape): attach this statem node's PgClient to
+        // its demux binding (joined-group frames + PgMembership pushes route into
+        // handle_cast) + pass its bound addr as the watcher address (where the
+        // supervisor casts PgMembership when this node pg_watch'es a group).
+        nm_poller.pg_attach(NmPoller::kNodeName, nm_poller_cfg,
+                                nm_poller_type, nm_poller_inst);
     } else {
         nm_poller.log().warn("config service bind failed; live log-level "
                                  "push + signal inject disabled");

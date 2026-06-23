@@ -56,13 +56,20 @@ public:
     static constexpr uint32_t kSupTipcInstance = 0u;
 
     // The CALL request service_ids (djb2 of the nanopb request type name, matching
-    // the supervisor's register_call<PgJoinReq,...> / <PgLeaveReq,...>).
+    // the supervisor's register_call<PgJoinReq,...> / <PgLeaveReq,...> / PgWatch).
     static constexpr uint16_t kJoinSid  = hash_msg_type_("system_supervisor_PgJoinReq");
     static constexpr uint16_t kLeaveSid = hash_msg_type_("system_supervisor_PgLeaveReq");
+    static constexpr uint16_t kWatchSid = hash_msg_type_("system_supervisor_PgWatchReq");
+    // The supervisor casts PgMembership pushes to a watcher with this service_id.
+    static constexpr uint16_t kMembershipSid =
+        hash_msg_type_("system_supervisor_PgMembership");
 
     // Result of a join/resolve: the group's allocated TIPC type + (for join) this
     // member's instance. ok=false if the supervisor was unreachable.
     struct Group { bool ok{false}; uint32_t type{0}; uint32_t instance{0}; };
+
+    // One group member's delivery address (where a producer casts records).
+    struct Member { uint32_t type{0}; uint32_t instance{0}; };
 
     PgClient() : self_pid_(::getpid()), node_name_("pg") {}
     ~PgClient() { shutdown(); if (call_fd_ >= 0) ::close(call_fd_); }
@@ -94,6 +101,58 @@ public:
     }
     template <typename T> void leave() {
         unbind_recv_(msg_type_name<T>());
+    }
+
+    // ---- OTP pg:monitor — the PRODUCER side -------------------------------
+    // watch<T>(on_change): PgWatch the group (the supervisor returns the current
+    // member list AND starts pushing PgMembership on every join/leave/reap).
+    // Caches the member list; registers a handler on the node's binding so future
+    // pushes refresh the cache + fire on_change (the {pg_join}/{pg_leave} hook —
+    // OTP `pg:monitor`). The producer then broadcast<T>()s by looping the cache.
+    // The watcher address = the node's OWN binding ({watcher_type, instance}); the
+    // supervisor casts PgMembership there. Pass the node's bound addr.
+    template <typename T>
+    Group watch(uint32_t watcher_type, uint32_t watcher_instance,
+                std::function<void()> on_change = {}) {
+        const char* gname = msg_type_name<T>();
+        uint16_t sid = RemoteCodec<T>::service_id;
+        {
+            std::lock_guard<std::mutex> lk(wmu_);
+            watched_[sid].on_change = std::move(on_change);
+            watched_[sid].group_name = gname;
+        }
+        // Register the PgMembership push handler on the node's binding ONCE.
+        install_membership_handler_();
+        Group g = call_watch_(gname, watcher_type, watcher_instance, /*watch=*/true);
+        return g;   // members already cached by call_watch_'s reply parse
+    }
+    // The producer's current view of group T's members (the watch cache).
+    template <typename T> std::vector<Member> members() {
+        std::lock_guard<std::mutex> lk(wmu_);
+        auto it = watched_.find(RemoteCodec<T>::service_id);
+        return it == watched_.end() ? std::vector<Member>{} : it->second.members;
+    }
+    template <typename T> void unwatch(uint32_t wt, uint32_t wi) {
+        call_watch_(msg_type_name<T>(), wt, wi, /*watch=*/false);
+        std::lock_guard<std::mutex> lk(wmu_);
+        watched_.erase(RemoteCodec<T>::service_id);
+    }
+
+    // PRODUCER broadcast — OTP `[Pid ! Msg || Pid <- pg:get_members(group)]`.
+    // Loop the WATCHED member cache and cast `payload` to each member's delivery
+    // address. The impl drives this (via the generated broadcast_*), so it can
+    // inspect members<T>() first (empty → stop work, e.g. logcat) or branch on
+    // its own state. service_id = T's id (the members' register_cast demux key).
+    template <typename T>
+    void broadcast_members(const uint8_t* payload, uint16_t len) {
+        std::vector<Member> snap;
+        {
+            std::lock_guard<std::mutex> lk(wmu_);
+            auto it = watched_.find(RemoteCodec<T>::service_id);
+            if (it != watched_.end()) snap = it->second.members;
+        }
+        for (const auto& m : snap)
+            send_unicast_(m.type, m.instance, RemoteCodec<T>::service_id, payload, len);
     }
 
     // RECEIVER (non-node consumer, e.g. com's trace_link): join group T and route
@@ -171,6 +230,26 @@ private:
         pb_varint_field(req, 4, inst);                             // instance
         std::string reply;
         (void)call_(kLeaveSid, req, reply);                       // ignore reply
+    }
+
+    // PgWatch CALL → PgMembership reply. Parses the member list into the cache.
+    Group call_watch_(const char* group_name, uint32_t watcher_type,
+                      uint32_t watcher_instance, bool watch) {
+        std::string req;
+        pb_string(req, 1, node_name_.c_str(), node_name_.size());  // node_name
+        pb_string(req, 2, group_name, std::strlen(group_name));    // group_name
+        pb_varint_field(req, 3, watcher_type);                     // watcher_type
+        pb_varint_field(req, 4, watcher_instance);                 // watcher_instance
+        if (watch) pb_varint_field(req, 5, 1);                     // watch=true
+        std::string reply;
+        Group g;
+        if (!call_(kWatchSid, req, reply)) return g;
+        g.ok = true;
+        uint64_t gtype = 0;
+        pb_read_uint(reply, 3, gtype);                            // group_type=3
+        g.type = static_cast<uint32_t>(gtype);
+        apply_membership_(reply);                                 // fills the cache
+        return g;
     }
 
     // One SEQPACKET connect to the supervisor + send a GEN_CALL + read the reply.
@@ -335,6 +414,87 @@ private:
         ::close(fd);
     }
 
+    // OTP per-member cast — RDM datagram to ONE member's {type,instance} (matches
+    // the member's bound recv socket). Best-effort, like `Pid ! Msg`.
+    void send_unicast_(uint32_t type, uint32_t instance, uint16_t service_id,
+                       const uint8_t* payload, uint16_t len) {
+        int fd = ::socket(AF_TIPC, SOCK_RDM, 0);
+        if (fd < 0) return;
+        struct sockaddr_tipc a{};
+        a.family                  = AF_TIPC;
+        a.addrtype                = TIPC_ADDR_NAME;
+        a.scope                   = TIPC_CLUSTER_SCOPE;
+        a.addr.name.name.type     = type;
+        a.addr.name.name.instance = instance;
+        TheiaMsgHeader hdr{};
+        hdr.bus_type           = kBusTypeRpc;
+        hdr.msg_type           = kMsgGenCast;
+        hdr.proto_len          = len;
+        hdr.rpc.service_id     = service_id;
+        hdr.rpc.method_id      = 0;
+        hdr.rpc.correlation_id = 0;
+        std::string frame(sizeof(hdr) + len, '\0');
+        std::memcpy(&frame[0], &hdr, sizeof(hdr));
+        if (len) std::memcpy(&frame[sizeof(hdr)], payload, len);
+        (void)::sendto(fd, frame.data(), frame.size(), MSG_NOSIGNAL | MSG_DONTWAIT,
+                       reinterpret_cast<struct sockaddr*>(&a), sizeof(a));
+        ::close(fd);
+    }
+
+    // ---- OTP pg:monitor — watch cache + PgMembership push handling ---------
+    // Register a handler on the node's binding for the supervisor's PgMembership
+    // push (service_id = kMembershipSid). Idempotent. Routes a push into
+    // apply_membership_ (refresh the cache + fire on_change). Needs a binding —
+    // a node with a config_mux binding (the normal reporting FC case).
+    void install_membership_handler_() {
+        if (!binding_ || membership_handler_installed_) return;
+        membership_handler_installed_ = true;
+        InboundEntry e;
+        e.kind = InboundEntry::Kind::Cast;
+        e.dispatch = [this](const uint8_t* p, uint16_t len, int, uint32_t) {
+            apply_membership_(std::string(reinterpret_cast<const char*>(p), len));
+        };
+        binding_->entries[kMembershipSid] = std::move(e);
+    }
+    // Parse a PgMembership { status=1, group_name=2, group_type=3,
+    // repeated PgMember members=4 (each {tipc_type=1, tipc_instance=2}) } and
+    // replace the cached member list for that group; fire its on_change.
+    void apply_membership_(const std::string& b) {
+        std::string gname;
+        pb_read_string(b, 2, gname);
+        std::vector<Member> mem;
+        size_t i = 0;
+        while (i < b.size()) {                     // scan top-level fields for #4
+            uint64_t key = 0; if (!rd_varint(b, i, key)) break;
+            uint32_t f = key >> 3, w = key & 7;
+            if (w == 2) {                          // length-delimited
+                uint64_t l = 0; if (!rd_varint(b, i, l)) break;
+                if (f == 4) {                      // a PgMember sub-message
+                    std::string sub = b.substr(i, l);
+                    uint64_t t = 0, inst = 0;
+                    pb_read_uint(sub, 1, t);
+                    pb_read_uint(sub, 2, inst);
+                    mem.push_back({static_cast<uint32_t>(t),
+                                   static_cast<uint32_t>(inst)});
+                }
+                i += l;
+            } else if (w == 0) { uint64_t t; if (!rd_varint(b, i, t)) break; }
+            else break;
+        }
+        std::function<void()> cb;
+        {
+            std::lock_guard<std::mutex> lk(wmu_);
+            for (auto& [sid, w] : watched_) {
+                if (w.group_name == gname) {
+                    w.members = mem;
+                    cb = w.on_change;
+                    break;
+                }
+            }
+        }
+        if (cb) cb();
+    }
+
     // ---- minimal proto3 helpers (encode + a uint-field reader) -------------
     static uint64_t zigzag32(int32_t v) {
         return static_cast<uint32_t>((v << 1) ^ (v >> 31));
@@ -375,6 +535,28 @@ private:
         }
         return false;
     }
+    // Read a length-delimited string field `field` from proto3 bytes.
+    static void pb_read_string(const std::string& b, uint32_t field,
+                               std::string& out) {
+        size_t i = 0;
+        while (i < b.size()) {
+            uint64_t key = 0; if (!rd_varint(b, i, key)) return;
+            uint32_t f = key >> 3, w = key & 7;
+            if (w == 2) {
+                uint64_t l = 0; if (!rd_varint(b, i, l)) return;
+                if (f == field) { out.assign(b, i, l); return; }
+                i += l;
+            } else if (w == 0) { uint64_t t; if (!rd_varint(b, i, t)) return; }
+            else return;
+        }
+    }
+
+    // One watched group's cache (OTP pg:monitor state).
+    struct Watched {
+        std::string           group_name;
+        std::vector<Member>   members;
+        std::function<void()> on_change;
+    };
 
     pid_t              self_pid_;
     std::string        node_name_;
@@ -387,6 +569,10 @@ private:
     std::vector<Bound> bound_;               // joined groups (recv sockets)
     std::atomic<bool>  running_{false};
     std::thread        recv_thread_;
+
+    std::mutex                       wmu_;   // guards watched_
+    std::map<uint16_t, Watched>      watched_;   // service_id(T) → watch cache
+    bool                             membership_handler_installed_{false};
 };
 
 }}  // namespace theia::runtime

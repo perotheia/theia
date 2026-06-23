@@ -160,16 +160,16 @@ int main(int argc, char** argv) {
             osi_ctl_cfg, osi_ctl);
         config_mux.register_call<ResourceLimitReq, ResourceLimitReply>(
             osi_ctl_cfg, osi_ctl);
-        // ---- process groups (pg): MANUAL pub/sub control ------------------
-        // The node OWNS its group membership: it calls pg_join<T>() to consume a
-        // broadcast group, pg_resolve<T>()/broadcast_*() to publish, and
-        // pg_leave<T>() to stop — from its OWN logic (init()/handlers), NOT
-        // automatically here. We only ATTACH the node's PgClient to its demux
-        // binding so a received group datagram routes into the node's normal
-        // handle_cast (entries[service_id] filled by register_cast above) and the
-        // supervisor CALL is labelled with this node's name. Manual, like OTP
-        // pg:join/leave — declaring a port means "I CAN", not "subscribe me".
-        osi_ctl.pg_attach(OsiCtl::kNodeName, osi_ctl_cfg);
+        // ---- process groups (pg): MANUAL pub/sub control (OTP pg shape) ----
+        // The node OWNS its membership: pg_join<T>() to CONSUME a group,
+        // pg_watch<T>()/broadcast_*() to PRODUCE, pg_leave<T>() to stop — from its
+        // OWN logic (init()/handlers), never automatically here. We ATTACH the
+        // node's PgClient to its demux binding (so a joined group's frames + the
+        // supervisor's PgMembership pushes route into handle_cast) and pass its
+        // BOUND ADDRESS as the watcher address — where the supervisor casts
+        // PgMembership when this node pg_watch'es a group it produces to.
+        osi_ctl.pg_attach(OsiCtl::kNodeName, osi_ctl_cfg,
+                                osi_ctl_type, osi_ctl_inst);
     } else {
         osi_ctl.log().warn("config service bind failed; live log-level "
                                  "push + signal inject disabled");

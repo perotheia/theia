@@ -137,10 +137,12 @@ int main(int argc, char** argv) {
         // types so a real peer — or a robot-test inject via services/com
         // — lands on the same handle_call / handle_cast path. clientServer
         // ops → register_call; senderReceiver `in` data → register_cast.
-        // PG (manual pub/sub): attach this statem node's PgClient to its demux
-        // binding so a joined group's multicast datagrams route into its normal
-        // handle_cast (register_cast above). The node pg_join<T>()s from init().
-        ucm_fsm.pg_attach(UcmFsm::kNodeName, ucm_fsm_cfg);
+        // PG (manual pub/sub, OTP shape): attach this statem node's PgClient to
+        // its demux binding (joined-group frames + PgMembership pushes route into
+        // handle_cast) + pass its bound addr as the watcher address (where the
+        // supervisor casts PgMembership when this node pg_watch'es a group).
+        ucm_fsm.pg_attach(UcmFsm::kNodeName, ucm_fsm_cfg,
+                                ucm_fsm_type, ucm_fsm_inst);
     } else {
         ucm_fsm.log().warn("config service bind failed; live log-level "
                                  "push + signal inject disabled");
@@ -218,10 +220,12 @@ int main(int argc, char** argv) {
         config_mux.register_cast<EvFailed>(ucm_gate_cfg, ucm_gate);
         config_mux.register_cast<EvRolledBack>(ucm_gate_cfg, ucm_gate);
         config_mux.register_cast<PhmHealthStatus>(ucm_gate_cfg, ucm_gate);
-        // PG (manual pub/sub): attach this statem node's PgClient to its demux
-        // binding so a joined group's multicast datagrams route into its normal
-        // handle_cast (register_cast above). The node pg_join<T>()s from init().
-        ucm_gate.pg_attach(UcmGate::kNodeName, ucm_gate_cfg);
+        // PG (manual pub/sub, OTP shape): attach this statem node's PgClient to
+        // its demux binding (joined-group frames + PgMembership pushes route into
+        // handle_cast) + pass its bound addr as the watcher address (where the
+        // supervisor casts PgMembership when this node pg_watch'es a group).
+        ucm_gate.pg_attach(UcmGate::kNodeName, ucm_gate_cfg,
+                                ucm_gate_type, ucm_gate_inst);
     } else {
         ucm_gate.log().warn("config service bind failed; live log-level "
                                  "push + signal inject disabled");
@@ -291,10 +295,12 @@ int main(int argc, char** argv) {
         // ops → register_call; senderReceiver `in` data → register_cast.
         config_mux.register_call<PackageManifest, UcmReply>(
             ucm_daemon_cfg, ucm_daemon);
-        // PG (manual pub/sub): attach this statem node's PgClient to its demux
-        // binding so a joined group's multicast datagrams route into its normal
-        // handle_cast (register_cast above). The node pg_join<T>()s from init().
-        ucm_daemon.pg_attach(UcmDaemon::kNodeName, ucm_daemon_cfg);
+        // PG (manual pub/sub, OTP shape): attach this statem node's PgClient to
+        // its demux binding (joined-group frames + PgMembership pushes route into
+        // handle_cast) + pass its bound addr as the watcher address (where the
+        // supervisor casts PgMembership when this node pg_watch'es a group).
+        ucm_daemon.pg_attach(UcmDaemon::kNodeName, ucm_daemon_cfg,
+                                ucm_daemon_type, ucm_daemon_inst);
     } else {
         ucm_daemon.log().warn("config service bind failed; live log-level "
                                  "push + signal inject disabled");

@@ -136,10 +136,12 @@ int main(int argc, char** argv) {
         // types so a real peer — or a robot-test inject via services/com
         // — lands on the same handle_call / handle_cast path. clientServer
         // ops → register_call; senderReceiver `in` data → register_cast.
-        // PG (manual pub/sub): attach this statem node's PgClient to its demux
-        // binding so a joined group's multicast datagrams route into its normal
-        // handle_cast (register_cast above). The node pg_join<T>()s from init().
-        phm_fsm.pg_attach(PhmFsm::kNodeName, phm_fsm_cfg);
+        // PG (manual pub/sub, OTP shape): attach this statem node's PgClient to
+        // its demux binding (joined-group frames + PgMembership pushes route into
+        // handle_cast) + pass its bound addr as the watcher address (where the
+        // supervisor casts PgMembership when this node pg_watch'es a group).
+        phm_fsm.pg_attach(PhmFsm::kNodeName, phm_fsm_cfg,
+                                phm_fsm_type, phm_fsm_inst);
     } else {
         phm_fsm.log().warn("config service bind failed; live log-level "
                                  "push + signal inject disabled");
@@ -213,10 +215,12 @@ int main(int argc, char** argv) {
         config_mux.register_cast<HeartbeatReport>(phm_gate_cfg, phm_gate);
         config_mux.register_cast<SendTimeoutReport>(phm_gate_cfg, phm_gate);
         config_mux.register_cast<PhmCheckpoint>(phm_gate_cfg, phm_gate);
-        // PG (manual pub/sub): attach this statem node's PgClient to its demux
-        // binding so a joined group's multicast datagrams route into its normal
-        // handle_cast (register_cast above). The node pg_join<T>()s from init().
-        phm_gate.pg_attach(PhmGate::kNodeName, phm_gate_cfg);
+        // PG (manual pub/sub, OTP shape): attach this statem node's PgClient to
+        // its demux binding (joined-group frames + PgMembership pushes route into
+        // handle_cast) + pass its bound addr as the watcher address (where the
+        // supervisor casts PgMembership when this node pg_watch'es a group).
+        phm_gate.pg_attach(PhmGate::kNodeName, phm_gate_cfg,
+                                phm_gate_type, phm_gate_inst);
     } else {
         phm_gate.log().warn("config service bind failed; live log-level "
                                  "push + signal inject disabled");

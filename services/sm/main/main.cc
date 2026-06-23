@@ -140,10 +140,12 @@ int main(int argc, char** argv) {
         // ops → register_call; senderReceiver `in` data → register_cast.
         config_mux.register_call<SmRequest, SmEmpty>(
             sm_daemon_cfg, sm_daemon);
-        // PG (manual pub/sub): attach this statem node's PgClient to its demux
-        // binding so a joined group's multicast datagrams route into its normal
-        // handle_cast (register_cast above). The node pg_join<T>()s from init().
-        sm_daemon.pg_attach(SmDaemon::kNodeName, sm_daemon_cfg);
+        // PG (manual pub/sub, OTP shape): attach this statem node's PgClient to
+        // its demux binding (joined-group frames + PgMembership pushes route into
+        // handle_cast) + pass its bound addr as the watcher address (where the
+        // supervisor casts PgMembership when this node pg_watch'es a group).
+        sm_daemon.pg_attach(SmDaemon::kNodeName, sm_daemon_cfg,
+                                sm_daemon_type, sm_daemon_inst);
     } else {
         sm_daemon.log().warn("config service bind failed; live log-level "
                                  "push + signal inject disabled");
@@ -212,10 +214,12 @@ int main(int argc, char** argv) {
         // types so a real peer — or a robot-test inject via services/com
         // — lands on the same handle_call / handle_cast path. clientServer
         // ops → register_call; senderReceiver `in` data → register_cast.
-        // PG (manual pub/sub): attach this statem node's PgClient to its demux
-        // binding so a joined group's multicast datagrams route into its normal
-        // handle_cast (register_cast above). The node pg_join<T>()s from init().
-        fg_sm.pg_attach(FunctionGroupSm::kNodeName, fg_sm_cfg);
+        // PG (manual pub/sub, OTP shape): attach this statem node's PgClient to
+        // its demux binding (joined-group frames + PgMembership pushes route into
+        // handle_cast) + pass its bound addr as the watcher address (where the
+        // supervisor casts PgMembership when this node pg_watch'es a group).
+        fg_sm.pg_attach(FunctionGroupSm::kNodeName, fg_sm_cfg,
+                                fg_sm_type, fg_sm_inst);
     } else {
         fg_sm.log().warn("config service bind failed; live log-level "
                                  "push + signal inject disabled");
@@ -290,10 +294,12 @@ int main(int argc, char** argv) {
         config_mux.register_cast<FgDegraded>(fg_gate_cfg, fg_gate);
         config_mux.register_cast<FgRetry>(fg_gate_cfg, fg_gate);
         config_mux.register_cast<PhmHealthStatus>(fg_gate_cfg, fg_gate);
-        // PG (manual pub/sub): attach this statem node's PgClient to its demux
-        // binding so a joined group's multicast datagrams route into its normal
-        // handle_cast (register_cast above). The node pg_join<T>()s from init().
-        fg_gate.pg_attach(FgGate::kNodeName, fg_gate_cfg);
+        // PG (manual pub/sub, OTP shape): attach this statem node's PgClient to
+        // its demux binding (joined-group frames + PgMembership pushes route into
+        // handle_cast) + pass its bound addr as the watcher address (where the
+        // supervisor casts PgMembership when this node pg_watch'es a group).
+        fg_gate.pg_attach(FgGate::kNodeName, fg_gate_cfg,
+                                fg_gate_type, fg_gate_inst);
     } else {
         fg_gate.log().warn("config service bind failed; live log-level "
                                  "push + signal inject disabled");
@@ -368,10 +374,12 @@ int main(int argc, char** argv) {
         config_mux.register_cast<UpdateComplete>(sm_gate_cfg, sm_gate);
         config_mux.register_cast<RetryStartup>(sm_gate_cfg, sm_gate);
         config_mux.register_cast<PowerOff>(sm_gate_cfg, sm_gate);
-        // PG (manual pub/sub): attach this statem node's PgClient to its demux
-        // binding so a joined group's multicast datagrams route into its normal
-        // handle_cast (register_cast above). The node pg_join<T>()s from init().
-        sm_gate.pg_attach(SmGate::kNodeName, sm_gate_cfg);
+        // PG (manual pub/sub, OTP shape): attach this statem node's PgClient to
+        // its demux binding (joined-group frames + PgMembership pushes route into
+        // handle_cast) + pass its bound addr as the watcher address (where the
+        // supervisor casts PgMembership when this node pg_watch'es a group).
+        sm_gate.pg_attach(SmGate::kNodeName, sm_gate_cfg,
+                                sm_gate_type, sm_gate_inst);
     } else {
         sm_gate.log().warn("config service bind failed; live log-level "
                                  "push + signal inject disabled");

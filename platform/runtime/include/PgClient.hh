@@ -121,8 +121,14 @@ public:
             watched_[sid].on_change = std::move(on_change);
             watched_[sid].group_name = gname;
         }
-        // Register the PgMembership push handler on the node's binding ONCE.
-        install_membership_handler_();
+        // Receive the supervisor's PgMembership pushes. A GenServer watcher has a
+        // binding (the push arrives on its mux → dispatch_frame_); a runnable
+        // watcher (e.g. the LOG pump) has none, so bind a bare recv socket at the
+        // watcher addr + run the recv thread (the push routes to apply_membership_
+        // by kMembershipSid). Both end at apply_membership_.
+        if (binding_) install_membership_handler_();
+        else if (watcher_type) bind_recv_(watcher_type, watcher_instance,
+                                          "__pg_watch__");
         Group g = call_watch_(gname, watcher_type, watcher_instance, /*watch=*/true);
         return g;   // members already cached by call_watch_'s reply parse
     }
@@ -379,6 +385,14 @@ private:
         std::memcpy(&hdr, frame, sizeof(hdr));
         uint16_t len = hdr.proto_len;
         if (sizeof(hdr) + len > n) len = static_cast<uint16_t>(n - sizeof(hdr));
+        // A PgMembership push (OTP pg:monitor) ALWAYS refreshes the watch cache,
+        // whether this client has a node binding (a GenServer watcher) or a bare
+        // recv socket (a runnable watcher, e.g. the LOG pump).
+        if (hdr.rpc.service_id == kMembershipSid) {
+            apply_membership_(std::string(
+                reinterpret_cast<const char*>(frame + sizeof(hdr)), len));
+            return;
+        }
         if (raw_sink_) { raw_sink_(frame + sizeof(hdr), len); return; }
         if (!binding_) return;
         auto it = binding_->entries.find(hdr.rpc.service_id);

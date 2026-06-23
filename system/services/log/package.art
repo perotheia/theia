@@ -203,53 +203,31 @@ message LogRecord {
     string   line [max_size:8192]
 }
 
-// Subscribe request — a consumer (tdb/rtdb) registering for the log firehose.
-// Mirrors SubscribeReq on the trace side. The coarse server-side filters
-// (level_min / tag_filter) are best-effort; the fine <tag-glob>:<level> DSL
-// is applied subscriber-side (the hose stays dumb, like the trace pump).
-//   level_min   — drop lines below this LogLevel (0 = VERBOSE = keep all).
-//   tag_filter  — keep only this tag; "" = all tags.
-message LogSubscribeReq {
-    uint32   sub_type
-    uint32   sub_instance
-    LogLevel level_min
-    string   tag_filter
-}
-
-message LogEmpty { }
+// (LogSubscribeReq / LogEmpty / LogStreamSub REMOVED — the log firehose is now
+// PG, symmetric with trace. A consumer pg_joins the LogRecord group; the pump
+// pg_watch'es it (OTP pg:monitor) and tails files only while the member list is
+// non-empty — the lazy-tailer is now driven by PG membership, not a Subscribe
+// refcount. No ring backlog: logcat is a LIVE tail (history is in the files /
+// journald). See [[project-pg-broadcast-model]].)
 
 // ─── Log stream interfaces ────────────────────────────────────────────
 
-// The log firehose — broadcast pub/sub, the SENDER is the log[] hose, the
-// RECEIVERS are tdb/rtdb subscribers. Mirrors TraceRecordStream.
+// The log firehose — PG pub/sub, the SENDER is the log[] pump, the RECEIVERS are
+// tdb/rtdb/com that pg_join the LogRecord group. Mirrors TraceRecordStream.
 interface senderReceiver LogRecordStream {
     data LogRecord rec
-}
-
-// Observer subscription control. A consumer calls Subscribe with its own
-// (type,instance); LogDaemon registers it, spills the ring backlog, then fans
-// live lines to it. The FIRST subscriber spins up the tailer (LogStreamPump);
-// the LAST unsubscribe (connection close) tears it down — no file I/O when
-// nobody's watching. Mirrors TraceStreamSub.
-interface clientServer LogStreamSub {
-    operation Subscribe(in r:LogSubscribeReq) returns LogEmpty
 }
 
 
 // ─── Nodes ─────────────────────────────────────────────────────────────
 
-// The log sink + log firehose CONTROL plane. tipc 0x80010003. Owns the
-// LogStreamSub subscribe surface: on the first subscriber it queries the
-// supervisor (GetLoggerPolicy) for every node's exact log sink and starts the
-// tailer; on the last unsubscribe it stops it. Shares a process-global LogHub
-// with LogStreamPump (ring + subscriber registry), the way TraceCtl shares
-// TraceHub with TraceStreamPump.
+// The syslog-sink node identity (tipc 0x80010003). No ports — logging flows to
+// each node's runtime sink directly (THEIA_LOGGER); LogDaemon just holds the
+// well-known slot + is the GetLoggerPolicy target name. (The Subscribe control
+// plane is gone — the pump pg_watch'es the LogRecord group itself.)
 node atomic LogDaemon {
     tipc type=0x80010003 instance=0
     tag = "LOG"
-    ports {
-        server ctl_sub provides LogStreamSub
-    }
 }
 
 // The log tailer — the hot path. tipc 0x80010023. A runnable owning its own
@@ -263,11 +241,6 @@ node runnable LogStreamPump {
     tag = "LOG"
     ports {
         sender stream_out provides LogRecordStream
-    }
-    // Always-on circular log buffer (logcat-style ring) — a late subscriber
-    // gets backlog on Subscribe.
-    params {
-        log_ring_records : uint32 = 4096
     }
 }
 

@@ -23,6 +23,7 @@
 #include "core/runtime.h"
 
 #include "NodeRef.hh"          // theia::runtime::cast(self, msg, TipcAddr)
+#include "TheiaMsgHeader.hh"   // PgMembership RDM-push frame header
 #include "platform_runtime/runtime.pb.h"  // TraceControlPush / LogLevelPush
 
 #include <cstdio>
@@ -30,6 +31,11 @@
 #include <string>
 #include <utility>
 #include <vector>
+
+#include <sys/socket.h>       // PgMembership RDM-datagram push to a watcher
+#include <linux/tipc.h>
+#include <unistd.h>
+#include <pb_encode.h>
 
 namespace ara::exec {
 
@@ -236,7 +242,6 @@ void ctl_set_log_level(const std::string& child, uint32_t level) {
 void ctl_push_pg_membership(uint32_t watcher_type, uint32_t watcher_instance,
                             const char* group_name, uint32_t group_type,
                             const uint32_t* members_flat, uint32_t count) {
-    if (!g_ctl) return;
     PgMembership m{};
     m.status     = 0;
     std::snprintf(m.group_name, sizeof(m.group_name), "%s",
@@ -247,9 +252,36 @@ void ctl_push_pg_membership(uint32_t watcher_type, uint32_t watcher_instance,
         m.members[i].tipc_type     = members_flat[2 * i];
         m.members[i].tipc_instance = members_flat[2 * i + 1];
     }
-    ::theia::runtime::cast(*g_ctl, m,
-        ::theia::runtime::TipcAddr{watcher_type, watcher_instance},
-        /*dst_name=*/nullptr, /*connect_timeout_ms=*/250);
+    // Encode + RDM-datagram sendto the watcher's bound recv socket. PG recv
+    // sockets are SOCK_RDM (the watcher's PgClient binds RDM); a SEQPACKET cast
+    // would be silently dropped (wrong type) — the same socket-type trap as the
+    // trace egress. So we sendto here, not ::cast. service_id = PgMembership's id
+    // (the watcher's PgClient dispatch_frame_ routes it by kMembershipSid).
+    uint8_t pb[2048];
+    pb_ostream_t os = pb_ostream_from_buffer(pb, sizeof(pb));
+    if (!pb_encode(&os, system_supervisor_PgMembership_fields, &m)) return;
+    int fd = ::socket(AF_TIPC, SOCK_RDM, 0);
+    if (fd < 0) return;
+    struct sockaddr_tipc a{};
+    a.family                  = AF_TIPC;
+    a.addrtype                = TIPC_ADDR_NAME;
+    a.scope                   = TIPC_CLUSTER_SCOPE;
+    a.addr.name.name.type     = watcher_type;
+    a.addr.name.name.instance = watcher_instance;
+    ::theia::runtime::TheiaMsgHeader hdr{};
+    hdr.bus_type           = ::theia::runtime::kBusTypeRpc;
+    hdr.msg_type           = ::theia::runtime::kMsgGenCast;
+    hdr.proto_len          = static_cast<uint16_t>(os.bytes_written);
+    hdr.rpc.service_id     =
+        ::theia::runtime::hash_msg_type_("system_supervisor_PgMembership");
+    hdr.rpc.method_id      = 0;
+    hdr.rpc.correlation_id = 0;
+    std::string frame(sizeof(hdr) + os.bytes_written, '\0');
+    std::memcpy(&frame[0], &hdr, sizeof(hdr));
+    std::memcpy(&frame[sizeof(hdr)], pb, os.bytes_written);
+    (void)::sendto(fd, frame.data(), frame.size(), MSG_NOSIGNAL | MSG_DONTWAIT,
+                   reinterpret_cast<struct sockaddr*>(&a), sizeof(a));
+    ::close(fd);
 }
 
 }  // namespace

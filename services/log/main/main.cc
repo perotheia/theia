@@ -155,18 +155,16 @@ int main(int argc, char** argv) {
         // types so a real peer — or a robot-test inject via services/com
         // — lands on the same handle_call / handle_cast path. clientServer
         // ops → register_call; senderReceiver `in` data → register_cast.
-        config_mux.register_call<LogSubscribeReq, LogEmpty>(
-            log_daemon_cfg, log_daemon);
-        // ---- process groups (pg): MANUAL pub/sub control ------------------
-        // The node OWNS its group membership: it calls pg_join<T>() to consume a
-        // broadcast group, pg_resolve<T>()/broadcast_*() to publish, and
-        // pg_leave<T>() to stop — from its OWN logic (init()/handlers), NOT
-        // automatically here. We only ATTACH the node's PgClient to its demux
-        // binding so a received group datagram routes into the node's normal
-        // handle_cast (entries[service_id] filled by register_cast above) and the
-        // supervisor CALL is labelled with this node's name. Manual, like OTP
-        // pg:join/leave — declaring a port means "I CAN", not "subscribe me".
-        log_daemon.pg_attach(LogDaemon::kNodeName, log_daemon_cfg);
+        // ---- process groups (pg): MANUAL pub/sub control (OTP pg shape) ----
+        // The node OWNS its membership: pg_join<T>() to CONSUME a group,
+        // pg_watch<T>()/broadcast_*() to PRODUCE, pg_leave<T>() to stop — from its
+        // OWN logic (init()/handlers), never automatically here. We ATTACH the
+        // node's PgClient to its demux binding (so a joined group's frames + the
+        // supervisor's PgMembership pushes route into handle_cast) and pass its
+        // BOUND ADDRESS as the watcher address — where the supervisor casts
+        // PgMembership when this node pg_watch'es a group it produces to.
+        log_daemon.pg_attach(LogDaemon::kNodeName, log_daemon_cfg,
+                                log_daemon_type, log_daemon_inst);
     } else {
         log_daemon.log().warn("config service bind failed; live log-level "
                                  "push + signal inject disabled");

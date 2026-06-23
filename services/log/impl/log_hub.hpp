@@ -49,19 +49,12 @@
 #include "NodeRef.hh"        // theia::runtime::TipcClient
 #include "RemoteCodec.hh"    // service_id for the fan-out frame
 #include "TheiaMsgHeader.hh"
+#include "PgClient.hh"       // OTP pg:monitor — membership-driven fan-out + tailer
+#include "lib/log_codecs.hh" // RemoteCodec<system_services_log_LogRecord>
 
 namespace ara::log {
 
-// One registered log subscriber. Persistent SEQPACKET client (connect once on
-// subscribe, reuse per fan-out). A failed send => the consumer went away =>
-// prune (connection-close demonitor).
-struct LogSub {
-    uint32_t tipc_type     = 0;
-    uint32_t tipc_instance = 0;
-    uint32_t level_min     = 0;   // best-effort coarse filter; 0 = all
-    std::string tag_filter;       // "" = all
-    std::shared_ptr<::theia::runtime::TipcClient> client;
-};
+using LogRecordT = system_services_log_LogRecord;
 
 // One tailed log file: the node it belongs to + its open offset.
 struct TailFile {
@@ -74,11 +67,6 @@ struct TailFile {
 
 class LogHub {
 public:
-    // service_id the consumer's receiver registers for — the djb2 of the
-    // LogRecord type, so the fan-out frame dispatches on the subscriber side.
-    static constexpr uint16_t kRecordServiceId =
-        ::theia::runtime::hash_msg_type_("system_services_log_LogRecord");
-
     // Supervisor control node (SupervisorCtl) TIPC address — where
     // GetLoggerPolicy is served. Matches platform/supervisor/system/component.art.
     static constexpr uint32_t kSupervisorCtlType     = 0x80020001;
@@ -89,51 +77,26 @@ public:
         return h;
     }
 
-    void set_capacity(std::size_t n) {
-        std::lock_guard<std::mutex> lk(mu_);
-        capacity_ = n ? n : 1;
-        while (ring_.size() > capacity_) ring_.pop_front();
-    }
-
-    // LogDaemon control path: register a consumer. Connects, spills the ring
-    // backlog (history, then follow), then live lines flow via the tailer's
-    // fan-out. The FIRST subscriber starts the tailer thread; returns false if
-    // the consumer is unreachable.
-    bool subscribe(uint32_t type, uint32_t instance,
-                   uint32_t level_min, std::string tag_filter) {
-        auto client = std::make_shared<::theia::runtime::TipcClient>();
-        if (!client->connect(type, instance)) {
-            std::fprintf(stderr,
-                "[log_hub] subscribe: cannot reach consumer {0x%08x,%u}\n",
-                type, instance);
-            return false;
-        }
-        LogSub sub;
-        sub.tipc_type     = type;
-        sub.tipc_instance = instance;
-        sub.level_min     = level_min;
-        sub.tag_filter    = std::move(tag_filter);
-        sub.client        = std::move(client);
-
-        bool start_tailer = false;
-        {
-            std::lock_guard<std::mutex> lk(mu_);
-            for (const std::string& rec : ring_) {     // spill backlog
-                if (!send_locked(sub, rec)) return false;  // died mid-spill
-            }
-            start_tailer = subs_.empty();   // first subscriber → spin up tailer
-            subs_.push_back(std::move(sub));
-            std::fprintf(stderr,
-                "[log_hub] consumer {0x%08x,%u} attached (%zu backlog, %zu live)\n",
-                type, instance, ring_.size(), subs_.size());
-        }
-        if (start_tailer) start_tailer_();
-        return true;
+    // OTP pg:monitor — the pump calls this ONCE (with its own bound addr) to
+    // start watching the LogRecord group. Membership now DRIVES the lazy tailer:
+    // pg_watch'ing means the supervisor pushes us PgMembership on every consumer
+    // join/leave, and tailer_wanted() reads the member count. `self_t/self_i` is
+    // the pump's bound addr — where the supervisor casts PgMembership.
+    void watch_group(const std::string& node_name,
+                     ::theia::runtime::NodeBinding* binding,
+                     uint32_t self_t, uint32_t self_i) {
+        pg_.attach(node_name, binding);
+        watch_self_t_ = self_t;
+        watch_self_i_ = self_i;
+        // on_change: wake the tailer thread (a consumer just joined → start, or
+        // left → maybe stop). The pump's do_loop polls tailer_wanted() anyway;
+        // this just makes the transition prompt.
+        pg_.watch<LogRecordT>(self_t, self_i, [] { /* poll-driven */ });
     }
 
     // Called by LogStreamPump::do_loop on its own thread. Blocks tailing files
-    // while there are subscribers; returns when the last one leaves (so the
-    // runnable's loop idles). Re-entrant across start/stop cycles.
+    // while the LogRecord group has members; returns when the last one leaves (so
+    // the runnable's loop idles). Re-entrant across start/stop cycles.
     void tail_loop() {
         // Fetch the per-node sinks once per tailer activation. Populates `files`
         // (file: sinks) and journal_tags_ (syslog sinks).
@@ -149,7 +112,7 @@ public:
             std::fprintf(stderr,
                 "[log_hub] tailer: no file:/syslog sinks to follow — idle\n");
         }
-        while (run_tailer_.load() && have_subs_()) {
+        while (have_subs_()) {
             bool any = false;
             for (TailFile& f : files) any |= drain_file_(f);
             if (jfd >= 0) any |= drain_journal_(jfd, jbuf);
@@ -162,24 +125,16 @@ public:
             files.size(), journal_tags_.size());
     }
 
-    // Whether the runnable's loop should keep calling tail_loop (i.e. there's
-    // demand). LogStreamPump::do_loop polls this.
-    bool tailer_wanted() const { return run_tailer_.load() && have_subs_(); }
+    // Whether the runnable's loop should keep calling tail_loop (i.e. the
+    // LogRecord group has ≥1 member). LogStreamPump::do_loop polls this — file
+    // I/O happens ONLY while someone is logcat'ing. The OTP-pg analogue of the
+    // old subscriber refcount; now the supervisor's PgMembership IS the count.
+    bool tailer_wanted() { return have_subs_(); }
 
 private:
     LogHub() = default;
 
-    bool have_subs_() const {
-        std::lock_guard<std::mutex> lk(mu_);
-        return !subs_.empty();
-    }
-
-    void start_tailer_() {
-        // The runnable LogStreamPump owns the actual thread; we just flip the
-        // run flag. do_loop() picks it up (polls tailer_wanted()). This keeps
-        // the thread lifecycle with the node, not the hub.
-        run_tailer_.store(true);
-    }
+    bool have_subs_() { return !pg_.members<LogRecordT>().empty(); }
 
     // ---- supervisor GetLoggerPolicy (hand-rolled SEQPACKET call) -----------
     //
@@ -320,31 +275,16 @@ private:
         encode_and_fanout_(rec);
     }
 
-    // Encode a LogRecord → ring + fan out to every live subscriber (pruning the
-    // dead). Shared by the file: tailer (emit_line_) and the syslog/journald
-    // tailer (emit_journal_entry_).
+    // Encode a LogRecord → PG fan out: cast to EACH watched member of the
+    // LogRecord group (OTP `[Pid ! Msg || Pid <- pg:get_members]`). Shared by the
+    // file: tailer (emit_line_) and the syslog/journald tailer. No ring (logcat
+    // is a live tail; history is in the files/journald).
     void encode_and_fanout_(const system_services_log_LogRecord& rec) {
         uint8_t wire[BUFSIZ + 256];
         pb_ostream_t os = pb_ostream_from_buffer(wire, sizeof(wire));
         if (!pb_encode(&os, system_services_log_LogRecord_fields, &rec)) return;
-        std::string bytes(reinterpret_cast<const char*>(wire), os.bytes_written);
-
-        std::lock_guard<std::mutex> lk(mu_);
-        ring_.push_back(bytes);
-        while (ring_.size() > capacity_) ring_.pop_front();
-        auto it = subs_.begin();
-        while (it != subs_.end()) {
-            if (!send_locked(*it, ring_.back())) {
-                std::fprintf(stderr,
-                    "[log_hub] consumer {0x%08x,%u} gone — pruning\n",
-                    it->tipc_type, it->tipc_instance);
-                it = subs_.erase(it);
-            } else {
-                ++it;
-            }
-        }
-        // Last consumer left mid-drain → ask the tailer to wind down.
-        if (subs_.empty()) run_tailer_.store(false);
+        pg_.broadcast_members<LogRecordT>(
+            wire, static_cast<uint16_t>(os.bytes_written));
     }
 
     // Strip the FileLogger prefix "<ISO8601Z> [<LEVEL>] " so `line` holds only
@@ -518,27 +458,12 @@ private:
         return system_services_log_LogLevel_LogLevel_DEBUG;
     }
 
-    // Frame raw record bytes as a GEN_CAST and send to one subscriber.
-    // Caller holds mu_.
-    bool send_locked(LogSub& sub, const std::string& wire) {
-        if (!sub.client || !sub.client->is_open()) return false;
-        ::theia::runtime::TheiaMsgHeader hdr{};
-        hdr.bus_type           = ::theia::runtime::kBusTypeRpc;
-        hdr.msg_type           = ::theia::runtime::kMsgGenCast;
-        hdr.proto_len          = static_cast<uint16_t>(wire.size());
-        hdr.rpc.service_id     = kRecordServiceId;
-        hdr.rpc.method_id      = 0;
-        hdr.rpc.correlation_id = 0;
-        return sub.client->send_frame(
-            hdr, reinterpret_cast<const uint8_t*>(wire.data()),
-            static_cast<uint16_t>(wire.size()));
-    }
-
-    mutable std::mutex mu_;
-    std::deque<std::string> ring_;
-    std::size_t capacity_ = 4096;
-    std::vector<LogSub> subs_;
-    std::atomic<bool> run_tailer_{false};
+    // The PG client: pg_watch'es the LogRecord group (membership drives the
+    // tailer) + broadcast_members fans each line to the watched consumers. The
+    // OTP-pg replacement for the old subscriber registry + ring.
+    ::theia::runtime::PgClient pg_;
+    uint32_t watch_self_t_{0};
+    uint32_t watch_self_i_{0};
 
     // syslog-mode state, (re)populated by fetch_and_open_ each tailer
     // activation: the SYSLOG_IDENTIFIER tags to follow via journald + their

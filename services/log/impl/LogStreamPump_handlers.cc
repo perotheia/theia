@@ -22,6 +22,8 @@
 #include <thread>
 
 #include "impl/log_hub.hpp"   // process-global LogHub (shared with LogDaemon)
+#include "MachineInstance.hh" // resolve_node_tipc — our machine-shifted addr
+#include <unistd.h>           // getpid — distinct watcher instance
 
 namespace ara::log {
 
@@ -31,11 +33,27 @@ void LogStreamPump::do_start() {
 }
 
 void LogStreamPump::do_loop() {
+    // OTP pg:monitor — start watching the LogRecord group ONCE. Membership drives
+    // the lazy tailer: the supervisor pushes PgMembership to our addr on every
+    // consumer join/leave, and tailer_wanted() reads the member count. We bind a
+    // bare recv socket at our own addr for the push (a runnable has no mux
+    // binding). Resolve our addr (machine-shifted instance) the same way main does.
+    uint32_t self_t = 0, self_i = 0;
+    ::theia::runtime::resolve_node_tipc(kNodeName, kTipcType, kTipcInstance,
+                                        self_t, self_i);
+    // The watcher recv socket must NOT collide with the pump's own node bind
+    // (0x80010023, SEQPACKET) — an RDM PgMembership push to a name shared with a
+    // SEQPACKET socket can land on the wrong one. Bind the watcher at a DISTINCT
+    // instance (pid-derived, high bit set so it's never 0 / a real node instance).
+    uint32_t watch_inst = (static_cast<uint32_t>(::getpid()) & 0x7FFFu) | 0x8000u;
+    LogHub::instance().watch_group(kNodeName, /*binding=*/nullptr,
+                                   self_t, watch_inst);
+
     while (!stop_requested()) {
         if (LogHub::instance().tailer_wanted()) {
-            // Blocks tailing files + fanning out until the last subscriber
-            // leaves (or stop_requested via the hub's run flag), then returns
-            // here to idle.
+            // Blocks tailing files + fanning out (broadcast_members to the watched
+            // consumers) until the last consumer leaves the LogRecord group, then
+            // returns here to idle — no file I/O when nobody's logcat'ing.
             LogHub::instance().tail_loop();
         } else {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));

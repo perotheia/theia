@@ -102,9 +102,18 @@ public:
     // Used where the consumer is not a GenServer node (a gRPC bridge, a tool).
     template <typename T>
     Group join_raw(std::function<void(const uint8_t*, uint16_t)> sink) {
+        return join_raw_named(msg_type_name<T>(), std::move(sink));
+    }
+
+    // Same, but the group is named by STRING — for a non-node consumer that
+    // deliberately keeps the message's proto/RemoteCodec header off its TU (e.g.
+    // com's edge links, which forward raw bytes to the gRPC side). `group_name`
+    // MUST be the wire type name (== msg_type_name<T>() on the producer side).
+    Group join_raw_named(const char* group_name,
+                         std::function<void(const uint8_t*, uint16_t)> sink) {
         raw_sink_ = std::move(sink);
-        Group g = call_join_(msg_type_name<T>(), /*join=*/true);
-        if (g.ok) bind_recv_(g.type, g.instance, msg_type_name<T>());
+        Group g = call_join_(group_name, /*join=*/true);
+        if (g.ok) bind_recv_(g.type, g.instance, group_name);
         return g;
     }
 

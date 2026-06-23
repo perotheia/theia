@@ -73,6 +73,15 @@ void fg_transition(FgGate* self, FgGateState& s, uint32_t fg,
 
 void FgGate::init(FgGateState& /*s*/) {
     this->log().info("fg gate up — multi-FG authority (per-FG state + EM drive)");
+    // PG: consume phm's health broadcast. phm now PG-multicasts PhmHealthStatus
+    // (no longer a direct cast); join the group so the supervisor adds us as a
+    // member and the multicast reaches handle_cast(const PhmHealthStatus&). The
+    // fg_lifecycle events are direct casts to our own address (EM/probe), NOT a
+    // group — they need no join. See [[project-pg-broadcast-model]].
+    auto _g = pg_join<PhmHealthStatus>();
+    if (!_g.ok)
+        this->log().warn("pg_join(PhmHealthStatus) failed — phm health degraded "
+                         "escalation will not arrive until the supervisor is up");
 }
 
 void FgGate::handle_info(const char* /*info*/, FgGateState& /*s*/) {

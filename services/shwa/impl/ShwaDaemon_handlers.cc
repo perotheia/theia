@@ -75,77 +75,14 @@ AccelSample to_wire_(const AccelReading& r) {
     return m;
 }
 
-// ── AccelTelemetry egress over TIPC (SHWA → com) ─────────────────────────────
+// ── AccelTelemetry egress: now PG (SHWA → com) ───────────────────────────────
 //
-// AccelTelemetry is a senderReceiver broadcast; the runtime's generated
-// broadcast_* fan-out is IN-PROCESS only (subscriber callbacks). To reach com
-// (the gRPC bridge to the GUI) — a separate process — SHWA hand-frames each
-// AccelSample as a GEN_CAST and SOCK_DGRAM-sendto's a well-known AccelTelemetry
-// egress TIPC service name. This MIRRORS the runtime's TraceSubmitter (the trace
-// egress producer, Tracer.hh): connectionless, best-effort, drop-on-block — a
-// slow/absent com must never back-pressure the poll thread, and a dropped
-// telemetry sample is fine (the next tick re-sends). com binds this name and
-// gates forwarding into the gRPC stream on a connected subscriber.
-class AccelSubmitter {
-public:
-    // The AccelTelemetry egress channel. com (shwa_link) binds this DGRAM name.
-    // Free address near SHWA's own 0x80010012 (verified against the manifest).
-    static constexpr uint32_t kEgressTipcType     = 0x8001001Au;
-    static constexpr uint32_t kEgressTipcInstance = 0u;
-
-    // service_id com's receiver matches: djb2_low16 of the nanopb C type name,
-    // the SAME hash RemoteCodec<AccelSample> computes — derived so it can't drift.
-    static constexpr const char* kRecordTypeName =
-        "system_services_shwa_AccelSample";
-    static constexpr uint16_t kRecordServiceId =
-        ::theia::runtime::hash_msg_type_(kRecordTypeName);
-
-    static AccelSubmitter& instance() { static AccelSubmitter s; return s; }
-
-    // Encode `m` to proto-wire, frame [TheiaMsgHeader|GEN_CAST][AccelSample],
-    // and sendto the egress name. Lossy by design — returns void.
-    void submit(const AccelSample& m) noexcept {
-        uint8_t pb[256];
-        pb_ostream_t os = pb_ostream_from_buffer(pb, sizeof(pb));
-        if (!pb_encode(&os, system_services_shwa_AccelSample_fields, &m)) return;
-
-        std::lock_guard<std::mutex> lk(mu_);
-        if (!ensure_open_locked()) return;
-        ::theia::runtime::TheiaMsgHeader hdr{};
-        hdr.bus_type           = ::theia::runtime::kBusTypeRpc;
-        hdr.msg_type           = ::theia::runtime::kMsgGenCast;
-        hdr.proto_len          = static_cast<uint16_t>(os.bytes_written);
-        hdr.rpc.service_id     = kRecordServiceId;
-        hdr.rpc.method_id      = 0;
-        hdr.rpc.correlation_id = 0;
-        std::vector<uint8_t> frame(sizeof(hdr) + os.bytes_written);
-        std::memcpy(frame.data(), &hdr, sizeof(hdr));
-        std::memcpy(frame.data() + sizeof(hdr), pb, os.bytes_written);
-        (void)::sendto(fd_, frame.data(), frame.size(),
-                       MSG_NOSIGNAL | MSG_DONTWAIT,
-                       reinterpret_cast<struct sockaddr*>(&addr_), sizeof(addr_));
-    }
-
-private:
-    AccelSubmitter() {
-        addr_.family                  = AF_TIPC;
-        addr_.addrtype                = TIPC_ADDR_NAME;
-        addr_.addr.name.name.type     = kEgressTipcType;
-        addr_.addr.name.name.instance = kEgressTipcInstance;
-        addr_.scope                   = TIPC_NODE_SCOPE;
-    }
-    ~AccelSubmitter() { if (fd_ >= 0) ::close(fd_); }
-
-    bool ensure_open_locked() noexcept {
-        if (fd_ >= 0) return true;
-        fd_ = ::socket(AF_TIPC, SOCK_DGRAM | SOCK_CLOEXEC, 0);
-        return fd_ >= 0;
-    }
-
-    std::mutex           mu_;
-    int                  fd_ = -1;
-    struct sockaddr_tipc addr_{};
-};
+// The hand-rolled AccelSubmitter (a SOCK_DGRAM sendto to a fixed egress name
+// 0x8001001A, the AccelSample analogue of the old TraceSubmitter) is RETIRED.
+// shwa's generated broadcast_broadcast_sample() is now a PG name-sequence
+// multicast of AccelSample; com's shwa_link pg_joins the AccelSample group, so
+// the supervisor allocates com's delivery address and the kernel fans out the
+// sample. No fixed egress address, no per-process bind collision, no submitter.
 
 }  // namespace
 
@@ -183,8 +120,7 @@ void ShwaDaemon::handle_info(const char* info, ShwaDaemonState& s) {
 
     backend::sample(s.last);
     AccelSample wire = to_wire_(s.last);
-    broadcast_broadcast_sample(wire);          // in-process subscribers
-    AccelSubmitter::instance().submit(wire);   // TIPC egress → com (GUI bridge)
+    broadcast_broadcast_sample(wire);          // PG multicast → com (GUI bridge) + any joiner
 
     // Reconcile the desired power mode on Orin (edge — only on a change).
     if (backend::on_jetson() && s.power_mode != s.applied_power_mode &&

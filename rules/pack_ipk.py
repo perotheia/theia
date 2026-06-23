@@ -89,6 +89,14 @@ def _wanted(exec_json: str) -> dict[str, tuple[str, str]]:
             "/opt/theia/bin/" + p["name"],
             _target_pkg_path(p["executable"]),
         )
+    # The supervisor is ALWAYS staged at bin/supervisor — it's the runtime that
+    # boots the executor.json tree (the PG allocator + watchdog), not a process
+    # row in execution.json. theia dist adds its label to the binaries filegroup;
+    # stage it here so the .deb is actually bootable (`theia start` runs it).
+    out["supervisor"] = (
+        "/opt/theia/bin/supervisor",
+        _target_pkg_path("//platform/supervisor/main:supervisor"),
+    )
     return out
 
 

@@ -48,6 +48,15 @@ struct EmitForwarder {
     void (*set_trace)(const char* /*child*/, uint32_t /*kind*/,
                       bool /*enabled*/) = nullptr;
     void (*set_log_level)(const char* /*child*/, uint32_t /*level*/) = nullptr;
+
+    // pg membership push to a WATCHER (broadcaster). The engine hands the
+    // watcher's RECEIVE address + the group's current members (a flat array of
+    // type/instance pairs); SupervisorCtl builds the PgMembership proto and casts
+    // it to that address. Same control-only-touches-transport rule as set_trace.
+    // members is (2*n_members) uint32s: [type0,inst0, type1,inst1, ...].
+    void (*push_pg)(uint32_t /*watcher_type*/, uint32_t /*watcher_instance*/,
+                    uint32_t /*group_id*/, const uint32_t* /*members*/,
+                    uint32_t /*n_members*/) = nullptr;
 };
 void set_emit_forwarder(const EmitForwarder& fwd);
 const EmitForwarder& emit_forwarder();

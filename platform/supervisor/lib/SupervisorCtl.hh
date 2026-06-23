@@ -69,6 +69,10 @@ using NodeState = system_supervisor_NodeState;
 using SnapshotEnd = system_supervisor_SnapshotEnd;
 using HeartbeatReport = system_supervisor_HeartbeatReport;
 using SendTimeoutReport = system_supervisor_SendTimeoutReport;
+using PgJoin = system_supervisor_PgJoin;
+using PgLeave = system_supervisor_PgLeave;
+using PgWatch = system_supervisor_PgWatch;
+using PgMembership = system_supervisor_PgMembership;
 using TraceControlPush = platform_runtime_TraceControlPush;
 using LogLevelPush = platform_runtime_LogLevelPush;
 using ConfigUpdated = platform_runtime_ConfigUpdated;
@@ -214,6 +218,17 @@ public:
     void handle_cast(const HeartbeatReport& msg, SupervisorCtlState& s);
 
     void handle_cast(const SendTimeoutReport& msg, SupervisorCtlState& s);
+
+    // pg membership control (node → supervisor) — translated to engine ops.
+    void handle_cast(const PgJoin& msg, SupervisorCtlState& s);
+    void handle_cast(const PgLeave& msg, SupervisorCtlState& s);
+    void handle_cast(const PgWatch& msg, SupervisorCtlState& s);
+
+    // pg membership push (supervisor → broadcaster) — the events.pg_membership
+    // sender data field. SupervisorCtl casts it to a watcher address directly
+    // (push_pg forwarder), so the in-process broadcast_* below is unused, but
+    // gen-app emits it for the sender port; kept for shape-completeness.
+    void broadcast_events_pg_membership(const PgMembership& msg);
 
 
     TreeSnapshot handle_call(const GetTreeRequest& req,
@@ -538,6 +553,12 @@ inline void SupervisorCtl::broadcast_events_node_state(const NodeState& msg) {
         }
     }
 }
+
+// pg_membership is pushed by the engine via the push_pg forwarder (direct cast to
+// the watcher addr), NOT through an in-process subscriber list — so this is a
+// no-op kept only to satisfy the sender-port shape. The real push is ctl_push_pg.
+inline void SupervisorCtl::broadcast_events_pg_membership(
+        const PgMembership& /*msg*/) {}
 
 inline uint32_t SupervisorCtl::subscribe_events_snap_end(
         EventsSnap_endSubscriber s) {

@@ -59,3 +59,7 @@ system_supervisor.SendTimeoutReport.caller_node   max_size:64
 system_supervisor.SendTimeoutReport.callee_node   max_size:64
 system_supervisor.SendTimeoutReport.iface   max_size:64
 system_supervisor.SendTimeoutReport.method   max_size:64
+system_supervisor.PgJoin.node_name   max_size:64
+system_supervisor.PgLeave.node_name   max_size:64
+system_supervisor.PgWatch.node_name   max_size:64
+system_supervisor.PgMembership.members   max_count:64

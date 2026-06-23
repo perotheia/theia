@@ -100,6 +100,19 @@ std::unique_ptr<::supervisor::Supervisor> g_engine;
     s.set_log_level = [](const std::string& child, uint32_t level) {
         if (auto fn = emit_forwarder().set_log_level) fn(child.c_str(), level);
     };
+    // pg membership push — DEFER to the forwarder (SupervisorCtl does the cast).
+    // Flatten the member list to [type0,inst0, type1,inst1, ...] for the C ABI.
+    s.push_pg = [](uint32_t wtype, uint32_t winst, uint32_t group_id,
+                   const std::vector<::supervisor::EmitSink::PgMemberAddr>& members) {
+        auto fn = emit_forwarder().push_pg;
+        if (!fn) return;
+        std::vector<uint32_t> flat;
+        flat.reserve(members.size() * 2);
+        for (const auto& m : members) { flat.push_back(m.tipc_type);
+                                        flat.push_back(m.tipc_instance); }
+        fn(wtype, winst, group_id, flat.data(),
+           static_cast<uint32_t>(members.size()));
+    };
     return s;
 }
 

@@ -210,6 +210,24 @@ void ctl_set_log_level(const std::string& child, uint32_t level) {
     resolve_and_cast(child, m);
 }
 
+// pg membership push: build the PgMembership proto + cast it to a watcher's
+// RECEIVE address (given explicitly by the engine — no name resolution). Same
+// control-only-touches-transport + short-budget rules as resolve_and_cast.
+void ctl_push_pg(uint32_t watcher_type, uint32_t watcher_instance,
+                 uint32_t group_id, const uint32_t* members, uint32_t n) {
+    if (!g_ctl) return;
+    system_supervisor_PgMembership m{};
+    m.group_id      = group_id;
+    m.members_count = (n > 64u) ? 64u : n;     // PgMember max_count:64
+    for (uint32_t i = 0; i < m.members_count; ++i) {
+        m.members[i].tipc_type     = members[2 * i];
+        m.members[i].tipc_instance = members[2 * i + 1];
+    }
+    ::theia::runtime::cast(*g_ctl, m,
+                           ::theia::runtime::TipcAddr{watcher_type, watcher_instance},
+                           /*dst_name=*/nullptr, /*connect_timeout_ms=*/250);
+}
+
 }  // namespace
 
 
@@ -229,6 +247,10 @@ void SupervisorCtl::init(SupervisorCtlState& /*s*/) {
     };
     fwd.set_log_level     = [](const char* c, uint32_t l) {
         ctl_set_log_level(c, l);
+    };
+    fwd.push_pg           = [](uint32_t wt, uint32_t wi, uint32_t gid,
+                               const uint32_t* members, uint32_t n) {
+        ctl_push_pg(wt, wi, gid, members, n);
     };
     ::supervisor::set_emit_forwarder(fwd);
 }
@@ -264,6 +286,52 @@ void SupervisorCtl::handle_cast(const SendTimeoutReport& msg,
     c.method      = s(msg.method);
     c.budget_ms   = msg.budget_ms;
     c.observed_ms = msg.observed_ms;
+    e->enqueue(std::move(c));
+}
+
+// pg join/leave/watch (node → supervisor) → engine ExecCommands. The engine
+// owns the registry; the watchdog reaps a dead member. group_id = the wire
+// message-type service_id the joining node receives / the watcher broadcasts.
+void SupervisorCtl::handle_cast(const PgJoin& msg, SupervisorCtlState& /*s*/) {
+    using Op = ::supervisor::ExecCommand::Op;
+    auto* e = engine();
+    if (!e) return;
+    ::supervisor::ExecCommand c;
+    c.op            = Op::PgJoin;
+    c.name          = s(msg.node_name);
+    c.pid           = static_cast<pid_t>(msg.pid);
+    c.group_id      = msg.group_id;
+    c.tipc_type     = msg.tipc_type;
+    c.tipc_instance = msg.tipc_instance;
+    e->enqueue(std::move(c));
+}
+
+void SupervisorCtl::handle_cast(const PgLeave& msg, SupervisorCtlState& /*s*/) {
+    using Op = ::supervisor::ExecCommand::Op;
+    auto* e = engine();
+    if (!e) return;
+    ::supervisor::ExecCommand c;
+    c.op       = Op::PgLeave;
+    c.name     = s(msg.node_name);
+    c.pid      = static_cast<pid_t>(msg.pid);
+    c.group_id = msg.group_id;
+    e->enqueue(std::move(c));
+}
+
+void SupervisorCtl::handle_cast(const PgWatch& msg, SupervisorCtlState& /*s*/) {
+    using Op = ::supervisor::ExecCommand::Op;
+    auto* e = engine();
+    if (!e) return;
+    ::supervisor::ExecCommand c;
+    c.op            = Op::PgWatch;
+    c.name          = s(msg.node_name);
+    c.pid           = static_cast<pid_t>(msg.pid);
+    c.group_id      = msg.group_id;
+    // The watcher's RECEIVE address for PgMembership = its SupervisorEventIf
+    // receiver. A broadcaster watches from its own node addr; the engine stores
+    // (tipc_type, tipc_instance) to push membership back. PgWatch carries them.
+    c.tipc_type     = msg.tipc_type;
+    c.tipc_instance = msg.tipc_instance;
     e->enqueue(std::move(c));
 }
 

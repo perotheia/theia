@@ -181,6 +181,11 @@ int main(int argc, char** argv) {
             supervisor_ctl_cfg, supervisor_ctl);
         config_mux.register_cast<HeartbeatReport>(supervisor_ctl_cfg, supervisor_ctl);
         config_mux.register_cast<SendTimeoutReport>(supervisor_ctl_cfg, supervisor_ctl);
+        // pg membership control (node → supervisor): join/leave a group, or watch
+        // a group's membership (broadcasters). Same NodeReportIf config service.
+        config_mux.register_cast<PgJoin>(supervisor_ctl_cfg, supervisor_ctl);
+        config_mux.register_cast<PgLeave>(supervisor_ctl_cfg, supervisor_ctl);
+        config_mux.register_cast<PgWatch>(supervisor_ctl_cfg, supervisor_ctl);
     } else {
         supervisor_ctl.log().warn("config service bind failed; live log-level "
                                  "push + signal inject disabled");

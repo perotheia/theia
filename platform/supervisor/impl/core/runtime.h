@@ -233,6 +233,10 @@ struct ExecCommand {
         TerminateChild, OnHeartbeat, OnSendTimeout, ConfigureTrace,
         ConfigureLogLevel, GetTree, GetSystemInfo, GetTraceConfig,
         GetLogLevelConfig, GetLoggerPolicy, GetTombstone, GetHealth, Shutdown,
+        // process groups (pg): a node joins/leaves a group (= a wire message
+        // type) to receive its broadcasts; a broadcaster watches a group to be
+        // pushed its membership. Reaped by the watchdog on heartbeat-miss/SIGCHLD.
+        PgJoin, PgLeave, PgWatch,
     };
     Op op;
 
@@ -258,6 +262,12 @@ struct ExecCommand {
     bool                     enabled{false};// ConfigureTrace
     uint32_t                 kind{0};       // ConfigureTrace
     uint32_t                 level{0};      // ConfigureLogLevel
+
+    // pg (PgJoin / PgLeave / PgWatch). group_id = the wire message-type service_id.
+    // tipc_type/tipc_instance = the joining member's RECEIVE address (PgJoin only).
+    uint32_t                 group_id{0};
+    uint32_t                 tipc_type{0};
+    uint32_t                 tipc_instance{0};
 
     // reply channel — set ONLY by call(); null for enqueue() casts.
     std::promise<ExecReply>* reply{nullptr};
@@ -285,6 +295,14 @@ struct EmitSink {
                        bool /*enabled*/)>            set_trace;
     std::function<void(const std::string& /*child*/, uint32_t /*level*/)>
                                                      set_log_level;
+    // Ask CONTROL to push a group's membership to ONE watcher (broadcaster). The
+    // engine owns the pg registry but does NOT cast: SupervisorCtl builds the
+    // PgMembership proto + casts it to the watcher's SupervisorEventIf receiver
+    // at (watcher_type, watcher_instance). members = each member's RECEIVE addr.
+    struct PgMemberAddr { uint32_t tipc_type; uint32_t tipc_instance; };
+    std::function<void(uint32_t /*watcher_type*/, uint32_t /*watcher_instance*/,
+                       uint32_t /*group_id*/,
+                       const std::vector<PgMemberAddr>& /*members*/)> push_pg;
 };
 
 class Supervisor {
@@ -607,6 +625,27 @@ private:
     };
     std::map<pid_t, HeartbeatState>  heartbeats_;
     void check_heartbeats();
+
+    // ---- process groups (pg) — OTP-style broadcast fan-out ------------------
+    //
+    // A group is keyed by group_id = the wire message-type service_id (the same
+    // djb2 register_cast demuxes on). pg_groups_[group_id][pid] = the member's
+    // RECEIVE address. pg_watchers_[group_id][pid] = a broadcaster of that type
+    // (so we know whom to push membership to). Both are reaped by the watchdog:
+    // pg_reap_pid() drops a dead pid from every group + watcher set and re-pushes
+    // membership to affected groups — liveness is the heartbeat, NOT a per-member
+    // socket. This makes pg available to ANY heartbeating node, not just children.
+    struct PgMemberRec { uint32_t tipc_type{0}; uint32_t tipc_instance{0}; };
+    std::map<uint32_t, std::map<pid_t, PgMemberRec>> pg_groups_;    // group→members
+    std::map<uint32_t, std::map<pid_t, PgMemberRec>> pg_watchers_;  // group→broadcasters
+
+    void ctl_pg_join(const std::string& node, pid_t pid, uint32_t group_id,
+                     uint32_t tipc_type, uint32_t tipc_instance);
+    void ctl_pg_leave(pid_t pid, uint32_t group_id);
+    void ctl_pg_watch(const std::string& node, pid_t pid, uint32_t group_id,
+                      uint32_t tipc_type, uint32_t tipc_instance);
+    void pg_reap_pid(pid_t pid);                 // drop pid from all groups (watchdog)
+    void push_pg_membership(uint32_t group_id);  // push to every watcher of group_id
 
     // ---- Trace config (#361, #403) -----------------------------------------
     //

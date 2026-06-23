@@ -586,6 +586,76 @@ void Supervisor::ctl_on_heartbeat(const std::string& node_name, pid_t pid,
     }
 }
 
+// ---------------------------------------------------------------------------
+// Process groups (pg) — OTP-style broadcast fan-out, watchdog-monitored.
+//
+// A node JOINs a group (= a wire message type) to receive its broadcasts; a
+// broadcaster WATCHEs the groups it sends to be pushed the membership. The
+// engine owns the registry + decides WHO to push; SupervisorCtl (via emit_.
+// push_pg) does the actual cast. Liveness is the heartbeat: pg_reap_pid drops a
+// dead member from every group on watchdog-miss / SIGCHLD (no per-member socket).
+// ---------------------------------------------------------------------------
+
+void Supervisor::ctl_pg_join(const std::string& node, pid_t pid,
+                             uint32_t group_id, uint32_t tipc_type,
+                             uint32_t tipc_instance) {
+    pg_groups_[group_id][pid] = PgMemberRec{tipc_type, tipc_instance};
+    engine_log().debug("pg join node=" + node + " group=" +
+                       std::to_string(group_id) + " addr=" +
+                       std::to_string(tipc_type) + "/" +
+                       std::to_string(tipc_instance));
+    push_pg_membership(group_id);
+}
+
+void Supervisor::ctl_pg_leave(pid_t pid, uint32_t group_id) {
+    auto g = pg_groups_.find(group_id);
+    if (g == pg_groups_.end()) return;
+    if (g->second.erase(pid) == 0) return;
+    push_pg_membership(group_id);
+}
+
+void Supervisor::ctl_pg_watch(const std::string& node, pid_t pid,
+                              uint32_t group_id, uint32_t tipc_type,
+                              uint32_t tipc_instance) {
+    pg_watchers_[group_id][pid] = PgMemberRec{tipc_type, tipc_instance};
+    engine_log().debug("pg watch node=" + node + " group=" +
+                       std::to_string(group_id));
+    // Push the CURRENT membership to the new watcher immediately so it can
+    // broadcast without waiting for the next join.
+    push_pg_membership(group_id);
+}
+
+// Drop a dead pid from EVERY group + watcher set; re-push affected groups. Called
+// from the watchdog SIGTERM path and the SIGCHLD reap — the heartbeat IS the
+// liveness signal, so a crashed/killed member leaves all its groups at once.
+void Supervisor::pg_reap_pid(pid_t pid) {
+    for (auto& [group_id, members] : pg_groups_) {
+        if (members.erase(pid) > 0) push_pg_membership(group_id);
+    }
+    for (auto& [group_id, watchers] : pg_watchers_) {
+        watchers.erase(pid);
+    }
+}
+
+// Push group_id's current membership to every watcher (broadcaster) of it. The
+// engine hands SupervisorCtl the watcher's addr + the member list; the control
+// node builds + casts the PgMembership proto.
+void Supervisor::push_pg_membership(uint32_t group_id) {
+    if (!emit_.push_pg) return;
+    auto w = pg_watchers_.find(group_id);
+    if (w == pg_watchers_.end() || w->second.empty()) return;
+
+    std::vector<EmitSink::PgMemberAddr> members;
+    auto g = pg_groups_.find(group_id);
+    if (g != pg_groups_.end()) {
+        members.reserve(g->second.size());
+        for (const auto& [mpid, rec] : g->second)
+            members.push_back({rec.tipc_type, rec.tipc_instance});
+    }
+    for (const auto& [wpid, wrec] : w->second)
+        emit_.push_pg(wrec.tipc_type, wrec.tipc_instance, group_id, members);
+}
+
 // SendTimeoutReport ingress — ported from the old on_inbound_frame
 // kTagSendTimeout path. Surfaced as a kind=7 supervision event.
 void Supervisor::ctl_on_send_timeout(const std::string& caller,
@@ -977,6 +1047,10 @@ void Supervisor::shutdown_subtree(SupervisorNode& sup) {
 // ---------------------------------------------------------------------------
 
 void Supervisor::on_child_exit(WorkerNode& w, int return_code, pid_t old_pid) {
+    // pg: a dead child leaves ALL its groups at once (the heartbeat is the
+    // liveness signal). Re-pushes the shrunk membership to each group's watchers.
+    pg_reap_pid(old_pid);
+
     SupervisorNode* sup = supervisor_of(w);
     if (!sup) {
         log_warn("exit from unknown child " + w.name);
@@ -1227,6 +1301,17 @@ void Supervisor::dispatch(ExecCommand& cmd) {
         case Op::OnSendTimeout:
             ctl_on_send_timeout(cmd.name, cmd.callee, cmd.iface, cmd.method,
                                 cmd.budget_ms, cmd.observed_ms);
+            break;
+        case Op::PgJoin:
+            ctl_pg_join(cmd.name, cmd.pid, cmd.group_id,
+                        cmd.tipc_type, cmd.tipc_instance);
+            break;
+        case Op::PgLeave:
+            ctl_pg_leave(cmd.pid, cmd.group_id);
+            break;
+        case Op::PgWatch:
+            ctl_pg_watch(cmd.name, cmd.pid, cmd.group_id,
+                         cmd.tipc_type, cmd.tipc_instance);
             break;
         case Op::ConfigureTrace:
             rep.ok = ctl_configure_trace(cmd.name, cmd.enabled, cmd.kind);

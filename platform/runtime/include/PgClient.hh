@@ -53,26 +53,33 @@ public:
         hash_msg_type_(kMembershipTypeName);
 
     PgClient(std::string node_name, uint32_t my_rx_type, uint32_t my_rx_instance)
-        : node_name_(std::move(node_name)),
-          my_rx_type_(my_rx_type), my_rx_instance_(my_rx_instance),
-          self_pid_(::getpid()) {}
+        : node_name_(std::move(node_name)), self_pid_(::getpid()) {
+        (void)my_rx_type; (void)my_rx_instance;   // address is now per-call
+    }
+    PgClient() : self_pid_(::getpid()) {}          // process-singleton ctor
 
     ~PgClient() { if (fd_ >= 0) ::close(fd_); }
     PgClient(const PgClient&) = delete;
     PgClient& operator=(const PgClient&) = delete;
 
-    // RECEIVER: ask the supervisor to add me to group_id; its broadcasters will
-    // cast group_id's message to (my_rx_type, my_rx_instance).
-    void join(uint32_t group_id) {
-        send_(kJoinSid, group_id, /*with_addr=*/true);
+    // Process-global instance — a process may host several nodes, but they share
+    // ONE socket to the supervisor + ONE membership cache (membership is keyed by
+    // group_id = message type, identical for every watcher in the process). Each
+    // join/watch carries the specific node's RECEIVE address.
+    static PgClient& instance() { static PgClient c; return c; }
+
+    // RECEIVER: ask the supervisor to add (rx_type, rx_inst) to group_id; its
+    // broadcasters will cast group_id's message to that address.
+    void join(uint32_t group_id, uint32_t rx_type, uint32_t rx_inst) {
+        send_(kJoinSid, group_id, rx_type, rx_inst, /*with_addr=*/true);
     }
     void leave(uint32_t group_id) {
-        send_(kLeaveSid, group_id, /*with_addr=*/false);
+        send_(kLeaveSid, group_id, 0, 0, /*with_addr=*/false);
     }
-    // SENDER/broadcaster: ask to be pushed group_id's membership. The membership
-    // arrives at my receiver (my_rx_type/instance) as a PgMembership cast.
-    void watch(uint32_t group_id) {
-        send_(kWatchSid, group_id, /*with_addr=*/true);
+    // SENDER/broadcaster: ask to be pushed group_id's membership at (rx_type,
+    // rx_inst) — the watcher's own receiver, where PgMembership arrives.
+    void watch(uint32_t group_id, uint32_t rx_type, uint32_t rx_inst) {
+        send_(kWatchSid, group_id, rx_type, rx_inst, /*with_addr=*/true);
     }
 
     // Feed an inbound PgMembership wire payload (the node's inline cast handler
@@ -113,7 +120,8 @@ private:
 
     // Frame + cast one PgJoin/PgLeave/PgWatch. with_addr appends the member's
     // receive address (fields 4/5) — present on Join + Watch, absent on Leave.
-    void send_(uint16_t service_id, uint32_t group_id, bool with_addr) {
+    void send_(uint16_t service_id, uint32_t group_id,
+               uint32_t rx_type, uint32_t rx_inst, bool with_addr) {
         if (!ensure_socket_()) return;
         std::string rec;
         rec.reserve(48);
@@ -121,8 +129,8 @@ private:
         pb_varint_field(rec, 2, zigzag32(self_pid_));              // pid (sint32)
         pb_varint_field(rec, 3, group_id);                        // group_id
         if (with_addr) {
-            pb_varint_field(rec, 4, my_rx_type_);                 // tipc_type
-            pb_varint_field(rec, 5, my_rx_instance_);             // tipc_instance
+            pb_varint_field(rec, 4, rx_type);                     // tipc_type
+            pb_varint_field(rec, 5, rx_inst);                     // tipc_instance
         }
         TheiaMsgHeader hdr{};
         hdr.bus_type           = kBusTypeRpc;
@@ -207,9 +215,7 @@ private:
         pb_tag(out, field, 2); pb_varint(out, n); out.append(s, n);
     }
 
-    std::string node_name_;
-    uint32_t    my_rx_type_;
-    uint32_t    my_rx_instance_;
+    std::string node_name_ = "pg";
     pid_t       self_pid_;
     int         fd_ = -1;
     bool        connected_ = false;

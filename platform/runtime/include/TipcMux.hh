@@ -170,6 +170,21 @@ public:
         b->entries[RemoteCodec<Msg>::service_id] = std::move(e);
     }
 
+    // Register a RAW inline cast handler keyed by an explicit service_id — the
+    // dispatch hands the closure the undecoded proto bytes (no RemoteCodec<Msg>
+    // needed). Used by PgClient to take PgMembership without the runtime
+    // depending on the supervisor proto (a cycle); PgClient parses the bytes.
+    void register_raw_inline(NodeBinding* b, uint16_t service_id,
+                             std::function<void(const uint8_t*, uint16_t)> fn) {
+        InboundEntry e;
+        e.kind = InboundEntry::Kind::Cast;
+        e.dispatch = [fn = std::move(fn)](const uint8_t* payload, uint16_t len,
+                                          int /*reply_fd*/, uint32_t /*corr*/) {
+            fn(payload, len);
+        };
+        b->entries[service_id] = std::move(e);
+    }
+
     // Register a remote handle_call handler for typed (Req → Reply).
     // The node thread runs handle_call(req, state) and returns Reply by
     // value; the mux's dispatcher encodes it and sends a CALL_REPLY

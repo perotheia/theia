@@ -77,10 +77,29 @@ void set_reply(ControlReply& rep, uint32_t status, const std::string& child,
 // ---- the EmitForwarder: engine event -> this node's broadcast senders -----
 //
 // The engine runs on the worker thread; these forwarders are called there and
-// fan out via the lock-guarded broadcast_events_* (safe cross-thread). They
-// need a SupervisorCtl* — published process-globally in init(). One pointer is
-// enough (a single control node per process).
+// multicast via pg_emit() (PG name-sequence, local type resolve — see below).
+// They need a SupervisorCtl* — published process-globally in init(). One pointer
+// is enough (a single control node per process).
 SupervisorCtl* g_ctl = nullptr;
+
+// The supervisor IS the PG allocator, so it must NOT use the generated
+// broadcast_*() (which TIPC-self-CALLs pg_resolve → would block the engine loop
+// on a connect to its own control address). Instead it resolves each event
+// group's TIPC type LOCALLY from the engine registry (pg_local_type, loop-thread
+// only — these forwarders run on the engine/worker thread) and multicasts via
+// pg_broadcast<T>(). group_name = the wire type name (msg_type_name<T>()), the
+// same well-known .art name a member passes to pg_join. See [[runnable-control-and-heartbeat]].
+template <typename T>
+void pg_emit(const T& m) {
+    if (!g_ctl) return;
+    auto* eng = ::supervisor::supervisor_instance();
+    if (!eng) return;
+    // group_name = the wire type name — IDENTICAL to what a member's
+    // pg_join<T>() passes (msg_type_name<T>()), so allocator key + member key
+    // match by construction. No hardcoded strings.
+    g_ctl->pg_broadcast<T>(
+        eng->pg_local_type(::theia::runtime::msg_type_name<T>()), m);
+}
 
 void fwd_event(const ::supervisor::EventData& e) {
     if (!g_ctl) return;
@@ -96,7 +115,7 @@ void fwd_event(const ::supervisor::EventData& e) {
     std::snprintf(m.tombstone_path, sizeof(m.tombstone_path), "%s",
                   e.tombstone_path.c_str());
     std::snprintf(m.detail, sizeof(m.detail), "%s", e.detail.c_str());
-    g_ctl->broadcast_events_event(m);
+    pg_emit(m);
 }
 
 void fwd_health(const ::supervisor::HealthData& h) {
@@ -109,7 +128,7 @@ void fwd_health(const ::supervisor::HealthData& h) {
     m.active_workers   = h.active_workers;
     m.total_restarts   = h.total_restarts;
     m.total_tombstones = h.total_tombstones;
-    g_ctl->broadcast_events_health(m);
+    pg_emit(m);
 }
 
 void fwd_snapshot_begin(uint64_t gen, uint64_t ts) {
@@ -117,7 +136,7 @@ void fwd_snapshot_begin(uint64_t gen, uint64_t ts) {
     SnapshotBegin m{};
     m.generation   = gen;
     m.timestamp_ms = ts;
-    g_ctl->broadcast_events_snap_begin(m);
+    pg_emit(m);
 }
 
 void fwd_edge(const ::supervisor::EdgeData& e) {
@@ -127,7 +146,7 @@ void fwd_edge(const ::supervisor::EdgeData& e) {
     std::snprintf(m.parent_name, sizeof(m.parent_name), "%s", e.parent_name.c_str());
     std::snprintf(m.name, sizeof(m.name), "%s", e.name.c_str());
     m.kind = e.kind;
-    g_ctl->broadcast_events_edge(m);
+    pg_emit(m);
 }
 
 void fwd_node_state(const ::supervisor::NodeStateData& n) {
@@ -147,14 +166,14 @@ void fwd_node_state(const ::supervisor::NodeStateData& n) {
     m.threads        = n.threads;
     m.shared_kb      = n.shared_kb;
     m.data_kb        = n.data_kb;
-    g_ctl->broadcast_events_node_state(m);
+    pg_emit(m);
 }
 
 void fwd_snapshot_end(uint64_t gen) {
     if (!g_ctl) return;
     SnapshotEnd m{};
     m.generation = gen;
-    g_ctl->broadcast_events_snap_end(m);
+    pg_emit(m);
 }
 
 // ---- LIFTED: resolve a child + cast a typed control message to it ----------

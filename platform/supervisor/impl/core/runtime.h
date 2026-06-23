@@ -352,6 +352,18 @@ public:
     void      enqueue(ExecCommand cmd);
     ExecReply call(ExecCommand cmd);
 
+    // LOCAL group-type resolve for the supervisor's OWN event broadcasts. The
+    // supervisor IS the PG allocator, so it must NOT TIPC-self-CALL pg_resolve to
+    // learn a group's type (that would block the engine loop on a connect to its
+    // own address). Instead its emit path (fwd_health/fwd_event, on the loop
+    // thread) calls this to allocate/look up the type directly in the registry.
+    // LOOP-THREAD ONLY (single writer of pg_groups_).
+    uint32_t  pg_local_type(const std::string& group_name) {
+        PgGroup& g = pg_groups_[group_name];
+        if (g.group_type == 0) g.group_type = pg_next_type_++;
+        return g.group_type;
+    }
+
     // ---- Control-surface primitives — LOOP-THREAD ONLY. Invoked exclusively
     //      by drain_commands()'s dispatch switch (never from a peer thread), so
     //      they need no lock: the loop is the single writer. All take/return

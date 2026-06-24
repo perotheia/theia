@@ -36,3 +36,36 @@ filegroup(
     name = "nm_proto",
     srcs = ["nm.proto"],
 )
+
+# ---------------------------------------------------------------------------
+# libprotobuf C++ variant (mirrors sm:sm_pb_cpp). The trace decoder needs the
+# reflective C++ message (default_instance()) to register NmStatusMsg /
+# NmCfgTxnData for decode — nanopb has no reflection. Emitted under cpp/ so
+# callers `#include "nm.pb.h"` after taking this dep.
+# ---------------------------------------------------------------------------
+
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+genrule(
+    name = "nm_pb_cpp_gen",
+    srcs = ["nm.proto"],
+    outs = [
+        "cpp/nm.pb.cc",
+        "cpp/nm.pb.h",
+    ],
+    cmd = "set -e;"
+        + " in_dir=$$(dirname $(location nm.proto));"
+        + " out_dir=$$(dirname $$(dirname $(location cpp/nm.pb.cc)));"
+        + " mkdir -p $$out_dir/cpp;"
+        + " protoc -I $$in_dir --cpp_out=$$out_dir/cpp nm.proto;",
+    local = True,
+)
+
+cc_library(
+    name = "nm_pb_cpp",
+    srcs = ["cpp/nm.pb.cc"],
+    hdrs = ["cpp/nm.pb.h"],
+    includes = ["cpp"],
+    deps = ["//third_party:system_protobuf"],
+    visibility = ["//visibility:public"],
+)

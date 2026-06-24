@@ -58,6 +58,10 @@ cc_library(
     deps = [
         ":trace_decoder",
         "//platform/proto/system/services/sm:sm_pb_cpp",
+        # nm — the network-readiness FSM data (NmCfgTxnData) + the readiness
+        # broadcast (NmStatusMsg), so the STATEM observer + the firehose decode
+        # nm's transitions for the rf-theia nm FC tests.
+        "//platform/proto/system/services/nm:nm_pb_cpp",
         # platform.msgs payload types broadcast over PG (tsync NavSatFix /
         # Odometry GPS feed) — so the firehose decodes them, not just sm.
         "//platform/proto/platform/msgs/sensor:sensor_pb_cpp",

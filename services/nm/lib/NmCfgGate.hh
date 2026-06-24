@@ -193,6 +193,20 @@ public:
     // gets emitted once. handle_call/handle_cast dispatch by
     // request type, not by port.
 
+    void handle_cast(const TxnAddWifi& msg, NmCfgGateState& s);
+
+    void handle_cast(const TxnRemoveWifi& msg, NmCfgGateState& s);
+
+    void handle_cast(const TxnSetVpn& msg, NmCfgGateState& s);
+
+    void handle_cast(const TxnSetAutoConn& msg, NmCfgGateState& s);
+
+    void handle_cast(const TxnConfirm& msg, NmCfgGateState& s);
+
+    void handle_cast(const TxnAbort& msg, NmCfgGateState& s);
+
+    void handle_cast(const TxnTimeout& msg, NmCfgGateState& s);
+
 
     NmCfgReply handle_call(const AddWifiReq& req,
                                             NmCfgGateState& s);

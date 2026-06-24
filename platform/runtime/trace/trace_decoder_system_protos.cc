@@ -29,6 +29,7 @@
 // + the GUI decode them instead of leaving the payload raw.
 #include "platform/msgs/sensor/sensor.pb.h"  // sensor_pb_cpp
 #include "platform/msgs/nav/nav.pb.h"        // nav_pb_cpp
+#include "nm.pb.h"    // //platform/proto/system/services/nm:nm_pb_cpp
 
 namespace {
 
@@ -53,6 +54,13 @@ struct Registrar {
                         &platform_msgs_nav::GnssSolution::default_instance());
         register_global("platform_msgs_nav_Odometry",
                         &platform_msgs_nav::Odometry::default_instance());
+
+        // nm — the config-transaction FSM data (Assert Statem Data in the nm FC
+        // test) + the network-readiness broadcast (temporal-logic assertions).
+        register_global("system_services_nm_NmCfgTxnData",
+                        &system_services_nm::NmCfgTxnData::default_instance());
+        register_global("system_services_nm_NmStatusMsg",
+                        &system_services_nm::NmStatusMsg::default_instance());
     }
 };
 

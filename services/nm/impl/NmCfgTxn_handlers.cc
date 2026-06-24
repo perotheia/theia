@@ -118,13 +118,25 @@ bool put_nmconfig(const system_services_nm_NmConfig& cfg, const char* who) {
 // then does the per I/O for PENDING (apply) / STEADY (commit-or-rollback).
 void NmCfgTxn::on_enter(NmCfgTxnState new_s,
                         NmCfgTxnState old_s,
-                        NmCfgTxnData& /*d*/) {
+                        NmCfgTxnData& d) {
     if (!nm_cfg_txn_ref().valid())         // wire the gate→FSM path on first entry
         nm_cfg_txn_ref() = ::theia::runtime::LocalRef<NmCfgTxn>(*this);
 
     auto& sh = nm_cfg_shared();
 
+    // Mirror the current transaction snapshot into the FSM data term so it rides
+    // the STATEM trace (the observer decodes it; rf-theia `Assert Statem Data`
+    // checks it). committed/pending are the rollback target + the applied config;
+    // confirm_left_s is non-zero only in PENDING (the live confirm window);
+    // `note` is the human transition tag (PENDING=apply, STEADY=settle, init).
+    d.has_committed = sh.committed_known;
+    d.committed     = sh.committed;
+    d.has_pending   = true;
+    d.pending       = sh.pending;
+
     if (new_s == NmCfgTxnState::PENDING) {
+        d.confirm_left_s = kConfirmWindowMs / 1000;
+        std::snprintf(d.note, sizeof(d.note), "apply");
         // Applied-but-unconfirmed: persist the pending config so per pushes it
         // live (NmPoller reconfigures: associate the new wifi / flip the VPN).
         if (put_nmconfig(sh.pending, "apply"))
@@ -132,7 +144,9 @@ void NmCfgTxn::on_enter(NmCfgTxnState new_s,
         return;
     }
 
+    d.confirm_left_s = 0;   // no confirm window outside PENDING
     if (new_s == NmCfgTxnState::STEADY && old_s == NmCfgTxnState::PENDING) {
+        std::snprintf(d.note, sizeof(d.note), "settle");
         // We left PENDING: either Confirm (sh.pending == sh.committed, the gate
         // set committed=pending) or Abort/Timeout (the gate set pending=committed).
         // Either way sh.pending now holds the config to keep — re-Put it so a
@@ -141,6 +155,7 @@ void NmCfgTxn::on_enter(NmCfgTxnState new_s,
             log().info("STEADY: settled config via per (commit or rollback)");
         return;
     }
+    std::snprintf(d.note, sizeof(d.note), "steady");   // init / STEADY self-entry
 }
 
 }  // namespace ara::nm

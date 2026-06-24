@@ -382,13 +382,39 @@ node atomic NmPoller {
 // the-wire rule — same split as sm's FgGate→statem). Owns the confirm-window
 // TIMER: on a PENDING transition it arms a countdown and post_event()s TxnTimeout
 // if the operator never confirms (auto-rollback). reporting node (watchdog).
+//
+// The gate ALSO receives NmCfgTxnIn as casts (the `txn` receiver): the SmGate /
+// LifecycleIn idiom — an event front in front of the statem. Production drives
+// the FSM through the NmCfgIf CALL ops (which carry a reply); a cast at this
+// receiver post_event()s the same Txn* into the FSM WITHOUT a reply. This is the
+// probe-test seam: NmCfgTester (below) casts Txn* here to drive the config-txn
+// FSM standalone, so the statem itself still takes no off-the-wire messages.
 node atomic NmCfgGate {
     tipc type=0x8001002F instance=0
     requires_timers
     tag = "NCG"
     ports {
-        server ctl     provides NmCfgIf
-        sender txn      provides NmCfgTxnIn
+        server   ctl     provides NmCfgIf
+        sender   txn      provides NmCfgTxnIn
+        receiver txn_in   requires NmCfgTxnIn
+    }
+}
+
+// ---- test-only client node (for artheia.probe) --------------------------
+//
+// NmCfgTester carries a `sender` on NmCfgTxnIn so artheia.probe can bind a tester
+// identity and cast TxnAddWifi/TxnSetVpn/TxnConfirm/TxnAbort at NmCfgGate's
+// `txn_in` receiver — ordered, over one persistent connection — to drive the
+// config-transaction FSM (NmCfgTxn) standalone via the generic hybrid-automata rf
+// keywords (testing/scenarios/services/nm/nm_fsm.robot). Mirrors sm's SmTester.
+// NOT deployed: it appears in no composition, so the manifest + supervisor tree
+// never instantiate it; it exists purely as a probe-resolvable handle. Same idiom
+// as tools/tdb/system/tdb.art's client nodes.
+node atomic NmCfgTester {
+    tipc type=0x80010031 instance=0
+    tag = "NCTT"
+    ports {
+        sender txn provides NmCfgTxnIn
     }
 }
 

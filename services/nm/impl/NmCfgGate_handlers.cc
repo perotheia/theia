@@ -219,4 +219,64 @@ NmCfgReply NmCfgGate::handle_call(const AbortReq& /*req*/, NmCfgGateState& /*s*/
     return reply(true, "rolled back", sh);
 }
 
+// ─── NmCfgTxnIn cast ingress (the `txn_in` receiver) ───────────────────────
+//
+// The SmGate/LifecycleIn idiom: a Txn* arriving as a CAST (no reply) at the gate
+// is forwarded straight into the FSM via post_event — the SAME in-process hand-off
+// the call handlers above use, minus the NmCfgReply. The config DELTA (which
+// profile / vpn flags) still rides nm_cfg_shared(); a bare cast just advances the
+// FSM. This is the probe-test seam: NmCfgTester casts these to drive NmCfgTxn
+// (STEADY→PENDING→STEADY) standalone, so the statem itself takes no wire messages.
+// It also mirror the begin/confirm bookkeeping so the gate's txn_pending view
+// stays coherent if a test mixes cast-drive with a Confirm/Abort call.
+void NmCfgGate::handle_cast(const TxnAddWifi& /*msg*/, NmCfgGateState& /*s*/) {
+    auto& sh = nm_cfg_shared();
+    begin_txn(sh);
+    arm_confirm(*this, sh);
+    post_txn(TxnAddWifi{});
+}
+
+void NmCfgGate::handle_cast(const TxnRemoveWifi& /*msg*/, NmCfgGateState& /*s*/) {
+    auto& sh = nm_cfg_shared();
+    begin_txn(sh);
+    arm_confirm(*this, sh);
+    post_txn(TxnRemoveWifi{});
+}
+
+void NmCfgGate::handle_cast(const TxnSetVpn& /*msg*/, NmCfgGateState& /*s*/) {
+    auto& sh = nm_cfg_shared();
+    begin_txn(sh);
+    arm_confirm(*this, sh);
+    post_txn(TxnSetVpn{});
+}
+
+void NmCfgGate::handle_cast(const TxnSetAutoConn& /*msg*/, NmCfgGateState& /*s*/) {
+    auto& sh = nm_cfg_shared();
+    begin_txn(sh);
+    arm_confirm(*this, sh);
+    post_txn(TxnSetAutoConn{});
+}
+
+void NmCfgGate::handle_cast(const TxnConfirm& /*msg*/, NmCfgGateState& /*s*/) {
+    auto& sh = nm_cfg_shared();
+    sh.committed = sh.pending;
+    sh.committed_known = true;
+    sh.txn_pending = false;
+    post_txn(TxnConfirm{});
+}
+
+void NmCfgGate::handle_cast(const TxnAbort& /*msg*/, NmCfgGateState& /*s*/) {
+    auto& sh = nm_cfg_shared();
+    sh.pending = sh.committed;
+    sh.txn_pending = false;
+    post_txn(TxnAbort{});
+}
+
+void NmCfgGate::handle_cast(const TxnTimeout& /*msg*/, NmCfgGateState& /*s*/) {
+    auto& sh = nm_cfg_shared();
+    sh.pending = sh.committed;
+    sh.txn_pending = false;
+    post_txn(TxnTimeout{});
+}
+
 }  // namespace ara::nm

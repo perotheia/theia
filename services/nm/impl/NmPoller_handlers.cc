@@ -173,9 +173,14 @@ void NmPoller::handle_info(const char* info, NmPollerState& s) {
         } else {
             // No usable wired link → pick a wifi profile that's visible and join.
             std::string wif = wifi_iface(want);
+            log().info(std::string("connect-try: wif='") + wif + "'");
             if (!wif.empty()) {
                 WifiObservation scan = wifi_observe(wif);
                 int idx = pick_wifi_profile(s.wifi_profiles, scan.bss);
+                log().info(std::string("connect-try: scan aps=") +
+                    std::to_string(scan.bss.size()) + " associated=" +
+                    (scan.associated ? "1" : "0") + " pick_idx=" +
+                    std::to_string(idx));
                 if (idx >= 0 && !scan.associated) {
                     const auto& p = s.wifi_profiles[idx];
                     ConnectResult cr = wifi_connect(wif, p.ssid, p.psk);

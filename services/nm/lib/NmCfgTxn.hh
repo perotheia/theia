@@ -31,7 +31,7 @@
 #include <utility>
 #include <vector>
 
-namespace system_services_nm {
+namespace ara::nm {
 
 
 
@@ -299,6 +299,6 @@ private:
 
 
 
-}  // namespace system_services_nm
+}  // namespace ara::nm
 
 

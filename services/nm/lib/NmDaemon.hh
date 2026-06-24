@@ -31,7 +31,7 @@
 #include <utility>
 #include <vector>
 
-namespace system_services_nm {
+namespace ara::nm {
 
 
 
@@ -434,6 +434,6 @@ inline void NmDaemon::broadcast_broadcast_status(const NmStatusMsg& msg) {
 
 
 
-}  // namespace system_services_nm
+}  // namespace ara::nm
 
 

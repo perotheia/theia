@@ -19,7 +19,7 @@
 #include <cstring>
 #include <string>
 
-namespace system_services_nm {
+namespace ara::nm {
 
 // ---- process-global shared state (declared in nm_cfg_shared.hpp) -----------
 NmCfgShared& nm_cfg_shared() {
@@ -188,4 +188,4 @@ NmCfgReply NmCfgGate::handle_call(const AbortReq& /*req*/, NmCfgGateState& /*s*/
     return reply(true, "rolled back", sh);
 }
 
-}  // namespace system_services_nm
+}  // namespace ara::nm

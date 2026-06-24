@@ -14,7 +14,7 @@
 #include "NodeRef.hh"       // theia::runtime::LocalRef
 #include "GenStateM.hh"     // theia::runtime::post_event
 
-namespace system_services_nm {
+namespace ara::nm {
 
 // Forward-decl the FSM so the gate can post_event into it without including the
 // full NmCfgTxn lib (avoids a header cycle gate↔txn).
@@ -36,4 +36,4 @@ NmCfgShared& nm_cfg_shared();
 // so the gate can post_event Txn* into it. Defined in NmCfgTxn_handlers.cc.
 ::theia::runtime::LocalRef<NmCfgTxn>& nm_cfg_txn_ref();
 
-}  // namespace system_services_nm
+}  // namespace ara::nm

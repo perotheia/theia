@@ -18,7 +18,7 @@
 // derived from the .art), so the struct lives in a WRITE-ONCE impl header
 // (seeded empty, never clobbered without --force) that the user fills in.
 // Included at GLOBAL scope (the header opens its own `namespace
-// system_services_nm`) so it isn't nested under this file's
+// ara::nm`) so it isn't nested under this file's
 // namespace block — bound as the GenServer State type below.
 #include "impl/NmPoller_state.hh"
 
@@ -33,7 +33,7 @@
 #include <utility>
 #include <vector>
 
-namespace system_services_nm {
+namespace ara::nm {
 
 
 // ---- NmPoller ----------------------------------------------------------
@@ -354,6 +354,6 @@ inline void NmPoller::broadcast_events_vpn_down(const VpnDown& msg) {
 
 
 
-}  // namespace system_services_nm
+}  // namespace ara::nm
 
 

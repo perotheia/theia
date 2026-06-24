@@ -35,7 +35,7 @@
 THEIA_DECLARE_REMOTE_CODEC(system_services_per_PutConfigReq)
 THEIA_DECLARE_REMOTE_CODEC(system_services_per_PerReply)
 
-namespace system_services_nm {
+namespace ara::nm {
 
 namespace {
 
@@ -120,4 +120,4 @@ void NmCfgTxn::on_enter(NmCfgTxnState new_s,
     }
 }
 
-}  // namespace system_services_nm
+}  // namespace ara::nm

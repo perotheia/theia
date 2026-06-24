@@ -59,7 +59,7 @@ int main(int argc, char** argv) {
         if (td[0]) tombstone::install_handlers("nm", td);
     }
 
-    using namespace system_services_nm;
+    using namespace ara::nm;
 
     // Boot log level — THEIA_LOG_LEVEL from the env (supervisor sets it from
     // executor.json's per-child env map). Defaults to Info when unset. Applied

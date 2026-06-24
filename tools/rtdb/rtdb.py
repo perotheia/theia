@@ -151,13 +151,22 @@ class _Session:
             self._sup = SupervisorClient(self._target)
         return self._sup
 
+    def _collector(self, port: int) -> str:
+        # The trace/log collectors live on the SAME host as --target (the
+        # SupervisorView :7700), just a different gRPC port. Derive host from
+        # --target so `--target 10.0.0.22:7700 tracecat` reaches the rpi4's
+        # :7710, not localhost. (host:port → host:<port>; bare host → host:port.)
+        host = self._target.rsplit(":", 1)[0] if ":" in self._target \
+            else self._target
+        return f"{host}:{port}"
+
     def trace_factory(self) -> TraceClient:
-        # tracecat → com's TraceForwarder TraceStream gRPC. Default :7710.
-        return TraceClient.from_workspace()
+        # tracecat → com's TraceForwarder TraceStream gRPC, port 7710 on --target.
+        return TraceClient.from_workspace(target=self._collector(7710))
 
     def log_factory(self) -> LogClient:
-        # logcat → com's LogForwarder LogStream gRPC. Default :7711.
-        return LogClient.from_workspace()
+        # logcat → com's LogForwarder LogStream gRPC, port 7711 on --target.
+        return LogClient.from_workspace(target=self._collector(7711))
 
     def close(self) -> None:
         if self._sup is not None:

@@ -24,3 +24,48 @@ message Odometry {
     TwistWithCovariance twist = 4;
 }
 
+enum GnssSolutionSource {
+    GnssSolutionSource_SOLUTION_SOURCE_UNKNOWN = 0;
+    GnssSolutionSource_SOLUTION_SOURCE_BINARY = 1;
+    GnssSolutionSource_SOLUTION_SOURCE_NMEA = 2;
+    GnssSolutionSource_SOLUTION_SOURCE_COMPUTED = 3;
+}
+
+enum GnssSolutionStatus {
+    GnssSolutionStatus_STATUS_NONE = 0;
+    GnssSolutionStatus_STATUS_FIX = 1;
+    GnssSolutionStatus_STATUS_FLOAT = 2;
+    GnssSolutionStatus_STATUS_SBAS = 3;
+    GnssSolutionStatus_STATUS_DGPS = 4;
+    GnssSolutionStatus_STATUS_SINGLE = 5;
+    GnssSolutionStatus_STATUS_PPP = 6;
+    GnssSolutionStatus_STATUS_EKF = 7;
+}
+
+message GnssSolution {
+    platform_msgs_std.Header header = 1;
+    uint32 time_week = 2;
+    double time_tow = 3;
+    GnssSolutionSource solution_source = 4;
+    GnssSolutionStatus status = 5;
+    uint32 num_sats = 6;
+    float ratio = 7;
+    float age_diff = 8;
+    float gdop = 9;
+    float pdop = 10;
+    float hdop = 11;
+    float vdop = 12;
+    double latitude = 13;
+    double longitude = 14;
+    double altitude = 15;
+    platform_msgs_geometry.Point pos_ecef = 16;
+    repeated double pos_cov_ecef = 17;
+    platform_msgs_geometry.Vector3 vel_ecef = 18;
+    repeated double vel_cov_ecef = 19;
+    platform_msgs_geometry.Point pos_enu_org_ecef = 20;
+    platform_msgs_geometry.Point pos_enu = 21;
+    repeated double pos_enu_cov = 22;
+    platform_msgs_geometry.Vector3 vel_enu = 23;
+    repeated double vel_enu_cov = 24;
+}
+

@@ -10,3 +10,7 @@
 platform_msgs_nav.PoseWithCovariance.covariance   max_count:36
 platform_msgs_nav.TwistWithCovariance.covariance   max_count:36
 platform_msgs_nav.Odometry.child_frame_id   max_size:32
+platform_msgs_nav.GnssSolution.pos_cov_ecef   max_count:9
+platform_msgs_nav.GnssSolution.vel_cov_ecef   max_count:9
+platform_msgs_nav.GnssSolution.pos_enu_cov   max_count:9
+platform_msgs_nav.GnssSolution.vel_enu_cov   max_count:9

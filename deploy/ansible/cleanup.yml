@@ -24,7 +24,7 @@
   gather_facts: false
   vars:
     target: "{{ target | mandatory }}"
-    registry_file: "{{ playbook_dir }}/../registry/{{ target }}.yml"
+    registry_file: "{{ registry_dir }}/{{ target }}.yml"
   tasks:
     - name: "Load the target's registry entry (host + machine slice)"
       ansible.builtin.include_vars:

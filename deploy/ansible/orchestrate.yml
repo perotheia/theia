@@ -27,7 +27,7 @@
   gather_facts: false
   vars:
     target: "{{ target | mandatory }}"
-    registry_file: "{{ playbook_dir }}/../registry/{{ target }}.yml"
+    registry_file: "{{ registry_dir }}/{{ target }}.yml"
   tasks:
     - name: "Load the target's registry entry (host + machine slice)"
       ansible.builtin.include_vars:
@@ -52,7 +52,7 @@
     deb_src: "{{ manifest_dir }}/{{ machine }}/{{ machine }}.deb"
     executor_src: "{{ manifest_dir }}/{{ machine }}/executor.json"
     config_src_dir: "{{ manifest_dir }}/{{ machine }}/config"
-    target_override_dir: "{{ playbook_dir }}/../config/{{ deploy_target }}"
+    target_override_dir: "{{ config_override_dir }}/{{ deploy_target }}"
   handlers:
     # Reload the supervisor (no blanket restart). Fires only when config changed
     # AND tdb is present (the no-downtime path); a missing tdb is tolerated.

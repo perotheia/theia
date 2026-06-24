@@ -4,7 +4,7 @@
 // Lib slice — message wiring + class declaration for ONE node. An FC
 // may declare several nodes; each gets its own <Node>.hh (this file).
 // Regenerated on every gen-app run. User edits land in
-// impl/NmPoller_handlers.cc.
+// impl/NmCfgGate_handlers.cc.
 
 #pragma once
 
@@ -20,7 +20,7 @@
 // Included at GLOBAL scope (the header opens its own `namespace
 // system_services_nm`) so it isn't nested under this file's
 // namespace block — bound as the GenServer State type below.
-#include "impl/NmPoller_state.hh"
+#include "impl/NmCfgGate_state.hh"
 
 #include <algorithm>
 #include <cstdint>
@@ -36,24 +36,30 @@
 namespace system_services_nm {
 
 
-// ---- NmPoller ----------------------------------------------------------
+// ---- NmCfgGate ----------------------------------------------------------
 
 // Local-namespace aliases over the nanopb C structs. The nanopb
 // generator prefixes types with the libc-safe proto package
 // (system_services_nm_*); aliasing them here keeps callers'
 // signatures readable.
-using LinkUp = system_services_nm_LinkUp;
-using LinkDown = system_services_nm_LinkDown;
-using AddrAcquired = system_services_nm_AddrAcquired;
-using AddrLost = system_services_nm_AddrLost;
-using WifiAssociated = system_services_nm_WifiAssociated;
-using WifiDisassociated = system_services_nm_WifiDisassociated;
-using VpnUp = system_services_nm_VpnUp;
-using VpnDown = system_services_nm_VpnDown;
+using AddWifiReq = system_services_nm_AddWifiReq;
+using NmCfgReply = system_services_nm_NmCfgReply;
+using RemoveWifiReq = system_services_nm_RemoveWifiReq;
+using SetVpnReq = system_services_nm_SetVpnReq;
+using SetAutoConnectReq = system_services_nm_SetAutoConnectReq;
+using ConfirmReq = system_services_nm_ConfirmReq;
+using AbortReq = system_services_nm_AbortReq;
+using TxnAddWifi = system_services_nm_TxnAddWifi;
+using TxnRemoveWifi = system_services_nm_TxnRemoveWifi;
+using TxnSetVpn = system_services_nm_TxnSetVpn;
+using TxnSetAutoConn = system_services_nm_TxnSetAutoConn;
+using TxnConfirm = system_services_nm_TxnConfirm;
+using TxnAbort = system_services_nm_TxnAbort;
+using TxnTimeout = system_services_nm_TxnTimeout;
 
 // statem block declared in .art — see the corresponding StateMBase
 // header produced by `artheia gen-cpp-stubs`. The daemon below
-// derives from NmPollerStateMBase (gen_statem-shaped); without
+// derives from NmCfgGateStateMBase (gen_statem-shaped); without
 // statem it would derive directly from GenServer.
 //
 // (The StateMBase emission is gen-cpp-stubs's job, not gen-app's;
@@ -64,10 +70,10 @@ using VpnDown = system_services_nm_VpnDown;
 // consumers pg_join the message type's group. No std::function subscriber
 // typedef, no subscribe_*/unsubscribe_*, no per-node _subs_ list.)
 
-class NmPoller : public ::theia::runtime::GenServer<NmPoller, NmPollerState> {
+class NmCfgGate : public ::theia::runtime::GenServer<NmCfgGate, NmCfgGateState> {
 public:
-    static constexpr const char* kNodeName = "nm_poller";
-    static constexpr uint32_t kTipcType     = 0x80010004u;
+    static constexpr const char* kNodeName = "nm_cfg_gate";
+    static constexpr uint32_t kTipcType     = 0x8001002Fu;
     static constexpr uint32_t kTipcInstance = 0u;
 
     // AUTOSAR Reporting / Non-Reporting flag (per .art `reporting`
@@ -83,7 +89,7 @@ public:
     // overload by name, so register_cast<LogLevelPush> wouldn't
     // resolve. This using-decl keeps both visible; overload resolution
     // then picks the right one per message type.
-    using ::theia::runtime::GenServer<NmPoller, NmPollerState>::handle_cast;
+    using ::theia::runtime::GenServer<NmCfgGate, NmCfgGateState>::handle_cast;
 
     // ---- Trace config (reporting=true only) -----------------------
     //
@@ -177,7 +183,7 @@ public:
     // delivered as untyped bytes. Cross-node traffic is exclusively typed
     // cast/call. The only handle_info is the LOCAL string clause below
     // (post_info / self-tick).
-    void terminate(const char* /*reason*/, NmPollerState& /*s*/) noexcept {}
+    void terminate(const char* /*reason*/, NmCfgGateState& /*s*/) noexcept {}
 
     // ---- handle_cast / handle_call — declared here, body in impl
     //
@@ -188,51 +194,56 @@ public:
     // request type, not by port.
 
 
+    NmCfgReply handle_call(const AddWifiReq& req,
+                                            NmCfgGateState& s);
 
-    // ---- OTP init/1 — body in impl (NmPoller_handlers.cc) ----------
+    NmCfgReply handle_call(const RemoveWifiReq& req,
+                                            NmCfgGateState& s);
+
+    NmCfgReply handle_call(const SetVpnReq& req,
+                                            NmCfgGateState& s);
+
+    NmCfgReply handle_call(const SetAutoConnectReq& req,
+                                            NmCfgGateState& s);
+
+    NmCfgReply handle_call(const ConfirmReq& req,
+                                            NmCfgGateState& s);
+
+    NmCfgReply handle_call(const AbortReq& req,
+                                            NmCfgGateState& s);
+
+
+    // ---- OTP init/1 — body in impl (NmCfgGate_handlers.cc) ----------
     //
     // Called ONCE by the runtime on this node's thread after start(),
     // before the first mailbox item (GenServer::dispatch_init_). A
     // self-driving node bootstraps its work loop here (e.g.
     // ::theia::runtime::post_info(*this, "tick")); a passive node leaves it
     // empty. Emitted for every node so the hook is always visible.
-    void init(NmPollerState& s);
+    void init(NmCfgGateState& s);
 
     // ---- string handle_info — body in impl ----------------------------
     //
     // The post_info()/send_after() string-message path (timer loops,
     // internal ticks). LOCAL-ONLY opaque signal — never crosses the wire.
     // Declared so a node can override the GenServer base no-op in its impl.
-    void handle_info(const char* info, NmPollerState& s);
-
-    // ---- config update — body in impl (NmPoller_handlers.cc) -------
-    //
-    // This node binds `config NmConfig`. services/per casts a
-    // platform.runtime.ConfigUpdated when the etcd-backed config changes; the
-    // GenServer base decodes the envelope + logs, then calls this hook. Declared
-    // (shadowing the base no-op) so the node can apply its typed config LIVE —
-    // ParseFromString cfg.config into NmConfig and honor the changed mask.
-    // A node that only reads config at boot leaves the impl body empty.
-    void on_config_update(const platform_runtime_ConfigUpdated& cfg,
-                          NmPollerState& s);
+    void handle_info(const char* info, NmCfgGateState& s);
 
     // ---- send helpers — bodies in impl (the broadcast fan-out)
 
-    void broadcast_events_link_up(const LinkUp& msg);
+    void broadcast_txn_add_wifi(const TxnAddWifi& msg);
 
-    void broadcast_events_link_down(const LinkDown& msg);
+    void broadcast_txn_remove_wifi(const TxnRemoveWifi& msg);
 
-    void broadcast_events_addr_acquired(const AddrAcquired& msg);
+    void broadcast_txn_set_vpn(const TxnSetVpn& msg);
 
-    void broadcast_events_addr_lost(const AddrLost& msg);
+    void broadcast_txn_set_autoconn(const TxnSetAutoConn& msg);
 
-    void broadcast_events_wifi_associated(const WifiAssociated& msg);
+    void broadcast_txn_confirm(const TxnConfirm& msg);
 
-    void broadcast_events_wifi_disassociated(const WifiDisassociated& msg);
+    void broadcast_txn_abort(const TxnAbort& msg);
 
-    void broadcast_events_vpn_up(const VpnUp& msg);
-
-    void broadcast_events_vpn_down(const VpnDown& msg);
+    void broadcast_txn_timeout(const TxnTimeout& msg);
 
 
 private:
@@ -247,108 +258,95 @@ private:
 // Broadcast fan-out — OTP `[Pid ! Msg || Pid <- pg:get_members(group)]`. Defined
 // in the lib slice (auto-generated); the user touches handle_*/init in impl.
 
-inline void NmPoller::broadcast_events_link_up(const LinkUp& msg) {
+inline void NmCfgGate::broadcast_txn_add_wifi(const TxnAddWifi& msg) {
     // Ensure we're monitoring the group (OTP pg:monitor — idempotent), then cast
-    // `msg` to EACH watched member. group identity = msg_type_name<LinkUp>().
-    // The impl can call pg_members<LinkUp>() first to skip work when the list
+    // `msg` to EACH watched member. group identity = msg_type_name<TxnAddWifi>().
+    // The impl can call pg_members<TxnAddWifi>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
-    pg_watch<LinkUp>();
+    pg_watch<TxnAddWifi>();
     uint8_t _buf[8192];
     pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
-    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<LinkUp>::fields(), &msg))
+    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<TxnAddWifi>::fields(), &msg))
         return;
-    pg_.broadcast_members<LinkUp>(_buf, static_cast<uint16_t>(_os.bytes_written));
+    pg_.broadcast_members<TxnAddWifi>(_buf, static_cast<uint16_t>(_os.bytes_written));
 }
 
-inline void NmPoller::broadcast_events_link_down(const LinkDown& msg) {
+inline void NmCfgGate::broadcast_txn_remove_wifi(const TxnRemoveWifi& msg) {
     // Ensure we're monitoring the group (OTP pg:monitor — idempotent), then cast
-    // `msg` to EACH watched member. group identity = msg_type_name<LinkDown>().
-    // The impl can call pg_members<LinkDown>() first to skip work when the list
+    // `msg` to EACH watched member. group identity = msg_type_name<TxnRemoveWifi>().
+    // The impl can call pg_members<TxnRemoveWifi>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
-    pg_watch<LinkDown>();
+    pg_watch<TxnRemoveWifi>();
     uint8_t _buf[8192];
     pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
-    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<LinkDown>::fields(), &msg))
+    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<TxnRemoveWifi>::fields(), &msg))
         return;
-    pg_.broadcast_members<LinkDown>(_buf, static_cast<uint16_t>(_os.bytes_written));
+    pg_.broadcast_members<TxnRemoveWifi>(_buf, static_cast<uint16_t>(_os.bytes_written));
 }
 
-inline void NmPoller::broadcast_events_addr_acquired(const AddrAcquired& msg) {
+inline void NmCfgGate::broadcast_txn_set_vpn(const TxnSetVpn& msg) {
     // Ensure we're monitoring the group (OTP pg:monitor — idempotent), then cast
-    // `msg` to EACH watched member. group identity = msg_type_name<AddrAcquired>().
-    // The impl can call pg_members<AddrAcquired>() first to skip work when the list
+    // `msg` to EACH watched member. group identity = msg_type_name<TxnSetVpn>().
+    // The impl can call pg_members<TxnSetVpn>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
-    pg_watch<AddrAcquired>();
+    pg_watch<TxnSetVpn>();
     uint8_t _buf[8192];
     pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
-    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<AddrAcquired>::fields(), &msg))
+    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<TxnSetVpn>::fields(), &msg))
         return;
-    pg_.broadcast_members<AddrAcquired>(_buf, static_cast<uint16_t>(_os.bytes_written));
+    pg_.broadcast_members<TxnSetVpn>(_buf, static_cast<uint16_t>(_os.bytes_written));
 }
 
-inline void NmPoller::broadcast_events_addr_lost(const AddrLost& msg) {
+inline void NmCfgGate::broadcast_txn_set_autoconn(const TxnSetAutoConn& msg) {
     // Ensure we're monitoring the group (OTP pg:monitor — idempotent), then cast
-    // `msg` to EACH watched member. group identity = msg_type_name<AddrLost>().
-    // The impl can call pg_members<AddrLost>() first to skip work when the list
+    // `msg` to EACH watched member. group identity = msg_type_name<TxnSetAutoConn>().
+    // The impl can call pg_members<TxnSetAutoConn>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
-    pg_watch<AddrLost>();
+    pg_watch<TxnSetAutoConn>();
     uint8_t _buf[8192];
     pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
-    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<AddrLost>::fields(), &msg))
+    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<TxnSetAutoConn>::fields(), &msg))
         return;
-    pg_.broadcast_members<AddrLost>(_buf, static_cast<uint16_t>(_os.bytes_written));
+    pg_.broadcast_members<TxnSetAutoConn>(_buf, static_cast<uint16_t>(_os.bytes_written));
 }
 
-inline void NmPoller::broadcast_events_wifi_associated(const WifiAssociated& msg) {
+inline void NmCfgGate::broadcast_txn_confirm(const TxnConfirm& msg) {
     // Ensure we're monitoring the group (OTP pg:monitor — idempotent), then cast
-    // `msg` to EACH watched member. group identity = msg_type_name<WifiAssociated>().
-    // The impl can call pg_members<WifiAssociated>() first to skip work when the list
+    // `msg` to EACH watched member. group identity = msg_type_name<TxnConfirm>().
+    // The impl can call pg_members<TxnConfirm>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
-    pg_watch<WifiAssociated>();
+    pg_watch<TxnConfirm>();
     uint8_t _buf[8192];
     pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
-    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<WifiAssociated>::fields(), &msg))
+    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<TxnConfirm>::fields(), &msg))
         return;
-    pg_.broadcast_members<WifiAssociated>(_buf, static_cast<uint16_t>(_os.bytes_written));
+    pg_.broadcast_members<TxnConfirm>(_buf, static_cast<uint16_t>(_os.bytes_written));
 }
 
-inline void NmPoller::broadcast_events_wifi_disassociated(const WifiDisassociated& msg) {
+inline void NmCfgGate::broadcast_txn_abort(const TxnAbort& msg) {
     // Ensure we're monitoring the group (OTP pg:monitor — idempotent), then cast
-    // `msg` to EACH watched member. group identity = msg_type_name<WifiDisassociated>().
-    // The impl can call pg_members<WifiDisassociated>() first to skip work when the list
+    // `msg` to EACH watched member. group identity = msg_type_name<TxnAbort>().
+    // The impl can call pg_members<TxnAbort>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
-    pg_watch<WifiDisassociated>();
+    pg_watch<TxnAbort>();
     uint8_t _buf[8192];
     pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
-    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<WifiDisassociated>::fields(), &msg))
+    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<TxnAbort>::fields(), &msg))
         return;
-    pg_.broadcast_members<WifiDisassociated>(_buf, static_cast<uint16_t>(_os.bytes_written));
+    pg_.broadcast_members<TxnAbort>(_buf, static_cast<uint16_t>(_os.bytes_written));
 }
 
-inline void NmPoller::broadcast_events_vpn_up(const VpnUp& msg) {
+inline void NmCfgGate::broadcast_txn_timeout(const TxnTimeout& msg) {
     // Ensure we're monitoring the group (OTP pg:monitor — idempotent), then cast
-    // `msg` to EACH watched member. group identity = msg_type_name<VpnUp>().
-    // The impl can call pg_members<VpnUp>() first to skip work when the list
+    // `msg` to EACH watched member. group identity = msg_type_name<TxnTimeout>().
+    // The impl can call pg_members<TxnTimeout>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
-    pg_watch<VpnUp>();
+    pg_watch<TxnTimeout>();
     uint8_t _buf[8192];
     pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
-    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<VpnUp>::fields(), &msg))
+    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<TxnTimeout>::fields(), &msg))
         return;
-    pg_.broadcast_members<VpnUp>(_buf, static_cast<uint16_t>(_os.bytes_written));
-}
-
-inline void NmPoller::broadcast_events_vpn_down(const VpnDown& msg) {
-    // Ensure we're monitoring the group (OTP pg:monitor — idempotent), then cast
-    // `msg` to EACH watched member. group identity = msg_type_name<VpnDown>().
-    // The impl can call pg_members<VpnDown>() first to skip work when the list
-    // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
-    pg_watch<VpnDown>();
-    uint8_t _buf[8192];
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
-    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<VpnDown>::fields(), &msg))
-        return;
-    pg_.broadcast_members<VpnDown>(_buf, static_cast<uint16_t>(_os.bytes_written));
+    pg_.broadcast_members<TxnTimeout>(_buf, static_cast<uint16_t>(_os.bytes_written));
 }
 
 

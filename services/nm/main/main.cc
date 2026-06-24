@@ -10,6 +10,8 @@
 
 #include "lib/NmDaemon.hh"
 #include "lib/NmPoller.hh"
+#include "lib/NmCfgGate.hh"
+#include "lib/NmCfgTxn.hh"
 
 #include "lib/Log.hh"    // per-node MakeContextLogger(tag) — tagged + $THEIA_LOGGER sink
 #include "Logger.hh"     // parse_log_level / process_logger / set_process_logger
@@ -57,7 +59,7 @@ int main(int argc, char** argv) {
         if (td[0]) tombstone::install_handlers("nm", td);
     }
 
-    using namespace ara::nm;
+    using namespace system_services_nm;
 
     // Boot log level — THEIA_LOG_LEVEL from the env (supervisor sets it from
     // executor.json's per-child env map). Defaults to Info when unset. Applied
@@ -241,6 +243,172 @@ int main(int argc, char** argv) {
     }
 
 
+    NmCfgGate nm_cfg_gate;
+    // Per-node logger: tagged [#nm_cfg_gate] (kNodeName, matches `tdb ps`),
+    // sink chosen by $THEIA_LOGGER. Installed BEFORE start so init/do_* log
+    // through it; the FIRST node's logger also backs process_logger().
+    {
+        auto nm_cfg_gate_log = MakeContextLogger(NmCfgGate::kNodeName);
+        nm_cfg_gate_log->set_level(boot_level);
+        nm_cfg_gate.set_logger(std::move(nm_cfg_gate_log));
+    }
+    nm_cfg_gate.start();
+    // Resolve this node’s TIPC address from the --tipc arg (the supervisor built
+    // it per node from executor.json, instance machine-shifted) so the binary is
+    // address-agnostic. Falls back to the compiled kTipcType/kTipcInstance for a
+    // standalone run.
+    uint32_t nm_cfg_gate_type, nm_cfg_gate_inst;
+    ::theia::runtime::resolve_node_tipc(NmCfgGate::kNodeName,
+        NmCfgGate::kTipcType, NmCfgGate::kTipcInstance,
+        nm_cfg_gate_type, nm_cfg_gate_inst);
+    {
+        char _tipc[64];
+        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
+                      nm_cfg_gate_type, nm_cfg_gate_inst);
+        nm_cfg_gate.log().info(_tipc);
+    }
+    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (supervisor sets it
+    // from the rig's NodeToCPUMapping). No-op when unset; soft-fails on EPERM.
+    ::theia::runtime::apply_node_affinity(nm_cfg_gate.native_handle(),
+        NmCfgGate::kNodeName, std::getenv("THEIA_NODE_CFG"));
+
+    if (auto* nm_cfg_gate_cfg = config_mux.bind_node(
+            nm_cfg_gate, nm_cfg_gate_type,
+            nm_cfg_gate_inst)) {
+        config_mux.register_cast<platform_runtime_LogLevelPush>(
+            nm_cfg_gate_cfg, nm_cfg_gate);
+        // Trace control (#403): supervisor pushes TraceControlPush to flip
+        // this node's Tracer kind filter — same path as LogLevelPush.
+        config_mux.register_cast<platform_runtime_TraceControlPush>(
+            nm_cfg_gate_cfg, nm_cfg_gate);
+        // Config update: services/per casts ConfigUpdated when a watched
+        // config changes — same framework path; GenServer base handle_cast
+        // applies it (decode + on_config_update hook).
+        config_mux.register_cast<platform_runtime_ConfigUpdated>(
+            nm_cfg_gate_cfg, nm_cfg_gate);
+        // Receiver ports (#387): register the node's declared inbound
+        // types so a real peer — or a robot-test inject via services/com
+        // — lands on the same handle_call / handle_cast path. clientServer
+        // ops → register_call; senderReceiver `in` data → register_cast.
+        config_mux.register_call<AddWifiReq, NmCfgReply>(
+            nm_cfg_gate_cfg, nm_cfg_gate);
+        config_mux.register_call<RemoveWifiReq, NmCfgReply>(
+            nm_cfg_gate_cfg, nm_cfg_gate);
+        config_mux.register_call<SetVpnReq, NmCfgReply>(
+            nm_cfg_gate_cfg, nm_cfg_gate);
+        config_mux.register_call<SetAutoConnectReq, NmCfgReply>(
+            nm_cfg_gate_cfg, nm_cfg_gate);
+        config_mux.register_call<ConfirmReq, NmCfgReply>(
+            nm_cfg_gate_cfg, nm_cfg_gate);
+        config_mux.register_call<AbortReq, NmCfgReply>(
+            nm_cfg_gate_cfg, nm_cfg_gate);
+        // PG (manual pub/sub, OTP shape): attach this statem node's PgClient to
+        // its demux binding (joined-group frames + PgMembership pushes route into
+        // handle_cast) + pass its bound addr as the watcher address (where the
+        // supervisor casts PgMembership when this node pg_watch'es a group).
+        nm_cfg_gate.pg_attach(NmCfgGate::kNodeName, nm_cfg_gate_cfg,
+                                nm_cfg_gate_type, nm_cfg_gate_inst);
+    } else {
+        nm_cfg_gate.log().warn("config service bind failed; live log-level "
+                                 "push + signal inject disabled");
+    }
+    // Liveness beat to the supervisor watchdog (#PHM). A reporting node must
+    // beat or the watchdog SIGTERMs it after K missed deadlines. One publisher
+    // per node, own timer thread (1s default = the supervisor's check cadence).
+    {
+        auto nm_cfg_gate_hb = std::make_unique<
+            ::theia::runtime::HeartbeatPublisher>(NmCfgGate::kNodeName);
+        if (nm_cfg_gate_hb->open()) {
+            nm_cfg_gate_hb->start(/*period_ms=*/1000);
+            heartbeats.push_back(std::move(nm_cfg_gate_hb));
+        } else {
+            nm_cfg_gate.log().warn("heartbeat publisher open failed; "
+                                     "supervisor watchdog will not see beats");
+        }
+    }
+
+
+    NmCfgTxn nm_cfg_txn;
+    // Per-node logger: tagged [#nm_cfg_txn] (kNodeName, matches `tdb ps`),
+    // sink chosen by $THEIA_LOGGER. Installed BEFORE start so init/do_* log
+    // through it; the FIRST node's logger also backs process_logger().
+    {
+        auto nm_cfg_txn_log = MakeContextLogger(NmCfgTxn::kNodeName);
+        nm_cfg_txn_log->set_level(boot_level);
+        nm_cfg_txn.set_logger(std::move(nm_cfg_txn_log));
+    }
+    nm_cfg_txn.start_statem(timers);
+    // Resolve this node’s TIPC address from the --tipc arg (the supervisor built
+    // it per node from executor.json, instance machine-shifted) so the binary is
+    // address-agnostic. Falls back to the compiled kTipcType/kTipcInstance for a
+    // standalone run.
+    uint32_t nm_cfg_txn_type, nm_cfg_txn_inst;
+    ::theia::runtime::resolve_node_tipc(NmCfgTxn::kNodeName,
+        NmCfgTxn::kTipcType, NmCfgTxn::kTipcInstance,
+        nm_cfg_txn_type, nm_cfg_txn_inst);
+    {
+        char _tipc[96];
+        std::snprintf(_tipc, sizeof(_tipc),
+                      "up — TIPC type=0x%x instance=%u; statem initial=STEADY",
+                      nm_cfg_txn_type, nm_cfg_txn_inst);
+        nm_cfg_txn.log().info(_tipc);
+    }
+    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (supervisor sets it
+    // from the rig's NodeToCPUMapping). No-op when unset; soft-fails on EPERM.
+    ::theia::runtime::apply_node_affinity(nm_cfg_txn.native_handle(),
+        NmCfgTxn::kNodeName, std::getenv("THEIA_NODE_CFG"));
+
+    if (auto* nm_cfg_txn_cfg = config_mux.bind_node(
+            nm_cfg_txn, nm_cfg_txn_type,
+            nm_cfg_txn_inst)) {
+        config_mux.register_cast<platform_runtime_LogLevelPush>(
+            nm_cfg_txn_cfg, nm_cfg_txn);
+        // Trace control (#403): supervisor pushes TraceControlPush to flip
+        // this node's Tracer kind filter — same path as LogLevelPush.
+        config_mux.register_cast<platform_runtime_TraceControlPush>(
+            nm_cfg_txn_cfg, nm_cfg_txn);
+        // Config update: services/per casts ConfigUpdated when a watched
+        // config changes — same framework path; GenServer base handle_cast
+        // applies it (decode + on_config_update hook).
+        config_mux.register_cast<platform_runtime_ConfigUpdated>(
+            nm_cfg_txn_cfg, nm_cfg_txn);
+        // Receiver ports (#387): register the node's declared inbound
+        // types so a real peer — or a robot-test inject via services/com
+        // — lands on the same handle_call / handle_cast path. clientServer
+        // ops → register_call; senderReceiver `in` data → register_cast.
+        config_mux.register_cast<TxnAddWifi>(nm_cfg_txn_cfg, nm_cfg_txn);
+        config_mux.register_cast<TxnRemoveWifi>(nm_cfg_txn_cfg, nm_cfg_txn);
+        config_mux.register_cast<TxnSetVpn>(nm_cfg_txn_cfg, nm_cfg_txn);
+        config_mux.register_cast<TxnSetAutoConn>(nm_cfg_txn_cfg, nm_cfg_txn);
+        config_mux.register_cast<TxnConfirm>(nm_cfg_txn_cfg, nm_cfg_txn);
+        config_mux.register_cast<TxnAbort>(nm_cfg_txn_cfg, nm_cfg_txn);
+        config_mux.register_cast<TxnTimeout>(nm_cfg_txn_cfg, nm_cfg_txn);
+        // PG (manual pub/sub, OTP shape): attach this statem node's PgClient to
+        // its demux binding (joined-group frames + PgMembership pushes route into
+        // handle_cast) + pass its bound addr as the watcher address (where the
+        // supervisor casts PgMembership when this node pg_watch'es a group).
+        nm_cfg_txn.pg_attach(NmCfgTxn::kNodeName, nm_cfg_txn_cfg,
+                                nm_cfg_txn_type, nm_cfg_txn_inst);
+    } else {
+        nm_cfg_txn.log().warn("config service bind failed; live log-level "
+                                 "push + signal inject disabled");
+    }
+    // Liveness beat to the supervisor watchdog (#PHM). A reporting node must
+    // beat or the watchdog SIGTERMs it after K missed deadlines. One publisher
+    // per node, own timer thread (1s default = the supervisor's check cadence).
+    {
+        auto nm_cfg_txn_hb = std::make_unique<
+            ::theia::runtime::HeartbeatPublisher>(NmCfgTxn::kNodeName);
+        if (nm_cfg_txn_hb->open()) {
+            nm_cfg_txn_hb->start(/*period_ms=*/1000);
+            heartbeats.push_back(std::move(nm_cfg_txn_hb));
+        } else {
+            nm_cfg_txn.log().warn("heartbeat publisher open failed; "
+                                     "supervisor watchdog will not see beats");
+        }
+    }
+
+
 
     config_mux.start();
 
@@ -256,6 +424,10 @@ int main(int argc, char** argv) {
     nm_daemon.stop("signal");
 
     nm_poller.stop("signal");
+
+    nm_cfg_gate.stop("signal");
+
+    nm_cfg_txn.stop("signal");
 
     return 0;
 }

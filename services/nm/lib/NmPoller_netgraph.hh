@@ -32,7 +32,7 @@
 
 #include "NodeRef.hh"   // TipcAddr + cast(Daemon&,Msg,TipcAddr); RemoteRef<>
 
-namespace ara::nm::netgraph {
+namespace system_services_nm::netgraph {
 
 
 
@@ -41,4 +41,4 @@ namespace ara::nm::netgraph {
 // netgraph namespace exists for include-path stability; add
 // connects in a composition or cluster to populate it.
 
-}  // namespace ara::nm::netgraph
+}  // namespace system_services_nm::netgraph

@@ -21,7 +21,7 @@
 #include <memory>
 #include <string>
 
-namespace ara::nm {
+namespace system_services_nm {
 
 // Logger decorator that prepends a per-node context tag to every record.
 // Inherits the level filter from the base class (set via THEIA_LOG_LEVEL on the
@@ -53,4 +53,4 @@ MakeContextLogger(const std::string& tag) noexcept {
         tag, ::theia::runtime::MakeLogger(spec ? spec : "", tag));
 }
 
-}  // namespace ara::nm
+}  // namespace system_services_nm

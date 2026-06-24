@@ -178,9 +178,27 @@ def cmd_provision(args: list[str]) -> int:
 
 def cmd_orchestrate(args: list[str]) -> int:
     """Phase 2 — app rollout (binaries + real config), pushed over SSH; no restart.
-    `theia orchestrate <machine> [ansible-args...]`."""
-    machine, rest = _split_machine(args)
-    return _ansible("orchestrate.yml", machine, rest)
+
+    `theia orchestrate <target> [ansible-args...]` — <target> names a deploy rig
+    in the registry (deploy/registry/<target>.yml: ansible_host + the artheia
+    `machine` slice to push). orchestrate.yml resolves the host from the registry
+    (no inventory host line needed) and applies the per-target config override
+    (deploy/config/<target>/) on top of the machine-generic profile."""
+    target, rest = _split_machine(args)
+    if not target:
+        print("theia orchestrate: needs a target name "
+              "(deploy/registry/<target>.yml), e.g. `theia orchestrate rpi4`",
+              file=sys.stderr)
+        return 2
+    reg = ANSIBLE.parent / "registry" / f"{target}.yml"
+    if not reg.is_file():
+        print(f"theia orchestrate: no registry entry {reg.relative_to(WORKSPACE)} "
+              f"— add it (ansible_host + machine) to deploy a new target.",
+              file=sys.stderr)
+        return 1
+    # The target is passed as -e target=<name>; the resolve play reads the
+    # registry for the host + machine. No machine= / -l needed.
+    return _ansible("orchestrate.yml", None, ["-e", f"target={target}", *rest])
 
 
 def cmd_cleanup(args: list[str]) -> int:

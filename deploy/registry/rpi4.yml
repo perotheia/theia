@@ -1,0 +1,16 @@
+# Deploy-target registry entry — `rpi4`.
+#
+# A target is a physical rig the controller deploys to, named INDEPENDENTLY of
+# the artheia `machine` (the manifest slice it runs). `theia orchestrate
+# --target rpi4` resolves this file to find the host + which dist/manifest/
+# <machine>/ slice to push, then applies the deploy/config/rpi4/ overrides.
+#
+# Keyed by target name (the filename stem), NOT the artheia machine — so several
+# physical boxes can run the same `central` manifest with different per-target
+# config (e.g. this Pi has no PTP NIC, so deploy/config/rpi4/tsync.json disables
+# ptp4l/phc2sys/gpsd; the real gateway central keeps them on).
+ansible_host: 10.0.0.22
+ansible_user: axadmin
+# The artheia machine name whose dist/manifest/<machine>/ slice this target runs.
+machine: central
+arch: aarch64

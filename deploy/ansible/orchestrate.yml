@@ -1,27 +1,61 @@
 # theia orchestrate — Phase 2: install the binaries + the REAL config. Pushed
-# over SSH; the frequent work.
+# over SSH; the frequent work. GENERIC: the target rig is resolved by NAME from
+# the registry (deploy/registry/<target>.yml), which carries the host + the
+# artheia `machine` slice to push. Config is layered in two passes:
+#
+#   orchestrate pass  — binaries (.deb) + executor.json + the machine-generic
+#                       per-FC config (dist/manifest/<machine>/config/, already
+#                       merged with deploy/config/<machine>/ at manifest time).
+#   config-override   — deploy/config/<target>/<fc>.json deep-merged ON TOP, so
+#                       a target keys its own profile off its NAME (e.g. the rpi4
+#                       GPS-feed box disables ptp4l/phc2sys/gpsd) WITHOUT a
+#                       synthetic machine. Merge runs on the CONTROLLER (robust
+#                       JSON), then the result is pushed.
 #
 # Phases:
-#   1. copy the per-machine <machine>.deb to the rig + dpkg --install (--force-
-#      overwrite); drops every binary at /opt/theia/bin/<name>
-#   2. setcap the binaries (the cap contract in tasks/setcap.yml — caps clear on
-#      a fresh copy, so this runs AFTER install)
-#   3. copy the REAL executor.json from <machine>/executor.json (replaces the
-#      empty tree Phase 1 seeded) + the per-FC config/<fc>.json profiles
-#   4. notify the supervisor to reload (tdb reload) — handler, fires only on change
+#   1. copy the per-machine <machine>.deb to the rig + dpkg --install
+#   2. setcap the binaries (caps clear on a fresh copy — runs AFTER install)
+#   3. copy the REAL executor.json + the per-FC config/<fc>.json profiles
+#   3b. apply the per-TARGET config override (deploy/config/<target>/), merged
+#       on the controller, pushed over the just-copied profiles
+#   4. notify the supervisor to reload (tdb reload) — handler, fires on change
 #
-# Run:  ansible-playbook orchestrate.yml -l rpi4
+# Run:  theia orchestrate --target rpi4         (resolves registry/rpi4.yml)
+#   or:  ansible-playbook orchestrate.yml -e target=rpi4
+- name: "Resolve the deploy target from the registry"
+  hosts: localhost
+  gather_facts: false
+  vars:
+    target: "{{ target | mandatory }}"
+    registry_file: "{{ playbook_dir }}/../registry/{{ target }}.yml"
+  tasks:
+    - name: "Load the target's registry entry (host + machine slice)"
+      ansible.builtin.include_vars:
+        file: "{{ registry_file }}"
+        name: _rig
+    - name: "Add the resolved target as an in-memory host"
+      ansible.builtin.add_host:
+        name: "{{ target }}"
+        groups: _orchestrate_targets
+        ansible_host: "{{ _rig.ansible_host }}"
+        ansible_user: "{{ _rig.ansible_user | default('root') }}"
+        machine: "{{ _rig.machine }}"
+        deploy_target: "{{ target }}"
+
 - name: "Theia orchestrate (Phase 2 — binaries + real config)"
-  hosts: all
+  hosts: _orchestrate_targets
   become: true
   vars:
     theia_root: /opt/theia
+    # `machine` (the manifest slice) is set per-host by the resolve play above;
+    # `deploy_target` keys the per-target config override.
     deb_src: "{{ manifest_dir }}/{{ machine }}/{{ machine }}.deb"
     executor_src: "{{ manifest_dir }}/{{ machine }}/executor.json"
     config_src_dir: "{{ manifest_dir }}/{{ machine }}/config"
+    target_override_dir: "{{ playbook_dir }}/../config/{{ deploy_target }}"
   handlers:
-    # Reload the supervisor (no blanket restart). Fires only when executor.json
-    # changed AND tdb is present (the no-downtime path); a missing tdb is tolerated.
+    # Reload the supervisor (no blanket restart). Fires only when config changed
+    # AND tdb is present (the no-downtime path); a missing tdb is tolerated.
     - name: Reload supervisor
       ansible.builtin.command: "{{ theia_root }}/bin/tdb reload"
       args:
@@ -46,3 +80,6 @@
 
     - name: "Include real config (executor.json + per-FC profiles)"
       ansible.builtin.include_tasks: tasks/seed-config.yml
+
+    - name: "Include per-target config override pass"
+      ansible.builtin.include_tasks: tasks/config-override.yml

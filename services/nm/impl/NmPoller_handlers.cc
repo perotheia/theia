@@ -144,12 +144,15 @@ void NmPoller::handle_info(const char* info, NmPollerState& s) {
     }
 
     // ── CONNECT POLICY (NM drives wpa_supplicant) ──────────────────────────
-    // When auto_connect is on and there's NO usable link (no address yet), drive
-    // the connection: prefer Ethernet (a wired link with carrier just needs DHCP,
-    // handled by the kernel/networkd — nothing to do here), else auto-associate
-    // the highest-priority known WiFi profile that's in range. Throttled so a
-    // failing associate doesn't hammer wpa every tick.
-    if (s.auto_connect && !addr && !s.wifi_profiles.empty()) {
+    // When auto_connect is on and there's NO USABLE link, drive the connection:
+    // prefer Ethernet (a wired link with carrier just needs DHCP — nothing to do
+    // here), else auto-associate the highest-priority known WiFi profile in range.
+    // "No usable link" = no address OR (on a WIRELESS link) not associated — a
+    // STALE address left on wlan0 (e.g. a prior manager's lease that wasn't
+    // cleared) must NOT block the connect: addr without association isn't usable.
+    // Throttled so a failing associate doesn't hammer wpa every tick.
+    const bool wifi_unusable = nm_detail::is_wireless(mon_iface) && !wifi_assoc;
+    if (s.auto_connect && (!addr || wifi_unusable) && !s.wifi_profiles.empty()) {
         if (s.connect_cooldown > 0) {
             --s.connect_cooldown;
         } else if (obs.has_carrier && !nm_detail::is_wireless(want)) {

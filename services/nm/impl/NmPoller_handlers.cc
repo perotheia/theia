@@ -244,7 +244,18 @@ void NmPoller::handle_info(const char* info, NmPollerState& s) {
             vpn_up = true;                       // no VPN needed → rung satisfied
         } else {
             VpnObservation v;
-            if (vpn_observe(s.vpn_interface, v)) vpn_up = v.up;
+            bool obs_up = vpn_observe(s.vpn_interface, v) && v.up;
+            // HYSTERESIS: tailscale flaps during NAT/relay reconvergence (e.g.
+            // right after an uplink switch to a phone hotspot). A single missed
+            // observation must NOT drop the whole FSM to DEGRADED + trigger a
+            // needless wifi reconnect. Report UP immediately, but only report DOWN
+            // after kVpnDownMisses consecutive misses.
+            constexpr uint32_t kVpnDownMisses = 5;
+            if (obs_up) { s.vpn_miss = 0; vpn_up = true; }
+            else {
+                if (s.vpn_miss < 0xffffffu) ++s.vpn_miss;
+                vpn_up = s.vpn_up && s.vpn_miss < kVpnDownMisses;  // hold last-up
+            }
 
             // CONNECT POLICY (VPN): symmetric to the WiFi drive above. When
             // auto_vpn is on, an address is up (the tunnel rides the LAN) but the
@@ -289,8 +300,18 @@ void NmPoller::handle_info(const char* info, NmPollerState& s) {
             else                 post_edge(kNodeName, "LinkDown", LinkDown{});
         }
         if (wifi_assoc != s.wifi_assoc) {
-            if (wifi_assoc) post_edge(kNodeName, "WifiAssociated", WifiAssociated{});
-            else            post_edge(kNodeName, "WifiDisassociated", WifiDisassociated{});
+            if (wifi_assoc) {
+                post_edge(kNodeName, "WifiAssociated", WifiAssociated{});
+                // Re-associated (e.g. after a DEGRADED bounce): the FSM dropped to
+                // WIFI_ASSOCIATED, but our addr/vpn LEVELS may be unchanged, so the
+                // change-based edges below wouldn't re-fire AddrAcquired/VpnUp and
+                // the FSM would never climb back up. Reset those baselines so this
+                // tick re-asserts the full ladder from the current observation.
+                s.has_address = false;
+                s.vpn_up = false;
+            } else {
+                post_edge(kNodeName, "WifiDisassociated", WifiDisassociated{});
+            }
         }
         if (addr != s.has_address) {
             if (addr) post_edge(kNodeName, "AddrAcquired", AddrAcquired{});

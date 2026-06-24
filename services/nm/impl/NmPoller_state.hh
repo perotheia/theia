@@ -46,6 +46,7 @@ struct NmPollerState {
     bool        auto_vpn = false;
     std::string vpn_authkey;             // optional key for the unattended `up`
     uint32_t    vpn_cooldown = 0;        // throttle, like connect_cooldown
+    uint32_t    vpn_miss = 0;            // consecutive vpn_observe misses (hysteresis)
 
     // ROAMING: while associated, periodically scan for a HIGHER-priority known
     // profile newly in range (e.g. you walk outside and your phone hotspot

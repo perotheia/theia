@@ -113,3 +113,59 @@ message WifiConnectReply {
     string message = 3;
 }
 
+// ── Config-maintenance ops (NmCfgGate serves; com proxies for rtdb/tdb) ──
+message AddWifiReq {
+    string ssid = 1;
+    string psk = 2;
+    uint32 priority = 3;
+}
+message RemoveWifiReq {
+    string ssid = 1;
+}
+message SetVpnReq {
+    bool require_vpn = 1;
+    bool auto_vpn = 2;
+}
+message SetAutoConnectReq {
+    bool auto_connect = 1;
+}
+message ConfirmReq {
+}
+message AbortReq {
+}
+message NmCfgReply {
+    bool ok = 1;
+    string message = 2;
+    uint32 profiles = 3;
+    uint32 txn_state = 4;
+}
+
+// ── Config-transaction FSM events (gate → NmCfgTxn, in-process) ──────────
+message TxnAddWifi {
+    string ssid = 1;
+    string psk = 2;
+    uint32 priority = 3;
+}
+message TxnRemoveWifi {
+    string ssid = 1;
+}
+message TxnSetVpn {
+    bool require_vpn = 1;
+    bool auto_vpn = 2;
+}
+message TxnSetAutoConn {
+    bool auto_connect = 1;
+}
+message TxnConfirm {
+}
+message TxnAbort {
+}
+message TxnTimeout {
+}
+message NmCfgTxnData {
+    NmConfig committed = 1;
+    NmConfig pending = 2;
+    uint32 confirm_left_s = 3;
+    string note = 4;
+}
+

@@ -27,3 +27,11 @@ system_services_nm.WifiConnectReq.ssid   max_size:33
 system_services_nm.WifiConnectReq.psk   max_size:64
 system_services_nm.WifiConnectReply.interface   max_size:16
 system_services_nm.WifiConnectReply.message   max_size:128
+system_services_nm.AddWifiReq.ssid   max_size:33
+system_services_nm.AddWifiReq.psk   max_size:64
+system_services_nm.RemoveWifiReq.ssid   max_size:33
+system_services_nm.NmCfgReply.message   max_size:128
+system_services_nm.TxnAddWifi.ssid   max_size:33
+system_services_nm.TxnAddWifi.psk   max_size:64
+system_services_nm.TxnRemoveWifi.ssid   max_size:33
+system_services_nm.NmCfgTxnData.note   max_size:128

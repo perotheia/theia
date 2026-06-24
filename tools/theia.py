@@ -170,10 +170,21 @@ def _split_machine(args: list[str]) -> tuple[str | None, list[str]]:
 
 
 def cmd_provision(args: list[str]) -> int:
-    """Phase 1 — OS packages + Mender client, pushed over SSH (agentless).
-    `theia provision <machine> [ansible-args...]`. Reads dist/manifest/<machine>/."""
-    machine, rest = _split_machine(args)
-    return _ansible("provision.yml", machine, rest)
+    """Phase 1 — OS packages + etcd + Mender client, pushed over SSH (agentless).
+    `theia provision <target> [ansible-args...]` — <target> names a rig in the
+    registry (deploy/registry/<target>.yml). Reads dist/manifest/<machine>/."""
+    target, rest = _split_machine(args)
+    if not target:
+        print("theia provision: needs a target name "
+              "(deploy/registry/<target>.yml), e.g. `theia provision rpi4`",
+              file=sys.stderr)
+        return 2
+    reg = ANSIBLE.parent / "registry" / f"{target}.yml"
+    if not reg.is_file():
+        print(f"theia provision: no registry entry {reg.relative_to(WORKSPACE)}",
+              file=sys.stderr)
+        return 1
+    return _ansible("provision.yml", None, ["-e", f"target={target}", *rest])
 
 
 def cmd_orchestrate(args: list[str]) -> int:

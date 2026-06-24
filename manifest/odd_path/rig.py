@@ -4,8 +4,13 @@ One Raspberry Pi 4 (machine `central`, aarch64) runs the platform services the
 odd-path-monitor GUI depends on for its GPS/odometry feed over PG + remote
 observability:
 
-    KEEP:  com, crypto, log, nm, tsync   (+ the implicit root supervisor)
-    DROP:  diag, fw, idsm, osi, per, phm, rds, shwa, sm, ucm
+    KEEP:  com, crypto, log, nm, per, tsync   (+ the implicit root supervisor)
+    DROP:  diag, fw, idsm, osi, phm, rds, shwa, sm, ucm
+
+per is the config gatekeeper (etcd-backed): NmConfig (wifi profiles + priority,
+auto_connect, auto_vpn) is stored in etcd and pushed to nm via ConfigUpdated, so
+an operator enrolls wifi from tdb/rtdb (set priority per entry) without a static
+file. Needs etcd on the box (provision installs it; etcd_machine=central).
 
 tsync is the NavSatFix/Odometry producer (build --define gps=rtk on the real Pi,
 or gps=fake for bench); the supervisor is the PG allocator the GUI's pg_join
@@ -37,7 +42,7 @@ from manifest.services.manifest import DEPLOYMENT as BASE
 from manifest.services.manifest import PROCESS_NODES  # noqa: F401
 
 # The services the GPS path + production rig need; everything else is dropped.
-KEEP = {"com", "crypto", "log", "nm", "tsync"}
+KEEP = {"com", "crypto", "log", "nm", "per", "tsync"}
 _ALL = {p.name for p in _members(BASE.execution.processes)}
 _DROP = _ALL - KEEP
 

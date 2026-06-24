@@ -53,7 +53,7 @@ cc_library(
         "//services/nm/lib:nm_lib",
         # per nanopb structs + RemoteCodec<PutConfigReq/PerReply> so NmCfgTxn can
         # PutConfig its NmConfig to per's PerClient (0x80010007) over TIPC.
-        "//platform/proto/system/services/per:per_pb",
-        "//services/per/lib:per_codecs",
+        # per_lib brings per_codecs.hh + the per.pb.h (same as com's per link).
+        "//services/per/lib:per_lib",
     ],
 )

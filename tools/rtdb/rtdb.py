@@ -98,7 +98,7 @@ def cmd_wifi(args, sup, _tf) -> int:
     sub = pos[0] if pos else "scan"          # bare `wifi` == `wifi scan`
     if sub in ("add", "rm", "confirm", "abort"):
         print(f"wifi {sub}: not available over rtdb yet — the com NmView write "
-              "proxy isn't wired. Run `tdb wifi {sub} …` on the machine.",
+              f"proxy isn't wired. Run `tdb wifi {sub} …` on the machine.",
               file=sys.stderr)
         return 2
     # `wifi scan <iface>` → iface is pos[1]; `wifi <iface>` (back-compat) → pos[0].

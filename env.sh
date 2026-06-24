@@ -110,12 +110,13 @@ if [ -n "${ZSH_VERSION:-}" ]; then
     # artheia is click-based — use its native completion source.
     eval "$(_ARTHEIA_COMPLETE=zsh_source artheia)"
     # The dispatch CLIs: complete from each tool's live __complete verb list.
-    _theia_complete() { compadd ${(z)"$(_theia_verbs)"} }
-    compdef _theia_complete theia
-    _tdb_complete() { compadd ${(z)"$(_tdb_verbs)"} }
-    compdef _tdb_complete tdb
-    _rtdb_complete() { compadd ${(z)"$(_rtdb_verbs)"} }
-    compdef _rtdb_complete rtdb
+    # NOTE: these bodies use zsh-only syntax (compadd, ${(z)...}). They're inside
+    # `eval` so a BASH parser (e.g. setup_local.sh sourced from bash) never tries
+    # to PARSE them — bash parses every branch of an if/elif even when not taken,
+    # and the bare zsh forms below were a parse error that aborted the whole file.
+    eval '_theia_complete() { compadd ${(z)"$(_theia_verbs)"} }; compdef _theia_complete theia'
+    eval '_tdb_complete()   { compadd ${(z)"$(_tdb_verbs)"} };   compdef _tdb_complete tdb'
+    eval '_rtdb_complete()  { compadd ${(z)"$(_rtdb_verbs)"} };  compdef _rtdb_complete rtdb'
 elif [ -n "${BASH_VERSION:-}" ]; then
     # bash fallback (you're on zsh per the project default, but keep this
     # so sourcing from a bash subshell still works).

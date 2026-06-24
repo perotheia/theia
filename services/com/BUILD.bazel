@@ -130,22 +130,45 @@ cc_library(
         # are compiled in THIS library now (no separate supervisor_pb_cpp).
         "//third_party:system_protobuf",
     ],
-    # grpc++ + its deps from the host toolchain (not in bzlmod). protobuf is
-    # already pulled transitively by supervisor_pb_cpp → //third_party:
-    # system_protobuf, but grpc needs -lgrpc++ -lgrpc -lgpr explicitly.
-    # On Ubuntu 24.04 gRPC's headers reference absl::Mutex but -lgrpc++ no longer
-    # pulls abseil, so the bridge fails to link (undefined absl::*::Mutex::Lock).
-    # -labsl_synchronization (DT_NEEDED-pulls its own absl deps) resolves it;
-    # it's present + harmless on 22.04 too (needs libabsl-dev for the .so).
+    # grpc++ + abseil link. PRINCIPLE: the shipped DISTRO (the aarch64 .deb) must
+    # carry NO grpc/abseil shared libs — a cross-built .so soname (sysroot abseil
+    # .20220623) won't match the target's (Debian-13 .20240722) anyway. So the
+    # rpi4 cross-build STATICALLY links the grpc/abseil closure (the .a's are in
+    # the sysroot); only ssl/crypto/system stay dynamic (libc-coupled, never
+    # bundled). The host x86 dev box has grpc as SHARED-ONLY (apt ships no .a's),
+    # so it keeps the dynamic -l form — it's a dev/test box, not a shipped distro.
+    # select() on the target platform honors "no shared libs in the distro" while
+    # keeping both envs buildable.
+    #
+    # The static group goes inside -Wl,-Bstatic … -Wl,-Bdynamic + --start-group
+    # (abseil archives have circular deps). The closure is the deduped
+    # `pkg-config --static --libs grpc++` set, all present in the rpi4 sysroot.
     linkopts = [
-        "-lgrpc++",
-        "-lgrpc",
-        "-lgpr",
-        "-labsl_synchronization",
-        # OpenSSL: com_tls.hpp's engine-mode TLS (phase 3) uses the ENGINE API
-        # (ENGINE_by_id / ENGINE_load_dynamic) to load the theia_crypto engine so
-        # the TLS private key never enters com. grpc's TLS here is system OpenSSL.
-        "-lssl",
-        "-lcrypto",
-    ],
+        "-lssl", "-lcrypto",   # OpenSSL (system) — com_tls.hpp engine-mode TLS
+    ] + select({
+        "@pero_theia//rules/config:is_arm64": [
+            "-Wl,-Bstatic", "-Wl,--start-group",
+            "-lgrpc++", "-lgrpc", "-lgpr",
+            "-laddress_sorting", "-lre2", "-lupb", "-lcares", "-lz",
+            "-labsl_synchronization", "-labsl_graphcycles_internal",
+            "-labsl_stacktrace", "-labsl_symbolize", "-labsl_debugging_internal",
+            "-labsl_demangle_internal", "-labsl_malloc_internal", "-labsl_time",
+            "-labsl_civil_time", "-labsl_time_zone", "-labsl_strings",
+            "-labsl_strings_internal", "-labsl_base", "-labsl_spinlock_wait",
+            "-labsl_throw_delegate", "-labsl_raw_logging_internal",
+            "-labsl_int128", "-labsl_bad_optional_access",
+            "-labsl_bad_variant_access", "-labsl_status", "-labsl_statusor",
+            "-labsl_cord", "-labsl_cord_internal", "-labsl_cordz_info",
+            "-labsl_cordz_functions", "-labsl_cordz_handle",
+            "-labsl_hash", "-labsl_city", "-labsl_low_level_hash",
+            "-labsl_raw_hash_set", "-labsl_hashtablez_sampler",
+            "-labsl_exponential_biased", "-labsl_str_format_internal",
+            "-Wl,--end-group", "-Wl,-Bdynamic",
+            "-latomic", "-lrt", "-ldl", "-lpthread",
+        ],
+        "//conditions:default": [   # host x86 dev — grpc is shared-only here
+            "-lgrpc++", "-lgrpc", "-lgpr", "-labsl_synchronization",
+            "-lpthread",
+        ],
+    }),
 )

@@ -53,12 +53,5 @@ profile (`ptp4l -s`, `gpsd` disabled).
   `ptp4l` drops `-s` (`-i ptpIf0 -m -q`) so it becomes master/grandmaster.
 - `compute/tsync.json` — **PTP slave**: `gpsd` OFF (explicit); `ptp4l -s`
   (`-i ptpIf0 -s -m -q`) syncs FROM central over Ethernet.
-- `gpsfeed/tsync.json` — **GPS-feed-only** (the `manifest.odd_path.rig` box
-  feeding odd-path-monitor): `ptp4l` / `phc2sys` / `gpsd` ALL OFF. This box has
-  no PTP-capable NIC (no `ptpIf0`), so leaving the daemons on forks children
-  that fail + churn on the supervisor's restart strategy. Only tsync's
-  in-process GPS broadcaster (`tsync_ctl`) runs and casts NavSatFix/Odometry
-  over PG. (Machine is `gpsfeed`, not `central`, precisely so it gets this
-  profile instead of central's grandmaster one.)
 
-`phc2sys` / `chrony` keep their `.art` defaults on the central/compute machines.
+`phc2sys` / `chrony` keep their `.art` defaults on both machines.

@@ -32,11 +32,3 @@ rig1-central    ansible_host=10.0.0.22  ansible_user=axadmin  machine=central
 
 [rig_lab:vars]
 rig_id = lab
-
-# ----- odd-path GPS-feed rig (manifest.odd_path.rig) -------------------------
-# The Pi that runs the reduced services slice feeding odd-path-monitor's GPS.
-# machine=gpsfeed (NOT central): its own deploy/config/gpsfeed/ profile disables
-# the PTP daemons (no ptpIf0 on this box). Same physical Pi as rig1-central for
-# now; deploy with `theia orchestrate gpsfeed -l rig1-gpsfeed`.
-[rig_gpsfeed]
-rig1-gpsfeed    ansible_host=10.0.0.22  ansible_user=axadmin  machine=gpsfeed

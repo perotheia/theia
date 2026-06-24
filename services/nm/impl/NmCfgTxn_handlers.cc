@@ -29,6 +29,7 @@
 #include <cstdio>
 #include <cstring>
 #include <mutex>
+#include <string>
 
 // The two per types NmCfgTxn sends/receives over TIPC. Declared locally (not via
 // per's per_codecs.hh) to avoid a header-path collision with nm's own lib/.
@@ -98,6 +99,9 @@ void NmCfgTxn::on_enter(NmCfgTxnState new_s,
                         NmCfgTxnData& /*d*/) {
     if (!nm_cfg_txn_ref().valid())         // wire the gate→FSM path on first entry
         nm_cfg_txn_ref() = ::theia::runtime::LocalRef<NmCfgTxn>(*this);
+
+    log().info(std::string("on_enter ") + std::to_string((int)old_s) + "→"
+               + std::to_string((int)new_s));   // trace every transition
 
     auto& sh = nm_cfg_shared();
 

@@ -40,7 +40,11 @@ constexpr uint32_t kTxnPending = 2;
 template <typename Evt>
 bool post_txn(Evt evt) {
     auto& ref = nm_cfg_txn_ref();
-    if (!ref.valid()) return false;
+    if (!ref.valid()) {
+        std::fprintf(stderr, "[nm_cfg_gate] WARN: NmCfgTxn FSM not wired yet — "
+                     "config NOT applied (post_event dropped)\n");
+        return false;
+    }
     ::theia::runtime::post_event(ref.target(), std::move(evt));
     return true;
 }

@@ -848,7 +848,11 @@ _HELP = """tdb — Theia Debug Bridge. commands:
                            adb-style, e.g. `logcat MyApp/counter:V *:E`
   restart <name>           restart a child
   terminate <name>         stop-and-hold a child
-  wifi [<iface>]           nm wifi scan: visible APs + association (via `iw`)
-  wifi --status            network readiness state only (no scan)
+  wifi scan [<iface>]      nm wifi scan: visible APs + association (via `iw`)
+  wifi status              network readiness state (state/carrier/addr/vpn)
+  wifi add <ssid> [psk] [priority]   enroll/update a wifi profile (NmCfgGate)
+  wifi rm <ssid>           forget a wifi profile
+  wifi confirm | abort     commit / roll back the pending config change
+  vpn on | off             require + drive (or clear) the VPN over wifi
   help                     this help
   quit / exit              leave the REPL"""

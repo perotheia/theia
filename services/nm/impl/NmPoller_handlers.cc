@@ -132,10 +132,6 @@ void NmPoller::handle_info(const char* info, NmPollerState& s) {
     // require_address=false → treat link-up alone as "address present" so the
     // FSM reaches READY on carrier without waiting for a routable address.
     const bool addr = s.require_address ? obs.has_address : obs.has_carrier;
-    log().info(std::string("obs: want='") + want + "' iface='" + obs.interface +
-        "' carrier=" + (obs.has_carrier ? "1" : "0") +
-        " has_address=" + (obs.has_address ? "1" : "0") +
-        " addr=" + (addr ? "1" : "0"));
 
     // WiFi association: a CHEAP `iw dev <if> link` probe (no radio scan) ONLY when
     // the MONITORED link is itself wireless. A wired monitored link (eth0) skips

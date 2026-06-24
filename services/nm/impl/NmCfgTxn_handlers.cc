@@ -122,9 +122,6 @@ void NmCfgTxn::on_enter(NmCfgTxnState new_s,
     if (!nm_cfg_txn_ref().valid())         // wire the gate→FSM path on first entry
         nm_cfg_txn_ref() = ::theia::runtime::LocalRef<NmCfgTxn>(*this);
 
-    log().info(std::string("on_enter ") + std::to_string((int)old_s) + "→"
-               + std::to_string((int)new_s));   // trace every transition
-
     auto& sh = nm_cfg_shared();
 
     if (new_s == NmCfgTxnState::PENDING) {

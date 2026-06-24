@@ -17,6 +17,7 @@ cc_library(
     name = "nm_state",
     hdrs = [
         "NmPoller_state.hh",
+        "NmCfgGate_state.hh",
     ],
     # The lib #includes these as "impl/<Node>_state.hh", so the include
     # root is the FC out_dir (one above impl/).

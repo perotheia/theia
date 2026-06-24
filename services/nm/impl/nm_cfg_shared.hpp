@@ -9,7 +9,7 @@
 // ordering is enough (no extra lock).
 #pragma once
 
-#include "nm.pb.h"          // system_services_nm_NmConfig
+#include "system/services/nm/nm.pb.h"   // system_services_nm_NmConfig
 
 #include "NodeRef.hh"       // theia::runtime::LocalRef
 #include "GenStateM.hh"     // theia::runtime::post_event

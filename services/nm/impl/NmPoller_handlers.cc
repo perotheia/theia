@@ -101,11 +101,17 @@ void NmPoller::handle_info(const char* info, NmPollerState& s) {
         auto& sh = nm_cfg_shared();
         if (sh.committed_known || sh.txn_pending) {
             const auto& c = sh.txn_pending ? sh.pending : sh.committed;
-            s.interfaces   = c.interfaces;
+            // MERGE, don't clobber: the gate's NmConfig (from `wifi add`/`vpn on`)
+            // carries the wifi_profiles + the flags it set, but NOT the rig's
+            // boot-only knobs like `interfaces` (which lives in deploy props, not
+            // the runtime config). So preserve the boot `interfaces`/`vpn_interface`
+            // when the gate's copy is empty — else an enroll would reset the
+            // monitored iface to "" (auto → eth0) and never drive wlan0.
+            if (c.interfaces[0]    != '\0') s.interfaces    = c.interfaces;
+            if (c.vpn_interface[0] != '\0') s.vpn_interface = c.vpn_interface;
             s.require_vpn  = c.require_vpn;
             s.auto_connect = c.auto_connect;
             s.auto_vpn     = c.auto_vpn;
-            s.vpn_interface = c.vpn_interface;
             s.wifi_profiles.clear();
             for (pb_size_t i = 0; i < c.wifi_profiles_count; ++i) {
                 WifiProfileInfo p;

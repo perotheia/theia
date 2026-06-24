@@ -30,10 +30,18 @@ cc_library(
     srcs = [
         "NmDaemon_handlers.cc",
         "NmPoller_handlers.cc",
+        # Config-transaction: the gate (validates + post_events + owns the txn
+        # state) and the FSM (applies/persists via a per RemoteRef on_enter).
+        "NmCfgGate_handlers.cc",
+        "NmCfgTxn_handlers.cc",
     ],
-    # The read-only `ip` observer behind NmPoller, included as
-    # "impl/nm_backend.hpp" — so the include root is the FC out_dir.
-    hdrs = ["nm_backend.hpp"],
+    # nm_backend.hpp = the read-only `ip` observer behind NmPoller;
+    # nm_cfg_shared.hpp = the gate↔txn shared config singleton. Both included as
+    # "impl/<h>" so the include root is the FC out_dir.
+    hdrs = [
+        "nm_backend.hpp",
+        "nm_cfg_shared.hpp",
+    ],
     includes = [".."],
     copts = [
         "-std=c++17",
@@ -43,5 +51,9 @@ cc_library(
     ],
     deps = [
         "//services/nm/lib:nm_lib",
+        # per nanopb structs + RemoteCodec<PutConfigReq/PerReply> so NmCfgTxn can
+        # PutConfig its NmConfig to per's PerClient (0x80010007) over TIPC.
+        "//platform/proto/system/services/per:per_pb",
+        "//services/per/lib:per_codecs",
     ],
 )

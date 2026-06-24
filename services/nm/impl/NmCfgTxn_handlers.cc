@@ -1,46 +1,109 @@
-// User handler bodies for NmCfgTxn (STATEM variant).
+// User handler bodies for NmCfgTxn (STATEM variant) — the config-transaction FSM.
 //
-// FIRST-TIME-ONLY SCAFFOLD. `artheia gen-app --kind fc` checks for
-// this file's existence and refuses to overwrite unless `--force`
-// is passed. Declarations are in lib/NmCfgTxn.hh.
+// HAND-OWNED (gen-app emits a scaffold once, then skips without --force).
 //
-// What lives here (user code):
-//   - on_enter — fires after every committed FSM transition (and
-//     once at init with new==old). Cast / send_after / log here.
-//     Returns void, so transition_to() is COMPILE-TIME forbidden.
-//   - handle_call overloads for any server-port operations — map
-//     external requests onto FSM events or daemon state.
+// NmCfgTxn owns the two-phase commit. NmCfgGate (which has the request payload)
+// computes the new NmConfig, stashes it in nm_cfg_shared(), and post_event()s
+// the Txn* event here; the FSM's transition table (lib .hh, from the .art) moves
+// STEADY⇄PENDING, and THIS on_enter does the side effect:
+//   on_enter(PENDING) → PutConfig sh.pending to per (per pushes ConfigUpdated →
+//                        NmPoller/NmDaemon reconfigure LIVE; the single apply path).
+//   on_enter(STEADY)  → committed: nothing (already persisted on the PENDING
+//                        apply) OR rollback (re-Put sh.committed) when we got here
+//                        via TxnAbort/TxnTimeout. We can't see the event in
+//                        on_enter, so the gate keeps sh.pending == sh.committed
+//                        for a rollback and == the new config for a confirm; we
+//                        always Put sh.pending on entering STEADY-from-PENDING,
+//                        which is the committed config either way. Idempotent.
 //
-// Default bodies are no-ops with a stderr log so traffic is
-// observable. Replace with real behaviour as the FC matures.
+// per is reached by a runtime RemoteRef to PerClient (tipc 0x80010007) — the
+// per_link pattern; no cross-package client stub.
 
 #include "lib/NmCfgTxn.hh"
+#include "impl/nm_cfg_shared.hpp"
+
+#include "NodeRef.hh"                         // LocalRef + RemoteRef
+#include "system/services/per/per.pb.h"      // PutConfigReq / PerReply nanopb
+#include "per_codecs.hh"                      // RemoteCodec<per types>
 
 #include <cstdio>
+#include <cstring>
 
 namespace system_services_nm {
 
+namespace {
 
+// per's PerClient node (Get/Put/Watch config). See system.services.per.
+constexpr uint32_t kPerClientType     = 0x80010007u;
+constexpr uint32_t kPerClientInstance = 0u;
+struct PerClientTag { static constexpr const char* kNodeName = "nm_cfg_txn"; };
+using PerRef = ::theia::runtime::RemoteRef<PerClientTag,
+                                           kPerClientType, kPerClientInstance>;
 
-// on_enter — runs on the FSM thread AFTER every committed
-// transition. The framework also fires it once at init with
-// new_s == old_s == STEADY. SAFE to call
-// cast/post_event/broadcast from here; UNSAFE to transition.
-void NmCfgTxn::on_enter(NmCfgTxnState new_s,
-                              NmCfgTxnState /*old_s*/,
-                              NmCfgTxnData& /*d*/) {
-    static const char* names[] = {
-        "STEADY",
-        "VALIDATING",
-        "PENDING",
-    };
-    const auto idx = static_cast<std::size_t>(new_s);
-    std::fprintf(stderr, "[%s] → %s\n",
-                 kNodeName,
-                 idx < sizeof(names)/sizeof(names[0]) ? names[idx] : "?");
-    // TODO: fan out to subscribe_<port>_<msg> registrations here.
+// PutConfig the given NmConfig to per. target_node = the WORKER name the config
+// is keyed under in etcd (/theia/config/<node>); NmConfig is bound by NmDaemon +
+// NmPoller — we key it under "nm_daemon" (the reporting worker). Best-effort:
+// per may be momentarily unreachable; the FSM logs and the next op retries.
+bool put_nmconfig(const system_services_nm_NmConfig& cfg, const char* who) {
+    system_services_per_PutConfigReq req = system_services_per_PutConfigReq_init_zero;
+    std::snprintf(req.target_node, sizeof(req.target_node), "%s", "nm_daemon");
+    // encode the NmConfig into req.config bytes.
+    pb_ostream_t os = pb_ostream_from_buffer(req.config.bytes, sizeof(req.config.bytes));
+    if (!pb_encode(&os, system_services_nm_NmConfig_fields, &cfg)) {
+        std::fprintf(stderr, "[nm_cfg_txn] %s: NmConfig encode failed\n", who);
+        return false;
+    }
+    req.config.size = static_cast<pb_size_t>(os.bytes_written);
+    req.expect_rev = 0;   // unconditional (no CAS)
+    // digest "" — per stores the bytes; the schema digest is filled by the seed
+    // path. For a live config push the digest is advisory; per keys on target_node.
+    PerRef ref;
+    auto result = ::theia::runtime::call<system_services_per_PerReply>(
+        ref, req, /*op*/ "PutConfig");
+    if (result.reply.status != 0) {
+        std::fprintf(stderr, "[nm_cfg_txn] %s: PutConfig status=%d %s\n",
+                     who, static_cast<int>(result.reply.status), result.reply.message);
+        return false;
+    }
+    return true;
 }
 
+}  // namespace
 
+// The LocalRef the gate post_events through; published on first FSM entry.
+::theia::runtime::LocalRef<NmCfgTxn>& nm_cfg_txn_ref() {
+    static ::theia::runtime::LocalRef<NmCfgTxn> ref;
+    return ref;
+}
+
+// on_enter — runs on the FSM thread after every committed transition (and once
+// at init, new==old==STEADY). Publishes self into the LocalRef on first entry,
+// then does the per I/O for PENDING (apply) / STEADY (commit-or-rollback).
+void NmCfgTxn::on_enter(NmCfgTxnState new_s,
+                        NmCfgTxnState old_s,
+                        NmCfgTxnData& /*d*/) {
+    auto& ref = nm_cfg_txn_ref();
+    if (!ref.valid()) ref.publish(this);   // wire the gate→FSM path on first entry
+
+    auto& sh = nm_cfg_shared();
+
+    if (new_s == NmCfgTxnState::PENDING) {
+        // Applied-but-unconfirmed: persist the pending config so per pushes it
+        // live (NmPoller reconfigures: associate the new wifi / flip the VPN).
+        if (put_nmconfig(sh.pending, "apply"))
+            log().info("PENDING: applied pending config via per (awaiting confirm)");
+        return;
+    }
+
+    if (new_s == NmCfgTxnState::STEADY && old_s == NmCfgTxnState::PENDING) {
+        // We left PENDING: either Confirm (sh.pending == sh.committed, the gate
+        // set committed=pending) or Abort/Timeout (the gate set pending=committed).
+        // Either way sh.pending now holds the config to keep — re-Put it so a
+        // rollback restores connectivity; a confirm re-Put is a harmless no-op.
+        if (put_nmconfig(sh.pending, "settle"))
+            log().info("STEADY: settled config via per (commit or rollback)");
+        return;
+    }
+}
 
 }  // namespace system_services_nm

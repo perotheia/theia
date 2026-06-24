@@ -420,6 +420,12 @@ inline bool vpn_observe(const std::string& want, VpnObservation& obs) {
     return false;   // no VPN mechanism at all
 }
 
+// Result of a CONNECT drive (wifi or vpn): ok + a human note for the log/status.
+struct ConnectResult {
+    bool        ok = false;
+    std::string note;
+};
+
 // ─── VPN CONNECT path (drive `tailscale up`, pinned to the WiFi underlay) ──
 //
 // Symmetric to wifi_connect: NM doesn't embed WireGuard, it DRIVES tailscaled.
@@ -490,11 +496,6 @@ struct WifiProfileInfo {
     std::string ssid;
     std::string psk;        // WPA2 passphrase ("" = open network)
     uint32_t    priority = 0;
-};
-
-struct ConnectResult {
-    bool        ok = false;
-    std::string note;
 };
 
 // Pick the best profile to connect: the highest-priority configured profile whose

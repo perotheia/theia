@@ -2,8 +2,13 @@ package system.services.nm
 
 
 // The Network-Management FC: the readiness FSM (NmDaemon) + the netlink poller
-// (NmPoller) that drives it. Two nodes, one process — like sm's daemon+gate.
+// (NmPoller) that drives it, plus the config-transaction pair — NmCfgGate
+// (serves the wifi-enroll / vpn-toggle ops) + NmCfgTxn (the two-phase commit
+// FSM that applies, holds PENDING for confirm, then persists via per or rolls
+// back). Four nodes, one process — like sm's daemon+gate split.
 composition Nm {
-    prototype NmDaemon nm_daemon
-    prototype NmPoller nm_poller
+    prototype NmDaemon  nm_daemon
+    prototype NmPoller  nm_poller
+    prototype NmCfgGate nm_cfg_gate
+    prototype NmCfgTxn  nm_cfg_txn
 }

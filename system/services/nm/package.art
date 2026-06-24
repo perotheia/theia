@@ -196,6 +196,33 @@ message NmCfgReply {
     bool   ok
     string message  [max_size:128]  // human detail (e.g. "enrolled 'PEROHotspot' prio=10")
     uint32 profiles                 // wifi_profiles count after the change
+    uint32 txn_state                // NmCfgTxnState ordinal after the op (PENDING=2 ⇒ confirm needed)
+}
+message ConfirmReq { }              // operator re-connected over the new path → commit
+message AbortReq   { }              // discard the pending change → rollback now
+
+// ─── Config-transaction FSM events (gate → NmCfgTxn, in-process) ───────────
+//
+// The gate validates + post_event()s these into the txn statem. A change that
+// can DROP the operator's connection (VPN toggle, switching the active SSID)
+// enters PENDING and must be confirmed; a safe change (enroll a non-active
+// profile) commits immediately. Each carries the requested delta.
+message TxnAddWifi      { string ssid [max_size:33]  string psk [max_size:64]  uint32 priority }
+message TxnRemoveWifi   { string ssid [max_size:33] }
+message TxnSetVpn       { bool require_vpn  bool auto_vpn }
+message TxnSetAutoConn  { bool auto_connect }
+message TxnConfirm      { }          // commit the pending config (PutConfig → per)
+message TxnAbort        { }          // roll back to the last-good config
+message TxnTimeout      { }          // confirm window elapsed → auto-rollback
+
+// The txn FSM's persistent data: the last-COMMITTED config + the PENDING one +
+// the seconds left on the confirm window. NmConfig is carried by VALUE so a
+// rollback restores the exact prior config without re-reading per.
+message NmCfgTxnData {
+    NmConfig committed                 // last-good (rollback target)
+    NmConfig pending                   // applied-but-unconfirmed (PENDING only)
+    uint32   confirm_left_s            // confirm-window countdown (0 outside PENDING)
+    string   note        [max_size:128]
 }
 
 // ─── Interfaces ────────────────────────────────────────────────────────────
@@ -227,6 +254,38 @@ interface clientServer NmCtlIf {
     operation WifiScan(in r: WifiScanReq)          returns WifiScanReply
     operation WifiConnect(in r: WifiConnectReq)    returns WifiConnectReply
 }
+
+// The config-maintenance control surface (NmCfgGate serves it; com proxies it
+// so rtdb/tdb can enroll wifi + toggle VPN remotely). Each op returns
+// immediately with the txn_state — PENDING means "applied, now Confirm over the
+// new path within the window or it rolls back".
+interface clientServer NmCfgIf {
+    operation AddWifi(in r: AddWifiReq)              returns NmCfgReply
+    operation RemoveWifi(in r: RemoveWifiReq)        returns NmCfgReply
+    operation SetVpn(in r: SetVpnReq)                returns NmCfgReply
+    operation SetAutoConnect(in r: SetAutoConnectReq) returns NmCfgReply
+    operation ConfirmConfig(in r: ConfirmReq)        returns NmCfgReply
+    operation AbortConfig(in r: AbortReq)            returns NmCfgReply
+}
+
+// The in-process event ingress NmCfgGate drives the txn statem through (the
+// statem-never-off-the-wire rule: the gate takes the ops off TIPC and
+// post_event()s these into NmCfgTxn).
+interface senderReceiver NmCfgTxnIn {
+    data TxnAddWifi     add_wifi
+    data TxnRemoveWifi  remove_wifi
+    data TxnSetVpn      set_vpn
+    data TxnSetAutoConn set_autoconn
+    data TxnConfirm     confirm
+    data TxnAbort       abort
+    data TxnTimeout     timeout
+}
+
+// per's config-client port type. Like com's `to_per`, this is a PLACEHOLDER
+// interface (the real PerClientIf lives in system.services.per); NmCfgTxn calls
+// PutConfig via a runtime RemoteRef to per's PerClient (tipc 0x80010007) in the
+// handler, not through a generated client stub — so no cross-package import.
+interface clientServer PersistencyIf { }
 
 // ─── Nodes ─────────────────────────────────────────────────────────────────
 
@@ -314,5 +373,62 @@ node atomic NmPoller {
     config NmConfig
     ports {
         sender events provides NmEventIn
+    }
+}
+
+// The config-transaction gate. tipc 0x8001002F. Serves the NmCfgIf control ops
+// (AddWifi/SetVpn/… + Confirm/Abort) off TIPC, validates them, and post_event()s
+// the corresponding Txn* event into NmCfgTxn in-process (the statem-never-off-
+// the-wire rule — same split as sm's FgGate→statem). Owns the confirm-window
+// TIMER: on a PENDING transition it arms a countdown and post_event()s TxnTimeout
+// if the operator never confirms (auto-rollback). reporting node (watchdog).
+node atomic NmCfgGate {
+    tipc type=0x8001002F instance=0
+    requires_timers
+    tag = "NCG"
+    ports {
+        server ctl     provides NmCfgIf
+        sender txn      provides NmCfgTxnIn
+    }
+}
+
+// The config-transaction FSM. tipc 0x80010030. Holds the two-phase commit:
+//   STEADY      running == committed config.
+//   VALIDATING  a change arrived; validate it. invalid → STEADY (reply !ok).
+//   PENDING     new config APPLIED live (cast to NmPoller/NmDaemon) + confirm
+//               window armed; the committed config is retained for rollback.
+//   (PENDING) Confirm → COMMIT: PutConfig → per (RemoteRef to 0x80010007) → STEADY.
+//   (PENDING) Timeout/Abort → ROLLBACK: re-apply the committed config → STEADY.
+// A safe change (enroll a profile that isn't the active link) skips PENDING and
+// commits immediately — the gate sets that by post_event'ing Confirm right after.
+// Takes NO external messages — NmCfgGate post_event()s into it. reporting node.
+node atomic NmCfgTxn {
+    tipc type=0x80010030 instance=0
+    tag = "NCT"
+    ports {
+        receiver txn_in requires NmCfgTxnIn
+        client   to_per requires PersistencyIf
+    }
+    statem {
+        states  [STEADY, VALIDATING, PENDING]
+        initial STEADY
+        data    NmCfgTxnData
+
+        // STEADY: accept a new change. The gate has already validated shape; the
+        // FSM applies it live and decides PENDING (connectivity-risky) vs an
+        // immediate commit (the gate drives Confirm for safe changes).
+        on STEADY:
+            event TxnAddWifi     → PENDING
+            event TxnRemoveWifi  → PENDING
+            event TxnSetVpn      → PENDING
+            event TxnSetAutoConn → PENDING
+
+        // PENDING: applied-but-unconfirmed. Confirm → commit (persist); Timeout
+        // or Abort → roll back to `committed`. A further change while PENDING is
+        // rejected by the gate (one txn at a time), so no edges for those here.
+        on PENDING:
+            event TxnConfirm → STEADY
+            event TxnAbort   → STEADY
+            event TxnTimeout → STEADY
     }
 }

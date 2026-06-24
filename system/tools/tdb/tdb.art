@@ -75,6 +75,11 @@ extern node atomic UcmDaemon { }
 // GetNetworkStatus (readiness snapshot) / WifiScan (visible APs + assoc).
 extern node atomic NmDaemon { }
 
+// nm's config-transaction gate (tipc 0x8001002F) — system.services.nm.
+// AddWifi/RemoveWifi/SetVpn/SetAutoConnect/ConfirmConfig/AbortConfig — the
+// operator wifi-enroll + vpn-toggle surface (`tdb wifi add` / `tdb vpn on`).
+extern node atomic NmCfgGate { }
+
 // ---- tdb client nodes ----------------------------------------------------
 //
 // Each carries its OWN tipc address (the probe binds it as the SOURCE of the
@@ -156,6 +161,8 @@ node atomic TdbNm {
     tipc type=0x80020108 instance=0
     ports {
         client nm_ctl  requires system.services.nm.NmCtlIf
+        // config-transaction ops (enroll wifi w/ priority, vpn toggle, confirm).
+        client nm_cfg  requires system.services.nm.NmCfgIf
     }
 }
 

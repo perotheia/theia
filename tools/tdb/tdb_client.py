@@ -231,6 +231,33 @@ class NmClient:
     def net_status(self, timeout: float = 3.0) -> dict[str, Any]:
         return self.probe.call("NmDaemon", "GetNetworkStatus", timeout=timeout)
 
+    # ---- config-transaction ops (NmCfgGate) — enroll wifi + toggle VPN. Each
+    # returns NmCfgReply{ok, message, profiles, txn_state}; txn_state==2 (PENDING)
+    # means "applied, now `confirm` over the new path within the window". ----
+    def add_wifi(self, ssid: str, psk: str = "", priority: int = 0,
+                 timeout: float = 4.0) -> dict[str, Any]:
+        return self.probe.call("NmCfgGate", "AddWifi", timeout=timeout,
+                               ssid=ssid, psk=psk, priority=priority)
+
+    def remove_wifi(self, ssid: str, timeout: float = 4.0) -> dict[str, Any]:
+        return self.probe.call("NmCfgGate", "RemoveWifi", timeout=timeout, ssid=ssid)
+
+    def set_vpn(self, require_vpn: bool, auto_vpn: bool,
+                timeout: float = 4.0) -> dict[str, Any]:
+        return self.probe.call("NmCfgGate", "SetVpn", timeout=timeout,
+                               require_vpn=require_vpn, auto_vpn=auto_vpn)
+
+    def set_autoconnect(self, auto_connect: bool,
+                        timeout: float = 4.0) -> dict[str, Any]:
+        return self.probe.call("NmCfgGate", "SetAutoConnect", timeout=timeout,
+                               auto_connect=auto_connect)
+
+    def confirm_config(self, timeout: float = 4.0) -> dict[str, Any]:
+        return self.probe.call("NmCfgGate", "ConfirmConfig", timeout=timeout)
+
+    def abort_config(self, timeout: float = 4.0) -> dict[str, Any]:
+        return self.probe.call("NmCfgGate", "AbortConfig", timeout=timeout)
+
     def stop(self) -> None:
         self.probe.stop()
 

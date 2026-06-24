@@ -637,21 +637,24 @@ def cmd_logcat(args, _sup, log_factory) -> int:
 
 
 def cmd_wifi(args, sup, _factory) -> int:
-    """wifi [<iface>] [--json] [--status]
+    """wifi <subcommand> — observe + configure services/nm's WiFi/VPN.
 
-    Ask services/nm to observe a wireless interface via `iw` (read-only): the
-    visible AP list (SSID / BSSID / signal / freq / security) + the link's
-    current association snapshot. NM does NOT associate — iwd/wpa does; this only
-    reports what `iw` shows. `<iface>` "" = nm's monitored / first wireless link.
+    READ (NmCtlIf, read-only `iw`):
+      wifi scan [<iface>]    visible APs (SSID/BSSID/signal/freq/security) + assoc
+      wifi status            the readiness ladder (state + carrier/addr/vpn)
+      wifi                   == `wifi scan` (back-compat)
 
-      tdb wifi               scan the default wifi interface
-      tdb wifi wlan0         scan a specific interface
-      tdb wifi --status      readiness state only (no scan)
-      tdb wifi --json        machine-readable
+    CONFIGURE (NmCfgGate — a stateful TRANSACTION; a vpn/wifi change can drop the
+    command's own link, so it lands in PENDING and must be confirmed over the new
+    path within the window or it auto-rolls-back):
+      wifi add <ssid> [psk] [priority]   enroll/update a profile (priority def 0)
+      wifi rm <ssid>                     forget a profile
+      wifi confirm                       commit the pending change
+      wifi abort                         roll back the pending change
+      vpn on|off                         (the `vpn` verb) require_vpn + auto_vpn
 
-    nm is reached over the TIPC probe (tdb.art TdbNm). rtdb (gRPC→com) needs a
-    com NmView proxy — not wired yet; use tdb on the machine, or `tdb -i <inst>`."""
-    # The session exposes nm_factory() on the TIPC (tdb) path. rtdb has none yet.
+    Add --json for machine-readable. nm is reached over the TIPC probe (tdb.art
+    TdbNm); rtdb drives the same ops over gRPC→com once the NmView proxy is wired."""
     nm_factory = getattr(sup, "_nm_factory", None) or _NM_FACTORY.get("fn")
     if nm_factory is None:
         print("wifi: not available here — rtdb reaches FCs over gRPC→com and the "
@@ -660,8 +663,19 @@ def cmd_wifi(args, sup, _factory) -> int:
         return 2
 
     as_json = "--json" in args
-    status_only = "--status" in args
-    iface = next((a for a in args if not a.startswith("--")), "")
+    pos = [a for a in args if not a.startswith("--")]
+    sub = pos[0] if pos else "scan"          # bare `wifi` == `wifi scan`
+    rest = pos[1:]
+
+    # CONFIGURE subcommands route to NmCfgGate (the transaction gate).
+    if sub in ("add", "rm", "confirm", "abort"):
+        return _wifi_config(sub, rest, nm_factory, as_json)
+
+    # READ subcommands: scan (default) + status.
+    status_only = (sub == "status") or ("--status" in args)
+    iface = "" if sub in ("scan", "status") else sub   # `wifi wlan0` back-compat
+    if sub == "scan" and rest:
+        iface = rest[0]
 
     nm = nm_factory()
     try:
@@ -719,6 +733,75 @@ def cmd_wifi(args, sup, _factory) -> int:
         nm.stop()
 
 
+def _fmt_cfg_reply(rep, as_json: bool) -> int:
+    """Render an NmCfgReply{ok,message,profiles,txn_state}. txn_state==2 (PENDING)
+    → tell the operator to `wifi confirm` over the new path."""
+    ok = bool(_g(rep, "ok"))
+    msg = _g(rep, "message", "")
+    txn = _g(rep, "txn_state", 0)
+    if as_json:
+        print(json.dumps({"ok": ok, "message": msg,
+                          "profiles": _g(rep, "profiles", 0), "txn_state": txn},
+                         separators=(",", ":")))
+        return 0 if ok else 1
+    print(("ok: " if ok else "FAILED: ") + msg)
+    if ok and txn == 2:
+        print("  PENDING — re-connect over the new path and run `tdb wifi confirm` "
+              "(auto-rolls-back if not confirmed in ~30s).")
+    return 0 if ok else 1
+
+
+def _wifi_config(sub: str, rest, nm_factory, as_json: bool) -> int:
+    """The NmCfgGate write subcommands: add / rm / confirm / abort."""
+    nm = nm_factory()
+    try:
+        if sub == "add":
+            if not rest:
+                print("wifi add <ssid> [psk] [priority]", file=sys.stderr)
+                return 2
+            ssid = rest[0]
+            psk = rest[1] if len(rest) > 1 else ""
+            priority = int(rest[2]) if len(rest) > 2 else 0
+            return _fmt_cfg_reply(nm.add_wifi(ssid, psk, priority), as_json)
+        if sub == "rm":
+            if not rest:
+                print("wifi rm <ssid>", file=sys.stderr)
+                return 2
+            return _fmt_cfg_reply(nm.remove_wifi(rest[0]), as_json)
+        if sub == "confirm":
+            return _fmt_cfg_reply(nm.confirm_config(), as_json)
+        if sub == "abort":
+            return _fmt_cfg_reply(nm.abort_config(), as_json)
+        print(f"wifi: unknown subcommand {sub!r}", file=sys.stderr)
+        return 2
+    finally:
+        nm.stop()
+
+
+def cmd_vpn(args, sup, _factory) -> int:
+    """vpn on|off [--json] — the global VPN policy (require_vpn + auto_vpn).
+
+    `vpn on`  → require the tunnel for NETWORK_OPERATIONAL AND drive `tailscale
+                up` over the wifi underlay (auto_vpn). `vpn off` → both false.
+    A stateful change (NmCfgGate): lands PENDING, `wifi confirm` to keep it."""
+    nm_factory = getattr(sup, "_nm_factory", None) or _NM_FACTORY.get("fn")
+    if nm_factory is None:
+        print("vpn: not available here — run `tdb vpn` on the machine.",
+              file=sys.stderr)
+        return 2
+    as_json = "--json" in args
+    pos = [a for a in args if not a.startswith("--")]
+    if not pos or pos[0] not in ("on", "off"):
+        print("vpn on|off", file=sys.stderr)
+        return 2
+    enable = pos[0] == "on"
+    nm = nm_factory()
+    try:
+        return _fmt_cfg_reply(nm.set_vpn(enable, enable), as_json)
+    finally:
+        nm.stop()
+
+
 # tdb.py installs the NM client factory here (rtdb leaves it None → wifi errors
 # with a clear "use tdb" message). A module-level hook keeps cmd_wifi shared.
 _NM_FACTORY: dict = {"fn": None}
@@ -740,7 +823,8 @@ _COMMANDS = {
     "terminate": cmd_terminate,
     "tracecat": cmd_tracecat,
     "logcat": cmd_logcat,     # the LOG firehose (node log lines); tracecat = TRACES
-    "wifi": cmd_wifi,         # nm wifi scan + association (TIPC probe; tdb only)
+    "wifi": cmd_wifi,         # nm wifi scan/status + add/rm/confirm/abort (NmCfgGate)
+    "vpn": cmd_vpn,           # nm VPN policy on|off (NmCfgGate; stateful txn)
 }
 
 _HELP = """tdb — Theia Debug Bridge. commands:

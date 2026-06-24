@@ -83,21 +83,35 @@ def cmd_snapshot(args, sup, _tf) -> int:
 
 
 def cmd_wifi(args, sup, _tf) -> int:
-    """wifi [<iface>] [--status] — nm's wifi view via com NmView gRPC.
+    """wifi <subcommand> — nm's wifi view via com NmView gRPC.
 
-    Default: the visible APs + association (strongest first, * = associated).
-    --status: just the readiness ladder snapshot (state + carrier/addr/vpn)."""
+      wifi scan [<iface>]   visible APs + association (strongest first, *=assoc)
+      wifi status           the readiness ladder (state + carrier/addr/vpn)
+      wifi                  == `wifi scan` (back-compat)
+
+    (The CONFIGURE ops — wifi add/rm, vpn on/off, confirm/abort — drive NmCfgGate;
+    over rtdb they need the com NmView write proxy, not yet wired. Use tdb on the
+    machine for those today.)"""
     import grpc  # local import — only the wifi verb needs the error type
     target = getattr(sup, "_target", _DEFAULT_TARGET)
+    pos = [a for a in args if not a.startswith("-")]
+    sub = pos[0] if pos else "scan"          # bare `wifi` == `wifi scan`
+    if sub in ("add", "rm", "confirm", "abort"):
+        print(f"wifi {sub}: not available over rtdb yet — the com NmView write "
+              "proxy isn't wired. Run `tdb wifi {sub} …` on the machine.",
+              file=sys.stderr)
+        return 2
+    # `wifi scan <iface>` → iface is pos[1]; `wifi <iface>` (back-compat) → pos[0].
+    iface = (pos[1] if sub == "scan" and len(pos) > 1
+             else "" if sub in ("scan", "status") else sub)
     nc = NmClient(target)
     try:
-        if "--status" in args:
+        if sub == "status" or "--status" in args:
             st = nc.get_status(timeout=4.0)
             print(f"state={st['state_name']} iface={st['interface'] or '(auto)'} "
                   f"carrier={int(st['has_carrier'])} addr={int(st['has_address'])} "
                   f"vpn={int(st['vpn_up'])}")
             return 0
-        iface = next((a for a in args if not a.startswith("-")), "")
         rep = nc.wifi_scan(iface, timeout=8.0)
         name = rep["interface"] or "(no wireless iface)"
         if rep["associated"]:

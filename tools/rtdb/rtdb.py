@@ -207,9 +207,17 @@ def _dispatch(sess: _Session, verb: str, args: list[str]) -> int:
 # ---------------------------------------------------------------------------
 
 def repl(sess: _Session) -> int:
-    from prompt_toolkit import PromptSession
-    from prompt_toolkit.completion import WordCompleter
-    from prompt_toolkit.history import InMemoryHistory
+    try:
+        from prompt_toolkit import PromptSession
+        from prompt_toolkit.completion import WordCompleter
+        from prompt_toolkit.history import InMemoryHistory
+    except ModuleNotFoundError:
+        print("rtdb repl needs prompt_toolkit (not installed). Either:\n"
+              "  pip install prompt_toolkit         # then `rtdb repl`\n"
+              "or use one-shot commands, e.g.:\n"
+              "  rtdb --target 10.0.0.22:7700 wifi scan\n"
+              "  rtdb --target 10.0.0.22:7700 ps", file=sys.stderr)
+        return 2
 
     completer = WordCompleter(sorted(_COMMANDS) + ["help", "quit", "exit"],
                               ignore_case=True)
@@ -257,12 +265,20 @@ def main(argv: list[str] | None = None) -> int:
         target = argv[1]
         argv = argv[2:]
 
+    # Bare `rtdb` → show help (NOT the REPL). The interactive REPL is opt-in via
+    # `rtdb repl`, since it needs prompt_toolkit (often not installed) — falling
+    # into it on a no-arg invocation surprised users with an import traceback.
     if not argv:
-        return repl(_Session(target))
+        print(_RTDB_HELP)
+        print("\n(interactive REPL: `rtdb repl` — needs prompt_toolkit)")
+        return 0
 
     if argv[0] in ("help", "-h", "--help"):
         print(_RTDB_HELP)
         return 0
+
+    if argv[0] == "repl":
+        return repl(_Session(target))
 
     # Hidden hook: emit the verb list (one per line) for shell completion, so
     # env.sh stays in lockstep with _COMMANDS instead of a hardcoded list. Runs

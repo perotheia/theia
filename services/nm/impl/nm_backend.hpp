@@ -567,6 +567,11 @@ inline bool dhcp_acquire(const std::string& iface) {
         run_capture("dhclient -1 -timeout 8 " + iface, out);
         return true;
     }
+    // dhcpcd (Debian/RPi default — what's on the rpi4): -1 one-shot, -t timeout.
+    if (run_capture("command -v dhcpcd", out) && !trim(out).empty()) {
+        run_capture("dhcpcd -1 -t 10 " + iface, out);
+        return true;
+    }
     return false;   // no DHCP client — a static-IP deployment handles addressing
 }
 

@@ -158,12 +158,6 @@ void NmPoller::handle_info(const char* info, NmPollerState& s) {
     // cleared) must NOT block the connect: addr without association isn't usable.
     // Throttled so a failing associate doesn't hammer wpa every tick.
     const bool wifi_unusable = nm_detail::is_wireless(mon_iface) && !wifi_assoc;
-    log().info(std::string("connect-gate: auto_connect=") +
-        (s.auto_connect ? "1" : "0") + " addr=" + (addr ? "1" : "0") +
-        " wifi_unusable=" + (wifi_unusable ? "1" : "0") +
-        " profiles=" + std::to_string(s.wifi_profiles.size()) +
-        " cooldown=" + std::to_string(s.connect_cooldown) +
-        " mon_iface=" + mon_iface);
     if (s.auto_connect && (!addr || wifi_unusable) && !s.wifi_profiles.empty()) {
         if (s.connect_cooldown > 0) {
             --s.connect_cooldown;

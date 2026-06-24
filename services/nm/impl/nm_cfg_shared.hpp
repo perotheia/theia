@@ -27,7 +27,18 @@ struct NmCfgShared {
     system_services_nm_NmConfig pending   = system_services_nm_NmConfig_init_zero;
     bool committed_known = false;   // false until the gate first reads per
     bool txn_pending     = false;   // a transaction is awaiting confirm
+    // Generation counter: bumped on each PENDING entry. The confirm-window timer
+    // captures the gen at arm time and only auto-rolls-back if it STILL matches
+    // (i.e. this exact txn is still pending) — a cheap "cancel" for a send_after
+    // that can't be unscheduled (a confirm/abort bumps the gen, so the stale
+    // timer is a no-op).
+    uint32_t txn_gen = 0;
 };
+
+// The confirm window: how long a PENDING change waits for ConfirmConfig before
+// the gate auto-rolls-back (restoring connectivity). Tunable; 30s is enough for
+// an operator to re-connect over the new path and confirm.
+constexpr uint32_t kConfirmWindowMs = 30000;
 
 // The process-global instance (defined in NmCfgGate_handlers.cc).
 NmCfgShared& nm_cfg_shared();

@@ -15,6 +15,8 @@
 #include "impl/nm_cfg_shared.hpp"
 #include "lib/NmCfgTxn.hh"           // post_event needs the full FSM type
 
+#include "TimerService.hh"          // send_after / process_timers — confirm window
+
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -60,6 +62,33 @@ void begin_txn(NmCfgShared& sh) {
 
 }  // namespace
 
+// Enter PENDING: mark pending, bump the generation, and arm the confirm-window
+// timer (send_after fires handle_info("txn_timeout") on the gate). `gate` is the
+// node (for send_after's *this). Templated so we don't add a method to the
+// regenerated lib header.
+template <typename Gate>
+static void arm_confirm(Gate& gate, NmCfgShared& sh) {
+    sh.txn_pending = true;
+    ++sh.txn_gen;
+    ::theia::runtime::send_after(::theia::runtime::process_timers(),
+                                 kConfirmWindowMs, gate, "txn_timeout");
+}
+
+// handle_info: the confirm-window timer fired. If THIS txn is still pending
+// (gen unchanged since arm — see below; we re-check txn_pending which a
+// confirm/abort cleared), auto-roll-back: re-apply committed, post TxnAbort.
+void NmCfgGate::handle_info(const char* info, NmCfgGateState& /*s*/) {
+    if (!info || std::strcmp(info, "txn_timeout") != 0) return;
+    auto& sh = nm_cfg_shared();
+    if (!sh.txn_pending) return;   // already confirmed/aborted — stale timer, no-op
+    sh.pending = sh.committed;     // NmCfgTxn on_enter(STEADY) re-applies committed
+    sh.txn_pending = false;
+    ++sh.txn_gen;
+    auto& ref = nm_cfg_txn_ref();
+    if (ref.valid()) ::theia::runtime::post_event(ref.target(), TxnAbort{});
+    log().warn("config confirm window elapsed — auto-rolled-back to committed");
+}
+
 // init: seed the committed baseline. per re-pushes the stored NmConfig as a
 // ConfigUpdated cast on boot (NmPoller/NmDaemon apply it); the gate mirrors that
 // baseline lazily — on the first op it clones whatever it last saw. We start
@@ -72,8 +101,6 @@ void NmCfgGate::init(NmCfgGateState& /*s*/) {
     sh.committed_known = false;
     sh.txn_pending = false;
 }
-
-void NmCfgGate::handle_info(const char* /*info*/, NmCfgGateState& /*s*/) {}
 
 // AddWifi — enroll (or update) a wifi profile, priority and all. Idempotent on
 // ssid: a repeat updates psk/priority in place.
@@ -102,7 +129,7 @@ NmCfgReply NmCfgGate::handle_call(const AddWifiReq& req, NmCfgGateState& /*s*/) 
     // Enrolling a profile NM should act on implies auto_connect on.
     cfg.auto_connect = true;
 
-    sh.txn_pending = true;
+    arm_confirm(*this, sh);   // PENDING + confirm-window timer
     post_txn(TxnAddWifi{});   // → FSM PENDING → on_enter PutConfig's sh.pending
     char m[128];
     std::snprintf(m, sizeof(m), "enrolled '%s' prio=%u — PENDING, confirm to keep",
@@ -126,7 +153,7 @@ NmCfgReply NmCfgGate::handle_call(const RemoveWifiReq& req, NmCfgGateState& /*s*
     for (pb_size_t i = static_cast<pb_size_t>(idx); i + 1 < cfg.wifi_profiles_count; ++i)
         cfg.wifi_profiles[i] = cfg.wifi_profiles[i + 1];
     cfg.wifi_profiles_count--;
-    sh.txn_pending = true;
+    arm_confirm(*this, sh);
     post_txn(TxnRemoveWifi{});
     return reply(true, std::string("removed '") + req.ssid + "' — PENDING", sh);
 }
@@ -140,7 +167,7 @@ NmCfgReply NmCfgGate::handle_call(const SetVpnReq& req, NmCfgGateState& /*s*/) {
     begin_txn(sh);
     sh.pending.require_vpn = req.require_vpn;
     sh.pending.auto_vpn    = req.auto_vpn;
-    sh.txn_pending = true;
+    arm_confirm(*this, sh);
     post_txn(TxnSetVpn{});
     char m[128];
     std::snprintf(m, sizeof(m), "vpn require=%d auto=%d — PENDING, confirm to keep",
@@ -155,7 +182,7 @@ NmCfgReply NmCfgGate::handle_call(const SetAutoConnectReq& req, NmCfgGateState& 
         return reply(false, "a config change is PENDING — confirm/abort first", sh);
     begin_txn(sh);
     sh.pending.auto_connect = req.auto_connect;
-    sh.txn_pending = true;
+    arm_confirm(*this, sh);
     post_txn(TxnSetAutoConn{});
     return reply(true, std::string("auto_connect=") +
                  (req.auto_connect ? "true" : "false") + " — PENDING", sh);

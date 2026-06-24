@@ -53,11 +53,18 @@ std::string manifest_path() {
         "e.g. run-supervisor.sh, exports it). Refusing to start.");
 }
 
+// The directory children's relative start_cmd (`./bin/<svc>`) resolves against.
+// THEIA_ROOT_DIR is REQUIRED — the launcher (run-supervisor.sh / systemd /
+// `theia start`) must export it. No cwd fallback, no self-locate: a deployed
+// embedded supervisor that guesses its root is a latent bug. Missing → refuse
+// to start, exactly like THEIA_SUPERVISOR_MANIFEST below.
 std::string root_dir() {
-    if (const char* d = std::getenv("THEIA_ROOT_DIR"); d && *d) {
-        return d;
-    }
-    return ".";
+    const char* d = std::getenv("THEIA_ROOT_DIR");
+    if (d && *d) return d;
+    throw std::runtime_error(
+        "THEIA_ROOT_DIR is not set — the supervisor resolves each child's "
+        "./bin/<svc> against it; the launcher must export it (e.g. "
+        "THEIA_ROOT_DIR=/opt/theia). Refusing to start.");
 }
 
 // The engine the worker thread owns for the lifetime of do_loop(). Stored as a

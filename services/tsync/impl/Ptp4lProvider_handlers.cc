@@ -174,6 +174,13 @@ void Ptp4lProvider::do_loop() {
             break;   // return → GenRunnable thread ends → supervisor restarts us
         }
     }
+    // Loop also exits on BOTH-pipes-EOF / stop_requested() without the in-loop
+    // WNOHANG firing → REAP the child here or it lingers as a <defunct> zombie.
+    if (child_pid_ > 0) {
+        int status = 0;
+        ::waitpid(child_pid_, &status, 0);
+        child_pid_ = -1;
+    }
 }
 
 // Bring the child down: SIGTERM, brief grace, SIGKILL if it lingers; reap.

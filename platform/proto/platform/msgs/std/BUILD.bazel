@@ -26,3 +26,37 @@ filegroup(name = "std_pb_c", srcs = ["std.pb.c"])
 filegroup(name = "std_pb_h", srcs = ["std.pb.h"])
 filegroup(name = "std_proto", srcs = ["std.proto"])
 filegroup(name = "std_options", srcs = ["std.options"])
+
+# ---------------------------------------------------------------------------
+# Google libprotobuf companion — REFLECTION-capable C++ binding, host-only
+# (the trace decoder / rtdb / GUI). Mirrors //platform/proto/system/services/sm:
+# sm_pb_cpp. Emitted under cpp/platform/msgs/std/ so a downstream package's
+# generated .pb.cc (which #includes "platform/msgs/std/std.pb.h") resolves it
+# on the shared `cpp/` include root.
+# ---------------------------------------------------------------------------
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+genrule(
+    name = "std_pb_cpp_gen",
+    srcs = ["std.proto"],
+    outs = [
+        "cpp/platform/msgs/std/std.pb.cc",
+        "cpp/platform/msgs/std/std.pb.h",
+    ],
+    cmd = "set -e;"
+        + " src=$(location std.proto);"
+        + " root=$${src%/platform/msgs/std/std.proto};"
+        + " out_dir=$$(echo $(location cpp/platform/msgs/std/std.pb.cc)"
+        + "   | sed 's#/platform/msgs/std/std.pb.cc##');"
+        + " protoc -I $$root --cpp_out=$$out_dir platform/msgs/std/std.proto;",
+    local = True,
+)
+
+cc_library(
+    name = "std_pb_cpp",
+    srcs = ["cpp/platform/msgs/std/std.pb.cc"],
+    hdrs = ["cpp/platform/msgs/std/std.pb.h"],
+    includes = ["cpp"],
+    deps = ["//third_party:system_protobuf"],
+    visibility = ["//visibility:public"],
+)

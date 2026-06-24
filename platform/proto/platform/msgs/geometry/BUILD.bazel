@@ -41,3 +41,43 @@ filegroup(name = "geometry_pb_c", srcs = ["geometry.pb.c"])
 filegroup(name = "geometry_pb_h", srcs = ["geometry.pb.h"])
 filegroup(name = "geometry_proto", srcs = ["geometry.proto"])
 filegroup(name = "geometry_options", srcs = ["geometry.options"])
+
+# ---------------------------------------------------------------------------
+# Google libprotobuf companion (host-only: trace decoder / rtdb / GUI).
+# geometry.pb.cc #includes "platform/msgs/std/std.pb.h", so protoc gets the
+# import on -I and the cc_library deps on :std_pb_cpp (which serves std.pb.h on
+# the shared cpp/ include root).
+# ---------------------------------------------------------------------------
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+genrule(
+    name = "geometry_pb_cpp_gen",
+    srcs = [
+        "geometry.proto",
+        "//platform/proto/platform/msgs/std:std_proto",
+    ],
+    outs = [
+        "cpp/platform/msgs/geometry/geometry.pb.cc",
+        "cpp/platform/msgs/geometry/geometry.pb.h",
+    ],
+    cmd = "set -e;"
+        + " src=$(location geometry.proto);"
+        + " root=$${src%/platform/msgs/geometry/geometry.proto};"
+        + " out_dir=$$(echo $(location cpp/platform/msgs/geometry/geometry.pb.cc)"
+        + "   | sed 's#/platform/msgs/geometry/geometry.pb.cc##');"
+        + " protoc -I $$root --cpp_out=$$out_dir"
+        + "   platform/msgs/geometry/geometry.proto;",
+    local = True,
+)
+
+cc_library(
+    name = "geometry_pb_cpp",
+    srcs = ["cpp/platform/msgs/geometry/geometry.pb.cc"],
+    hdrs = ["cpp/platform/msgs/geometry/geometry.pb.h"],
+    includes = ["cpp"],
+    deps = [
+        "//platform/proto/platform/msgs/std:std_pb_cpp",
+        "//third_party:system_protobuf",
+    ],
+    visibility = ["//visibility:public"],
+)

@@ -34,3 +34,44 @@ filegroup(name = "nav_pb_c", srcs = ["nav.pb.c"])
 filegroup(name = "nav_pb_h", srcs = ["nav.pb.h"])
 filegroup(name = "nav_proto", srcs = ["nav.proto"])
 filegroup(name = "nav_options", srcs = ["nav.options"])
+
+# ---------------------------------------------------------------------------
+# Google libprotobuf companion (host-only: trace decoder / rtdb / GUI). Lets
+# `rtdb tracecat` + the GUI DECODE an Odometry trace record (wire type
+# `platform_msgs_nav_Odometry`) into fields. nav.pb.cc #includes std + geometry
+# .pb.h → protoc gets both imports on -I, cc_library deps on their _pb_cpp.
+# ---------------------------------------------------------------------------
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+genrule(
+    name = "nav_pb_cpp_gen",
+    srcs = [
+        "nav.proto",
+        "//platform/proto/platform/msgs/std:std_proto",
+        "//platform/proto/platform/msgs/geometry:geometry_proto",
+    ],
+    outs = [
+        "cpp/platform/msgs/nav/nav.pb.cc",
+        "cpp/platform/msgs/nav/nav.pb.h",
+    ],
+    cmd = "set -e;"
+        + " src=$(location nav.proto);"
+        + " root=$${src%/platform/msgs/nav/nav.proto};"
+        + " out_dir=$$(echo $(location cpp/platform/msgs/nav/nav.pb.cc)"
+        + "   | sed 's#/platform/msgs/nav/nav.pb.cc##');"
+        + " protoc -I $$root --cpp_out=$$out_dir platform/msgs/nav/nav.proto;",
+    local = True,
+)
+
+cc_library(
+    name = "nav_pb_cpp",
+    srcs = ["cpp/platform/msgs/nav/nav.pb.cc"],
+    hdrs = ["cpp/platform/msgs/nav/nav.pb.h"],
+    includes = ["cpp"],
+    deps = [
+        "//platform/proto/platform/msgs/std:std_pb_cpp",
+        "//platform/proto/platform/msgs/geometry:geometry_pb_cpp",
+        "//third_party:system_protobuf",
+    ],
+    visibility = ["//visibility:public"],
+)

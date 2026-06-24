@@ -34,3 +34,46 @@ filegroup(name = "sensor_pb_c", srcs = ["sensor.pb.c"])
 filegroup(name = "sensor_pb_h", srcs = ["sensor.pb.h"])
 filegroup(name = "sensor_proto", srcs = ["sensor.proto"])
 filegroup(name = "sensor_options", srcs = ["sensor.options"])
+
+# ---------------------------------------------------------------------------
+# Google libprotobuf companion (host-only: trace decoder / rtdb / GUI). This is
+# what lets `rtdb tracecat` + the GUI DECODE a NavSatFix trace record's payload
+# (the wire type `platform_msgs_sensor_NavSatFix`) into fields instead of
+# leaving it raw. sensor.pb.cc #includes the std + geometry .pb.h, so protoc
+# gets both imports on -I and the cc_library deps on their _pb_cpp targets.
+# ---------------------------------------------------------------------------
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+genrule(
+    name = "sensor_pb_cpp_gen",
+    srcs = [
+        "sensor.proto",
+        "//platform/proto/platform/msgs/std:std_proto",
+        "//platform/proto/platform/msgs/geometry:geometry_proto",
+    ],
+    outs = [
+        "cpp/platform/msgs/sensor/sensor.pb.cc",
+        "cpp/platform/msgs/sensor/sensor.pb.h",
+    ],
+    cmd = "set -e;"
+        + " src=$(location sensor.proto);"
+        + " root=$${src%/platform/msgs/sensor/sensor.proto};"
+        + " out_dir=$$(echo $(location cpp/platform/msgs/sensor/sensor.pb.cc)"
+        + "   | sed 's#/platform/msgs/sensor/sensor.pb.cc##');"
+        + " protoc -I $$root --cpp_out=$$out_dir"
+        + "   platform/msgs/sensor/sensor.proto;",
+    local = True,
+)
+
+cc_library(
+    name = "sensor_pb_cpp",
+    srcs = ["cpp/platform/msgs/sensor/sensor.pb.cc"],
+    hdrs = ["cpp/platform/msgs/sensor/sensor.pb.h"],
+    includes = ["cpp"],
+    deps = [
+        "//platform/proto/platform/msgs/std:std_pb_cpp",
+        "//platform/proto/platform/msgs/geometry:geometry_pb_cpp",
+        "//third_party:system_protobuf",
+    ],
+    visibility = ["//visibility:public"],
+)

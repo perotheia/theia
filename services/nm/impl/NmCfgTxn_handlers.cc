@@ -23,6 +23,7 @@
 #include "impl/nm_cfg_shared.hpp"
 
 #include "NodeRef.hh"                         // LocalRef + RemoteRef + call()
+#include "TipcMux.hh"                         // own reply pump for the per call
 #include "RemoteCodec.hh"                     // THEIA_DECLARE_REMOTE_CODEC
 #include "system/services/per/per.pb.h"      // PutConfigReq / PerReply nanopb
 
@@ -43,18 +44,39 @@ namespace {
 // per's PerClient node (Get/Put/Watch config). See system.services.per.
 constexpr uint32_t kPerClientType     = 0x80010007u;
 constexpr uint32_t kPerClientInstance = 0u;
-struct PerClientTag { static constexpr const char* kNodeName = "nm_cfg_txn"; };
+struct PerClientTag { static constexpr const char* kNodeName = "per_client"; };
 using PerRef = ::theia::runtime::RemoteRef<PerClientTag,
                                            kPerClientType, kPerClientInstance>;
 
+// Singleton link to per's PerClient — its OWN TipcMux reply pump, lazily
+// connected. A bare RemoteRef + call() has NO reply path (the call times out
+// "no reply") unless its fd is watched by a running mux; this mirrors sm's
+// SmSupLink / com's per_link. One mutex serializes the blocking call.
+struct PerLink {
+    PerRef                  ref;
+    theia::runtime::TipcMux mux;
+    bool                    started = false;
+    std::mutex              mu;
+
+    static PerLink& instance() { static PerLink l; return l; }
+
+    bool ensure_started() {
+        if (started) return true;
+        if (!ref.connect(/*timeout_ms=*/2000)) return false;
+        mux.watch_remote_ref(ref);
+        mux.start();
+        started = true;
+        return true;
+    }
+};
+
 // PutConfig the given NmConfig to per. target_node = the WORKER name the config
 // is keyed under in etcd (/theia/config/<node>); NmConfig is bound by NmDaemon +
-// NmPoller — we key it under "nm_daemon" (the reporting worker). Best-effort:
-// per may be momentarily unreachable; the FSM logs and the next op retries.
+// NmPoller — we key it under "nm_daemon". Best-effort: per momentarily
+// unreachable → log + the next op retries.
 bool put_nmconfig(const system_services_nm_NmConfig& cfg, const char* who) {
     system_services_per_PutConfigReq req = system_services_per_PutConfigReq_init_zero;
     std::snprintf(req.target_node, sizeof(req.target_node), "%s", "nm_daemon");
-    // encode the NmConfig into req.config bytes.
     pb_ostream_t os = pb_ostream_from_buffer(req.config.bytes, sizeof(req.config.bytes));
     if (!pb_encode(&os, system_services_nm_NmConfig_fields, &cfg)) {
         std::fprintf(stderr, "[nm_cfg_txn] %s: NmConfig encode failed\n", who);
@@ -62,15 +84,15 @@ bool put_nmconfig(const system_services_nm_NmConfig& cfg, const char* who) {
     }
     req.config.size = static_cast<pb_size_t>(os.bytes_written);
     req.expect_rev = 0;   // unconditional (no CAS)
-    // digest "" — per stores the bytes; the schema digest is filled by the seed
-    // path. For a live config push the digest is advisory; per keys on target_node.
-    // Persistent ref (reply pumped by the process mux), serialized by a mutex —
-    // the per_link pattern. act=0 (no streaming action), 3s timeout.
-    static PerRef ref;
-    static std::mutex call_mu;
-    std::lock_guard<std::mutex> lk(call_mu);
+
+    auto& link = PerLink::instance();
+    std::lock_guard<std::mutex> lk(link.mu);
+    if (!link.ensure_started()) {
+        std::fprintf(stderr, "[nm_cfg_txn] %s: PerClient unreachable (connect failed)\n", who);
+        return false;
+    }
     auto result = ::theia::runtime::call<system_services_per_PerReply>(
-        ref, req, /*act=*/0, /*timeout_ms=*/3000);
+        link.ref, req, /*act=*/0, /*timeout_ms=*/3000);
     if (result.tag != ::theia::runtime::CallTag::Reply) {
         std::fprintf(stderr, "[nm_cfg_txn] %s: PutConfig no reply (per down?)\n", who);
         return false;

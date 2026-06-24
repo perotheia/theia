@@ -1,0 +1,12 @@
+{
+  "_comment_ignored": "Per-RIG nm boot config for the rpi4 GPS-feed box. The .art default is interfaces='' (auto, eth-first); this rig has no wired uplink in the field — it rides WiFi, so it monitors + drives wlan0 and brings the VPN up on that link. Read by NmPoller::init via get_config('nm_poller'); etcd ConfigUpdated can still override live. wifi_profiles + psk are enrolled at runtime (rtdb wifi add), NOT here.",
+  "nodes": {
+    "nm_poller": {
+      "interfaces": "wlan0",
+      "auto_connect": true,
+      "auto_vpn": true,
+      "require_vpn": true,
+      "vpn_interface": "tailscale0"
+    }
+  }
+}

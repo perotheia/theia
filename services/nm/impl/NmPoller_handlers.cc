@@ -22,6 +22,7 @@
 #include "TimerService.hh"    // post_info / send_after / process_timers
 #include "GenStateM.hh"       // theia::runtime::post_event
 #include "NodeRef.hh"         // theia::runtime::LocalRef
+#include "ParamsConfig.hh"    // get_config() — static boot params (deploy override)
 
 #include <pb_decode.h>
 
@@ -58,11 +59,28 @@ void post_edge(const char* node, const char* name, Evt evt) {
 
 }  // namespace
 
-// init: kick off the self-driving poll loop. requires_timers gives us
-// send_after; the first "poll" runs immediately and primes the baseline.
-void NmPoller::init(NmPollerState& /*s*/) {
-    log().info("nm poller up — observing `ip` link/addr (read-only; the kernel "
-               "configures the network)");
+// init: seed the BOOT config from static params (deploy/config/<machine>/nm.json,
+// overridable per-rig at install), then kick off the self-driving poll loop.
+// These are the DEFAULTS before any etcd ConfigUpdated arrives — interfaces /
+// auto_connect / auto_vpn / require_vpn are rig-deploy knobs, NOT baked in code:
+// the .art default is interfaces="" (auto), and a rig like the rpi4 GPS-feed box
+// sets interfaces="wlan0" + auto_connect/auto_vpn in its deploy/config/rpi4/
+// nm.json. etcd's ConfigUpdated (on_config_update) can still change them live.
+void NmPoller::init(NmPollerState& s) {
+    auto cfg = ::theia::runtime::get_config().node(NmPoller::kNodeName);
+    s.interfaces      = cfg.str("interfaces", s.interfaces);
+    s.poll_ms         = cfg.u32("poll_ms", s.poll_ms);
+    s.require_address = cfg.boolean("require_address", s.require_address);
+    s.require_vpn     = cfg.boolean("require_vpn", s.require_vpn);
+    s.vpn_interface   = cfg.str("vpn_interface", s.vpn_interface);
+    s.auto_connect    = cfg.boolean("auto_connect", s.auto_connect);
+    s.auto_vpn        = cfg.boolean("auto_vpn", s.auto_vpn);
+    s.vpn_authkey     = cfg.str("vpn_authkey", s.vpn_authkey);
+    log().info(std::string("nm poller up — boot config: interfaces='") +
+               s.interfaces + "' auto_connect=" + (s.auto_connect ? "1" : "0") +
+               " auto_vpn=" + (s.auto_vpn ? "1" : "0") +
+               " require_vpn=" + (s.require_vpn ? "1" : "0") +
+               " (static params; etcd may override live)");
     ::theia::runtime::post_info(*this, "poll");
 }
 

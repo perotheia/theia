@@ -20,6 +20,7 @@
 
 #include "NodeRef.hh"     // theia::runtime::LocalRef — publish self to the poller
 #include "GenStateM.hh"   // theia::runtime::GenStateMHolder
+#include "ParamsConfig.hh"  // get_config() — the rig's monitored-iface prop
 
 #include <pb_decode.h>
 
@@ -110,6 +111,21 @@ void NmDaemon::on_enter(NmDaemonState new_s,
     }
 
     stamp_snapshot_(new_s, d);
+
+    // Stamp the monitored-interface label from the RIG PROP (deploy/config/
+    // <rig>/nm.json → get_config("nm_poller").interfaces) — the SAME source the
+    // poller actually monitors, so `wifi status` reports the real iface, not
+    // "(auto)". Only when still empty: a live etcd ConfigUpdated (on_config_update)
+    // sets d.interface and must win over the boot prop.
+    if (d.interface[0] == '\0') {
+        std::string ifc = ::theia::runtime::get_config()
+                              .node("nm_poller").str("interfaces", "");
+        // NmConfig.interfaces is a comma list; the label shows the first.
+        if (auto comma = ifc.find(','); comma != std::string::npos)
+            ifc = ifc.substr(0, comma);
+        if (!ifc.empty())
+            std::strncpy(d.interface, ifc.c_str(), sizeof(d.interface) - 1);
+    }
 
     // state_name() is generated in NmDaemon.hh — single source of truth for the
     // state labels (covers the full ladder, unlike a hand-kept local array).

@@ -185,7 +185,7 @@ def cmd_provision(args: list[str]) -> int:
               "(deploy/registry/<target>.yml), e.g. `theia provision rpi4`",
               file=sys.stderr)
         return 2
-    reg = ANSIBLE.parent / "registry" / f"{target}.yml"
+    reg = WORKSPACE / "deploy" / "registry" / f"{target}.yml"
     if not reg.is_file():
         print(f"theia provision: no registry entry {reg.relative_to(WORKSPACE)}",
               file=sys.stderr)
@@ -207,7 +207,7 @@ def cmd_orchestrate(args: list[str]) -> int:
               "(deploy/registry/<target>.yml), e.g. `theia orchestrate rpi4`",
               file=sys.stderr)
         return 2
-    reg = ANSIBLE.parent / "registry" / f"{target}.yml"
+    reg = WORKSPACE / "deploy" / "registry" / f"{target}.yml"
     if not reg.is_file():
         print(f"theia orchestrate: no registry entry {reg.relative_to(WORKSPACE)} "
               f"— add it (ansible_host + machine) to deploy a new target.",
@@ -231,7 +231,7 @@ def cmd_cleanup(args: list[str]) -> int:
               "(deploy/registry/<target>.yml), e.g. `theia cleanup rpi4`",
               file=sys.stderr)
         return 2
-    reg = ANSIBLE.parent / "registry" / f"{target}.yml"
+    reg = WORKSPACE / "deploy" / "registry" / f"{target}.yml"
     if not reg.is_file():
         print(f"theia cleanup: no registry entry {reg.relative_to(WORKSPACE)}",
               file=sys.stderr)

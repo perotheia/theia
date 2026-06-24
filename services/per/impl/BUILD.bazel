@@ -35,14 +35,60 @@ cc_library(
     srcs = ["etcd_store.cc"],
     hdrs = ["etcd_store.hpp"],
     copts = ["-std=c++17", "-fPIC"],
-    # The etcd .a's grpc-generated TUs (v3election.grpc.pb.cc, …) reference
-    # absl::Mutex, but the static archive leaves it undefined at the FINAL binary
-    # link. The linkopt on //third_party:etcd_cc doesn't reach per's binary link
-    # in archive order, so re-state it here — a cc_library linkopt propagates to
-    # every dependent's link line (per/main is gen-app'd, can't edit it). Same
-    # fix as third_party:etcd_cc / com_bridge_grpc. Cross/static-link only;
-    # harmless on host.
-    linkopts = ["-labsl_synchronization"],
+    # grpc/abseil link for the etcd client. PRINCIPLE (same as com_bridge_grpc):
+    # the shipped aarch64 distro carries NO grpc/abseil shared libs — the
+    # sysroot's abseil soname (.20220623) won't match the Pi's (.20240722), so a
+    # DYNAMIC link fails at runtime (`libabsl_synchronization.so.20220623: cannot
+    # open shared object`). The cross-build STATICALLY links the grpc/abseil
+    # closure (the .a's are in the sysroot); only ssl/crypto/system stay dynamic.
+    # The host x86 box has grpc shared-only (no .a's), so it keeps the dynamic
+    # -l form — a dev/test box, not a shipped distro. This linkopt propagates to
+    # per's binary link (per/main is gen-app'd, can't edit it).
+    #
+    # The static group goes inside -Wl,-Bstatic … -Wl,-Bdynamic + --start-group
+    # (abseil archives have circular deps). System libs it depends on come AFTER
+    # the group so the linker resolves grpc's references into them.
+    linkopts = select({
+        "@pero_theia//rules/config:is_arm64": [
+            "-Wl,-Bstatic", "-Wl,--start-group",
+            "-lgrpc++", "-lgrpc", "-lgpr",
+            "-laddress_sorting", "-lre2", "-lupb", "-lcares", "-lz",
+            "-labsl_bad_any_cast_impl", "-labsl_bad_optional_access",
+            "-labsl_bad_variant_access", "-labsl_base", "-labsl_city",
+            "-labsl_civil_time", "-labsl_cord", "-labsl_cord_internal",
+            "-labsl_cordz_functions", "-labsl_cordz_handle", "-labsl_cordz_info",
+            "-labsl_cordz_sample_token", "-labsl_debugging_internal",
+            "-labsl_demangle_internal", "-labsl_examine_stack",
+            "-labsl_exponential_biased", "-labsl_failure_signal_handler",
+            "-labsl_flags_commandlineflag", "-labsl_flags_commandlineflag_internal",
+            "-labsl_flags_config", "-labsl_flags_internal",
+            "-labsl_flags_marshalling", "-labsl_flags_parse",
+            "-labsl_flags_private_handle_accessor", "-labsl_flags_program_name",
+            "-labsl_flags_reflection", "-labsl_flags_usage",
+            "-labsl_flags_usage_internal", "-labsl_graphcycles_internal",
+            "-labsl_hash", "-labsl_hashtablez_sampler", "-labsl_int128",
+            "-labsl_leak_check", "-labsl_log_severity", "-labsl_low_level_hash",
+            "-labsl_malloc_internal", "-labsl_periodic_sampler",
+            "-labsl_random_distributions",
+            "-labsl_random_internal_distribution_test_util",
+            "-labsl_random_internal_platform", "-labsl_random_internal_pool_urbg",
+            "-labsl_random_internal_randen", "-labsl_random_internal_randen_hwaes",
+            "-labsl_random_internal_randen_hwaes_impl",
+            "-labsl_random_internal_randen_slow",
+            "-labsl_random_internal_seed_material",
+            "-labsl_random_seed_gen_exception", "-labsl_random_seed_sequences",
+            "-labsl_raw_hash_set", "-labsl_raw_logging_internal",
+            "-labsl_scoped_set_env", "-labsl_spinlock_wait", "-labsl_stacktrace",
+            "-labsl_status", "-labsl_statusor", "-labsl_strerror",
+            "-labsl_str_format_internal", "-labsl_strings",
+            "-labsl_strings_internal", "-labsl_symbolize",
+            "-labsl_synchronization", "-labsl_throw_delegate", "-labsl_time",
+            "-labsl_time_zone",
+            "-Wl,--end-group", "-Wl,-Bdynamic",
+            "-lssl", "-lcrypto", "-latomic", "-lrt", "-ldl", "-lpthread", "-lm",
+        ],
+        "//conditions:default": ["-labsl_synchronization"],
+    }),
     # NOTE on cross-compile: etcd_store.cc includes the etcd-cpp-apiv3 headers
     # system-style (<etcd/SyncClient.hpp>); the foreign_cc cmake() exposes them
     # by absolute source path, which the aarch64 toolchain's strict header scan

@@ -12,6 +12,7 @@ system_services_nm.WifiProfile.psk   max_size:64
 system_services_nm.NmConfig.interfaces   max_size:64
 system_services_nm.NmConfig.vpn_interface   max_size:32
 system_services_nm.NmConfig.wifi_profiles   max_count:8
+system_services_nm.NmConfig.vpn_authkey   max_size:128
 system_services_nm.NmStatusMsg.interface   max_size:64
 system_services_nm.WifiBss.ssid   max_size:33
 system_services_nm.WifiBss.bssid   max_size:18

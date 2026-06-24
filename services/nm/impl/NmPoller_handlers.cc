@@ -148,6 +148,22 @@ void NmPoller::handle_info(const char* info, NmPollerState& s) {
         } else {
             VpnObservation v;
             if (vpn_observe(s.vpn_interface, v)) vpn_up = v.up;
+
+            // CONNECT POLICY (VPN): symmetric to the WiFi drive above. When
+            // auto_vpn is on, an address is up (the tunnel rides the LAN) but the
+            // tunnel is NOT yet established, DRIVE `tailscale up` pinned to the
+            // WiFi underlay. Throttled so a failing `up` doesn't hammer tailscaled
+            // every tick. Only over a WIFI link — the whole point is "VPN on wifi".
+            const bool on_wifi = nm_detail::is_wireless(obs.interface);
+            if (s.auto_vpn && !vpn_up && on_wifi) {
+                if (s.vpn_cooldown > 0) {
+                    --s.vpn_cooldown;
+                } else {
+                    ConnectResult vr = vpn_connect(obs.interface, s.vpn_authkey);
+                    log().info(std::string("auto-vpn → ") + vr.note);
+                    s.vpn_cooldown = 10;   // ~10 ticks for `up` + handshake to settle
+                }
+            }
         }
     }
 
@@ -216,6 +232,8 @@ void NmPoller::on_config_update(
     s.require_vpn     = c.require_vpn;
     s.vpn_interface   = c.vpn_interface;
     s.auto_connect    = c.auto_connect;
+    s.auto_vpn        = c.auto_vpn;
+    s.vpn_authkey     = c.vpn_authkey;
 
     // Known WiFi profiles (the connect-policy candidates).
     s.wifi_profiles.clear();
@@ -227,6 +245,7 @@ void NmPoller::on_config_update(
         s.wifi_profiles.push_back(std::move(p));
     }
     s.connect_cooldown = 0;   // allow an immediate connect attempt under the new policy
+    s.vpn_cooldown     = 0;
 
     // Re-prime so the next tick re-emits edges against the new interface/gate.
     s.primed = false;
@@ -235,6 +254,7 @@ void NmPoller::on_config_update(
         " require_address=" + (s.require_address ? "true" : "false") +
         " require_vpn=" + (s.require_vpn ? "true" : "false") +
         " auto_connect=" + (s.auto_connect ? "true" : "false") +
+        " auto_vpn=" + (s.auto_vpn ? "true" : "false") +
         " profiles=" + std::to_string(s.wifi_profiles.size()) +
         " vpn_iface='" + s.vpn_interface + "'");
 }

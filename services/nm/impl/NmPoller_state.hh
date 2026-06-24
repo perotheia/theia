@@ -41,6 +41,12 @@ struct NmPollerState {
     // doesn't hammer wpa every poll. Counts ticks since the last attempt.
     uint32_t    connect_cooldown = 0;
 
+    // VPN connect policy (NM DRIVES `tailscale up` over the WiFi underlay when
+    // auto_vpn + require_vpn and an address is up but the tunnel is down).
+    bool        auto_vpn = false;
+    std::string vpn_authkey;             // optional key for the unattended `up`
+    uint32_t    vpn_cooldown = 0;        // throttle, like connect_cooldown
+
     // ── Roaming / PHM degradation: count consecutive failed associate/DHCP
     // attempts. After a threshold the poller emits a health event (→ PHM via the
     // supervisor watchdog today) and backs off harder.

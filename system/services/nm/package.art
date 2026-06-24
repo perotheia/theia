@@ -73,9 +73,10 @@ message NmConfig {
     // the rig must also bring up the Headscale/Tailscale tunnel (VPN_ESTABLISHED)
     // before operational — the remote-fleet case. SM/policy flips this per mode.
     bool   require_vpn = false
-    // The VPN tunnel interface NM observes (Tailscale's wg interface, e.g.
-    // "tailscale0"). NM reads `tailscale status`/the iface state; it never brings
-    // the tunnel up itself (tailscaled does). "" → auto ("tailscale0").
+    // The VPN tunnel (overlay) interface — Tailscale's wg interface, e.g.
+    // "tailscale0". NM reads `tailscale status`/the iface state to OBSERVE the
+    // rung, and (when auto_vpn=true) also DRIVES `tailscale up` to bring it up.
+    // "" → auto ("tailscale0").
     string vpn_interface = "" [max_size:32]
     // Let NM DRIVE the connection (not just observe): when no usable link is up,
     // pick Ethernet if it has carrier, else auto-connect the highest-priority
@@ -85,6 +86,16 @@ message NmConfig {
     bool   auto_connect = false
     // The known WiFi networks NM may auto-connect (the CONNECT path).
     repeated WifiProfile wifi_profiles [max_count:8]
+    // Let NM DRIVE the VPN up (not just observe it): once an address is acquired
+    // and require_vpn=true, run `tailscale up` (with vpn_authkey if set) PINNED
+    // to egress over the active WiFi link, so the tunnel rides wifi. false
+    // (default) = observe only (tailscaled / an enroll step owns `up`).
+    bool   auto_vpn = false
+    // Tailscale auth key for the unattended `tailscale up` (auto_vpn). "" → run
+    // `up` with no key (relies on a prior enroll / stored node key). A per-rig
+    // key is normally written out-of-band (enroll → certs/vpn.authkey) and
+    // injected here via the per-machine config override, never committed.
+    string vpn_authkey = "" [max_size:128]
 }
 
 // ─── FSM events (posted by NmPoller into the FSM in-process) ───────────────

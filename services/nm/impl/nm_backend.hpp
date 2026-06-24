@@ -420,6 +420,61 @@ inline bool vpn_observe(const std::string& want, VpnObservation& obs) {
     return false;   // no VPN mechanism at all
 }
 
+// ─── VPN CONNECT path (drive `tailscale up`, pinned to the WiFi underlay) ──
+//
+// Symmetric to wifi_connect: NM doesn't embed WireGuard, it DRIVES tailscaled.
+// Once the WiFi link has an address, bring the tunnel up so it rides WiFi.
+//
+// "On the WiFi interface" = the tunnel UNDERLAY egresses over `wifi_iface`.
+// tailscaled binds its underlay socket to whichever interface owns the route to
+// the control plane. NM only reaches this path once WiFi is associated AND has
+// an address (the IP_ACQUIRED rung over WiFi), so WiFi is the live default-route
+// link and a plain `tailscale up` already rides it. To make that robust against
+// a STALE wired route lingering at higher priority, we (best-effort) ensure the
+// WiFi link's default route wins before `up` by lowering its metric — a no-op if
+// WiFi is already the only/default route. We never touch the eth lifeline route.
+//
+// --accept-routes=false / --accept-dns=false keep the tunnel from hijacking the
+// rig's LAN routes; it only adds the 100.64/10 overlay. The authkey is OPTIONAL:
+// an already-enrolled node re-ups from its stored node key without one.
+inline ConnectResult vpn_connect(const std::string& wifi_iface,
+                                 const std::string& authkey) {
+    using namespace nm_detail;
+    ConnectResult r;
+
+    // No tailscale binary → nothing to drive (observe-only fallback applies).
+    std::string probe;
+    if (!run_capture("tailscale version", probe) || probe.empty()) {
+        r.note = "tailscale not installed";
+        return r;
+    }
+
+    // Best-effort: make the WiFi link the preferred default so tailscaled's
+    // underlay binds to it. Adds a low-metric default via WiFi's own gateway;
+    // harmless + idempotent if WiFi is already the default. (We do NOT delete any
+    // existing route — the eth lifeline stays reachable on its own subnet route.)
+    std::string ign;
+    if (!wifi_iface.empty()) {
+        std::string gw;
+        if (run_capture("ip -o route show default dev " + wifi_iface, gw) &&
+            !gw.empty())
+            run_capture("ip route replace default dev " + wifi_iface +
+                        " metric 50", ign);
+    }
+
+    std::string cmd = "tailscale up --accept-routes=false --accept-dns=false";
+    if (!authkey.empty())
+        cmd += " --authkey '" + authkey + "'";
+
+    std::string out;
+    const bool ok = run_capture(cmd, out);
+    r.ok = ok;
+    r.note = ok ? ("tailscale up (underlay via " +
+                   (wifi_iface.empty() ? std::string("default") : wifi_iface) + ")")
+                : ("tailscale up failed: " + trim(out));
+    return r;
+}
+
 // ─── WiFi CONNECT path (drive wpa_supplicant + DHCP) ───────────────────────
 //
 // NM does NOT embed 802.11 — it DRIVES the standard Linux wifi stack. The

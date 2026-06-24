@@ -28,6 +28,8 @@ message NmConfig {
     string vpn_interface = 5;
     bool auto_connect = 6;
     repeated WifiProfile wifi_profiles = 7;
+    bool auto_vpn = 8;
+    string vpn_authkey = 9;
 }
 
 message LinkUp {

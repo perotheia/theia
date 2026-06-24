@@ -1,16 +1,28 @@
-# Per-machine config overrides
+# Config overrides — two layers
 
-This directory holds **per-machine overrides** that `theia install` deep-merges
-onto the machine-generic defaults emitted by `artheia gen-params`.
+This directory holds config overrides deep-merged onto the machine-generic
+defaults emitted by `artheia gen-params`. There are TWO layers, applied in order:
+
+1. **per-machine** `deploy/config/<machine>/<fc>.json` — merged at manifest/
+   install time (by `theia install` and `theia manifest`). Keyed by the artheia
+   `machine` (`central`, `compute`).
+2. **per-target** `deploy/config/<target>/<fc>.json` — merged at *deploy* time
+   by `theia orchestrate <target>` (tasks/config-override.yml), ON TOP of the
+   machine-generic profile. Keyed by the deploy TARGET name (the rig in
+   `deploy/registry/<target>.yml`), NOT the machine — so several physical rigs
+   can run the same `central` manifest with different config. Example: `rpi4`
+   runs the `central` slice but has no PTP NIC, so `deploy/config/rpi4/tsync.json`
+   disables ptp4l/phc2sys/gpsd while the real central gateway keeps them on.
 
 ## Layout
 
 ```
-deploy/config/<machine>/<fc>.json
+deploy/config/<machine-or-target>/<fc>.json
 ```
 
 - `<machine>` — the install machine (`central`, `compute`, …), matching the
   machine `theia install` resolves (arg / `$THEIA_MACHINE` / single target).
+- `<target>` — a deploy rig name from `deploy/registry/<target>.yml`.
 - `<fc>` — the function-cluster (service) name, e.g. `tsync`.
 
 ## How it works

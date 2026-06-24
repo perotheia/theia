@@ -454,11 +454,42 @@ message NmWifiScan {
     repeated NmWifiBss bss = 5;
 }
 
+// ---- NmCfgGate write ops (the config TRANSACTION over com → NmCfgGate) ----
+// Mirror system_services_nm.{AddWifiReq,RemoveWifiReq,SetVpnReq,
+// SetAutoConnectReq,NmCfgReply}; NmLink re-encodes between these libprotobuf
+// messages and the nanopb nm structs. A reply with txn_state==2 (PENDING) means
+// "applied, ConfirmConfig over the new path within the window or it rolls back".
+message NmAddWifiCall {
+    string ssid = 1;
+    string psk = 2;
+    uint32 priority = 3;
+}
+message NmRemoveWifiCall { string ssid = 1; }
+message NmSetVpnCall {
+    bool require_vpn = 1;
+    bool auto_vpn = 2;
+}
+message NmSetAutoConnectCall { bool auto_connect = 1; }
+message NmCfgEmpty { }                 // ConfirmConfig / AbortConfig — no args
+message NmCfgReply {
+    bool   ok = 1;
+    string message = 2;
+    uint32 profiles = 3;
+    uint32 txn_state = 4;
+}
+
 service NmView {
     // The network-readiness snapshot (the ladder state + carrier/addr/vpn).
     rpc GetStatus (NmStatusCall) returns (NmStatus);
-    // The visible AP list + association snapshot (`rtdb wifi`). Read-only `iw`.
+    // The visible AP list + association snapshot (`rtdb wifi scan`). Read-only `iw`.
     rpc WifiScan (WifiScanCall) returns (NmWifiScan);
+    // Config transaction (the WRITE ops → NmCfgGate). Each returns NmCfgReply.
+    rpc AddWifi (NmAddWifiCall) returns (NmCfgReply);
+    rpc RemoveWifi (NmRemoveWifiCall) returns (NmCfgReply);
+    rpc SetVpn (NmSetVpnCall) returns (NmCfgReply);
+    rpc SetAutoConnect (NmSetAutoConnectCall) returns (NmCfgReply);
+    rpc ConfirmConfig (NmCfgEmpty) returns (NmCfgReply);
+    rpc AbortConfig (NmCfgEmpty) returns (NmCfgReply);
 }
 
 // ---- Provisioning — rig enrollment over com (NOT SupervisorView) ----------

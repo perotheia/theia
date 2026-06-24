@@ -654,7 +654,78 @@ public:
         return grpc::Status::OK;
     }
 
+    // ---- config-transaction write ops → NmCfgGate (via NmLink) -------------
+    grpc::Status AddWifi(
+            grpc::ServerContext*,
+            const services::com::NmAddWifiCall* req,
+            services::com::NmCfgReply* out) override {
+        services_com::NmCfgReplyInfo r;
+        if (!services_com::NmLink::instance().add_wifi(
+                req->ssid(), req->psk(), req->priority(), r))
+            return nm_unavailable();
+        return fill(r, out);
+    }
+
+    grpc::Status RemoveWifi(
+            grpc::ServerContext*,
+            const services::com::NmRemoveWifiCall* req,
+            services::com::NmCfgReply* out) override {
+        services_com::NmCfgReplyInfo r;
+        if (!services_com::NmLink::instance().remove_wifi(req->ssid(), r))
+            return nm_unavailable();
+        return fill(r, out);
+    }
+
+    grpc::Status SetVpn(
+            grpc::ServerContext*,
+            const services::com::NmSetVpnCall* req,
+            services::com::NmCfgReply* out) override {
+        services_com::NmCfgReplyInfo r;
+        if (!services_com::NmLink::instance().set_vpn(
+                req->require_vpn(), req->auto_vpn(), r))
+            return nm_unavailable();
+        return fill(r, out);
+    }
+
+    grpc::Status SetAutoConnect(
+            grpc::ServerContext*,
+            const services::com::NmSetAutoConnectCall* req,
+            services::com::NmCfgReply* out) override {
+        services_com::NmCfgReplyInfo r;
+        if (!services_com::NmLink::instance().set_autoconnect(req->auto_connect(), r))
+            return nm_unavailable();
+        return fill(r, out);
+    }
+
+    grpc::Status ConfirmConfig(
+            grpc::ServerContext*,
+            const services::com::NmCfgEmpty*,
+            services::com::NmCfgReply* out) override {
+        services_com::NmCfgReplyInfo r;
+        if (!services_com::NmLink::instance().confirm_config(r))
+            return nm_unavailable();
+        return fill(r, out);
+    }
+
+    grpc::Status AbortConfig(
+            grpc::ServerContext*,
+            const services::com::NmCfgEmpty*,
+            services::com::NmCfgReply* out) override {
+        services_com::NmCfgReplyInfo r;
+        if (!services_com::NmLink::instance().abort_config(r))
+            return nm_unavailable();
+        return fill(r, out);
+    }
+
 private:
+    static grpc::Status fill(const services_com::NmCfgReplyInfo& r,
+                             services::com::NmCfgReply* out) {
+        out->set_ok(r.ok);
+        out->set_message(r.message);
+        out->set_profiles(r.profiles);
+        out->set_txn_state(r.txn_state);
+        return grpc::Status::OK;
+    }
     static grpc::Status nm_unavailable() {
         return grpc::Status(grpc::StatusCode::UNAVAILABLE,
                             "network-management link (nm) unavailable / timeout");

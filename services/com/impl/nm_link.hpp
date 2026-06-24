@@ -43,6 +43,15 @@ struct NmWifiScanInfo {
     std::vector<NmBssInfo> bss;
 };
 
+// NmCfgGate reply: a config-transaction op's outcome. txn_state==2 (PENDING)
+// means "applied, awaiting ConfirmConfig over the new path".
+struct NmCfgReplyInfo {
+    bool        ok = false;
+    std::string message;
+    uint32_t    profiles = 0;
+    uint32_t    txn_state = 0;
+};
+
 // Singleton link to NmDaemon. Opened by ComGrpcProxy::do_start, torn down by
 // do_stop. Thread-safe.
 class NmLink {
@@ -60,6 +69,19 @@ public:
     // WifiScan(interface="" → the monitored wifi link) → APs + association.
     bool wifi_scan(const std::string& interface, NmWifiScanInfo& out,
                    int timeout_ms = 8000);
+
+    // ---- config-transaction ops → NmCfgGate (TIPC 0x8001002F). Each returns
+    // the gate's NmCfgReply; false only if the gate is unreachable. ----
+    bool add_wifi(const std::string& ssid, const std::string& psk,
+                  uint32_t priority, NmCfgReplyInfo& out, int timeout_ms = 4000);
+    bool remove_wifi(const std::string& ssid, NmCfgReplyInfo& out,
+                     int timeout_ms = 4000);
+    bool set_vpn(bool require_vpn, bool auto_vpn, NmCfgReplyInfo& out,
+                 int timeout_ms = 4000);
+    bool set_autoconnect(bool auto_connect, NmCfgReplyInfo& out,
+                         int timeout_ms = 4000);
+    bool confirm_config(NmCfgReplyInfo& out, int timeout_ms = 4000);
+    bool abort_config(NmCfgReplyInfo& out, int timeout_ms = 4000);
 
 private:
     NmLink();

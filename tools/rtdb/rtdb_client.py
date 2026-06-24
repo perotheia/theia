@@ -250,6 +250,38 @@ class NmClient:
             ],
         }
 
+    # ---- config-transaction write ops → NmCfgGate (via com NmView) ----------
+    @staticmethod
+    def _cfg(rep) -> dict:
+        return {"ok": rep.ok, "message": rep.message,
+                "profiles": rep.profiles, "txn_state": rep.txn_state}
+
+    def add_wifi(self, ssid: str, psk: str = "", priority: int = 0,
+                 timeout: float = 5.0) -> dict:
+        return self._cfg(self._stub.AddWifi(
+            _br.NmAddWifiCall(ssid=ssid, psk=psk, priority=priority),
+            timeout=timeout))
+
+    def remove_wifi(self, ssid: str, timeout: float = 5.0) -> dict:
+        return self._cfg(self._stub.RemoveWifi(
+            _br.NmRemoveWifiCall(ssid=ssid), timeout=timeout))
+
+    def set_vpn(self, require_vpn: bool, auto_vpn: bool,
+                timeout: float = 5.0) -> dict:
+        return self._cfg(self._stub.SetVpn(
+            _br.NmSetVpnCall(require_vpn=require_vpn, auto_vpn=auto_vpn),
+            timeout=timeout))
+
+    def set_autoconnect(self, auto_connect: bool, timeout: float = 5.0) -> dict:
+        return self._cfg(self._stub.SetAutoConnect(
+            _br.NmSetAutoConnectCall(auto_connect=auto_connect), timeout=timeout))
+
+    def confirm_config(self, timeout: float = 5.0) -> dict:
+        return self._cfg(self._stub.ConfirmConfig(_br.NmCfgEmpty(), timeout=timeout))
+
+    def abort_config(self, timeout: float = 5.0) -> dict:
+        return self._cfg(self._stub.AbortConfig(_br.NmCfgEmpty(), timeout=timeout))
+
     def stop(self) -> None:
         self._channel.close()
 

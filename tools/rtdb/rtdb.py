@@ -97,10 +97,7 @@ def cmd_wifi(args, sup, _tf) -> int:
     pos = [a for a in args if not a.startswith("-")]
     sub = pos[0] if pos else "scan"          # bare `wifi` == `wifi scan`
     if sub in ("add", "rm", "confirm", "abort"):
-        print(f"wifi {sub}: not available over rtdb yet — the com NmView write "
-              f"proxy isn't wired. Run `tdb wifi {sub} …` on the machine.",
-              file=sys.stderr)
-        return 2
+        return _wifi_config(sub, pos[1:], target)
     # `wifi scan <iface>` → iface is pos[1]; `wifi <iface>` (back-compat) → pos[0].
     iface = (pos[1] if sub == "scan" and len(pos) > 1
              else "" if sub in ("scan", "status") else sub)
@@ -137,12 +134,82 @@ def cmd_wifi(args, sup, _tf) -> int:
         nc.stop()
 
 
+def _fmt_cfg(rep) -> int:
+    """Render an NmCfgReply{ok,message,profiles,txn_state}. PENDING (txn_state==2)
+    → tell the operator to re-connect over the new path and `wifi confirm`."""
+    ok = rep["ok"]
+    print(("ok: " if ok else "FAILED: ") + rep["message"])
+    if ok and rep["txn_state"] == 2:
+        print("  PENDING — re-connect over the new path and run "
+              "`rtdb --target <t> wifi confirm` (auto-rolls-back in ~30s).")
+    return 0 if ok else 1
+
+
+def _wifi_config(sub, rest, target) -> int:
+    """The NmCfgGate write subcommands over com NmView: add / rm / confirm / abort."""
+    import grpc
+    nc = NmClient(target)
+    try:
+        if sub == "add":
+            if not rest:
+                print("wifi add <ssid> [psk] [priority]", file=sys.stderr)
+                return 2
+            ssid = rest[0]
+            psk = rest[1] if len(rest) > 1 else ""
+            priority = int(rest[2]) if len(rest) > 2 else 0
+            return _fmt_cfg(nc.add_wifi(ssid, psk, priority))
+        if sub == "rm":
+            if not rest:
+                print("wifi rm <ssid>", file=sys.stderr)
+                return 2
+            return _fmt_cfg(nc.remove_wifi(rest[0]))
+        if sub == "confirm":
+            return _fmt_cfg(nc.confirm_config())
+        if sub == "abort":
+            return _fmt_cfg(nc.abort_config())
+        print(f"wifi: unknown subcommand {sub!r}", file=sys.stderr)
+        return 2
+    except grpc.RpcError as e:
+        code = e.code().name if hasattr(e, "code") else "?"
+        print(f"wifi {sub}: {code} — "
+              f"{e.details() if hasattr(e, 'details') else e}", file=sys.stderr)
+        return 1
+    finally:
+        nc.stop()
+
+
+def cmd_vpn(args, sup, _tf) -> int:
+    """vpn on|off — the global VPN policy (require_vpn + auto_vpn) via NmCfgGate.
+
+    `vpn on` requires the tunnel for NETWORK_OPERATIONAL AND drives `tailscale up`
+    over the wifi underlay; `vpn off` clears both. A stateful change — lands
+    PENDING, `wifi confirm` to keep it."""
+    import grpc
+    target = getattr(sup, "_target", _DEFAULT_TARGET)
+    pos = [a for a in args if not a.startswith("-")]
+    if not pos or pos[0] not in ("on", "off"):
+        print("vpn on|off", file=sys.stderr)
+        return 2
+    enable = pos[0] == "on"
+    nc = NmClient(target)
+    try:
+        return _fmt_cfg(nc.set_vpn(enable, enable))
+    except grpc.RpcError as e:
+        code = e.code().name if hasattr(e, "code") else "?"
+        print(f"vpn: {code} — {e.details() if hasattr(e, 'details') else e}",
+              file=sys.stderr)
+        return 1
+    finally:
+        nc.stop()
+
+
 # rtdb's command map = the shared verbs + the PerView-only schemas/snapshot +
 # the NmView `wifi` verb (tdb has wifi over TIPC; rtdb reaches it through com).
 _COMMANDS = dict(_SHARED_COMMANDS)
 _COMMANDS["schemas"]  = cmd_schemas
 _COMMANDS["snapshot"] = cmd_snapshot
 _COMMANDS["wifi"]     = cmd_wifi
+_COMMANDS["vpn"]      = cmd_vpn
 
 # rtdb's help is the shared one with the tdb-specific intro line swapped + the
 # transport note. We just print the shared body (verb list is identical).

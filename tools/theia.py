@@ -1295,6 +1295,25 @@ def cmd_dist(args: list[str]) -> int:
             f"--platforms={platform}",
         ])) != 0:
             rc_final = rc
+            continue
+        # Stage the built .deb NEXT TO that host's manifest JSON, where the
+        # deploy tooling reads it: orchestrate.yml/install-bundle.yml copy
+        # `{{ manifest_dir }}/{{ machine }}/{{ machine }}.deb`. bazel leaves it
+        # under bazel-bin/ as a SYMLINK into the output tree; Ansible's copy
+        # (and scp) follow a regular file, not a dangling symlink across hosts,
+        # so we copy the resolved bytes. This closes the dist→orchestrate chain
+        # so a deploy needs NO hand-copy of the artifact.
+        import shutil
+        built = WORKSPACE / "bazel-bin" / _MANIFEST_DIR / f"{host}.deb"
+        if not built.is_file():
+            print(f"theia dist: {host}: built target ok but {built} missing "
+                  "— cannot stage for deploy", file=sys.stderr)
+            rc_final = 1
+            continue
+        staged = mdir / host / f"{host}.deb"
+        staged.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(built, staged)   # resolves the bazel symlink → real file
+        print(f"theia dist: staged {staged} ({staged.stat().st_size} bytes)")
     return rc_final
 
 

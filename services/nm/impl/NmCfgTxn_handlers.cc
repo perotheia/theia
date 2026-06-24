@@ -22,12 +22,18 @@
 #include "lib/NmCfgTxn.hh"
 #include "impl/nm_cfg_shared.hpp"
 
-#include "NodeRef.hh"                         // LocalRef + RemoteRef
+#include "NodeRef.hh"                         // LocalRef + RemoteRef + call()
+#include "RemoteCodec.hh"                     // THEIA_DECLARE_REMOTE_CODEC
 #include "system/services/per/per.pb.h"      // PutConfigReq / PerReply nanopb
-#include "per_codecs.hh"                      // RemoteCodec<per types>
 
 #include <cstdio>
 #include <cstring>
+#include <mutex>
+
+// The two per types NmCfgTxn sends/receives over TIPC. Declared locally (not via
+// per's per_codecs.hh) to avoid a header-path collision with nm's own lib/.
+THEIA_DECLARE_REMOTE_CODEC(system_services_per_PutConfigReq)
+THEIA_DECLARE_REMOTE_CODEC(system_services_per_PerReply)
 
 namespace system_services_nm {
 
@@ -57,9 +63,17 @@ bool put_nmconfig(const system_services_nm_NmConfig& cfg, const char* who) {
     req.expect_rev = 0;   // unconditional (no CAS)
     // digest "" — per stores the bytes; the schema digest is filled by the seed
     // path. For a live config push the digest is advisory; per keys on target_node.
-    PerRef ref;
+    // Persistent ref (reply pumped by the process mux), serialized by a mutex —
+    // the per_link pattern. act=0 (no streaming action), 3s timeout.
+    static PerRef ref;
+    static std::mutex call_mu;
+    std::lock_guard<std::mutex> lk(call_mu);
     auto result = ::theia::runtime::call<system_services_per_PerReply>(
-        ref, req, /*op*/ "PutConfig");
+        ref, req, /*act=*/0, /*timeout_ms=*/3000);
+    if (result.tag != ::theia::runtime::CallTag::Reply) {
+        std::fprintf(stderr, "[nm_cfg_txn] %s: PutConfig no reply (per down?)\n", who);
+        return false;
+    }
     if (result.reply.status != 0) {
         std::fprintf(stderr, "[nm_cfg_txn] %s: PutConfig status=%d %s\n",
                      who, static_cast<int>(result.reply.status), result.reply.message);
@@ -82,8 +96,8 @@ bool put_nmconfig(const system_services_nm_NmConfig& cfg, const char* who) {
 void NmCfgTxn::on_enter(NmCfgTxnState new_s,
                         NmCfgTxnState old_s,
                         NmCfgTxnData& /*d*/) {
-    auto& ref = nm_cfg_txn_ref();
-    if (!ref.valid()) ref.publish(this);   // wire the gate→FSM path on first entry
+    if (!nm_cfg_txn_ref().valid())         // wire the gate→FSM path on first entry
+        nm_cfg_txn_ref() = ::theia::runtime::LocalRef<NmCfgTxn>(*this);
 
     auto& sh = nm_cfg_shared();
 

@@ -905,39 +905,11 @@ def cmd_install(args: list[str]) -> int:
     shutil.copy2(src_executor, dest / "executor.json")
     print(f"staged {dest / 'executor.json'}", file=sys.stderr)
 
-    # 3b. Per-FC static params JSON — config/<fc>.json, one per FC that declares
-    #     a params {} block. Read once at boot by the runtime config singleton
-    #     (init_config(<fc>) resolves $THEIA_CONFIG_DIR/<fc>.json; the supervisor
-    #     sets THEIA_CONFIG_DIR=config in the child env, see executor emit). A
-    #     params-less FC emits an empty {nodes:{}} (harmless; lookups default).
-    cfg_dir = dest / "config"
-    cfg_dir.mkdir(parents=True, exist_ok=True)
-    # Per-machine override source: deploy/config/<machine>/<fc>.json (partial,
-    # mirrors the gen-params shape: {"nodes":{"<node>":{"<key>":<val>}}}). After
-    # gen-params writes the machine-generic default, deep-merge the hand-written
-    # override (if any) onto it so each machine gets its own profile (e.g. tsync
-    # central=GPS-grandmaster vs compute=PTP-slave) without forking the .art.
-    import json as _json
-    override_root = WORKSPACE / "deploy" / "config" / machine
-    for fc, target in binaries.items():
-        art = _fc_art_path(fc, target)
-        if art is None:
-            continue
-        out_json = cfg_dir / f"{fc}.json"
-        if (rc := _run([
-            "artheia", "gen-params", str(art),
-            "--out", str(out_json),
-        ])) != 0:
-            return rc
-        ov_path = override_root / f"{fc}.json"
-        if ov_path.is_file():
-            base = _json.loads(out_json.read_text())
-            override = _json.loads(ov_path.read_text())
-            merged = _deep_merge(base, override)
-            out_json.write_text(_json.dumps(merged, indent=2) + "\n")
-            rel = ov_path.relative_to(WORKSPACE)
-            print(f"applied per-machine config override {rel}")
-    print(f"staged {cfg_dir}/<fc>.json (static params)")
+    # 3b. Per-FC static params JSON — config/<fc>.json. Shared with the
+    #     deploy-manifest path (theia manifest) so install/<machine>/config/ and
+    #     dist/manifest/<machine>/config/ are produced by the SAME emitter.
+    if (rc := _emit_fc_config(machine, binaries, dest / "config")) != 0:
+        return rc
 
     # 4. Stage binaries + setcap. A binary's source is its prebuilt path (deb
     #    mode) when we have one, else its bazel-bin output.
@@ -970,6 +942,49 @@ def _deep_merge(base: dict, override: dict) -> dict:
         else:
             base[key] = ov_val
     return base
+
+
+def _emit_fc_config(machine: str, binaries: dict, cfg_dir: Path) -> int:
+    """Emit the per-FC static params JSON (config/<fc>.json) for *machine* into
+    *cfg_dir*, one file per FC that declares a params {} block.
+
+    Read once at boot by the runtime config singleton (init_config(<fc>)
+    resolves $THEIA_CONFIG_DIR/<fc>.json; the supervisor sets
+    THEIA_CONFIG_DIR=config in the child env). A params-less FC emits an empty
+    {nodes:{}} (harmless; lookups default).
+
+    `binaries` maps fc name → its bazel target (so _fc_art_path resolves the
+    .art). gen-params writes the machine-generic default; the hand-written
+    per-machine override deploy/config/<machine>/<fc>.json (partial, same shape)
+    is deep-merged on top so each machine gets its own profile (e.g. tsync
+    central=GPS-grandmaster vs compute=PTP-slave) without forking the .art.
+
+    SHARED by `theia install` (→ install/<machine>/config/) and `theia manifest`
+    (→ dist/manifest/<machine>/config/) so a local stage and a remote deploy
+    ship byte-identical per-FC config. Returns 0 on success, non-zero rc on a
+    gen-params failure."""
+    import json as _json
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    override_root = WORKSPACE / "deploy" / "config" / machine
+    for fc, target in binaries.items():
+        art = _fc_art_path(fc, target)
+        if art is None:
+            continue
+        out_json = cfg_dir / f"{fc}.json"
+        if (rc := _run([
+            "artheia", "gen-params", str(art), "--out", str(out_json),
+        ])) != 0:
+            return rc
+        ov_path = override_root / f"{fc}.json"
+        if ov_path.is_file():
+            base = _json.loads(out_json.read_text())
+            override = _json.loads(ov_path.read_text())
+            merged = _deep_merge(base, override)
+            out_json.write_text(_json.dumps(merged, indent=2) + "\n")
+            print(f"applied per-machine config override "
+                  f"{ov_path.relative_to(WORKSPACE)}")
+    print(f"staged {cfg_dir}/<fc>.json (static params)")
+    return 0
 
 
 def _stage_certs(machines: list[dict], out: Path) -> int:
@@ -1244,6 +1259,22 @@ def cmd_manifest(args: list[str]) -> int:
         return rc
 
     machines = json.loads((out / "machines.json").read_text())["machines"]
+
+    # Per-FC static params JSON — config/<fc>.json per machine, the SAME emitter
+    # `theia install` uses. Without this the deploy tree had no config/ dir, so
+    # `theia orchestrate` (seed-config.yml) skipped per-FC config entirely (e.g.
+    # the tsync GPS-backend profile never reached the rig). Derive each machine's
+    # fc→target map from its execution.json (serialize-manifest just wrote it).
+    for m in machines:
+        exec_json = out / m / "execution.json"
+        if not exec_json.is_file():
+            continue
+        procs = json.loads(exec_json.read_text()).get("processes", [])
+        binaries = {p["name"]: p["executable"] for p in procs
+                    if p.get("executable")}
+        if (rc := _emit_fc_config(m, binaries, out / m / "config")) != 0:
+            return rc
+
     # Drop the dist BUILD glue alongside the JSON so `theia dist` (RULE 2 —
     # rules/dist_ipk.bzl) can build //dist/manifest:<host>_pkg without re-running
     # the Python rig. Only when writing into the in-tree dist/manifest/ (the

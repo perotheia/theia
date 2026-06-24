@@ -13,7 +13,7 @@
 package platform.msgs.nav
 
 import system.platform.msgs.std.*       // Header
-import system.platform.msgs.geometry.*  // Pose, Twist (embedded by the *WithCovariance types)
+import system.platform.msgs.geometry.*  // Pose, Twist, Point, Vector3
 
 // Pose with its 6x6 (x,y,z,roll,pitch,yaw) row-major covariance.
 message PoseWithCovariance {
@@ -34,4 +34,61 @@ message Odometry {
     string              child_frame_id [max_size:32]   // frame the twist is in
     PoseWithCovariance  pose
     TwistWithCovariance twist
+}
+
+// ─── RTK-native GNSS solution ──────────────────────────────────────────────
+//
+// The full receiver solution — the RTK-native message that SUPERSEDES the
+// NavSatFix(position)+Odometry(velocity) pair for the GNSS path. Carries
+// position AND velocity in BOTH ECEF and ENU with row-major 3x3 covariances,
+// plus the RTK quality fields a localizer needs: fix status (FIX/FLOAT/SBAS/
+// DGPS/PPP), AR ratio, correction age, DOPs, sat count. Modeled on
+// github.com/DaikiNiimi/gnss_ros_standardization GnssSolution.msg.
+// 3x3 covariances are bounded inline (fixed in-struct arrays, like nav's 6x6).
+
+// Where the solution came from.
+enum GnssSolutionSource {
+    SOLUTION_SOURCE_UNKNOWN  = 0
+    SOLUTION_SOURCE_BINARY   = 1     // receiver binary protocol (e.g. UBX)
+    SOLUTION_SOURCE_NMEA     = 2     // NMEA sentences
+    SOLUTION_SOURCE_COMPUTED = 3     // computed/post-processed
+}
+
+// RTK fix status (rtklib-style solq).
+enum GnssSolutionStatus {
+    STATUS_NONE   = 0
+    STATUS_FIX    = 1     // RTK fixed (integer ambiguities resolved)
+    STATUS_FLOAT  = 2     // RTK float
+    STATUS_SBAS   = 3
+    STATUS_DGPS   = 4
+    STATUS_SINGLE = 5     // single-point (autonomous)
+    STATUS_PPP    = 6
+    STATUS_EKF    = 7
+}
+
+message GnssSolution {
+    Header              header             // ts + receiver label (frame_id)
+    uint32              time_week                          // GPS week (extended)
+    double              time_tow                           // time of week [s]
+    GnssSolutionSource  solution_source
+    GnssSolutionStatus  status
+    uint32              num_sats                           // sats used
+    float               ratio                              // AR ratio (reliability)
+    float               age_diff                           // diff-correction age [s]
+    float               gdop                               // NaN when unavailable
+    float               pdop
+    float               hdop
+    float               vdop
+    double              latitude                           // geodetic [deg], +N
+    double              longitude                          // geodetic [deg], +E
+    double              altitude                           // ellipsoidal height [m]
+    Point               pos_ecef                           // ECEF [m] (X,Y,Z)
+    repeated double     pos_cov_ecef       [max_count:9]   // 3x3 row-major [m^2]
+    Vector3             vel_ecef                           // ECEF [m/s]
+    repeated double     vel_cov_ecef       [max_count:9]   // 3x3 row-major [(m/s)^2]
+    Point               pos_enu_org_ecef                   // ENU origin (first fix)
+    Point               pos_enu                            // ENU [m] (E,N,U)
+    repeated double     pos_enu_cov        [max_count:9]   // 3x3 row-major [m^2]
+    Vector3             vel_enu                            // ENU [m/s] (E,N,U)
+    repeated double     vel_enu_cov        [max_count:9]   // 3x3 row-major [(m/s)^2]
 }

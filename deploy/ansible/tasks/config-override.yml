@@ -35,7 +35,7 @@
     content: >-
       {{
         ((lookup('file', config_src_dir ~ '/' ~ (item.path | basename), errors='ignore') | default('{}', true) | from_json)
-          | combine((item.path | from_json), recursive=True))
+          | combine((lookup('file', item.path) | from_json), recursive=True))
         | to_nice_json
       }}
     dest: "{{ theia_root }}/config/{{ item.path | basename }}"

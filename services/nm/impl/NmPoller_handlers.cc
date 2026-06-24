@@ -23,6 +23,7 @@
 #include "GenStateM.hh"       // theia::runtime::post_event
 #include "NodeRef.hh"         // theia::runtime::LocalRef
 #include "ParamsConfig.hh"    // get_config() — static boot params (deploy override)
+#include "impl/nm_cfg_shared.hpp"  // nm_cfg_shared() — live config from the gate/txn
 
 #include <pb_decode.h>
 
@@ -90,6 +91,32 @@ void NmPoller::init(NmPollerState& s) {
 void NmPoller::handle_info(const char* info, NmPollerState& s) {
     if (!info || std::strcmp(info, "poll") != 0) return;
 
+    // LIVE CONFIG (in-process): the gate/NmCfgTxn keep the effective NmConfig in
+    // nm_cfg_shared() — committed normally, `pending` while a txn awaits confirm.
+    // Pull it into our state EACH TICK so an `rtdb wifi add`/`vpn on` takes effect
+    // immediately, without an etcd→ConfigUpdated round-trip. Only override once
+    // the gate has set something (committed_known or a txn is pending); before
+    // that, the static-params boot config (init) stands.
+    {
+        auto& sh = nm_cfg_shared();
+        if (sh.committed_known || sh.txn_pending) {
+            const auto& c = sh.txn_pending ? sh.pending : sh.committed;
+            s.interfaces   = c.interfaces;
+            s.require_vpn  = c.require_vpn;
+            s.auto_connect = c.auto_connect;
+            s.auto_vpn     = c.auto_vpn;
+            s.vpn_interface = c.vpn_interface;
+            s.wifi_profiles.clear();
+            for (pb_size_t i = 0; i < c.wifi_profiles_count; ++i) {
+                WifiProfileInfo p;
+                p.ssid     = c.wifi_profiles[i].ssid;
+                p.psk      = c.wifi_profiles[i].psk;
+                p.priority = c.wifi_profiles[i].priority;
+                s.wifi_profiles.push_back(std::move(p));
+            }
+        }
+    }
+
     // The FIRST configured interface (NmConfig.interfaces is a comma list).
     std::string want = s.interfaces;
     if (auto comma = want.find(','); comma != std::string::npos)
@@ -110,7 +137,10 @@ void NmPoller::handle_info(const char* info, NmPollerState& s) {
     const std::string mon_iface = obs.interface;   // the link actually monitored
     if (obs.has_carrier && nm_detail::is_wireless(mon_iface)) {
         WifiObservation w;
-        if (wifi_assoc_probe(mon_iface, w)) wifi_assoc = w.associated;
+        if (wifi_assoc_probe(mon_iface, w)) {
+            wifi_assoc = w.associated;
+            s.assoc_ssid = w.associated ? w.assoc_ssid : std::string();
+        }
     }
 
     // ── CONNECT POLICY (NM drives wpa_supplicant) ──────────────────────────
@@ -149,6 +179,41 @@ void NmPoller::handle_info(const char* info, NmPollerState& s) {
                 } else if (idx < 0) {
                     // No known SSID in range — note once per cooldown window.
                     s.connect_cooldown = 5;
+                }
+            }
+        }
+    }
+
+    // ── ROAMING POLICY (prefer a higher-priority network that came in range) ──
+    // When ALREADY associated, periodically re-scan and, if a known profile with
+    // STRICTLY HIGHER priority than the current AP is now visible, switch to it.
+    // This is the "walk outside, your phone hotspot appears" case — the connect
+    // policy above only fires when there's NO address, so it can't upgrade a live
+    // link. Out-of-range is handled by the existing WifiDisassociated→!addr path
+    // (re-connect picks the best remaining profile). Slow cadence: a scan is
+    // costly + briefly disrupts the link, so don't thrash.
+    if (s.auto_connect && wifi_assoc && !s.assoc_ssid.empty() &&
+        s.wifi_profiles.size() > 1 && nm_detail::is_wireless(mon_iface)) {
+        if (s.roam_cooldown > 0) {
+            --s.roam_cooldown;
+        } else {
+            s.roam_cooldown = 15;   // ~15 ticks between roam scans
+            // Priority of the profile we're currently on (−1 if the live AP
+            // isn't even one of ours — then any known profile is an upgrade).
+            int cur_prio = -1;
+            for (const auto& p : s.wifi_profiles)
+                if (p.ssid == s.assoc_ssid) { cur_prio = (int)p.priority; break; }
+            WifiObservation scan = wifi_observe(mon_iface);
+            int best = pick_wifi_profile(s.wifi_profiles, scan.bss);
+            if (best >= 0) {
+                const auto& bp = s.wifi_profiles[best];
+                if (bp.ssid != s.assoc_ssid && (int)bp.priority > cur_prio) {
+                    ConnectResult cr = wifi_connect(mon_iface, bp.ssid, bp.psk);
+                    log().info(std::string("roam → higher-priority '") + bp.ssid +
+                        "' (prio " + std::to_string(bp.priority) + " > " +
+                        std::to_string(cur_prio) + ", was '" + s.assoc_ssid +
+                        "'): " + (cr.ok ? "switching" : "FAILED") + " (" + cr.note + ")");
+                    s.roam_cooldown = 5;   // let the switch + DHCP settle
                 }
             }
         }

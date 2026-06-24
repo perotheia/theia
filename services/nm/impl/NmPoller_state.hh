@@ -47,6 +47,13 @@ struct NmPollerState {
     std::string vpn_authkey;             // optional key for the unattended `up`
     uint32_t    vpn_cooldown = 0;        // throttle, like connect_cooldown
 
+    // ROAMING: while associated, periodically scan for a HIGHER-priority known
+    // profile newly in range (e.g. you walk outside and your phone hotspot
+    // appears) and switch to it. Slower cadence than connect (a scan is costly +
+    // disrupts the active link), counted down per tick.
+    uint32_t    roam_cooldown = 0;
+    std::string assoc_ssid;              // last observed associated SSID (roam base)
+
     // ── Roaming / PHM degradation: count consecutive failed associate/DHCP
     // attempts. After a threshold the poller emits a health event (→ PHM via the
     // supervisor watchdog today) and backs off harder.

@@ -173,6 +173,31 @@ message WifiConnectReply {
     string message   [max_size:128]  // human detail ("associating to …" / fail)
 }
 
+// ─── Config-maintenance wire types (NM OWNS its config via per) ────────────
+//
+// NM is the keeper of its own NmConfig: these ops mutate the in-memory config,
+// PERSIST it via per (PutConfig → etcd), and react immediately (per casts
+// ConfigUpdated back; the poller picks the new policy up next tick). So an
+// operator ENROLLS a wifi network (with priority) or flips the VPN policy from
+// tdb/rtdb without a static file. Idempotent on ssid: a repeat AddWifiProfile
+// updates that profile's psk/priority in place.
+message AddWifiReq {
+    string ssid     [max_size:33]   // the network to enroll
+    string psk      [max_size:64]   // WPA2 passphrase ("" = open)
+    uint32 priority                 // higher wins among visible known SSIDs (default 0)
+}
+message RemoveWifiReq { string ssid [max_size:33] }   // forget a profile by SSID
+message SetVpnReq {
+    bool require_vpn                // gate NETWORK_OPERATIONAL on the tunnel
+    bool auto_vpn                   // DRIVE `tailscale up` over the wifi underlay
+}
+message SetAutoConnectReq { bool auto_connect }   // global: NM drives wifi or just observes
+message NmCfgReply {
+    bool   ok
+    string message  [max_size:128]  // human detail (e.g. "enrolled 'PEROHotspot' prio=10")
+    uint32 profiles                 // wifi_profiles count after the change
+}
+
 // ─── Interfaces ────────────────────────────────────────────────────────────
 
 // Readiness broadcast — senderReceiver pub/sub. NmDaemon is the SENDER; SM (and

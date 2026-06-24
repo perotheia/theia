@@ -25,7 +25,12 @@
     daemon_reload: true
     enabled: true
 
-- name: "Start (or restart on unit change) the supervisor"
+- name: "Start (or restart on unit OR binary change) the supervisor"
+  # Restart when the unit file changed OR the .deb was (re)installed (_dpkg from
+  # install-bundle.yml) — a new binary on disk does nothing until the supervisor
+  # re-execs it. `started` alone is a no-op on an already-running supervisor, so
+  # a binary-only redeploy would silently keep running the OLD binary. The tdb-
+  # reload handler only re-reads the manifest, not the binaries.
   ansible.builtin.systemd:
     name: theia-supervisor.service
-    state: "{{ 'restarted' if _unit.changed else 'started' }}"
+    state: "{{ 'restarted' if (_unit.changed or (_dpkg is defined and _dpkg.changed)) else 'started' }}"

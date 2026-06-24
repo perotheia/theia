@@ -217,6 +217,39 @@ inline std::string trim(const std::string& s) {
     return s.substr(a, b - a + 1);
 }
 
+// `iw` prints non-ASCII / non-printable SSID octets as C-style escapes in its
+// scan/link output: `\xNN` (a byte) and `\\` (a literal backslash). Un-escape
+// them back to the RAW bytes so the SSID is the real UTF-8 string — both for
+// display (rtdb shows "Administrator’s iPhone", not "...\xe2\x80\x99s...") AND
+// for the CONNECT path (wpa_cli must get the actual SSID octets to match the
+// AP). Unknown escapes pass through unchanged.
+inline std::string unescape_iw(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '\\' && i + 1 < s.size()) {
+            char n = s[i + 1];
+            if (n == '\\') { out.push_back('\\'); i += 1; continue; }
+            if (n == 'x' && i + 3 < s.size()) {
+                auto hex = [](char c) -> int {
+                    if (c >= '0' && c <= '9') return c - '0';
+                    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+                    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+                    return -1;
+                };
+                int hi = hex(s[i + 2]), lo = hex(s[i + 3]);
+                if (hi >= 0 && lo >= 0) {
+                    out.push_back(static_cast<char>((hi << 4) | lo));
+                    i += 3;
+                    continue;
+                }
+            }
+        }
+        out.push_back(s[i]);
+    }
+    return out;
+}
+
 // Is `name` a wireless interface? /sys/class/net/<name>/wireless exists for
 // 802.11 devices. Avoids running `iw` against eth0.
 inline bool is_wireless(const std::string& name) {
@@ -275,7 +308,7 @@ inline std::vector<WifiBssInfo> parse_scan(const std::string& text) {
             std::string rest = t.substr(4);
             cur.bssid = trim(rest.substr(0, rest.find('(')));
         } else if (t.rfind("SSID:", 0) == 0) {
-            cur.ssid = trim(t.substr(5));
+            cur.ssid = unescape_iw(trim(t.substr(5)));   // \xNN → real bytes
         } else if (t.rfind("signal:", 0) == 0) {
             // "signal: -54.00 dBm"
             cur.signal_dbm = (int32_t)std::strtol(trim(t.substr(7)).c_str(),
@@ -309,7 +342,7 @@ inline void parse_link(const std::string& text, WifiObservation& obs) {
             std::string rest = trim(t.substr(12));
             obs.assoc_bssid = trim(rest.substr(0, rest.find('(')));
         } else if (t.rfind("SSID:", 0) == 0) {
-            obs.assoc_ssid = trim(t.substr(5));
+            obs.assoc_ssid = unescape_iw(trim(t.substr(5)));   // \xNN → real bytes
         }
     }
 }

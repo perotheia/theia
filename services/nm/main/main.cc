@@ -376,13 +376,6 @@ int main(int argc, char** argv) {
         // types so a real peer — or a robot-test inject via services/com
         // — lands on the same handle_call / handle_cast path. clientServer
         // ops → register_call; senderReceiver `in` data → register_cast.
-        config_mux.register_cast<TxnAddWifi>(nm_cfg_txn_cfg, nm_cfg_txn);
-        config_mux.register_cast<TxnRemoveWifi>(nm_cfg_txn_cfg, nm_cfg_txn);
-        config_mux.register_cast<TxnSetVpn>(nm_cfg_txn_cfg, nm_cfg_txn);
-        config_mux.register_cast<TxnSetAutoConn>(nm_cfg_txn_cfg, nm_cfg_txn);
-        config_mux.register_cast<TxnConfirm>(nm_cfg_txn_cfg, nm_cfg_txn);
-        config_mux.register_cast<TxnAbort>(nm_cfg_txn_cfg, nm_cfg_txn);
-        config_mux.register_cast<TxnTimeout>(nm_cfg_txn_cfg, nm_cfg_txn);
         // PG (manual pub/sub, OTP shape): attach this statem node's PgClient to
         // its demux binding (joined-group frames + PgMembership pushes route into
         // handle_cast) + pass its bound addr as the watcher address (where the

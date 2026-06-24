@@ -406,8 +406,11 @@ node atomic NmCfgTxn {
     tipc type=0x80010030 instance=0
     tag = "NCT"
     ports {
-        receiver txn_in requires NmCfgTxnIn
-        client   to_per requires PersistencyIf
+        // NO receiver port for the Txn* events: NmCfgGate post_event()s them
+        // in-process via a LocalRef<NmCfgTxn> (the statem-never-off-the-wire
+        // rule — same as NmPoller→NmDaemon, where NmDaemon has no NmEventIn
+        // receiver port either). The only wire port is the per client below.
+        client to_per requires PersistencyIf
     }
     statem {
         states  [STEADY, VALIDATING, PENDING]

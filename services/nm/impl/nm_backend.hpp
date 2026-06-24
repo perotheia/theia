@@ -601,6 +601,13 @@ inline ConnectResult wifi_connect(const std::string& iface,
         run_capture(wc + "set_network " + id + " key_mgmt NONE", out);   // open
     } else {
         run_capture(wc + "set_network " + id + " psk '\"" + psk + "\"'", out);
+        // Accept BOTH WPA2-PSK and WPA3-SAE so one profile joins either: a WPA3
+        // AP (e.g. an iPhone hotspot) negotiates SAE, a WPA2 AP negotiates PSK.
+        // ieee80211w=1 = PMF optional (mandatory for SAE; tolerated by WPA2).
+        // (Older wpa_supplicant without SAE ignores the unknown token; PSK still
+        // works for WPA2.)
+        run_capture(wc + "set_network " + id + " key_mgmt WPA-PSK SAE", out);
+        run_capture(wc + "set_network " + id + " ieee80211w 1", out);
     }
     run_capture(wc + "enable_network " + id, out);
     std::string sel;

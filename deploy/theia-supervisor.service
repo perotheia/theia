@@ -6,10 +6,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-# theia-run exports the strict env (THEIA_ROOT_DIR + THEIA_SUPERVISOR_MANIFEST)
-# the supervisor requires, then exec's it. THEIA_ROOT defaults to /opt/theia;
-# override here for a non-default prefix.
-Environment=THEIA_ROOT=/opt/theia
+# theia-run derives the strict env (THEIA_SUPERVISOR_MANIFEST + LD_LIBRARY_PATH)
+# from THEIA_ROOT_DIR — the SAME var the supervisor binary reads — then exec's
+# it. Defaults to /opt/theia; override here for a non-default prefix.
+Environment=THEIA_ROOT_DIR=/opt/theia
 ExecStartPre=/sbin/modprobe tipc
 ExecStart=/opt/theia/bin/theia-run
 # The supervisor owns its children (PR_SET_PDEATHSIG); a clean stop SIGTERMs it

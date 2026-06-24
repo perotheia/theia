@@ -90,6 +90,22 @@ ln -sf "$_THEIA_ROOT/tools/rtdb/rtdb.py" "$_THEIA_ROOT/.venv/bin/rtdb"
 chmod +x "$_THEIA_ROOT/theia" "$_THEIA_ROOT/tools/theia.py" \
          "$_THEIA_ROOT/tools/tdb/tdb.py" "$_THEIA_ROOT/tools/rtdb/rtdb.py" 2>/dev/null
 
+# --- rtdb gRPC stubs (idempotent, regen only when the proto is newer) -----
+# rtdb's _gen/*_pb2.py are generated from services/com/proto/supervisor_bridge.
+# proto and GITIGNORED (per-checkout). If the proto gains an rpc (e.g. NmView.
+# SetVpn) the stale stub raises AttributeError at call time. Regenerate when the
+# proto is newer than the stub (or the stub is missing) — keeps them in lockstep
+# the same way the symlinks above stay current. Cheap no-op when up to date.
+_rtdb_proto="$_THEIA_ROOT/services/com/proto/supervisor_bridge.proto"
+_rtdb_stub="$_THEIA_ROOT/tools/rtdb/_gen/supervisor_bridge_pb2_grpc.py"
+if [ -f "$_rtdb_proto" ] && \
+   { [ ! -f "$_rtdb_stub" ] || [ "$_rtdb_proto" -nt "$_rtdb_stub" ]; }; then
+    bash "$_THEIA_ROOT/tools/rtdb/gen_protos.sh" >/dev/null 2>&1 \
+        && echo "env.sh: regenerated rtdb gRPC stubs (proto changed)" \
+        || echo "env.sh: rtdb stub regen failed — run tools/rtdb/gen_protos.sh" >&2
+fi
+unset _rtdb_proto _rtdb_stub
+
 # --- shell completion ----------------------------------------------------
 # theia / tdb / rtdb are plain dispatch CLIs (no click). Rather than hardcode
 # their verb sets here — which silently drifts as commands are added/renamed —

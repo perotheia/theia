@@ -90,109 +90,120 @@ void trace_emit(const Msg& m) noexcept {
             ::theia::runtime::next_trace_corr_id(), scratch, n);
 }
 
-// --- ROS-shaped GNSS broadcasts -------------------------------------------
+// --- RTK-native GNSS broadcasts -------------------------------------------
 //
-// Re-publish a valid fix as NavSatFix (position) + Odometry (velocity+heading)
-// for a localization/fusion app. Both are senderReceiver broadcasts; the
-// in-process broadcast_* fan-out delivers to subscribers; trace_emit (above)
-// carries them OVER TIPC to the log[trace] firehose (tdb tracecat, GUI, a
-// cross-machine fusion node). The covariance diagonals come from the receiver's
-// reported 1-sigma accuracies (variance = sigma^2); off-diagonals stay 0 and
-// covariance_type = APPROXIMATED.
+// Re-publish a valid fix as the RTK-native GnssSolution (position + velocity +
+// RTK quality, ONE message — supersedes the former NavSatFix+Odometry pair) and,
+// when the receiver fuses attitude, an Imu (orientation from the F9R NAV-ATT
+// solution). Both are senderReceiver PG broadcasts; the in-process broadcast_*
+// fan-out delivers to subscribers; trace_emit (above) carries them OVER TIPC to
+// the log[trace] firehose (tdb tracecat, GUI, a cross-machine fusion node). The
+// covariance diagonals come from the receiver's reported 1-sigma accuracies
+// (variance = sigma^2); off-diagonals stay 0.
 void publish_gnss(TsyncCtl& self, const GnssFix& fix, uint64_t now) {
-    // ---- NavSatFix (position) ----
-    NavSatFix nf = platform_msgs_sensor_NavSatFix_init_zero;
-    nf.has_header = true;
-    nf.header.timestamp_ns = fix.utc_ns ? fix.utc_ns : now;
-    std::snprintf(nf.header.frame_id, sizeof(nf.header.frame_id), "gps");
-    nf.status    = fix.rtk_fix
-        ? platform_msgs_sensor_NavSatStatus_NavSatStatus_STATUS_GBAS_FIX
-        : platform_msgs_sensor_NavSatStatus_NavSatStatus_STATUS_FIX;
-    nf.latitude  = fix.lat;
-    nf.longitude = fix.lon;
-    nf.altitude  = fix.alt;
-    // 3x3 ENU covariance: variance on the diagonal from hAcc (E,N) / vAcc (U).
-    nf.position_covariance_count = 9;
+    // ---- GnssSolution (position + velocity + RTK quality) ----
+    GnssSolution sol = platform_msgs_nav_GnssSolution_init_zero;
+    sol.has_header = true;
+    sol.header.timestamp_ns = fix.utc_ns ? fix.utc_ns : now;
+    std::snprintf(sol.header.frame_id, sizeof(sol.header.frame_id), "gps");
+
+    // Source: the RTK backend reads the receiver binary (UBX); NMEA/fake report
+    // their own kind via GpsBackend::name().
+    const char* bname = GpsBackend::name();
+    if (std::strcmp(bname, "rtk") == 0)
+        sol.solution_source = platform_msgs_nav_GnssSolutionSource_GnssSolutionSource_SOLUTION_SOURCE_BINARY;
+    else if (std::strcmp(bname, "nmea") == 0)
+        sol.solution_source = platform_msgs_nav_GnssSolutionSource_GnssSolutionSource_SOLUTION_SOURCE_NMEA;
+    else
+        sol.solution_source = platform_msgs_nav_GnssSolutionSource_GnssSolutionSource_SOLUTION_SOURCE_COMPUTED;
+
+    // Fix status: rtk_fix → FIX (integer-resolved); else a single-point solution.
+    // (The v1 backend struct does not distinguish FLOAT/DGPS/SBAS — a hardware-rig
+    // refinement; FIX vs SINGLE is the field-meaningful split here.)
+    sol.status = fix.rtk_fix
+        ? platform_msgs_nav_GnssSolutionStatus_GnssSolutionStatus_STATUS_FIX
+        : platform_msgs_nav_GnssSolutionStatus_GnssSolutionStatus_STATUS_SINGLE;
+
+    sol.latitude  = fix.lat;
+    sol.longitude = fix.lon;
+    sol.altitude  = fix.alt;
+
+    // ENU position + its 3x3 row-major covariance from hAcc (E,N) / vAcc (U).
+    // pos_enu stays 0 in v1 (no local origin established) — a localizer fuses the
+    // geodetic lat/lon/alt; the covariance still describes the position quality.
+    sol.has_pos_enu = true;             // E,N,U all 0 until an ENU origin is set
+    sol.pos_enu_cov_count = 9;
     const double hv = fix.h_acc_m * fix.h_acc_m;
     const double vv = fix.v_acc_m * fix.v_acc_m;
-    nf.position_covariance[0] = hv;   // E
-    nf.position_covariance[4] = hv;   // N
-    nf.position_covariance[8] = vv;   // U
-    nf.position_covariance_type =
-        (fix.h_acc_m > 0.0)
-            ? platform_msgs_sensor_NavSatCovarianceType_NavSatCovarianceType_COVARIANCE_TYPE_DIAGONAL_KNOWN
-            : platform_msgs_sensor_NavSatCovarianceType_NavSatCovarianceType_COVARIANCE_TYPE_UNKNOWN;
-    self.broadcast_navsatfix_fix(nf);
-    trace_emit(nf);   // → log[trace] firehose (tdb tracecat) when tracing is on
+    sol.pos_enu_cov[0] = hv;   // E
+    sol.pos_enu_cov[4] = hv;   // N
+    sol.pos_enu_cov[8] = vv;   // U
 
-    if (!fix.velocity_valid) return;
+    if (fix.velocity_valid) {
+        // ENU velocity (m/s): E,N,U(=-down). vel_enu_cov diagonal from sAcc, split
+        // isotropically across the 3 axes (the receiver reports a scalar sAcc).
+        sol.has_vel_enu = true;
+        sol.vel_enu.x = fix.vel_e;   // East
+        sol.vel_enu.y = fix.vel_n;   // North
+        sol.vel_enu.z = -fix.vel_d;  // Up
+        sol.vel_enu_cov_count = 9;
+        const double sv = fix.speed_acc_m_s * fix.speed_acc_m_s;
+        sol.vel_enu_cov[0] = sv;
+        sol.vel_enu_cov[4] = sv;
+        sol.vel_enu_cov[8] = sv;
+    }
+    self.broadcast_gnss_solution_solution(sol);
+    trace_emit(sol);   // → log[trace] firehose (tdb tracecat) when tracing is on
 
-    // ---- Odometry (velocity + heading) ----
-    // pose carries the same geodetic position (WGS84, not a metric local frame in
-    // v1); twist.linear is the NED velocity (m/s) in child_frame_id "gps".
-    // twist.angular stays 0 (a single-antenna receiver reports no body rates).
-    Odometry od = platform_msgs_nav_Odometry_init_zero;
-    od.has_header = true;
-    od.header.timestamp_ns = fix.utc_ns ? fix.utc_ns : now;
-    std::snprintf(od.header.frame_id, sizeof(od.header.frame_id), "map");
-    std::snprintf(od.child_frame_id, sizeof(od.child_frame_id), "gps");
-    od.has_pose = true;
-    od.pose.has_pose = true;
-    od.pose.pose.has_position = true;
-    od.pose.pose.position.x = fix.lon;   // geodetic; consumer fuses NavSatFix instead
-    od.pose.pose.position.y = fix.lat;
-    od.pose.pose.position.z = fix.alt;
-    // Orientation: from the F9R fusion attitude (NAV-ATT roll/pitch/heading) when
-    // valid; else identity. ROS uses ENU + a yaw measured CCW from East, while
-    // u-blox heading is CW from North — convert (yaw_enu = 90° - heading). Build
-    // the quaternion from the Z-Y-X (yaw-pitch-roll) Euler sequence.
-    od.pose.pose.has_orientation = true;
+    // ---- Imu (orientation from the receiver's fused attitude) ----
+    // Only the RTK backend with sensor fusion (ZED-F9R NAV-ATT) yields attitude;
+    // the F9P/NMEA/fake have none → no Imu published (an autonomy stack treats a
+    // missing Imu as "no inertial solution this tick"). The GnssFix struct carries
+    // the FUSED orientation, not raw gyro/accel samples, so angular_velocity and
+    // linear_acceleration are marked unknown (-1 leading covariance, ROS rule).
     if (fix.attitude_valid) {
+        Imu im = platform_msgs_sensor_Imu_init_zero;
+        im.has_header = true;
+        im.header.timestamp_ns = fix.utc_ns ? fix.utc_ns : now;
+        std::snprintf(im.header.frame_id, sizeof(im.header.frame_id), "gps");
+
+        // Orientation from NAV-ATT roll/pitch/heading. ROS uses ENU + a yaw
+        // measured CCW from East, while u-blox heading is CW from North — convert
+        // (yaw_enu = 90° - heading). Quaternion from the Z-Y-X (yaw-pitch-roll)
+        // Euler sequence.
         const double deg2rad = 3.14159265358979323846 / 180.0;
         const double roll  = fix.roll_deg  * deg2rad;
         const double pitch = fix.pitch_deg * deg2rad;
-        const double yaw   = (90.0 - fix.att_heading_deg) * deg2rad;  // CW-from-N → CCW-from-E
+        const double yaw   = (90.0 - fix.att_heading_deg) * deg2rad;
         const double cr = std::cos(roll * 0.5),  sr = std::sin(roll * 0.5);
         const double cp = std::cos(pitch * 0.5), sp = std::sin(pitch * 0.5);
         const double cy = std::cos(yaw * 0.5),   sy = std::sin(yaw * 0.5);
-        od.pose.pose.orientation.w = cr * cp * cy + sr * sp * sy;
-        od.pose.pose.orientation.x = sr * cp * cy - cr * sp * sy;
-        od.pose.pose.orientation.y = cr * sp * cy + sr * cp * sy;
-        od.pose.pose.orientation.z = cr * cp * sy - sr * sp * cy;
-        // 6x6 pose covariance: position from hAcc/vAcc, orientation from the
-        // NAV-ATT accuracies (variance = sigma^2, deg→rad). x,y,z then r,p,y.
-        od.pose.covariance_count = 36;
-        const double hv = fix.h_acc_m * fix.h_acc_m, vv = fix.v_acc_m * fix.v_acc_m;
+        im.has_orientation = true;
+        im.orientation.w = cr * cp * cy + sr * sp * sy;
+        im.orientation.x = sr * cp * cy - cr * sp * sy;
+        im.orientation.y = cr * sp * cy + sr * cp * sy;
+        im.orientation.z = cr * cp * sy - sr * sp * cy;
+        // 3x3 orientation covariance from the NAV-ATT 1-sigma accuracies (rad^2),
+        // r,p,y on the diagonal.
+        im.orientation_covariance_count = 9;
         const double rr = fix.roll_acc_deg * deg2rad, pp = fix.pitch_acc_deg * deg2rad,
                      yy = fix.heading_att_acc_deg * deg2rad;
-        od.pose.covariance[0]  = hv;        // x
-        od.pose.covariance[7]  = hv;        // y
-        od.pose.covariance[14] = vv;        // z
-        od.pose.covariance[21] = rr * rr;   // roll
-        od.pose.covariance[28] = pp * pp;   // pitch
-        od.pose.covariance[35] = yy * yy;   // yaw
-    } else {
-        od.pose.pose.orientation.w = 1.0;   // identity (no attitude solution yet)
+        im.orientation_covariance[0] = rr * rr;   // roll
+        im.orientation_covariance[4] = pp * pp;   // pitch
+        im.orientation_covariance[8] = yy * yy;   // yaw
+        // No raw rate/accel in the fused solution → mark both unknown (ROS: a
+        // leading -1 in the covariance means "this field is not provided").
+        im.has_angular_velocity = true;           // zeroed
+        im.angular_velocity_covariance_count = 9;
+        im.angular_velocity_covariance[0] = -1.0;
+        im.has_linear_acceleration = true;        // zeroed
+        im.linear_acceleration_covariance_count = 9;
+        im.linear_acceleration_covariance[0] = -1.0;
+        self.broadcast_imu_imu(im);
+        trace_emit(im);   // → log[trace] firehose when tracing is on
     }
-    od.has_twist = true;
-    od.twist.has_twist = true;
-    od.twist.twist.has_linear = true;
-    od.twist.twist.linear.x = fix.vel_e;   // ENU-ish: x=East, y=North, z=Up(-down)
-    od.twist.twist.linear.y = fix.vel_n;
-    od.twist.twist.linear.z = -fix.vel_d;
-    od.twist.twist.has_angular = true;     // zeroed
-    // 6x6 twist covariance: linear variances from sAcc (split across the 3 axes
-    // as an isotropic approximation); angular unknown (-1 on the diagonal).
-    od.twist.covariance_count = 36;
-    const double sv = fix.speed_acc_m_s * fix.speed_acc_m_s;
-    od.twist.covariance[0]  = sv;   // vx
-    od.twist.covariance[7]  = sv;   // vy
-    od.twist.covariance[14] = sv;   // vz
-    od.twist.covariance[21] = -1.0; // roll rate unknown
-    od.twist.covariance[28] = -1.0; // pitch rate unknown
-    od.twist.covariance[35] = -1.0; // yaw rate unknown
-    self.broadcast_gnss_odom_odom(od);
-    trace_emit(od);   // → log[trace] firehose (tdb tracecat) when tracing is on
+
+    if (!fix.velocity_valid) return;
 
     // Visibility for a live (in-car) test: a concise line per published fix.
     // INFO so it lands in the supervisor/stderr log without a wired subscriber.

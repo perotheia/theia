@@ -12,7 +12,7 @@ auto_connect, auto_vpn) is stored in etcd and pushed to nm via ConfigUpdated, so
 an operator enrolls wifi from tdb/rtdb (set priority per entry) without a static
 file. Needs etcd on the box (provision installs it; etcd_machine=central).
 
-tsync is the NavSatFix/Odometry producer (build --define gps=rtk on the real Pi,
+tsync is the GnssSolution/Imu producer (build --define gps=rtk on the real Pi,
 or gps=fake for bench); the supervisor is the PG allocator the GUI's pg_join
 needs; com is the gRPC bridge (rtdb over VPN); nm observes the tailscale tunnel;
 crypto/log round out the production set. The Qt app itself is compiled ON the Pi

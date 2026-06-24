@@ -174,8 +174,11 @@ void Phc2sysProvider::do_loop() {
             break;   // return → GenRunnable thread ends → supervisor restarts us
         }
     }
-    // Loop also exits on BOTH-pipes-EOF / stop_requested() without the in-loop
-    // WNOHANG firing → REAP the child here or it lingers as a <defunct> zombie.
+    // The loop also exits when BOTH pipes hit EOF (the child closed stdout+stderr
+    // — it's exiting) without the in-loop WNOHANG firing, OR on stop_requested().
+    // In both cases the child must still be REAPED or it lingers as a <defunct>
+    // zombie (the process holds a PID slot until its parent waits). A blocking
+    // wait is safe: the child has closed its pipes, so it's already exiting.
     if (child_pid_ > 0) {
         int status = 0;
         ::waitpid(child_pid_, &status, 0);

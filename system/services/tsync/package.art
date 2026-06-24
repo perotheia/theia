@@ -19,12 +19,12 @@
 
 package system.services.tsync
 
-// ROS-shaped sensor/nav payloads the RTK receiver feeds an autonomy stack:
-// NavSatFix (position) + Odometry/Twist (velocity+heading). The GNSS driver
-// (UBX-NAV-PVT) carries all of it in one frame; TsyncCtl re-publishes it.
-import system.platform.msgs.sensor.*    // NavSatFix, NavSatStatus, NavSatCovarianceType
-import system.platform.msgs.nav.*       // Odometry, TwistWithCovariance
-import system.platform.msgs.geometry.*  // Twist, Vector3 (embedded by Odometry)
+// the RTK-native GnssSolution (position+velocity+RTK quality, one frame) + the
+// receiver's Imu. The GNSS driver (UBX-NAV-PVT / rtklib solq) fills the solution;
+// the IMU comes from the receiver's inertial output. TsyncCtl re-publishes both.
+import system.platform.msgs.sensor.*    // Imu (RTK inertial output)
+import system.platform.msgs.nav.*       // GnssSolution, GnssSolutionSource/Status
+import system.platform.msgs.geometry.*  // Point, Vector3 (embedded by GnssSolution)
 import system.platform.msgs.std.*       // Header
 
 // ─── Sync state + source ───────────────────────────────────────────────────
@@ -140,21 +140,21 @@ interface clientServer TsyncCtlIf {
 // shwa's AccelTelemetry. A localization/fusion app subscribes; nothing is
 // required of TsyncCtl's time-discipline path (these are a parallel output).
 //
-// NavSatFix = position (lat/lon/alt + ENU covariance from the receiver's
-// hAcc/vAcc). Only emitted when the fix is valid.
-interface senderReceiver GnssFixStream {
-    data NavSatFix fix
+// GnssSolution = the RTK-NATIVE receiver solution (supersedes the former
+// NavSatFix(position)+Odometry(velocity) pair). ONE message carries position +
+// velocity in both ECEF and ENU with covariances, plus the RTK quality a
+// localizer needs: fix status (FIX/FLOAT/SBAS/DGPS/PPP), AR ratio, correction
+// age, DOPs, sat count. The RTK backend fills it natively from UBX-NAV-PVT /
+// rtklib solq; the NMEA/fake backends fill the lat/lon/vel/status subset.
+interface senderReceiver GnssSolutionStream {
+    data GnssSolution solution
 }
 
-// Odometry = velocity + heading. UBX-NAV-PVT gives NED velocity + ground speed +
-// heading-of-motion; we map it to nav.Odometry — pose.position carries the same
-// lat/lon/alt (WGS84, NOT a metric local frame in v1), twist.linear is the NED
-// velocity (m/s) in child_frame_id, twist.angular left zero (a single-antenna
-// receiver has no body angular rate). Covariance diagonals from sAcc/headAcc.
-// A localization node typically consumes the twist (velocity) and ignores the
-// geodetic pose, fusing NavSatFix for position instead.
-interface senderReceiver GnssOdomStream {
-    data Odometry odom
+// Imu = the RTK receiver's inertial output (sensor_msgs/Imu): angular velocity +
+// linear acceleration (+ orientation when the unit fuses one), with covariances.
+// Only the RTK backend with an IMU fills it; fake/NMEA leave it unpublished.
+interface senderReceiver ImuStream {
+    data Imu imu
 }
 
 // ─── Nodes ─────────────────────────────────────────────────────────────────
@@ -226,10 +226,11 @@ node atomic TsyncCtl {
     config TsyncConfig
     ports {
         server status provides TsyncCtlIf
-        // ROS-shaped GNSS broadcasts (RTK variant fills them; NMEA/fake emit
-        // position-only / nothing). A fusion app subscribes.
-        sender navsatfix provides GnssFixStream
-        sender gnss_odom provides GnssOdomStream
+        // RTK-native GNSS broadcasts (the RTK backend fills them natively; the
+        // fake/NMEA backends fill the position/velocity/status subset of the
+        // solution + leave the IMU unpublished). A fusion app subscribes.
+        sender gnss_solution provides GnssSolutionStream
+        sender imu           provides ImuStream
     }
     // Static DEPLOY knobs (lifecycle: param, not runtime-observable config) —
     // serialized into config/tsync.json, read once at boot via the runtime

@@ -25,8 +25,8 @@
 
 #include "sm.pb.h"    // //platform/proto/system/services/sm:sm_pb_cpp
 // platform.msgs — the ROS-analogue payload types broadcast over PG (e.g.
-// tsync's NavSatFix / Odometry GPS feed). Registered so `rtdb tracecat` + the
-// GUI decode them instead of leaving the payload raw.
+// tsync's RTK-native GnssSolution + Imu GPS feed). Registered so `rtdb tracecat`
+// + the GUI decode them instead of leaving the payload raw.
 #include "platform/msgs/sensor/sensor.pb.h"  // sensor_pb_cpp
 #include "platform/msgs/nav/nav.pb.h"        // nav_pb_cpp
 
@@ -47,7 +47,10 @@ struct Registrar {
                         &platform_msgs_sensor::NavSatFix::default_instance());
         register_global("platform_msgs_sensor_Imu",
                         &platform_msgs_sensor::Imu::default_instance());
-        // platform.msgs.nav — odometry (pose + twist).
+        // platform.msgs.nav — the RTK-native GnssSolution (tsync's primary GPS
+        // broadcast: position + velocity + RTK quality) + the legacy Odometry.
+        register_global("platform_msgs_nav_GnssSolution",
+                        &platform_msgs_nav::GnssSolution::default_instance());
         register_global("platform_msgs_nav_Odometry",
                         &platform_msgs_nav::Odometry::default_instance());
     }

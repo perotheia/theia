@@ -12,11 +12,11 @@
 #include <cstdint>
 #include <string>
 
-namespace system_services_nm {
+namespace ara::nm {
 
 struct NmCfgGateState {
     // Add app fields here, e.g.:
     //   int32_t counter = 0;
 };
 
-}  // namespace system_services_nm
+}  // namespace ara::nm

@@ -13,10 +13,11 @@
 //              (GetTree / ConfigureTrace / GetTraceConfig / lifecycle) and
 //              RECEIVES SupervisorEventIf (the NodeEdge/NodeState firehose that
 //              replaces the monolithic GetTree tree).
-//   TdbTrace — subscribes to log[trace]: CALLs TraceStreamSub.Subscribe and
-//              RECEIVES TraceRecordStream (the live decoded-record fan-out).
-//              (artheia.observer.TraceObserver already implements this exact
-//              client; tdb reuses it. Declared here for one coherent model.)
+//   TdbTrace — observes log[trace]: pg_joins the TraceRecord group and RECEIVES
+//              TraceRecordStream (the live PG record fan-out). No Subscribe RPC —
+//              the unicast TraceStreamSub control plane was removed when trace
+//              egress moved to PG. (artheia.observer.TraceObserver already
+//              implements this exact client; tdb reuses it.)
 
 package system.tools.tdb
 
@@ -41,9 +42,6 @@ import system.services.ucm.*
 
 // The supervisor control node (tipc 0x80020001) — system.supervisor.
 extern node atomic SupervisorCtl { }
-
-// log[trace]'s subscribe control node (tipc 0x80010014) — system.services.log.
-extern node atomic TraceCtl { }
 
 // per's config-gatekeeper nodes — system.services.per. PerManager (0x80010016)
 // for Snapshot/schema/migrate; PerClient (0x80010007) for Get/Put/Watch config.
@@ -100,11 +98,10 @@ node atomic TdbSup {
     }
 }
 
-// Trace client: calls TraceStreamSub.Subscribe, receives the live record fan-out.
+// Trace client: pg_joins the TraceRecord group, receives the live record fan-out.
 node atomic TdbTrace {
     tipc type=0x80020102 instance=0
     ports {
-        client   trace_sub   requires TraceStreamSub
         receiver trace_rec    requires TraceRecordStream
     }
 }

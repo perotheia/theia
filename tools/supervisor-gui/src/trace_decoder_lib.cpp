@@ -58,9 +58,18 @@ std::string exe_dir() {
 }
 
 bool has_decoder_prefix(const std::string& name) {
-    // libtrace_decoder_<x>.so — the plugin naming convention.
+    // libtrace_decoder_<world>.so — the plugin naming convention. EXCLUDE the
+    // cc_library/cc_binary byproducts that share the prefix but are not loadable
+    // plugins: the `*_protos.so` registrar TU (undefined symbols until linked
+    // into a plugin) would dlopen-fail, and `libtrace_decoder.so` is the bare
+    // decoder-core lib. A stray one in bazel-bin must not be treated as a plugin.
+    auto ends_with = [&](const char* suf) {
+        const std::string s(suf);
+        return name.size() >= s.size() &&
+               name.compare(name.size() - s.size(), s.size(), s) == 0;
+    };
     return name.rfind("libtrace_decoder_", 0) == 0 &&
-           name.size() > 3 && name.compare(name.size() - 3, 3, ".so") == 0;
+           ends_with(".so") && !ends_with("_protos.so");
 }
 
 // Append every libtrace_decoder_*.so in `dir` (absolute paths) to `out`.

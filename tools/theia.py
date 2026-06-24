@@ -203,12 +203,23 @@ def cmd_orchestrate(args: list[str]) -> int:
 
 def cmd_cleanup(args: list[str]) -> int:
     """Uninstall any prior Theia from a rig (the inverse of provision+orchestrate).
-    `theia cleanup <machine> [ansible-args...]`. Stops the supervisor, removes
+    `theia cleanup <target> [ansible-args...]`. <target> names a rig in the
+    registry (deploy/registry/<target>.yml). Stops the supervisor, removes
     /opt/theia + the dpkg bundle + the systemd units; keeps etcd/Mender data
     unless `-e wipe_etcd=true` / `-e wipe_mender=true`. Run before re-rolling a
     box onto a different stack (e.g. wiping a Pi to install gateway_ws)."""
-    machine, rest = _split_machine(args)
-    return _ansible("cleanup.yml", machine, rest)
+    target, rest = _split_machine(args)
+    if not target:
+        print("theia cleanup: needs a target name "
+              "(deploy/registry/<target>.yml), e.g. `theia cleanup rpi4`",
+              file=sys.stderr)
+        return 2
+    reg = ANSIBLE.parent / "registry" / f"{target}.yml"
+    if not reg.is_file():
+        print(f"theia cleanup: no registry entry {reg.relative_to(WORKSPACE)}",
+              file=sys.stderr)
+        return 1
+    return _ansible("cleanup.yml", None, ["-e", f"target={target}", *rest])
 
 
 def _bazel_root() -> Path:

@@ -14,11 +14,32 @@
 #   - wipe_etcd=true   → /var/lib/theia-etcd (the etcd data-dir; config history)
 #   - wipe_mender=true → Mender device identity + the theia-release update module
 #
-# Run:  ansible-playbook cleanup.yml -l <host> -e machine=<machine>
+# Run:  theia cleanup <target>     ← the wrapper (tools/theia.py)
+#   or:  ansible-playbook cleanup.yml -e target=<target>
 #       (add -e wipe_etcd=true -e wipe_mender=true for a full factory wipe)
-#       theia cleanup <machine>   ← the wrapper (tools/theia.py)
+# The target rig is resolved by NAME from deploy/registry/<target>.yml (host +
+# the artheia `machine` slice) — same registry as `theia orchestrate`.
+- name: "Resolve the deploy target from the registry"
+  hosts: localhost
+  gather_facts: false
+  vars:
+    target: "{{ target | mandatory }}"
+    registry_file: "{{ playbook_dir }}/../registry/{{ target }}.yml"
+  tasks:
+    - name: "Load the target's registry entry (host + machine slice)"
+      ansible.builtin.include_vars:
+        file: "{{ registry_file }}"
+        name: _rig
+    - name: "Add the resolved target as an in-memory host"
+      ansible.builtin.add_host:
+        name: "{{ target }}"
+        groups: _cleanup_targets
+        ansible_host: "{{ _rig.ansible_host }}"
+        ansible_user: "{{ _rig.ansible_user | default('root') }}"
+        machine: "{{ _rig.machine }}"
+
 - name: "Theia cleanup (uninstall the prior stack)"
-  hosts: all
+  hosts: _cleanup_targets
   become: true
   vars:
     theia_root: /opt/theia

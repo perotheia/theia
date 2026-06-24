@@ -83,3 +83,13 @@
 
     - name: "Include per-target config override pass"
       ansible.builtin.include_tasks: tasks/config-override.yml
+
+    # Boot-time autostart unit. ON by default so a fresh orchestrate (or one
+    # after `theia cleanup`, which removes the unit) leaves a RUNNING, enabled
+    # supervisor — not just staged files. The handler-based `tdb reload` only
+    # fires when something's already up, so without this a cleaned box would
+    # stay dead. Opt out with -e autostart=false (e.g. the docker-compose path
+    # where run-supervisor.sh is the container entrypoint, not a systemd unit).
+    - name: "Include supervisor autostart unit (systemd)"
+      ansible.builtin.include_tasks: tasks/install-supervisor-unit.yml
+      when: autostart | default(true) | bool

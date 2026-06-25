@@ -16,6 +16,7 @@ enum SupervisionKind {
     SupervisionKind_SK_DEADLINE = 1;
     SupervisionKind_SK_LOGICAL = 2;
     SupervisionKind_SK_STATE = 3;
+    SupervisionKind_SK_FC_HEALTH = 4;
 }
 
 message PhmConfig {
@@ -85,5 +86,14 @@ message FaultEscalate {
 
 message FaultCleared {
     // empty body
+}
+
+message FcHealthReport {
+    string entity = 1;
+    HealthLevel level = 2;
+    uint32 fg = 3;
+    uint32 code = 4;
+    string detail = 5;
+    uint64 ts_ns = 6;
 }
 

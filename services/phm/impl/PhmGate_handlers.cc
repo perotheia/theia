@@ -282,6 +282,51 @@ void PhmGate::handle_cast(const PhmCheckpoint& msg, PhmGateState& s) {
     forward_to_fsm(kNodeName, "FaultEscalate(checkpoint)", FaultEscalate{});
 }
 
+// ---- FcHealthReport — the FC→PHM health edge (SK_FC_HEALTH). -----------------
+//
+// An FC did its OWN local fault analysis and reports the resulting level on a
+// fault EDGE (not keep-alive). PHM AGGREGATES the indication into the per-entity
+// tracker and drives the fault FSM — it does NOT re-discover the fault. Map the
+// reported HealthLevel to the FSM event the other detectors use:
+//   OK       → FaultCleared  (recovery: step the entity back toward OK)
+//   WARNING  → FaultObserved (watch)
+//   DEGRADED → FaultEscalate (→ DEGRADED)
+//   FAILED   → FaultEscalate ×2 (drive to FAILED — mirrors the SupervisionEvent
+//              fail path). PhmFsm's verdict then casts PhmHealthStatus → SM.
+void PhmGate::handle_cast(const FcHealthReport& msg, PhmGateState& s) {
+    const std::string entity = msg.entity;
+    if (entity.empty()) return;
+
+    const uint64_t now = now_ns_();
+    const uint64_t window_ns =
+        static_cast<uint64_t>(s.config.restart_window_ms) * 1000000ull;
+    EntityFault& e = tracker_for(s, entity, now, window_ns);
+    e.level = static_cast<uint8_t>(msg.level);   // the FC's self-assessed level
+
+    std::fprintf(stderr,
+        "[%s] FcHealthReport entity=%s level=%u fg=%u code=%u detail=%s\n",
+        kNodeName, entity.c_str(), (unsigned)msg.level, (unsigned)msg.fg,
+        (unsigned)msg.code, msg.detail);
+
+    switch (msg.level) {
+    case system_services_phm_HealthLevel_HealthLevel_OK:
+        forward_to_fsm(kNodeName, "FaultCleared(fc)", FaultCleared{});
+        break;
+    case system_services_phm_HealthLevel_HealthLevel_WARNING:
+        forward_to_fsm(kNodeName, "FaultObserved(fc)", FaultObserved{});
+        break;
+    case system_services_phm_HealthLevel_HealthLevel_DEGRADED:
+        forward_to_fsm(kNodeName, "FaultEscalate(fc)", FaultEscalate{});
+        break;
+    case system_services_phm_HealthLevel_HealthLevel_FAILED:
+        forward_to_fsm(kNodeName, "FaultEscalate(fc-fail)", FaultEscalate{});
+        forward_to_fsm(kNodeName, "FaultEscalate(fc-fail)", FaultEscalate{});
+        break;
+    default:
+        break;
+    }
+}
+
 // ---- GetHealthStatus — the ara::phm read surface. Summarise the per-entity
 //      table: worst level seen, total tracked, how many are DEGRADED+.
 PhmStatusMsg PhmGate::handle_call(

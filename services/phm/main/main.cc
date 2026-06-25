@@ -215,6 +215,7 @@ int main(int argc, char** argv) {
         config_mux.register_cast<HeartbeatReport>(phm_gate_cfg, phm_gate);
         config_mux.register_cast<SendTimeoutReport>(phm_gate_cfg, phm_gate);
         config_mux.register_cast<PhmCheckpoint>(phm_gate_cfg, phm_gate);
+        config_mux.register_cast<FcHealthReport>(phm_gate_cfg, phm_gate);
         // PG (manual pub/sub, OTP shape): attach this statem node's PgClient to
         // its demux binding (joined-group frames + PgMembership pushes route into
         // handle_cast) + pass its bound addr as the watcher address (where the

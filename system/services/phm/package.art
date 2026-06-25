@@ -40,10 +40,11 @@ enum HealthLevel {
 
 // The AUTOSAR supervision category a fault came from (which detector saw it).
 enum SupervisionKind {
-    SK_ALIVE    = 0   // heartbeat / process death
-    SK_DEADLINE = 1   // send-side budget miss (SendTimeoutReport)
-    SK_LOGICAL  = 2   // app-reported wrong execution order
-    SK_STATE    = 3   // app-reported illegal lifecycle transition
+    SK_ALIVE     = 0   // heartbeat / process death
+    SK_DEADLINE  = 1   // send-side budget miss (SendTimeoutReport)
+    SK_LOGICAL   = 2   // app-reported wrong execution order
+    SK_STATE     = 3   // app-reported illegal lifecycle transition
+    SK_FC_HEALTH = 4   // FC self-reported health (local fault analysis → escalation)
 }
 
 // ─── Thresholds (static deploy params; etcd hot-reload is the plan) ──────────
@@ -114,6 +115,29 @@ message PhmCheckpoint {
 }
 interface senderReceiver PhmReportIf {
     data PhmCheckpoint checkpoint
+}
+
+// ─── FC health report → PHM (the FC→PHM escalation edge) ─────────────────────
+//
+// The standard health INDICATION every FC casts to PHM on a fault EDGE — NOT a
+// keep-alive stream (the supervisor's HeartbeatReport already owns liveness; an
+// FC must not firehose "still OK / still at rung N"). Each FC does its OWN local
+// fault analysis (nm: lost-operational / required-VPN-down; com: gRPC peer lost;
+// fw: egress-drop spike; …) and reports the resulting level on the transition.
+// PHM AGGREGATES these indications into a per-entity verdict (it does not
+// re-discover the fault) and, when a subsystem crosses threshold, escalates
+// PhmHealthStatus → SM (mode) + rolls a summarized trend → the fleet. `level` OK
+// is the fault-CLEARED edge (recovery); WARNING/DEGRADED/FAILED is the fault edge.
+message FcHealthReport {
+    string      entity [max_size:64]    // the reporting FC/worker name
+    HealthLevel level         // OK(cleared) | WARNING | DEGRADED | FAILED
+    uint32      fg            // Function Group id the FC belongs to (0=Machine)
+    uint32      code          // FC-local fault code (0 when level=OK)
+    string      detail [max_size:128]   // human note ("lost operational: VPN down")
+    uint64      ts_ns
+}
+interface senderReceiver FcHealthReportIf {
+    data FcHealthReport report
 }
 
 // ─── Escalation OUT → State Management (the comm-matrix phm → sm edge) ───────
@@ -237,6 +261,7 @@ node atomic PhmGate {
         receiver from_sup    requires SupervisorEventIf   // alive: SupervisionEvent
         receiver from_nodes  requires NodeReportIf         // alive+deadline reports
         receiver from_apps   requires PhmReportIf          // logical+state checkpoints
+        receiver from_fcs    requires FcHealthReportIf     // FC self-reported health edges
         server   ctl         provides PhmCtlIf             // GetHealthStatus
     }
 }

@@ -46,6 +46,7 @@ using SupervisionEvent = system_supervisor_SupervisionEvent;
 using HeartbeatReport = system_supervisor_HeartbeatReport;
 using SendTimeoutReport = system_supervisor_SendTimeoutReport;
 using PhmCheckpoint = system_services_phm_PhmCheckpoint;
+using FcHealthReport = system_services_phm_FcHealthReport;
 using PhmStatusReq = system_services_phm_PhmStatusReq;
 using PhmStatusMsg = system_services_phm_PhmStatusMsg;
 
@@ -192,6 +193,8 @@ public:
     void handle_cast(const SendTimeoutReport& msg, PhmGateState& s);
 
     void handle_cast(const PhmCheckpoint& msg, PhmGateState& s);
+
+    void handle_cast(const FcHealthReport& msg, PhmGateState& s);
 
 
     PhmStatusMsg handle_call(const PhmStatusReq& req,

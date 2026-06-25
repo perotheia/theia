@@ -241,6 +241,16 @@ inline std::string build_ruleset(const std::string& dmz_csv,
     in_chain += "        ct state established,related accept\n";
     in_chain += "        ct state invalid drop\n";
     in_chain += "        iif lo accept\n";
+    // SSH management — ALWAYS allowed, regardless of the DMZ list / default-drop.
+    // FIELD-SAFETY INVARIANT: a headless remote rig (reached only over SSH/VPN)
+    // must NEVER be locked out by a firewall (mis)config. A full-stack fw with no
+    // deploy config defaults to `policy drop` + a DMZ list of {7700,7710,7711,2379}
+    // that OMITS 22 — which silently dropped all inbound SSH on the rpi4 field rig
+    // (link up, host unreachable). 22 is unconditionally accepted here so fw can
+    // never strand the operator; lock it down via a fw.d fragment (saddr-restrict)
+    // when a deployment genuinely wants to, but never by accident.
+    in_chain += "        tcp dport 22 accept\n";
+    ++rules;
 
     // FW.d: management VPN — a fully-trusted inbound interface. Emitted BEFORE
     // the dport rule so ssh/puppet/monitoring over the VPN bypass the saddr

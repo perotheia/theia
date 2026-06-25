@@ -25,6 +25,7 @@
 #include <pb_decode.h>
 
 #include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <string>
 
@@ -101,7 +102,7 @@ void stamp_snapshot_(NmDaemonState s, NmStatusMsg& d) {
 // so mutating `d` updates BOTH the broadcast payload and the FSM's persistent
 // data in one move — handle_call(NetStatusReq) reads the same `d` back.
 void NmDaemon::on_enter(NmDaemonState new_s,
-                          NmDaemonState /*old_s*/,
+                          NmDaemonState old_s,
                           NmDaemonData& d) {
     // Publish self to the poller on first entry (idempotent on later
     // transitions). The initial DOWN entry runs during start_statem(), so the
@@ -138,6 +139,34 @@ void NmDaemon::on_enter(NmDaemonState new_s,
     // subscribers under the lock + invokes outside it, so a slow subscriber
     // can't stall the FSM thread.
     broadcast_broadcast_status(d);
+
+    // PHM health edge (escalation model): report a health INDICATION to PHM only
+    // on the OPERATIONAL fault EDGE — NOT every transition (no keep-alive spam;
+    // PHM aggregates). NM does its own fault analysis here: reaching OPERATIONAL
+    // is the fault CLEARED (OK); leaving OPERATIONAL (or entering DEGRADED) is the
+    // fault. PHM aggregates this into the platform health verdict; the orthogonal
+    // OPERATIONAL gate (SM FgGate on NmStatusStream) fires on the same edge.
+    {
+        const bool now_op  = (new_s == NmDaemonState::NETWORK_OPERATIONAL);
+        const bool was_op  = (old_s == NmDaemonState::NETWORK_OPERATIONAL);
+        if (now_op != was_op) {   // edge only
+            FcHealthReport hr = system_services_phm_FcHealthReport_init_zero;
+            std::snprintf(hr.entity, sizeof(hr.entity), "%s", NmDaemon::kNodeName);
+            hr.fg    = 2;          // FG_NETWORK (sm sm_sup_link FgId)
+            hr.ts_ns = d.ts_ns;
+            if (now_op) {
+                hr.level = system_services_phm_HealthLevel_HealthLevel_OK;
+                hr.code  = 0;
+                std::snprintf(hr.detail, sizeof(hr.detail), "network operational");
+            } else {
+                hr.level = system_services_phm_HealthLevel_HealthLevel_DEGRADED;
+                hr.code  = 1;      // NM-local: lost operational
+                std::snprintf(hr.detail, sizeof(hr.detail),
+                              "lost operational (state=%s)", NmDaemon::state_name(new_s));
+            }
+            broadcast_to_phm_report(hr);
+        }
+    }
 
     // VPN_ESTABLISHED self-advances to NETWORK_OPERATIONAL: the tunnel rung is the
     // last gate, and "operational" is the steady terminal state SM gates on. Post

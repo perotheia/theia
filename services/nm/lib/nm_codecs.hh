@@ -26,6 +26,7 @@
 #include "RemoteCodec.hh"   // THEIA_DECLARE_REMOTE_CODEC
 #include "system/services/nm/nm.pb.h"
 
+#include "system/services/phm/phm.pb.h"
 
 
 
@@ -35,6 +36,7 @@ THEIA_DECLARE_REMOTE_CODEC(system_services_nm_WifiScanReq)
 THEIA_DECLARE_REMOTE_CODEC(system_services_nm_WifiScanReply)
 THEIA_DECLARE_REMOTE_CODEC(system_services_nm_WifiConnectReq)
 THEIA_DECLARE_REMOTE_CODEC(system_services_nm_WifiConnectReply)
+THEIA_DECLARE_REMOTE_CODEC(system_services_phm_FcHealthReport)
 THEIA_DECLARE_REMOTE_CODEC(system_services_nm_LinkUp)
 THEIA_DECLARE_REMOTE_CODEC(system_services_nm_LinkDown)
 THEIA_DECLARE_REMOTE_CODEC(system_services_nm_AddrAcquired)

@@ -70,6 +70,7 @@ using WifiScanReq = system_services_nm_WifiScanReq;
 using WifiScanReply = system_services_nm_WifiScanReply;
 using WifiConnectReq = system_services_nm_WifiConnectReq;
 using WifiConnectReply = system_services_nm_WifiConnectReply;
+using FcHealthReport = system_services_phm_FcHealthReport;
 
 
 using NmDaemonData = NmStatusMsg;
@@ -392,6 +393,8 @@ public:
 
     void     broadcast_broadcast_status(const NmStatusMsg& msg);
 
+    void     broadcast_to_phm_report(const FcHealthReport& msg);
+
 
     // ---- Server-port operations (one per unique handler signature) — impl
     //
@@ -429,6 +432,19 @@ inline void NmDaemon::broadcast_broadcast_status(const NmStatusMsg& msg) {
     if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<NmStatusMsg>::fields(), &msg))
         return;
     pg_.broadcast_members<NmStatusMsg>(_buf, static_cast<uint16_t>(_os.bytes_written));
+}
+
+inline void NmDaemon::broadcast_to_phm_report(const FcHealthReport& msg) {
+    // Monitor the group (OTP pg:monitor — idempotent), then cast to EACH watched
+    // member. group identity = msg_type_name<FcHealthReport>(); members pg_join the
+    // same type → register_cast<FcHealthReport> delivers to their handle_cast. The impl
+    // may pg_members<FcHealthReport>() to skip work when empty.
+    pg_watch<FcHealthReport>();
+    uint8_t _buf[8192];
+    pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
+    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<FcHealthReport>::fields(), &msg))
+        return;
+    pg_.broadcast_members<FcHealthReport>(_buf, static_cast<uint16_t>(_os.bytes_written));
 }
 
 

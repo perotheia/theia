@@ -15,6 +15,14 @@
 
 package system.services.nm
 
+// PHM health edge (escalation model): NM does its own fault analysis and reports
+// a health INDICATION to PHM on a fault EDGE (lost-operational / recovered) — NOT
+// a keep-alive stream. PHM aggregates platform health + rolls trends to the
+// fleet. This is the orthogonal HEALTH path; the OPERATIONAL path (SM gates the
+// NetworkFG on the same edge) is a separate cast. FcHealthReport / HealthLevel /
+// FcHealthReportIf are PHM's (imported). See docs/autosar/communication-matrix.md.
+import system.services.phm.*
+
 // ─── Readiness state ───────────────────────────────────────────────────────
 
 // The network-readiness ladder — a SM input. "operational" mode gates on
@@ -301,6 +309,7 @@ node atomic NmDaemon {
     ports {
         sender broadcast provides NmStatusStream
         server ctl       provides NmCtlIf
+        sender to_phm    provides FcHealthReportIf   // health edge → PHM (escalation)
     }
     statem {
         states  [NETWORK_OFF, LINK_AVAILABLE, WIFI_ASSOCIATED, IP_ACQUIRED,

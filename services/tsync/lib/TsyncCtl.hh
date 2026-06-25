@@ -54,6 +54,7 @@ using GmInfoReq = system_services_tsync_GmInfoReq;
 using GrandmasterReply = system_services_tsync_GrandmasterReply;
 using GnssSolution = platform_msgs_nav_GnssSolution;
 using Imu = platform_msgs_sensor_Imu;
+using FcHealthReport = system_services_phm_FcHealthReport;
 
 
 
@@ -235,6 +236,8 @@ public:
 
     void broadcast_imu_imu(const Imu& msg);
 
+    void broadcast_to_phm_report(const FcHealthReport& msg);
+
 
 private:
     // The node's process-group client: owns the recv thread for joined groups, the
@@ -272,6 +275,19 @@ inline void TsyncCtl::broadcast_imu_imu(const Imu& msg) {
     if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<Imu>::fields(), &msg))
         return;
     pg_.broadcast_members<Imu>(_buf, static_cast<uint16_t>(_os.bytes_written));
+}
+
+inline void TsyncCtl::broadcast_to_phm_report(const FcHealthReport& msg) {
+    // Ensure we're monitoring the group (OTP pg:monitor — idempotent), then cast
+    // `msg` to EACH watched member. group identity = msg_type_name<FcHealthReport>().
+    // The impl can call pg_members<FcHealthReport>() first to skip work when the list
+    // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
+    pg_watch<FcHealthReport>();
+    uint8_t _buf[8192];
+    pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
+    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<FcHealthReport>::fields(), &msg))
+        return;
+    pg_.broadcast_members<FcHealthReport>(_buf, static_cast<uint16_t>(_os.bytes_written));
 }
 
 

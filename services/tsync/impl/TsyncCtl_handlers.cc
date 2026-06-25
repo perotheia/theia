@@ -282,6 +282,37 @@ void poll_once(TsyncCtl& self, TsyncCtlState& s) {
             self.log().warn(std::string("LOSS OF LOCK: ") + line);
         else
             self.log().info(line);
+
+        // PHM health edge (escalation model): report the clock-health INDICATION
+        // to PHM on this state EDGE only (the supervisor's heartbeat owns liveness;
+        // tsync must not firehose "still LOCKED"). tsync does its own fault
+        // analysis — a degraded clock is a platform-wide fault PHM aggregates:
+        //   LOCKED(3)            → OK       (lock acquired / fault cleared)
+        //   HOLDOVER(2)          → WARNING  (free-running, still usable — recoverable)
+        //   UNLOCKED/UNAVAIL(≤1) → DEGRADED (no usable time discipline)
+        // PHM aggregates → PhmHealthStatus → SM. CAST over PG.
+        {
+            FcHealthReport hr = system_services_phm_FcHealthReport_init_zero;
+            std::snprintf(hr.entity, sizeof(hr.entity), "%s", TsyncCtl::kNodeName);
+            hr.fg    = 2;          // FG_NETWORK (sm sm_sup_link FgId — tsync ∈ network_sup)
+            hr.ts_ns = now;
+            if (s.state == S_LOCKED) {
+                hr.level = system_services_phm_HealthLevel_HealthLevel_OK;
+                hr.code  = 0;
+                std::snprintf(hr.detail, sizeof(hr.detail), "clock locked");
+            } else if (s.state == S_HOLDOVER) {
+                hr.level = system_services_phm_HealthLevel_HealthLevel_WARNING;
+                hr.code  = 1;
+                std::snprintf(hr.detail, sizeof(hr.detail), "clock holdover (free-run)");
+            } else {
+                hr.level = system_services_phm_HealthLevel_HealthLevel_DEGRADED;
+                hr.code  = 2;
+                std::snprintf(hr.detail, sizeof(hr.detail),
+                              "no time lock (state=%s)", kSt[s.state & 3]);
+            }
+            self.broadcast_to_phm_report(hr);
+        }
+
         s.last_reported_state = s.state;
     }
 }

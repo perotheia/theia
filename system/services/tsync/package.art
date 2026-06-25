@@ -27,6 +27,13 @@ import system.platform.msgs.nav.*       // GnssSolution, GnssSolutionSource/Stat
 import system.platform.msgs.geometry.*  // Point, Vector3 (embedded by GnssSolution)
 import system.platform.msgs.std.*       // Header
 
+// PHM health edge (escalation model): tsync reports a health INDICATION to PHM on
+// the loss-of-lock fault EDGE (LOCKED ⇄ lower) — NOT a keep-alive stream. A
+// degraded clock is a platform-wide fault PHM aggregates. FcHealthReport /
+// HealthLevel / FcHealthReportIf are PHM's (imported). See
+// docs/autosar/communication-matrix.md (escalation model).
+import system.services.phm.*
+
 // ─── Sync state + source ───────────────────────────────────────────────────
 
 // The clock's discipline state — what a consumer checks before trusting the
@@ -231,6 +238,7 @@ node atomic TsyncCtl {
         // solution + leave the IMU unpublished). A fusion app subscribes.
         sender gnss_solution provides GnssSolutionStream
         sender imu           provides ImuStream
+        sender to_phm        provides FcHealthReportIf   // health edge → PHM (loss-of-lock)
     }
     // Static DEPLOY knobs (lifecycle: param, not runtime-observable config) —
     // serialized into config/tsync.json, read once at boot via the runtime

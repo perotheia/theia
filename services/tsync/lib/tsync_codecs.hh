@@ -28,6 +28,7 @@
 
 #include "platform/msgs/nav/nav.pb.h"
 #include "platform/msgs/sensor/sensor.pb.h"
+#include "system/services/phm/phm.pb.h"
 
 
 
@@ -43,3 +44,4 @@ THEIA_DECLARE_REMOTE_CODEC(system_services_tsync_GmInfoReq)
 THEIA_DECLARE_REMOTE_CODEC(system_services_tsync_GrandmasterReply)
 THEIA_DECLARE_REMOTE_CODEC(platform_msgs_nav_GnssSolution)
 THEIA_DECLARE_REMOTE_CODEC(platform_msgs_sensor_Imu)
+THEIA_DECLARE_REMOTE_CODEC(system_services_phm_FcHealthReport)

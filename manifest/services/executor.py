@@ -21,6 +21,6 @@ SUPERVISORS: list[SupervisorNode] = [
     SupervisorNode(
         name="services_sup",
         strategy=RestartStrategy.ONE_FOR_ONE,
-        children=['com', 'crypto', 'diag', 'fw', 'idsm', 'log', 'nm', 'osi', 'per', 'phm', 'rds', 'shwa', 'sm', 'tsync', 'ucm'],
+        children=['com', 'crypto', 'diag', 'fw', 'idsm', 'log', 'nm', 'osi', 'per', 'phm', 'rds', 'shwa', 'sm', 'tsync', 'ucm', 'vucm'],
     ),
 ]

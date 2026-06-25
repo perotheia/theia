@@ -98,6 +98,11 @@ DEPLOYMENT = DeploymentLayer(
             fg_states={"Startup", "Running"},
         ),
         ProcessLayer(
+            name='vucm', executable=Explicit('//services/vucm/main:vucm'),
+            start_cmd=Explicit('bin/vucm'), function_group=Explicit('services'),
+            fg_states={"Startup", "Running"},
+        ),
+        ProcessLayer(
             name='shwa', executable=Explicit('//services/shwa/main:shwa'),
             start_cmd=Explicit('bin/shwa'), function_group=Explicit('services'),
             fg_states={"Startup", "Running"},
@@ -105,7 +110,7 @@ DEPLOYMENT = DeploymentLayer(
     }),
     applications=ApplicationSetLayer(applications={
         # one AA bundling every process; host bound by the variant.
-        ApplicationLayer(name='services', processes={'com', 'crypto', 'diag', 'fw', 'idsm', 'log', 'nm', 'osi', 'per', 'phm', 'rds', 'sm', 'tsync', 'ucm', 'shwa'}),
+        ApplicationLayer(name='services', processes={'com', 'crypto', 'diag', 'fw', 'idsm', 'log', 'nm', 'osi', 'per', 'phm', 'rds', 'sm', 'tsync', 'ucm', 'vucm', 'shwa'}),
     }),
 )
 
@@ -255,4 +260,13 @@ PROCESS_NODES = {   'com': {   'modules': ['services/com'],
                             {   'name': 'ucm_fsm',
                                 'reporting': True,
                                 'tipc_instance': '0',
-                                'tipc_type': '0x8001001E'}]}}
+                                'tipc_type': '0x8001001E'}]},
+    'vucm': {   'modules': ['services/vucm'],
+                'nodes': [   {   'name': 'vucm_campaign',
+                                 'reporting': True,
+                                 'tipc_instance': '0',
+                                 'tipc_type': '0x80010050'},
+                             {   'name': 'vucm_gate',
+                                 'reporting': True,
+                                 'tipc_instance': '0',
+                                 'tipc_type': '0x8001005E'}]}}

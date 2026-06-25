@@ -101,7 +101,11 @@ void NmCfgGate::handle_info(const char* info, NmCfgGateState& /*s*/) {
 // the committed view converges once an op runs.
 void NmCfgGate::init(NmCfgGateState& /*s*/) {
     auto& sh = nm_cfg_shared();
-    sh.committed = system_services_nm_NmConfig_init_zero;
+    // _init_zero is a brace-initializer — valid to INITIALISE a fresh object, not
+    // to ASSIGN to an existing one (aarch64 gcc rejects the assignment form, x86
+    // accepts it). Zero via a temp, then copy.
+    const system_services_nm_NmConfig zero = system_services_nm_NmConfig_init_zero;
+    sh.committed = zero;
     sh.committed_known = false;
     sh.txn_pending = false;
 }

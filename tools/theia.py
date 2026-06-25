@@ -1507,9 +1507,16 @@ def cmd_release(args: list[str]) -> int:
         return 0
 
     archs = ["host"]
+    # The build-distro ABI tag for the x86 services .deb Depends (com/per link
+    # grpc++/libprotobuf shared). Default = the host's soname generation; pass
+    # --distro ubuntu24 on a 24.04 box. Threads to --define distro=<tag> so
+    # //packaging/theia:theia-services_deb selects the matching dep names.
+    distro = None
     for i, a in enumerate(args):
         if a == "--arch" and i + 1 < len(args):
             archs = [x.strip() for x in args[i + 1].split(",") if x.strip()]
+        if a == "--distro" and i + 1 < len(args):
+            distro = args[i + 1].strip()
     for a in archs:
         if a not in _RELEASE_ARCH:
             print(f"theia release: unknown arch '{a}' "
@@ -1521,56 +1528,78 @@ def cmd_release(args: list[str]) -> int:
     deb_dir.mkdir(parents=True, exist_ok=True)
 
     python_only = "--python-only" in args
+    # --runtime: build ONLY the on-device runtime+services .debs (theia-runtime +
+    # theia-services), skipping the framework + rf wheels AND the -dev packages.
+    # The fast path for cutting a runtime bugfix / dev rc straight to the S3 runtime
+    # plane (seed-official.sh) WITHOUT a full GitHub release — the fleet provisions
+    # from theia-runtime/<ver>, so only those two debs matter. Pairs with --distro.
+    runtime_only = "--runtime" in args
     # .deb is the default + primary (Theia is always Debian-derived). --ipk is the
     # opt-in hatch that ALSO emits the embedded/opkg .ipk under dist/ipkg/.
     want_ipk = "--ipk" in args
 
-    # ── Step 1: framework — artheia + deps + rules → a real .deb (/opt/theia,
-    #    ROS2-style setup.bash). Arch-independent (Architecture: all). ──────────
     fw_out = deb_dir / "theia-framework"
-    fw_out.mkdir(parents=True, exist_ok=True)
-    if (rc := _build_framework_deb(fw_out)) != 0:
-        print("theia release: framework .deb build failed.", file=sys.stderr)
-        return rc
-
-    # ── Step 4 (python part): rf harness wheel (minus _selftest, per its
-    #    pyproject find.exclude). Arch-independent. ────────────────────────────
     rf_out = deb_dir / "theia-rf"
-    rf_out.mkdir(parents=True, exist_ok=True)
-    if (rc := _run([sys.executable, "-m", "pip", "wheel",
-                    str(WORKSPACE / "rf-theia"), "--no-deps",
-                    "-w", str(rf_out)])) != 0:
-        print("theia release: rf wheel build failed.", file=sys.stderr)
-        return rc
+    if not runtime_only:
+        # ── Step 1: framework — artheia + deps + rules → a real .deb (/opt/theia,
+        #    ROS2-style setup.bash). Arch-independent (Architecture: all). ──────
+        fw_out.mkdir(parents=True, exist_ok=True)
+        if (rc := _build_framework_deb(fw_out)) != 0:
+            print("theia release: framework .deb build failed.", file=sys.stderr)
+            return rc
 
-    if python_only:
-        print(f"theia release: python wheels → {fw_out}, {rf_out}",
-              file=sys.stderr)
-        return 0
+        # ── Step 4 (python part): rf harness wheel (minus _selftest, per its
+        #    pyproject find.exclude). Arch-independent. ──────────────────────────
+        rf_out.mkdir(parents=True, exist_ok=True)
+        if (rc := _run([sys.executable, "-m", "pip", "wheel",
+                        str(WORKSPACE / "rf-theia"), "--no-deps",
+                        "-w", str(rf_out)])) != 0:
+            print("theia release: rf wheel build failed.", file=sys.stderr)
+            return rc
+
+        if python_only:
+            print(f"theia release: python wheels → {fw_out}, {rf_out}",
+                  file=sys.stderr)
+            return 0
 
     # ── Steps 2+3: runtime + services .deb (+ .ipk with --ipk) via bazel. ─────
+    distro_def = [f"--define=distro={distro}"] if distro else []
+    # --runtime narrows to the two on-device debs (drop the -dev / dev-tooling pkgs).
+    _RUNTIME_DEBS = {"//packaging/theia:theia-runtime_deb",
+                     "//packaging/theia:theia-services_deb"}
     for arch in archs:
         platform = _RELEASE_ARCH[arch]
-        deb_targets = [d for d, _ in _RELEASE_BAZEL_PKGS]
+        deb_targets = [d for d, _ in _RELEASE_BAZEL_PKGS
+                       if (not runtime_only) or d in _RUNTIME_DEBS]
         # .deb (default — per arch, emits *_amd64.deb / *_arm64.deb).
         if (rc := _run(["bazel", "build", *deb_targets,
-                        f"--platforms={platform}"])) != 0:
+                        f"--platforms={platform}", *distro_def])) != 0:
             return rc
         # .ipk hatch (embedded/opkg) — only with --ipk.
         if want_ipk:
             ipk_targets = [i for _, i in _RELEASE_BAZEL_PKGS if i]
             if (rc := _run(["bazel", "build", *ipk_targets,
-                            f"--platforms={platform}"])) != 0:
+                            f"--platforms={platform}", *distro_def])) != 0:
                 return rc
 
     # ── Step 4 (collect): copy bazel-bin outputs into dist/. ─────────────────
+    # --runtime narrows the collected set to the two on-device packages so a stale
+    # framework/dev .deb lingering in bazel-bin from a prior full release isn't
+    # swept into the runtime bundle. bazel outputs are read-only (r-xr-xr-x), so
+    # unlink any existing dest before copying (copy2 onto a read-only file fails).
     bin_root = WORKSPACE / "bazel-bin" / "packaging" / "theia"
+    _runtime_pkgs = {"theia-runtime", "theia-services"}
     n_deb = n_ipk = 0
     for f in bin_root.glob("*.deb"):
         pkg = f.name.split("_")[0]          # theia-runtime_0.1.0_amd64.deb → theia-runtime
+        if runtime_only and pkg not in _runtime_pkgs:
+            continue
         dst = deb_dir / pkg
         dst.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(f, dst / f.name)
+        dst_f = dst / f.name
+        if dst_f.exists():
+            dst_f.unlink()
+        shutil.copy2(f, dst_f)
         n_deb += 1
     if want_ipk:
         ipk_dir.mkdir(parents=True, exist_ok=True)
@@ -1586,6 +1615,233 @@ def cmd_release(args: list[str]) -> int:
         msg += f", {n_ipk} .ipk → {ipk_dir}/"
     print(f"{msg} (+ framework & rf wheels); arch={','.join(archs)}",
           file=sys.stderr)
+    return 0
+
+
+def cmd_release_app(args: list[str]) -> int:
+    """Build + publish a USER-WS APP bundle for day-2 Mender OTA (the app plane).
+
+    The runtime/app dichotomy: `theia release [--runtime]` ships the UNIVERSAL
+    platform (supervisor + services) to the runtime plane (colony factory-installs
+    it). `theia release-app` ships ONLY the user's app FCs — the day-2 delivery
+    unit Mender installs as an OVERLAY into the running release (services + the
+    supervisor are NEVER touched). The app build is target-arch — the arch is
+    DEFINED BY THE FLEET's board hardware.
+
+    Usage:
+      theia release-app <app> [opts]
+        <app>            the apps/<app> composition (e.g. gateway)
+        --app-version V  the app semver (default 0.1.0) — the install dir + Mender
+                         artifact name (keyed <app>-<V>)
+        --fleet F        the hardware-capability fleet / Mender device-group
+                         (default theia-rig) — the S3 app-plane key + Mender
+                         --device-type
+        --arch A         target arch (default x86_64) — the fleet board's arch
+        --machine M      the manifest machine whose app slice to pack (default:
+                         the app's host_machine from application.json)
+        --s3 URL         publish to the app plane on this MinIO/S3 (e.g.
+                         http://10.0.0.99:9000); omit to only build the .mender
+        --mender-only    just write dist/apps/<app>/<app>-<V>.mender (no S3 push)
+
+    Output:
+      dist/apps/<app>/<app>-<V>.mender   the Mender artifact (theia-app module)
+      → S3 user-software/<fleet>/<app>/<V>/  (when --s3 given)
+
+    The artifact payload (consumed by the on-device `theia-app` update module):
+      bin/<fc>          the app's FC binaries (the overlay)
+      app.json          {name, version, processes[], executor_subtree}
+      version.txt       <app>-<V>  (the module's artifact-name gate)
+    """
+    import json
+    import shutil
+
+    if "-h" in args or "--help" in args or not args:
+        print(cmd_release_app.__doc__, file=sys.stderr)
+        return 0 if args else 2
+
+    app = next((a for a in args if not a.startswith("-")), None)
+    if not app:
+        print("theia release-app: needs an <app> name (apps/<app>).",
+              file=sys.stderr)
+        return 2
+
+    def _opt(name, default=None):
+        for i, a in enumerate(args):
+            if a == name and i + 1 < len(args):
+                return args[i + 1]
+        return default
+
+    app_ver = _opt("--app-version", "0.1.0")
+    fleet = _opt("--fleet", "theia-rig")
+    arch = _opt("--arch", "x86_64")
+    s3_url = _opt("--s3")
+    mender_only = "--mender-only" in args or not s3_url
+    platform = _ARCH_PLATFORM.get(arch)
+    if not platform:
+        print(f"theia release-app: no bazel platform for arch '{arch}'.",
+              file=sys.stderr)
+        return 2
+
+    # ── Resolve the app's process set + host machine from the manifest. The app's
+    #    application.json (emitted by `theia manifest`) names the app + its FCs. ──
+    mdir = WORKSPACE / _MANIFEST_DIR
+    machine = _opt("--machine")
+    app_procs: list[str] = []
+    if not machine or not app_procs:
+        # scan every machine's application.json for an application named <app>.
+        for aj in sorted(mdir.glob("*/application.json")):
+            apps = json.loads(aj.read_text()).get("applications", [])
+            for a in apps:
+                if a.get("name") == app:
+                    machine = machine or aj.parent.name
+                    app_procs = a.get("processes", [])
+                    break
+            if app_procs:
+                break
+    if not app_procs:
+        print(f"theia release-app: no application '{app}' in any "
+              f"{mdir}/*/application.json — run `theia manifest` on the app rig "
+              "first.", file=sys.stderr)
+        return 1
+    print(f"theia release-app: {app} v{app_ver} fleet={fleet} arch={arch} "
+          f"machine={machine} procs={app_procs}", file=sys.stderr)
+
+    # ── Build the app's FC binaries (target-arch). The app FCs live under
+    #    //apps/<app>/main:<fc> in the user-ws; cross-compile to the fleet arch. ──
+    fc_targets = [f"//apps/{app}/main:{p}" for p in app_procs]
+    if (rc := _run(["bazel", "build", *fc_targets,
+                    f"--platforms={platform}"])) != 0:
+        print("theia release-app: app FC build failed.", file=sys.stderr)
+        return rc
+
+    # ── Stage the app release tree: bin/<fc> + app.json + version.txt. ─────────
+    out_dir = WORKSPACE / "dist" / "apps" / app
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stage = out_dir / "_stage"
+    if stage.exists():
+        shutil.rmtree(stage)
+    (stage / "bin").mkdir(parents=True)
+    bzbin = WORKSPACE / "bazel-bin" / "apps" / app / "main"
+    for p in app_procs:
+        src = bzbin / p
+        if not src.is_file():
+            print(f"theia release-app: built binary missing: {src}",
+                  file=sys.stderr)
+            return 1
+        dst = stage / "bin" / p
+        shutil.copy2(src, dst)
+        dst.chmod(0o755)
+
+    # The executor subtree for just this app (the supervisor merges it under its
+    # tree on install). Pull the app's slice from the machine's executor.json.
+    exec_subtree = None
+    ej = (mdir / machine / "executor.json") if machine else None
+    if ej and ej.is_file():
+        full = json.loads(ej.read_text())
+        exec_subtree = _extract_app_subtree(full, app, app_procs)
+    (stage / "app.json").write_text(json.dumps({
+        "name": app, "version": app_ver, "fleet": fleet, "arch": arch,
+        "processes": app_procs, "executor_subtree": exec_subtree,
+    }, indent=2))
+    artifact_name = f"{app}-{app_ver}"
+    (stage / "version.txt").write_text(artifact_name + "\n")
+
+    # ── Pack the Mender artifact (theia-app module). Reuse mender-artifact if
+    #    present; else leave the staged tree + a tarball for the GW to pack. ─────
+    mender_out = out_dir / f"{artifact_name}.mender"
+    tarball = out_dir / f"{artifact_name}.tar.gz"
+    import tarfile
+    with tarfile.open(tarball, "w:gz") as tf:
+        tf.add(stage, arcname=".")
+    if shutil.which("mender-artifact"):
+        rc = _run([
+            "mender-artifact", "write", "module-image",
+            "--type", "theia-app",
+            "--artifact-name", artifact_name,
+            "--device-type", fleet,
+            "--file", str(tarball),
+            "--file", str(stage / "version.txt"),
+            "--file", str(stage / "app.json"),
+            "--output-path", str(mender_out),
+        ])
+        if rc != 0:
+            print("theia release-app: mender-artifact pack failed.",
+                  file=sys.stderr)
+            return rc
+        print(f"theia release-app: wrote {mender_out}", file=sys.stderr)
+    else:
+        print("theia release-app: mender-artifact not installed — staged tree + "
+              f"{tarball} written; pack on the GW.", file=sys.stderr)
+
+    # ── Publish to the app plane: user-software/<fleet>/<app>/<ver>/. ──────────
+    if not mender_only and s3_url:
+        rc = _publish_app_plane(s3_url, fleet, app, app_ver,
+                                mender_out if mender_out.exists() else None,
+                                tarball, stage / "app.json")
+        if rc != 0:
+            return rc
+    return 0
+
+
+def _extract_app_subtree(executor: dict, app: str, procs: list[str]):
+    """Return the executor.json subtree (the supervisor child nodes) for just the
+    app's processes — what the on-device app module merges into the running tree.
+    Walks the tree, returns the matching process nodes (by name) verbatim."""
+    procset = set(procs)
+    found = []
+
+    def walk(node):
+        if isinstance(node, dict):
+            if node.get("name") in procset and node.get("start_cmd"):
+                found.append(node)
+            for k in ("children", "workers", "nodes"):
+                for c in node.get(k, []) or []:
+                    walk(c)
+    walk(executor)
+    return {"app": app, "nodes": found}
+
+
+def _publish_app_plane(s3_url: str, fleet: str, app: str, ver: str,
+                       mender: "Path | None", tarball: "Path",
+                       app_json: "Path") -> int:
+    """Push the app bundle to the S3 app plane user-software/<fleet>/<app>/<ver>/.
+    Uses the aws cli (S3-compatible) against MinIO. Writes an index.json the GW /
+    ground-station reads to drive a Mender deployment."""
+    import json
+    import os
+    import subprocess
+    if not shutil.which("aws"):
+        print("theia release-app: aws cli not found — cannot push to S3 (build "
+              "the artifact, push from a host that has it).", file=sys.stderr)
+        return 1
+    key = f"user-software/{fleet}/{app}/{ver}"
+    env = {**os.environ,
+           "AWS_ACCESS_KEY_ID": os.environ.get("MINIO_USER", "theia"),
+           "AWS_SECRET_ACCESS_KEY": os.environ.get("MINIO_PASSWORD", "theiaminio"),
+           "AWS_DEFAULT_REGION": "us-east-1"}
+    bucket = "theia-apps"
+    aws = ["aws", "--endpoint-url", s3_url, "s3"]
+
+    def _aws(argv: list, check: bool = True) -> int:
+        print(f"$ {' '.join(argv)}", file=sys.stderr)
+        return subprocess.run(argv, env=env).returncode if not check else \
+            subprocess.run(argv, env=env, check=False).returncode
+
+    subprocess.run([*aws, "mb", f"s3://{bucket}"], env=env)  # idempotent
+    objs = []
+    for f in (mender, tarball, app_json):
+        if f and f.is_file():
+            if _aws([*aws, "cp", str(f), f"s3://{bucket}/{key}/{f.name}"]) != 0:
+                return 1
+            objs.append(f.name)
+    idx = {"plane": "app", "fleet": fleet, "app": app, "version": ver,
+           "artifact": (mender.name if mender and mender.is_file() else None),
+           "files": objs}
+    idx_path = WORKSPACE / "dist" / "apps" / app / f"index-{ver}.json"
+    idx_path.write_text(json.dumps(idx, indent=2))
+    if _aws([*aws, "cp", str(idx_path), f"s3://{bucket}/{key}/index.json"]) != 0:
+        return 1
+    print(f"theia release-app: published → s3://{bucket}/{key}/", file=sys.stderr)
     return 0
 
 
@@ -2385,6 +2641,7 @@ COMMANDS = {
     "manifest":    (cmd_manifest,    "rig.py → dist/manifest/*.json (sole rig entry for deploy)"),
     "dist":        (cmd_dist,        "per-host .ipk from dist/manifest/ JSON (no rig.py)"),
     "release":     (cmd_release,     "build the installable package set (.deb+.ipk) → dist/debian + dist/ipkg"),
+    "release-app": (cmd_release_app, "build + publish a user-ws app bundle (day-2 Mender OTA, the app plane)"),
     "compdb":      (cmd_compdb,      "regen compile_commands.json from bazel (clangd)"),
     "observer":    (cmd_observer,    "launch the supervisor-GUI against the local cluster (always mTLS)"),
 }

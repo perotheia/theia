@@ -1,0 +1,154 @@
+#!/bin/sh
+# theia-app — a Mender Update Module that installs a USER APP as an OVERLAY on the
+# running release (the day-2 app plane). The runtime/app dichotomy on-device:
+#
+#   theia-release  swaps the WHOLE release (current → releases/<ver>) — the
+#                  platform (supervisor + services), colony's factory job.
+#   theia-app      overlays ONLY the app's FC binaries into the live release +
+#                  merges the app's executor subtree into the supervised tree +
+#                  reloads the supervisor. Services + supervisor are NEVER touched.
+#
+# This is what makes "apps are Mender-only day-2, services are factory-only" real:
+# an app deployment lands app bits without disturbing the platform underneath.
+#
+# Artifact payload (produced by `theia release-app`):
+#   release.tar.* | <app>-<ver>.tar.gz   tar of {bin/<fc>, app.json, version.txt}
+#   app.json                             {name,version,processes[],executor_subtree}
+#   version.txt                          <app>-<ver>  (the artifact-name gate)
+#
+# Install model (overlay, reversible):
+#   - copy bin/<fc> → $CURRENT/bin/<fc>   (the app FCs join the running release)
+#   - merge executor_subtree.nodes → $THEIA_ROOT/config/executor.json under the
+#     root, keyed by app name so a re-install replaces the SAME app's nodes
+#     (idempotent) and other apps/services are untouched.
+#   - back up the prior {bin copies, executor} so ArtifactRollback restores them.
+#   - reload the supervisor (tdb reload if present) so it (re)spawns the app FCs.
+#
+# Mender invokes:  theia-app <STATE> <payload-files-dir>
+set -eu
+
+STATE="$1"
+FILES="${2:-}"
+
+THEIA_ROOT="${THEIA_ROOT:-/opt/theia}"
+CURRENT="$THEIA_ROOT/current"
+EXEC="$THEIA_ROOT/config/executor.json"
+APPS_STATE="$THEIA_ROOT/apps"            # per-app install records (for rollback)
+
+_payload() {   # echo the path to a payload file, files/ or bare
+    if [ -f "$FILES/files/$1" ]; then echo "$FILES/files/$1";
+    elif [ -f "$FILES/$1" ]; then echo "$FILES/$1"; fi
+}
+
+_artifact_name() {
+    vt="$(_payload version.txt)"
+    [ -n "$vt" ] && cat "$vt" || echo "unknown"
+}
+
+# Merge the app's executor_subtree.nodes into the running executor.json under the
+# root, REPLACING any nodes previously installed for the same app (idempotent).
+# Python is on every Theia rig (the framework wheel) — use it for robust JSON.
+_merge_executor() {
+    appjson="$1"
+    python3 - "$EXEC" "$appjson" <<'PY'
+import json, sys, os
+exec_path, app_path = sys.argv[1], sys.argv[2]
+app = json.load(open(app_path))
+name = app["name"]
+sub = (app.get("executor_subtree") or {}).get("nodes", [])
+tree = json.load(open(exec_path)) if os.path.exists(exec_path) else {"name": "root", "nodes": []}
+# the app's nodes attach under the root's children list (whichever key it uses)
+key = "nodes" if "nodes" in tree else ("children" if "children" in tree else "nodes")
+kids = tree.setdefault(key, [])
+# drop any nodes this app installed before (tagged via _app), then add fresh
+kids[:] = [n for n in kids if n.get("_app") != name]
+for n in sub:
+    n = dict(n); n["_app"] = name
+    kids.append(n)
+tmp = exec_path + ".tmp"
+json.dump(tree, open(tmp, "w"), indent=2)
+os.replace(tmp, exec_path)
+print(f"theia-app: merged {len(sub)} node(s) for app '{name}' into {exec_path}")
+PY
+}
+
+_reload_supervisor() {
+    if [ -x "$THEIA_ROOT/bin/tdb" ]; then
+        "$THEIA_ROOT/bin/tdb" reload 2>/dev/null \
+            && echo "theia-app: supervisor reloaded (tdb)" \
+            || echo "theia-app: tdb reload failed (supervisor may pick up on next scan)" >&2
+    else
+        echo "theia-app: no tdb — supervisor must be reloaded out of band" >&2
+    fi
+}
+
+case "$STATE" in
+  Download)
+    : ;;   # let Mender auto-save the payload to files/
+
+  ArtifactInstall)
+    art="$(_artifact_name)"
+    [ "$art" != "unknown" ] || { echo "theia-app: no version.txt" >&2; exit 1; }
+    appjson="$(_payload app.json)"
+    [ -n "$appjson" ] || { echo "theia-app: no app.json in payload" >&2; exit 1; }
+    app="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["name"])' "$appjson")"
+    [ -d "$CURRENT" ] || { echo "theia-app: no $CURRENT (provision the runtime first)" >&2; exit 1; }
+
+    # unpack the bundle tar to a temp dir
+    tarball="$(ls "$FILES"/files/*.tar.* 2>/dev/null | head -1 || true)"
+    [ -n "$tarball" ] || tarball="$(ls "$FILES"/*.tar.* 2>/dev/null | head -1 || true)"
+    [ -n "$tarball" ] || { echo "theia-app: no app tarball in payload" >&2; exit 1; }
+    work="$(mktemp -d)"
+    case "$tarball" in
+      *.zst) zstd -dc "$tarball" | tar -x -C "$work" ;;
+      *.gz)  tar -xzf "$tarball" -C "$work" ;;
+      *)     tar -xf "$tarball"  -C "$work" ;;
+    esac
+
+    # back up the prior install of THIS app (bin copies + the executor) for rollback
+    rec="$APPS_STATE/$app"
+    mkdir -p "$rec/prev-bin"
+    cp -f "$EXEC" "$rec/executor.prev.json" 2>/dev/null || true
+    # overlay the app FC binaries into the live release, saving any displaced file
+    for b in "$work"/bin/*; do
+        [ -f "$b" ] || continue
+        bn="$(basename "$b")"
+        if [ -f "$CURRENT/bin/$bn" ]; then cp -f "$CURRENT/bin/$bn" "$rec/prev-bin/$bn"; fi
+        install -m 0755 "$b" "$CURRENT/bin/$bn"
+        echo "theia-app: overlaid $CURRENT/bin/$bn"
+    done
+    # merge the app's executor subtree + record the install
+    cp -f "$work/app.json" "$rec/app.json"
+    echo "$art" > "$rec/.artifact"
+    _merge_executor "$work/app.json"
+    rm -rf "$work"
+    echo "theia-app: installed app '$app' ($art)"
+    ;;
+
+  ArtifactCommit)
+    echo "theia-app: committed" ;;
+
+  ArtifactRollback)
+    # Restore the executor + the displaced binaries for the LAST-installed app.
+    # (Mender installs one artifact at a time, so the most recent .artifact wins.)
+    last="$(ls -t "$APPS_STATE"/*/.artifact 2>/dev/null | head -1 || true)"
+    if [ -n "$last" ]; then
+        rec="$(dirname "$last")"; app="$(basename "$rec")"
+        [ -f "$rec/executor.prev.json" ] && cp -f "$rec/executor.prev.json" "$EXEC"
+        for b in "$rec"/prev-bin/*; do
+            [ -f "$b" ] && install -m 0755 "$b" "$CURRENT/bin/$(basename "$b")"
+        done
+        echo "theia-app: ROLLBACK app '$app' (executor + binaries restored)"
+        _reload_supervisor
+    else
+        echo "theia-app: nothing to roll back" >&2
+    fi
+    ;;
+
+  ArtifactCommit_Leave|ArtifactInstall_Leave)
+    _reload_supervisor ;;
+
+  SupportsRollback)   echo "Yes" ;;
+  NeedsArtifactReboot) echo "No" ;;
+  *)                  exit 0 ;;
+esac

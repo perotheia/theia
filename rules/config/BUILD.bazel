@@ -96,3 +96,18 @@ config_setting(
     name = "gps_nmea",
     values = {"define": "gps=nmea"},
 )
+
+# Build-distro ABI selector for the theia-services .deb Depends. com + per link
+# grpc++/libprotobuf SHARED on x86 (the rig's own apt provides them — the host is
+# a real distro, not a cross sysroot with .a's), so the package's library
+# dependencies are tied to the soname generation of the distro it was BUILT on:
+#   Ubuntu 22.04 → libgrpc++1, libprotobuf23   (the default; matches the 0.1/0.2
+#                                                releases cut on the 22.04 box)
+#   Ubuntu 24.04 → libgrpc++1.51t64, libprotobuf32t64   (--define distro=ubuntu24)
+# The arm64 distro static-links the whole grpc/protobuf closure (sysroot .a's) so
+# it carries NO such dep — it ignores this selector. Pick the one matching the
+# build box; the runtime-plane key is qualified the same way (see seed-official.sh).
+config_setting(
+    name = "distro_ubuntu24",
+    values = {"define": "distro=ubuntu24"},
+)

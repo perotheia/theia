@@ -28,7 +28,7 @@ load("//rules:opkg.bzl", "pkg_opkg")
 
 package(default_visibility = ["//visibility:public"])
 
-_VERSION = "0.2.0"
+_VERSION = "0.2.1"
 
 # Debian runtime/-dev split: a RUNTIME-ONLY machine gets just the binaries (+ the
 # shared libs they link); everything build-time — sources, headers, protos, the
@@ -101,14 +101,38 @@ pkg_deb(
     # is now STATICALLY linked into per (//third_party:etcd_cc → cmake()
     # libetcd-cpp-api-core.a), so there is no libetcd-cpp-api.so to bundle or
     # ship — and no cpprest dep (the async client isn't linked).
-    depends = "theia-runtime, libgrpc++1, libprotobuf23",
+    # com + per link grpc++/libprotobuf SHARED on x86, so the dep names track the
+    # BUILD distro's soname generation (select on --define distro=…). The arm64
+    # build static-links the grpc/protobuf closure from the sysroot .a's → only
+    # theia-runtime. See //rules/config:distro_ubuntu24.
+    depends = select({
+        "@pero_theia//rules/config:is_arm64": "theia-runtime",
+        "@pero_theia//rules/config:distro_ubuntu24":
+            "theia-runtime, libgrpc++1.51t64, libprotobuf32t64",
+        "//conditions:default":   # Ubuntu 22.04 host (the release box)
+            "theia-runtime, libgrpc++1, libprotobuf23",
+    }),
+    # The FULL ARA service set — every FC the factory full-services rig
+    # (manifest.services.services_rig) supervises, so the executor.json tree and
+    # the shipped binaries match (a child in the tree with no binary fails to exec
+    # → 127 → takes services_sup down). Keep this in lockstep with services_rig.
     files = {
         "//services/com/main:com": "/opt/theia/bin/com",
         "//services/per/main:per": "/opt/theia/bin/per",
         "//services/sm/main:sm": "/opt/theia/bin/sm",
         "//services/ucm/main:ucm": "/opt/theia/bin/ucm",
+        "//services/vucm/main:vucm": "/opt/theia/bin/vucm",
         "//services/log/main:log": "/opt/theia/bin/log",
         "//services/shwa/main:shwa": "/opt/theia/bin/shwa",
+        "//services/nm/main:nm": "/opt/theia/bin/nm",
+        "//services/osi/main:osi": "/opt/theia/bin/osi",
+        "//services/phm/main:phm": "/opt/theia/bin/phm",
+        "//services/rds/main:rds": "/opt/theia/bin/rds",
+        "//services/tsync/main:tsync": "/opt/theia/bin/tsync",
+        "//services/crypto/main:crypto": "/opt/theia/bin/crypto",
+        "//services/diag/main:diag": "/opt/theia/bin/diag",
+        "//services/fw/main:fw": "/opt/theia/bin/fw",
+        "//services/idsm/main:idsm": "/opt/theia/bin/idsm",
     },
 )
 
@@ -213,13 +237,24 @@ pkg_opkg(
     arch = "x86_64",
     description = "Theia ARA platform services (binaries) — embedded/opkg",
     depends = "theia-runtime",
+    # Full service set — keep in lockstep with theia-services_deb + services_rig.
     files = {
         "//services/com/main:com": "/opt/theia/bin/com",
         "//services/per/main:per": "/opt/theia/bin/per",
         "//services/sm/main:sm": "/opt/theia/bin/sm",
         "//services/ucm/main:ucm": "/opt/theia/bin/ucm",
+        "//services/vucm/main:vucm": "/opt/theia/bin/vucm",
         "//services/log/main:log": "/opt/theia/bin/log",
         "//services/shwa/main:shwa": "/opt/theia/bin/shwa",
+        "//services/nm/main:nm": "/opt/theia/bin/nm",
+        "//services/osi/main:osi": "/opt/theia/bin/osi",
+        "//services/phm/main:phm": "/opt/theia/bin/phm",
+        "//services/rds/main:rds": "/opt/theia/bin/rds",
+        "//services/tsync/main:tsync": "/opt/theia/bin/tsync",
+        "//services/crypto/main:crypto": "/opt/theia/bin/crypto",
+        "//services/diag/main:diag": "/opt/theia/bin/diag",
+        "//services/fw/main:fw": "/opt/theia/bin/fw",
+        "//services/idsm/main:idsm": "/opt/theia/bin/idsm",
     },
 )
 

@@ -78,6 +78,37 @@ void apply_now(FwDaemon& self, FwDaemonState& s) {
     std::strncpy(msg.message, s.message.c_str(), sizeof(msg.message) - 1);
     msg.ts_ns = now_ns_();
     self.broadcast_broadcast_status(msg);
+
+    // PHM health edge (escalation model): an apply FAILURE means the IP boundary
+    // is not enforced — a security fault PHM aggregates. Report on the level EDGE
+    // only (apply_now also runs on the reassert TIMER tick; a healthy re-apply must
+    // not spam PHM). F_DEGRADED → DEGRADED; F_APPLIED / F_DISABLED → OK (cleared);
+    // F_UNKNOWN → WARNING (not yet applied / nft absent).
+    int health;
+    if (s.state == F_DEGRADED)                              health = 2 /*DEGRADED*/;
+    else if (s.state == F_APPLIED || s.state == F_DISABLED) health = 0 /*OK*/;
+    else                                                    health = 1 /*WARNING*/;
+    if (health != s.last_health) {
+        s.last_health = health;
+        FcHealthReport hr = system_services_phm_FcHealthReport_init_zero;
+        std::snprintf(hr.entity, sizeof(hr.entity), "%s", FwDaemon::kNodeName);
+        hr.fg    = 1;          // FG_PLATFORM (fw ∈ core_sup — the security boundary)
+        hr.ts_ns = msg.ts_ns;
+        hr.code  = (health == 0) ? 0u : 1u;
+        if (health == 2) {
+            hr.level = system_services_phm_HealthLevel_HealthLevel_DEGRADED;
+            std::snprintf(hr.detail, sizeof(hr.detail), "nft apply failed: %.96s",
+                          s.message.c_str());
+        } else if (health == 0) {
+            hr.level = system_services_phm_HealthLevel_HealthLevel_OK;
+            std::snprintf(hr.detail, sizeof(hr.detail), "ruleset live (%u rules)",
+                          s.rule_count);
+        } else {
+            hr.level = system_services_phm_HealthLevel_HealthLevel_WARNING;
+            std::snprintf(hr.detail, sizeof(hr.detail), "ruleset not applied");
+        }
+        self.broadcast_to_phm_report(hr);
+    }
 }
 
 }  // namespace

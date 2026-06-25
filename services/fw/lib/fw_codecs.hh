@@ -26,6 +26,7 @@
 #include "RemoteCodec.hh"   // THEIA_DECLARE_REMOTE_CODEC
 #include "system/services/fw/fw.pb.h"
 
+#include "system/services/phm/phm.pb.h"
 
 
 
@@ -33,3 +34,4 @@ THEIA_DECLARE_REMOTE_CODEC(system_services_fw_FwStatusReq)
 THEIA_DECLARE_REMOTE_CODEC(system_services_fw_FwStatusMsg)
 THEIA_DECLARE_REMOTE_CODEC(system_services_fw_ReloadReq)
 THEIA_DECLARE_REMOTE_CODEC(system_services_fw_ReloadReply)
+THEIA_DECLARE_REMOTE_CODEC(system_services_phm_FcHealthReport)

@@ -17,6 +17,13 @@
 
 package system.services.fw
 
+// PHM health edge (escalation model): fw reports FcHealthReport to PHM on the
+// ruleset-apply fault EDGE (FW_APPLIED ⇄ FW_DEGRADED) — an apply failure means
+// the IP boundary is NOT enforced (a security fault PHM must aggregate). Edge
+// only, not keep-alive. FcHealthReport/HealthLevel/FcHealthReportIf are PHM's
+// (imported). See docs/autosar/communication-matrix.md (escalation model).
+import system.services.phm.*
+
 // ─── Apply state ────────────────────────────────────────────────────────────
 
 enum FwState {
@@ -136,5 +143,6 @@ node atomic FwDaemon {
     ports {
         sender broadcast provides FwStatusStream
         server ctl       provides FwCtlIf
+        sender to_phm    provides FcHealthReportIf   // health edge → PHM (apply failed)
     }
 }

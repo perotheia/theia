@@ -39,6 +39,11 @@ struct FwDaemonState {
     uint32_t    override_count = 0;
     uint32_t    egress_fc_count = 0;
     std::string message        = "not yet applied";
+
+    // PHM health edge-latch: the last health level reported to PHM (-1 = none
+    // yet), so apply_now() escalates only on a level CHANGE — not on every reassert
+    // tick (the reassert re-applies on a timer; a healthy re-apply must not spam).
+    int         last_health    = -1;
 };
 
 }  // namespace ara::fw

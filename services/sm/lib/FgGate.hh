@@ -49,6 +49,7 @@ using FgStopped = system_services_sm_FgStopped;
 using FgDegraded = system_services_sm_FgDegraded;
 using FgRetry = system_services_sm_FgRetry;
 using PhmHealthStatus = system_services_phm_PhmHealthStatus;
+using NmStatusMsg = system_services_nm_NmStatusMsg;
 
 // statem block declared in .art — see the corresponding StateMBase
 // header produced by `artheia gen-cpp-stubs`. The daemon below
@@ -199,6 +200,8 @@ public:
     void handle_cast(const FgRetry& msg, FgGateState& s);
 
     void handle_cast(const PhmHealthStatus& msg, FgGateState& s);
+
+    void handle_cast(const NmStatusMsg& msg, FgGateState& s);
 
 
 

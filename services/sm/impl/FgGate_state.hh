@@ -30,6 +30,12 @@ struct FgGateState {
         return it == fg_state.end() ? 0 /*FG_OFF*/ : it->second;
     }
     void set_state(uint32_t fg, uint8_t st) { fg_state[fg] = st; }
+
+    // NM readiness edge-detect: the last NETWORK_OPERATIONAL verdict seen for the
+    // NetworkFG, so handle_cast(NmStatusMsg) fires FgStarted only on the RISING
+    // edge to operational and FgDegraded only on the FALLING edge from it — not
+    // once per ladder rung. Starts false (NETWORK_OFF at boot).
+    bool net_operational = false;
 };
 
 }  // namespace ara::sm

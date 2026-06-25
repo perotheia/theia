@@ -294,6 +294,7 @@ int main(int argc, char** argv) {
         config_mux.register_cast<FgDegraded>(fg_gate_cfg, fg_gate);
         config_mux.register_cast<FgRetry>(fg_gate_cfg, fg_gate);
         config_mux.register_cast<PhmHealthStatus>(fg_gate_cfg, fg_gate);
+        config_mux.register_cast<NmStatusMsg>(fg_gate_cfg, fg_gate);
         // PG (manual pub/sub, OTP shape): attach this statem node's PgClient to
         // its demux binding (joined-group frames + PgMembership pushes route into
         // handle_cast) + pass its bound addr as the watcher address (where the

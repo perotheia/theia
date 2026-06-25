@@ -142,4 +142,41 @@ void FgGate::handle_cast(const PhmHealthStatus& msg, FgGateState& s) {
     }
 }
 
+// ---- NM readiness (comm-matrix nm → sm) — gate the NetworkFG. ----------------
+//
+// SM owns OPERATIONAL state; it reacts to a network FAULT EDGE, never to NM's
+// keep-alive ladder chatter. NmStatusMsg arrives on every NM transition, but this
+// gate ACTS only on the two edges that matter for the NetworkFG (FG_NETWORK=2)
+// operational state — the intermediate rungs (LINK_AVAILABLE/WIFI_ASSOCIATED/
+// IP_ACQUIRED/VPN_ESTABLISHED) are filtered out by the net_operational latch:
+//   fault CLEARED (→ OPERATIONAL):       FgStarted(NetworkFG)  — network usable.
+//   fault DETECTED (OPERATIONAL → lower): FgDegraded(NetworkFG) — a rung was lost.
+// Mirrors the PHM edge above; the statem still never sees a raw wire message
+// (the gate post_event()s the per-FG transition into the FG authority).
+//
+// NOTE (escalation model): SM consuming NM's status directly is the L4 operational
+// gate (network-down → NetworkFG degrades). The ORTHOGONAL health path is FC→PHM:
+// NM's fault edges should ALSO escalate to PHM (which aggregates platform health +
+// rolls trends to the fleet). That FC→PHM health report is a separate edge from
+// this operational gate — health ≠ operational state (a vehicle can be
+// DRIVING+DEGRADED). See docs/autosar/communication-matrix.md escalation ladder.
+void FgGate::handle_cast(const NmStatusMsg& msg, FgGateState& s) {
+    const bool operational =
+        msg.state == system_services_nm_NetState_NetState_NETWORK_OPERATIONAL;
+    if (operational == s.net_operational) return;   // no edge — nothing to do
+    s.net_operational = operational;
+
+    if (operational) {
+        std::fprintf(stderr,
+            "[%s] NmStatusMsg state=OPERATIONAL iface=%s vpn=%d → FgStarted(NetworkFG)\n",
+            kNodeName, msg.interface, (int)msg.vpn_up);
+        fg_transition(this, s, FG_NETWORK, 2 /*FG_RUNNING*/, "NM-operational");
+    } else {
+        std::fprintf(stderr,
+            "[%s] NmStatusMsg state=%u (lost operational) → FgDegraded(NetworkFG)\n",
+            kNodeName, (unsigned)msg.state);
+        fg_transition(this, s, FG_NETWORK, 4 /*FG_RESTART*/, "NM-degraded");
+    }
+}
+
 }  // namespace ara::sm

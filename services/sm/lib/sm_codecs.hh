@@ -27,6 +27,7 @@
 #include "system/services/sm/sm.pb.h"
 
 #include "system/services/phm/phm.pb.h"
+#include "system/services/nm/nm.pb.h"
 
 
 
@@ -41,6 +42,7 @@ THEIA_DECLARE_REMOTE_CODEC(system_services_sm_FgStopped)
 THEIA_DECLARE_REMOTE_CODEC(system_services_sm_FgDegraded)
 THEIA_DECLARE_REMOTE_CODEC(system_services_sm_FgRetry)
 THEIA_DECLARE_REMOTE_CODEC(system_services_phm_PhmHealthStatus)
+THEIA_DECLARE_REMOTE_CODEC(system_services_nm_NmStatusMsg)
 THEIA_DECLARE_REMOTE_CODEC(system_services_sm_SystemBoot)
 THEIA_DECLARE_REMOTE_CODEC(system_services_sm_StartupComplete)
 THEIA_DECLARE_REMOTE_CODEC(system_services_sm_ShutdownRequest)

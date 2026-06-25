@@ -25,6 +25,15 @@ package system.services.sm
 // services/phm/system/phm/package.art.
 import system.services.phm.*
 
+// Reuse NM's REAL readiness type (the comm-matrix nm→sm edge). NM is the
+// defining package for NmStatusMsg + NetState; SM's FgGate decodes the
+// NetState and gates the NetworkFG (FG_NETWORK=2) on network readiness —
+// NETWORK_OPERATIONAL brings the FG up, a drop from operational degrades it.
+// Cross-package import so SM's register_cast service_id (djb2 of
+// system_services_nm_NmStatusMsg) matches the one NmDaemon stamps when it
+// broadcasts. Real defs live in services/nm/system/nm/package.art.
+import system.services.nm.*
+
 // Forward decls of foreign interfaces.
 interface clientServer   PersistencyIf { }  // from system.services.per
 
@@ -147,6 +156,20 @@ interface senderReceiver PhmHealthStream {
     data PhmHealthStatus health
 }
 
+// ─── NM readiness edge (comm-matrix: nm → sm) ──────────────────────────────
+//
+// Network Management broadcasts its readiness ladder verdict; SM's FgGate
+// decodes the NetState and gates the NetworkFG (FG_NETWORK=2) on it — the
+// network analogue of the PHM health edge above. CAST (notification): NM
+// informs, SM decides the FG action. NETWORK_OPERATIONAL → FgStarted(NetworkFG)
+// (the network layer is usable); a drop BELOW operational once it had been up
+// (DEGRADED / loss of a rung) → FgDegraded(NetworkFG). NmStatusMsg is the REAL
+// type from system.services.nm (imported above): { state(NetState), interface,
+// has_carrier, has_address, vpn_up, ts_ns }.
+interface senderReceiver NmStatusStream {
+    data NmStatusMsg status
+}
+
 node atomic SmDaemon {
     tipc type=0x8001000D instance=0
     tag = "SMX"
@@ -242,6 +265,7 @@ node atomic FgGate {
     ports {
         receiver fg_lifecycle requires FgLifecycleIn
         receiver from_phm     requires PhmHealthStream
+        receiver from_nm      requires NmStatusStream
     }
 }
 

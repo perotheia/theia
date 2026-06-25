@@ -1,5 +1,12 @@
 # Mender OTA for Theia — release-dir + symlink (NOT A/B partitions)
 
+> **Note (repo split):** this dir now holds ONLY the **on-device** Mender pieces —
+> the `theia-release` update module (`modules/`) + the Mender→UCM handoff
+> (`state-scripts/`), which ship in theia's runtime `.deb`. The **server side**
+> (Mender GW compose, `build-artifact.sh`, `fleet.py`, enrollment) moved to the
+> **`ground-station`** repo; the **provision/orchestrate** playbooks moved to the
+> **`colony`** repo. See `docs/tasks/BACKLOG/repo-separation.md`.
+
 Theia does **not** use Mender's rootfs A/B partition flip. We deploy a release as
 `/opt/theia/releases/<version>/` plus an atomic `current` symlink switch — the same
 model as the on-device UCM agent (`services/ucm/impl/release_dir.hpp`). Mender is

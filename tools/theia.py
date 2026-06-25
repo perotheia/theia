@@ -60,7 +60,10 @@ if not (WORKSPACE / "manifest").is_dir() and not (WORKSPACE / ".theia").is_file(
         WORKSPACE = THEIA_ROOT
 
 COMPOSE = THEIA_ROOT / "deploy" / "docker-compose.yml"
-ANSIBLE = THEIA_ROOT / "deploy" / "ansible"
+# provision/orchestrate/cleanup moved OUT to the `colony` repo (the deploy adapter):
+# theia's deploy surface is now `manifest`/`dist` (emit the per-rig bundle to
+# dist/manifest/<rig>); colony consumes that bundle + the deploy/registry. See
+# docs/tasks/BACKLOG/repo-separation.md. (COMPOSE stays — the dev container stack.)
 
 
 def _run(argv: list[str], cwd: "Path | None" = None) -> int:
@@ -148,95 +151,6 @@ def cmd_rig(args: list[str]) -> int:
         extra = ["-d", *extra]
     return _run(["docker", "compose", "-f", str(COMPOSE), action, *extra])
 
-
-def _ansible(playbook: str, machine: str | None, args: list[str]) -> int:
-    """Run an Ansible playbook from deploy/ansible/ (agentless, SSH-push).
-    `machine` (the artheia machine name, e.g. central) is passed as -e machine=…;
-    the inventory maps each host's machine= var, so a playbook run pushes the
-    right dist/manifest/<machine>/ slice. Extra args (e.g. -l rpi4) pass through."""
-    cmd = ["ansible-playbook", "-i", str(ANSIBLE / "inventory" / "hosts"),
-           str(ANSIBLE / playbook)]
-    if machine:
-        cmd += ["-e", f"machine={machine}"]
-    cmd += args
-    # cwd = deploy/ansible so ansible.cfg + the relative manifest_dir resolve.
-    return _run(cmd, cwd=ANSIBLE)
-
-
-def _split_machine(args: list[str]) -> tuple[str | None, list[str]]:
-    """First bare (non-flag) arg is the machine name; the rest pass through to
-    the engine. `theia provision central -l rpi4` → ("central", ["-l","rpi4"])."""
-    machine, rest = None, []
-    for a in args:
-        if machine is None and not a.startswith("-"):
-            machine = a
-        else:
-            rest.append(a)
-    return machine, rest
-
-
-def cmd_provision(args: list[str]) -> int:
-    """Phase 1 — OS packages + etcd + Mender client, pushed over SSH (agentless).
-    `theia provision <target> [ansible-args...]` — <target> names a rig in the
-    registry (deploy/registry/<target>.yml). Reads dist/manifest/<machine>/."""
-    target, rest = _split_machine(args)
-    if not target:
-        print("theia provision: needs a target name "
-              "(deploy/registry/<target>.yml), e.g. `theia provision rpi4`",
-              file=sys.stderr)
-        return 2
-    reg = WORKSPACE / "deploy" / "registry" / f"{target}.yml"
-    if not reg.is_file():
-        print(f"theia provision: no registry entry {reg.relative_to(WORKSPACE)}",
-              file=sys.stderr)
-        return 1
-    return _ansible("provision.yml", None, ["-e", f"target={target}", *rest])
-
-
-def cmd_orchestrate(args: list[str]) -> int:
-    """Phase 2 — app rollout (binaries + real config), pushed over SSH; no restart.
-
-    `theia orchestrate <target> [ansible-args...]` — <target> names a deploy rig
-    in the registry (deploy/registry/<target>.yml: ansible_host + the artheia
-    `machine` slice to push). orchestrate.yml resolves the host from the registry
-    (no inventory host line needed) and applies the per-target config override
-    (deploy/config/<target>/) on top of the machine-generic profile."""
-    target, rest = _split_machine(args)
-    if not target:
-        print("theia orchestrate: needs a target name "
-              "(deploy/registry/<target>.yml), e.g. `theia orchestrate rpi4`",
-              file=sys.stderr)
-        return 2
-    reg = WORKSPACE / "deploy" / "registry" / f"{target}.yml"
-    if not reg.is_file():
-        print(f"theia orchestrate: no registry entry {reg.relative_to(WORKSPACE)} "
-              f"— add it (ansible_host + machine) to deploy a new target.",
-              file=sys.stderr)
-        return 1
-    # The target is passed as -e target=<name>; the resolve play reads the
-    # registry for the host + machine. No machine= / -l needed.
-    return _ansible("orchestrate.yml", None, ["-e", f"target={target}", *rest])
-
-
-def cmd_cleanup(args: list[str]) -> int:
-    """Uninstall any prior Theia from a rig (the inverse of provision+orchestrate).
-    `theia cleanup <target> [ansible-args...]`. <target> names a rig in the
-    registry (deploy/registry/<target>.yml). Stops the supervisor, removes
-    /opt/theia + the dpkg bundle + the systemd units; keeps etcd/Mender data
-    unless `-e wipe_etcd=true` / `-e wipe_mender=true`. Run before re-rolling a
-    box onto a different stack (e.g. wiping a Pi to install gateway_ws)."""
-    target, rest = _split_machine(args)
-    if not target:
-        print("theia cleanup: needs a target name "
-              "(deploy/registry/<target>.yml), e.g. `theia cleanup rpi4`",
-              file=sys.stderr)
-        return 2
-    reg = WORKSPACE / "deploy" / "registry" / f"{target}.yml"
-    if not reg.is_file():
-        print(f"theia cleanup: no registry entry {reg.relative_to(WORKSPACE)}",
-              file=sys.stderr)
-        return 1
-    return _ansible("cleanup.yml", None, ["-e", f"target={target}", *rest])
 
 
 def _bazel_root() -> Path:
@@ -2462,9 +2376,8 @@ filegroup(name = "apps_proto", srcs = ["apps.proto"])
 COMMANDS = {
     "init":        (cmd_init,        "scaffold the CWD as a Theia consuming workspace (source or /opt/theia)"),
     "rig":         (cmd_rig,         "docker compose {up|down} the deploy stack"),
-    "provision":   (cmd_provision,   "ansible — Phase 1 (os pkgs + Mender)"),
-    "orchestrate": (cmd_orchestrate, "ansible — Phase 2 remote app rollout"),
-    "cleanup":     (cmd_cleanup,     "ansible — uninstall a prior Theia from a rig"),
+    # provision/orchestrate/cleanup MOVED to the `colony` repo (deploy adapter).
+    # theia emits the per-rig bundle via `manifest`/`dist`; colony deploys it.
     "install":     (cmd_install,     "build + populate install/<machine>/ (local host)"),
     "stage-local": (cmd_install,     "alias for `install` (back-compat)"),
     "start":       (cmd_start,       "run the staged supervisor from install/<machine>/ (detached + pidfile)"),

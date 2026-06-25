@@ -26,6 +26,8 @@
 #include <memory>
 #include <string>
 
+#include <sys/stat.h>   // stat / S_ISDIR — child-launch root = $prefix/current?
+
 namespace ara::exec {
 
 namespace {
@@ -53,18 +55,38 @@ std::string manifest_path() {
         "e.g. run-supervisor.sh, exports it). Refusing to start.");
 }
 
-// The directory children's relative start_cmd (`./bin/<svc>`) resolves against.
+// The PREFIX the launcher exports: where the supervisor binary + manifest live.
 // THEIA_ROOT_DIR is REQUIRED — the launcher (run-supervisor.sh / systemd /
 // `theia start`) must export it. No cwd fallback, no self-locate: a deployed
 // embedded supervisor that guesses its root is a latent bug. Missing → refuse
 // to start, exactly like THEIA_SUPERVISOR_MANIFEST below.
-std::string root_dir() {
+std::string prefix_dir() {
     const char* d = std::getenv("THEIA_ROOT_DIR");
     if (d && *d) return d;
     throw std::runtime_error(
-        "THEIA_ROOT_DIR is not set — the supervisor resolves each child's "
-        "./bin/<svc> against it; the launcher must export it (e.g. "
+        "THEIA_ROOT_DIR is not set — the launcher must export it (e.g. "
         "THEIA_ROOT_DIR=/opt/theia). Refusing to start.");
+}
+
+// The directory children's relative start_cmd (`./bin/<svc>`) resolves against.
+// SPLIT FROM the supervisor's own prefix (OTA design): the supervisor binary is
+// the UPDATER — it lives at $THEIA_ROOT_DIR/bin and must NOT swap under itself —
+// but the SERVICES + APPS it forks run from the `current` release symlink, which
+// OTA (Mender theia-release / UCM) flips + rolls back. The child-launch root is
+// ALWAYS $THEIA_ROOT_DIR/current — the release-dir layout is the ONLY layout (the
+// launcher, incl. `theia start` + tests, lays a `current` symlink; there is no
+// flat-bin fallback). A Mender `current`→releases/<ver> flip + the UCM-driven FC
+// restart brings children up on the new version while the supervisor is untouched.
+// REQUIRE the symlink — a missing `current` means a broken provision, refuse to
+// start (same posture as a missing THEIA_ROOT_DIR / manifest).
+std::string root_dir() {
+    const std::string cur = prefix_dir() + "/current";
+    struct stat st;
+    if (::stat(cur.c_str(), &st) == 0 && S_ISDIR(st.st_mode)) return cur;
+    throw std::runtime_error(
+        "no release at " + cur + " — the supervisor launches each child's "
+        "./bin/<svc> from $THEIA_ROOT_DIR/current; the launcher (provision / "
+        "theia start) must lay that symlink. Refusing to start.");
 }
 
 // The engine the worker thread owns for the lifetime of do_loop(). Stored as a

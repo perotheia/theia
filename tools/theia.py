@@ -1140,12 +1140,27 @@ def _stage_local(dest: Path, supervisor_src: str,
                        bind does NOT need it; cluster/topology admin does.)"""
     import shutil as _sh
     dest.mkdir(parents=True, exist_ok=True)
-    (dest / "bin").mkdir(exist_ok=True)
+    # Release-dir layout (the ONLY layout — same shape a deployed rig + Mender use):
+    # the supervisor binary sits at <dest>/supervisor (the updater, never swapped);
+    # the CHILDREN live under a versioned release the `current` symlink points at,
+    # so the supervisor launches each child's ./bin/<svc> from <dest>/current/bin/.
+    # OTA flips current→releases/<v>; locally there's one release ("local"). The
+    # supervisor's root_dir() REQUIRES <root>/current — no flat-bin fallback.
+    rel = dest / "releases" / "local"
+    (rel / "bin").mkdir(parents=True, exist_ok=True)
+    cur = dest / "current"
+    # Atomically (re)point current → releases/local.
+    if cur.is_symlink() or cur.exists():
+        try:
+            cur.unlink()
+        except PermissionError:
+            _run(["sudo", "rm", "-f", str(cur)])
+    cur.symlink_to(Path("releases") / "local")
 
     # A legacy Puppet/sudo install left install/<machine>/ root-owned, so a
     # user-run stage can't overwrite files OR create new ones in bin/. If the
     # tree isn't writable by us, sudo-chown it back to the current user once.
-    if not os.access(dest / "bin", os.W_OK):
+    if not os.access(rel / "bin", os.W_OK):
         import getpass
         _run(["sudo", "chown", "-R", f"{getpass.getuser()}:{getpass.getuser()}",
               str(dest)])
@@ -1167,7 +1182,7 @@ def _stage_local(dest: Path, supervisor_src: str,
     try:
         _copy(supervisor_src, dest / "supervisor")
         for name, src in binaries.items():
-            _copy(src, dest / "bin" / name)
+            _copy(src, rel / "bin" / name)   # children → releases/local/bin (via current/)
     except OSError as e:
         print(f"theia install: staging failed — {e}", file=sys.stderr)
         return 1

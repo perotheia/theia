@@ -47,6 +47,9 @@
 #include "impl/com_tls.hpp"       // shared TLS-or-insecure ServerCredentials
 
 #include "TipcTopology.hh"        // Stage 3: live supervisor-instance discovery
+#include "PgClient.hh"            // PG egress for the FcHealthReport → PHM edge
+#include "lib/com_codecs.hh"      // RemoteCodec<system_services_phm_FcHealthReport>
+#include <pb_encode.h>
 
 #include "supervisor_bridge.grpc.pb.h"
 
@@ -1041,7 +1044,53 @@ void ComGrpcProxy::do_loop() {
                      kNodeName);
         return;
     }
+
+    // PHM health edge (escalation model): com's supervisor control uplink (SupLink
+    // → SupervisorCtl) is its critical dependency — if it can't reach the
+    // supervisor, the whole remote-management plane (GUI/rtdb control RPCs + the
+    // tree Subscribe) is degraded. Report a health INDICATION to PHM on the
+    // reachable↔unreachable EDGE only (com is reporting=false: no watchdog
+    // heartbeat, so this PG cast is its sole health signal). PHM aggregates → SM.
+    // Pure PG broadcaster (the runnable pump pattern — no generated broadcast_*
+    // for a runnable sender); group resolved lazily (supervisor may be late).
+    using FcHealthReport = system_services_phm_FcHealthReport;
+    ::theia::runtime::PgClient phm_pg;
+    phm_pg.attach(kNodeName, /*binding=*/nullptr);
+    uint32_t phm_group = 0;
+    int last_up = -1;   // -1 = unreported; 0 = down, 1 = up — edge latch
+
+    auto report_health = [&](bool up) {
+        if (phm_group == 0) {
+            auto g = phm_pg.resolve<FcHealthReport>();
+            if (!g.ok) return;          // supervisor/allocator down — drop (retry next edge)
+            phm_group = g.type;
+        }
+        FcHealthReport hr = system_services_phm_FcHealthReport_init_zero;
+        std::snprintf(hr.entity, sizeof(hr.entity), "%s", kNodeName);
+        hr.fg = 1;                       // FG_PLATFORM (com ∈ core_sup)
+        if (up) {
+            hr.level = system_services_phm_HealthLevel_HealthLevel_OK;
+            hr.code  = 0;
+            std::snprintf(hr.detail, sizeof(hr.detail), "supervisor uplink up");
+        } else {
+            hr.level = system_services_phm_HealthLevel_HealthLevel_DEGRADED;
+            hr.code  = 1;
+            std::snprintf(hr.detail, sizeof(hr.detail), "supervisor uplink unreachable");
+        }
+        uint8_t buf[256];
+        pb_ostream_t os = pb_ostream_from_buffer(buf, sizeof(buf));
+        if (!pb_encode(&os, ::theia::runtime::RemoteCodec<FcHealthReport>::fields(), &hr))
+            return;
+        phm_pg.broadcast<FcHealthReport>(phm_group, buf,
+                                         static_cast<uint16_t>(os.bytes_written));
+    };
+
     while (!stop_requested()) {
+        const int up = services_com::SupLink::instance().connected() ? 1 : 0;
+        if (up != last_up) {             // edge only — never per-tick keep-alive
+            report_health(up == 1);
+            last_up = up;
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
     std::fprintf(stderr, "[%s] runnable loop exiting\n", kNodeName);

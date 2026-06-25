@@ -12,6 +12,11 @@
 
 package system.services.com
 
+// PHM health edge (escalation model): com reports FcHealthReport to PHM on its
+// supervisor-uplink fault edge. Real FcHealthReport/HealthLevel/FcHealthReportIf
+// from PHM (imported — not a forward-decl, since we send the real message).
+import system.services.phm.*
+
 interface clientServer   PersistencyIf { }  // from system.services.per
 interface senderReceiver SmStateStream { }  // from system.services.sm
 interface senderReceiver AccelTelemetry { }  // from system.services.shwa
@@ -120,6 +125,16 @@ node runnable ComGrpcProxy {
     tipc type=0x80010009 instance=0
     reporting = false
     tag = "COMG"
+    ports {
+        // Health edge → PHM (escalation model): com reports a health INDICATION
+        // when its supervisor control uplink (SupLink → SupervisorCtl) transitions
+        // reachable↔unreachable — a com that can't reach the supervisor means the
+        // whole remote-management plane (GUI/rtdb) is degraded. EDGE only, not
+        // keep-alive (com is reporting=false: no watchdog heartbeat — this PG cast
+        // is its only health signal). PHM aggregates → SM. FcHealthReportIf is
+        // PHM's (imported below).
+        sender to_phm provides FcHealthReportIf
+    }
 }
 
 // ---- TraceForwarder (the trace EGRESS gRPC thread) ----------------------

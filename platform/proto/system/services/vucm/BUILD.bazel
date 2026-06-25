@@ -1,0 +1,40 @@
+# Generated nanopb sources for the system.services.vucm package.
+# .pb.{c,h} are produced by the genrule from vucm.proto; not committed.
+#
+# vucm.proto IMPORTS system/services/ucm/ucm.proto (it reuses ucm's UpdateScope on
+# the CampaignRequest), so unlike the self-contained service protos the nanopb -I
+# root is platform/proto/ (where the imported path resolves) and ucm.proto is a
+# build input. nanopb emits a stub for the imported message; the real ucm nanopb
+# struct comes from //platform/proto/system/services/ucm:ucm_pb at link.
+
+package(default_visibility = ["//visibility:public"])
+
+genrule(
+    name = "vucm_pb",
+    srcs = [
+        "vucm.proto",
+        "vucm.options",
+        "//platform/proto/system/services/ucm:ucm_proto",
+    ],
+    outs = [
+        "vucm.pb.c",
+        "vucm.pb.h",
+    ],
+    # -I platform/proto so `import "system/services/ucm/ucm.proto"` resolves.
+    # nanopb writes the output under the import-relative subpath (system/services/
+    # vucm/vucm.pb.*), so -D to a scratch root then move the pair to the flat
+    # declared outputs bazel expects.
+    cmd = "set -e;"
+        + " proto_root=$$(dirname $$(dirname $$(dirname $$(dirname $(location vucm.proto)))));"
+        + " out_c=$(location vucm.pb.c); out_h=$(location vucm.pb.h);"
+        + " scratch=$$(dirname $$out_c)/_nanopb; mkdir -p $$scratch;"
+        + " nanopb_generator -I $$proto_root -D $$scratch"
+        + " system/services/vucm/vucm.proto;"
+        + " mv $$scratch/system/services/vucm/vucm.pb.c $$out_c;"
+        + " mv $$scratch/system/services/vucm/vucm.pb.h $$out_h;",
+    local = True,
+)
+
+filegroup(name = "vucm_pb_c", srcs = ["vucm.pb.c"])
+filegroup(name = "vucm_pb_h", srcs = ["vucm.pb.h"])
+filegroup(name = "vucm_proto", srcs = ["vucm.proto"])

@@ -1,0 +1,201 @@
+// Vehicle Update & Configuration Management (ara::ucm "vehicle driver" / VUCM) —
+// the on-device FLEET-FACING campaign orchestrator. The "WHAT to install" layer:
+//
+//   VUCM decides WHAT · UCM decides HOW · EXEC performs · PHM validates · SM authorizes
+//
+// VUCM is the Mender-facing orchestrator. It talks to the Mender server (via com),
+// checks LOCAL policy (SM vehicle-state + PHM health), then drives services/ucm
+// (the local artifact install engine) one campaign at a time. It NEVER talks to
+// applications directly — UCM owns artifact download/verify/stage/install/rollback;
+// VUCM owns campaign planning, the SM/PHM go/no-go gate, and inventory aggregation
+// back to the fleet. Responsibility split (maps 1:1 to Mender):
+//   Mender Deployment ↔ VUCM     Mender Artifact     ↔ UCM
+//   Mender DeviceGroup ↔ VUCM    Mender StateMachine ↔ UCM
+//   Mender Inventory  ↔ VUCM aggregate (UCM version / PHM health / SM state)
+//
+// Shape mirrors ucm/sm/phm: a campaign statem (VucmCampaign) + an ingress gate
+// (VucmGate). The statem takes no off-the-wire message; the gate post_event()s.
+// Off-device fleet side stays in deploy/vucm/{campaign.sh,fleet.py} (Mender server).
+// See docs/autosar/communication-matrix.md (UCM/VUCM section).
+
+package system.services.vucm
+
+// UCM is the install engine VUCM drives (the HOW layer). Pull its real UpdateCtl
+// + PackageManifest so the to_ucm CALL's service_id matches what UcmDaemon serves.
+import system.services.ucm.*
+
+// SM authorizes (vehicle-state go/no-go) + PHM validates (health go/no-go). Reuse
+// their real types so the cross-package service_ids line up (the SM/PHM idiom).
+import system.services.sm.*
+import system.services.phm.*
+
+// ─── Campaign state ──────────────────────────────────────────────────────────
+
+// A fleet campaign's lifecycle. VUCM owns this; UCM owns the per-artifact install
+// FSM one layer down. PLANNING: a deployment arrived from Mender; AUTHORIZING:
+// gate on SM-state + PHM-health; INSTALLING: UCM is executing (RequestUpdate sent);
+// VALIDATING: post-install health confirm; DONE: reported success to the fleet;
+// ROLLBACK: a gate or install/validate step failed → UCM rolls back, report failure.
+enum CampaignState {
+    CMP_IDLE        = 0   // no active campaign
+    CMP_PLANNING    = 1   // deployment received; resolving artifacts/dependencies
+    CMP_AUTHORIZING = 2   // gating on SM vehicle-state + PHM health
+    CMP_INSTALLING  = 3   // UCM is downloading/verifying/staging/installing
+    CMP_VALIDATING  = 4   // post-install PHM health confirm
+    CMP_DONE        = 5   // campaign succeeded; reported to fleet
+    CMP_ROLLBACK    = 6   // a step failed; UCM rolled back; failure reported
+}
+
+// The campaign's persistent data + the progress payload VUCM broadcasts/reports.
+message CampaignProgress {
+    string        campaign_id [max_size:64]   // the Mender deployment id
+    string        version     [max_size:32]   // target release, e.g. "2026.08"
+    CampaignState state
+    string        detail      [max_size:128]  // human note ("blocked: SM=DRIVING")
+    uint64        ts_ns
+}
+
+// ─── Campaign-lifecycle events (gate → VucmCampaign, in-process) ─────────────
+//
+// One message per event (GenStateM per-event overload dispatch — the ucm/phm
+// idiom). VucmGate is the only ingress; the statem takes no off-the-wire message.
+message EvDeployment    { }   // Mender deployment arrived → begin PLANNING
+message EvPlanned       { }   // artifacts/dependencies resolved → AUTHORIZING
+message EvAuthorized    { }   // SM-state + PHM-health both allow → INSTALLING
+message EvInstalled     { }   // UCM reported the install ACTIVE → VALIDATING
+message EvValidated     { }   // post-install health confirmed → DONE
+message EvBlocked       { }   // SM/PHM denied (recoverable: retry when state changes)
+message EvFailed        { }   // any step failed → ROLLBACK
+
+interface senderReceiver VucmLifecycleIn {
+    data EvDeployment deployment
+    data EvPlanned    planned
+    data EvAuthorized authorized
+    data EvInstalled  installed
+    data EvValidated  validated
+    data EvBlocked    blocked
+    data EvFailed     failed
+}
+
+// ─── Fleet/cloud control surface (Mender deployment API, proxied by com) ─────
+//
+// The external (Mender server → com gRPC → VucmGate) campaign surface. com proxies
+// these so the off-device fleet (deploy/vucm/fleet.py / a Mender deployment) drives
+// the on-device orchestrator. CALL: the fleet gets a campaign verdict back.
+message CampaignRequest {
+    string campaign_id [max_size:64]   // Mender deployment id
+    string version     [max_size:32]   // target release
+    UpdateScope scope                  // full | partial (reuse ucm's enum)
+}
+message CampaignReply  { uint32 accepted    CampaignState state }   // accepted=1 if queued
+message CampaignStatusReq { }
+
+interface clientServer VucmCtlIf {
+    operation CheckForCampaign(in r: CampaignRequest)  returns CampaignReply   // Mender → device
+    operation GetCampaignStatus(in r: CampaignStatusReq) returns CampaignProgress
+}
+
+// Campaign progress broadcast — any observer (the fleet inventory aggregator, the
+// GUI) watches the campaign lifecycle (mirrors UcmProgressStream one layer down).
+interface senderReceiver CampaignStream {
+    data CampaignProgress progress
+}
+
+// ─── Foreign edges (reused real types from the imports) ──────────────────────
+
+// SM authorize edge: VUCM observes the vehicle state to decide go/no-go. The real
+// SmStateStream (from sm) carries SmStateMsg; VucmCampaign gates the campaign on it
+// (DRIVING → postpone; CHARGING/SERVICE/READY → allow). Receiver — SM informs.
+interface senderReceiver SmStateStream { data SmStateMsg sm_state }
+
+// PHM validate edge: VUCM gates on platform health (a critical fault blocks the
+// campaign; post-install it confirms healthy or triggers UCM rollback). Real
+// PhmHealthStatus from phm (the canonical type — SM/UCM reuse it the same way).
+interface senderReceiver PhmHealthStream { data PhmHealthStatus health }
+
+// ─── Nodes — the {Gate; Campaign} split ──────────────────────────────────────
+
+// The campaign state machine. tipc 0x80010050. Gates on SM-state + PHM-health,
+// drives UCM (RequestUpdate), broadcasts CampaignProgress on every transition.
+// Takes NO external messages — VucmGate post_event()s into it (the gate→fsm idiom).
+node atomic VucmCampaign {
+    tipc type=0x80010050 instance=0
+    requires_timers
+    tag = "VCMC"
+    config VucmConfig
+    ports {
+        sender progress provides CampaignStream
+        client to_ucm   requires UpdateCtl          // drive the HOW layer (RequestUpdate)
+    }
+    statem {
+        states  [CMP_IDLE, CMP_PLANNING, CMP_AUTHORIZING, CMP_INSTALLING,
+                 CMP_VALIDATING, CMP_DONE, CMP_ROLLBACK]
+        initial CMP_IDLE
+        data    CampaignProgress
+
+        on CMP_IDLE:
+            event EvDeployment → CMP_PLANNING
+
+        on CMP_PLANNING:
+            event EvPlanned    → CMP_AUTHORIZING
+            event EvFailed     → CMP_ROLLBACK
+
+        on CMP_AUTHORIZING:
+            event EvAuthorized → CMP_INSTALLING      // SM + PHM both allow
+            event EvBlocked    → CMP_PLANNING        // denied — re-plan/retry on state change
+            event EvFailed     → CMP_ROLLBACK
+
+        on CMP_INSTALLING:
+            event EvInstalled  → CMP_VALIDATING      // UCM reported ACTIVE
+            event EvFailed     → CMP_ROLLBACK
+
+        on CMP_VALIDATING:
+            event EvValidated  → CMP_DONE            // PHM-confirmed healthy
+            event EvFailed     → CMP_ROLLBACK
+
+        on CMP_DONE:
+            event EvDeployment → CMP_PLANNING        // next campaign
+
+        on CMP_ROLLBACK:
+            event EvValidated  → CMP_IDLE            // rolled back clean → idle
+    }
+}
+
+// The fleet ingress + orchestrator. tipc 0x8001005E. The ONLY TIPC-reachable VUCM
+// surface: serves VucmCtlIf (Mender/com), receives SM-state + PHM-health, and
+// post_event()s the campaign lifecycle into VucmCampaign. requires_timers for the
+// authorize-retry / validate window.
+node atomic VucmGate {
+    tipc type=0x8001005E instance=0
+    requires_timers
+    tag = "VCMG"
+    ports {
+        server   ctl       provides VucmCtlIf          // Mender → com gRPC → here
+        receiver lifecycle requires VucmLifecycleIn    // in-process FSM events
+        receiver from_sm   requires SmStateStream      // SM authorizes (vehicle state)
+        receiver from_phm  requires PhmHealthStream     // PHM validates (health)
+    }
+}
+
+// Test-only probe driver. Posts the Ev* campaign events at VucmGate to drive the
+// orchestrator FSM standalone (services/vucm/test), like UcmTester/SmTester. NOT
+// deployed — appears in no composition.
+node atomic VucmTester {
+    tipc type=0x8001005F instance=0
+    tag = "VCMT"
+    ports {
+        sender to_gate provides VucmLifecycleIn
+    }
+}
+
+// ─── Runtime config (etcd-backed via services/per) ──────────────────────────
+
+message VucmConfig {
+    // How long (ms) the gate waits in AUTHORIZING for SM/PHM to allow before it
+    // re-plans (a postponed campaign retries when the vehicle state changes).
+    uint32 authorize_budget_ms = 60000
+    // How long (ms) to watch PHM health in VALIDATING before declaring success.
+    uint32 validate_budget_ms  = 30000
+    // The Mender server base URL (the fleet edge; com proxies the actual HTTP).
+    string mender_url [max_size:128]
+}

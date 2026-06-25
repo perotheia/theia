@@ -36,6 +36,7 @@ filegroup(
         "//platform/proto/system/services/sm:sm.proto",
         "//platform/proto/system/services/tsync:tsync.proto",
         "//platform/proto/system/services/ucm:ucm.proto",
+        "//platform/proto/system/services/vucm:vucm.proto",
         "//platform/proto/system/supervisor:supervisor.proto",
         "//platform/proto/platform/msgs/std:std_proto",
         "//platform/proto/platform/msgs/geometry:geometry_proto",
@@ -65,6 +66,7 @@ cc_library(
         "//platform/proto/system/services/sm:sm_pb_c",
         "//platform/proto/system/services/tsync:tsync_pb_c",
         "//platform/proto/system/services/ucm:ucm_pb_c",
+        "//platform/proto/system/services/vucm:vucm_pb_c",
         "//platform/proto/system/supervisor:supervisor_pb_c",
         # ROS-shaped common message packages (platform.msgs.*) — std/geometry
         # are deps of sensor/nav. tsync's NavSatFix/Odometry streams are the
@@ -92,6 +94,7 @@ cc_library(
         "//platform/proto/system/services/sm:sm_pb_h",
         "//platform/proto/system/services/tsync:tsync_pb_h",
         "//platform/proto/system/services/ucm:ucm_pb_h",
+        "//platform/proto/system/services/vucm:vucm_pb_h",
         "//platform/proto/system/supervisor:supervisor_pb_h",
         "//platform/proto/platform/msgs/std:std_pb_h",
         "//platform/proto/platform/msgs/geometry:geometry_pb_h",

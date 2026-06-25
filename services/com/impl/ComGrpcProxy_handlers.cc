@@ -1005,14 +1005,32 @@ void ComGrpcProxy::do_start() {
     g_prov_svc = std::make_unique<ProvisioningImpl>();
 
     const std::string listen = listen_addr();
-    grpc::ServerBuilder b;
-    b.AddListeningPort(listen, services_com::make_server_creds(kNodeName));
-    b.RegisterService(g_sup_svc.get());
-    b.RegisterService(g_per_svc.get());
-    b.RegisterService(g_nm_svc.get());
-    b.RegisterService(g_diag_svc.get());
-    b.RegisterService(g_prov_svc.get());
-    g_server = b.BuildAndStart();
+    // Bind with a short bounded retry. On a supervisor restart / OTA FC-swap the
+    // previous com may not have released the listen port yet (TIME_WAIT / a slow
+    // teardown) — BuildAndStart() then returns null with EADDRINUSE. Giving up
+    // immediately leaves a live TIPC node with no gRPC edge (the operator/rtdb
+    // path is dead until a manual sweep). Retry a few times so the transient
+    // window self-heals; only escalate if the port is genuinely held.
+    constexpr int kBindAttempts = 10;
+    constexpr int kBindBackoffMs = 500;
+    for (int attempt = 1; attempt <= kBindAttempts && !g_server; ++attempt) {
+        grpc::ServerBuilder b;
+        b.AddListeningPort(listen, services_com::make_server_creds(kNodeName));
+        b.RegisterService(g_sup_svc.get());
+        b.RegisterService(g_per_svc.get());
+        b.RegisterService(g_nm_svc.get());
+        b.RegisterService(g_diag_svc.get());
+        b.RegisterService(g_prov_svc.get());
+        g_server = b.BuildAndStart();
+        if (!g_server && attempt < kBindAttempts) {
+            std::fprintf(stderr,
+                         "[%s] gRPC bind on %s busy (attempt %d/%d) — retrying in "
+                         "%dms\n", kNodeName, listen.c_str(), attempt,
+                         kBindAttempts, kBindBackoffMs);
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(kBindBackoffMs));
+        }
+    }
     if (!g_server) {
         std::fprintf(stderr, "[%s] gRPC server failed to start on %s\n",
                      kNodeName, listen.c_str());

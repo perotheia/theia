@@ -78,11 +78,31 @@ jobs:
             testing/scenarios/_selftest/topology/ \
             testing/scenarios/_selftest/temporal_logic/
 
+      - name: Run the hermetic per-FC temporal scenarios
+        env:
+          RF_THEIA_WORKSPACE: ${{ github.workspace }}
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          # Per-FC temporal-logic (Pair-2) scenarios for nm/sm/log/com — the
+          # hermetic cases assert each FC's trace-stream shape (Eventually/
+          # Always/Never over the real node names) with a synthetic TRC feed,
+          # no live supervisor. The 'live' FSM cases (Start Statem Stack stages
+          # a stack) are excluded — they run in the dev/release live tier.
+          python -m robot \
+            --include hermetic --exclude live \
+            --outputdir out-fc \
+            testing/scenarios/services/nm/ \
+            testing/scenarios/services/sm/ \
+            testing/scenarios/services/log/log_firehose_temporal.robot \
+            testing/scenarios/services/com/com_firehose_temporal.robot
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: selftest-report
-          path: out/
+          path: |
+            out/
+            out-fc/
 
   # The in-repo demo at demo/ is a real CONSUMING WORKSPACE (the `theia init`
   # shape: system/apps real, manifest/ rig, proto/, framework symlinked via

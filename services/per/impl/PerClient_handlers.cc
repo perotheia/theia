@@ -33,6 +33,22 @@ namespace ara::per {
 
 namespace {
 
+// PHM health edge (escalation model): report per's etcd-backend availability to
+// PHM. Called once from init() at the store choice — etcd reachable → OK; the
+// in-memory fallback → DEGRADED (config no longer durable/shared, a real platform
+// fault PHM aggregates). One-shot at boot, not keep-alive. fg=FG_PLATFORM.
+void report_backend_health(PerClient& self, bool ok, const std::string& detail) {
+    system_services_phm_FcHealthReport hr =
+        system_services_phm_FcHealthReport_init_zero;
+    std::snprintf(hr.entity, sizeof(hr.entity), "%s", PerClient::kNodeName);
+    hr.fg   = 1;   // FG_PLATFORM (per ∈ core_sup)
+    hr.code = ok ? 0u : 1u;
+    hr.level = ok ? system_services_phm_HealthLevel_HealthLevel_OK
+                  : system_services_phm_HealthLevel_HealthLevel_DEGRADED;
+    std::snprintf(hr.detail, sizeof(hr.detail), "%.120s", detail.c_str());
+    self.broadcast_to_phm_report(hr);
+}
+
 // Copy a std::string into a fixed nanopb char[] field (NUL-terminated, capped).
 template <std::size_t N>
 void set_str(char (&dst)[N], const std::string& s) {
@@ -184,6 +200,7 @@ void PerClient::init(PerClientState& s) {
         s.store = make_etcd_store(endpoint);
         if (s.store) {
             this->log().info("store: etcd @ " + endpoint);
+            report_backend_health(*this, /*ok=*/true, "etcd @ " + endpoint);
             // Watch the whole config prefix. On an etcd change, per casts
             // ConfigUpdated to every subscriber of that target. The watch cb
             // runs on the etcd watcher thread — defer the cast onto the node
@@ -206,6 +223,8 @@ void PerClient::init(PerClientState& s) {
         } else {
             this->log().warn("store: etcd unreachable @ " + endpoint +
                              " — falling back to in-memory");
+            report_backend_health(*this, /*ok=*/false,
+                                  "etcd unreachable @ " + endpoint + " (in-memory fallback)");
             s.store = make_memory_store();
         }
     }

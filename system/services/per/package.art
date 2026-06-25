@@ -36,6 +36,13 @@ package system.services.per
 // also lives in platform.runtime; per is a SENDER of it.
 import system.platform.runtime.*
 
+// PHM health edge (escalation model): per reports FcHealthReport to PHM on its
+// etcd-backend availability EDGE — etcd reachable → OK; unreachable (fell back to
+// in-memory, config no longer durable/shared) → DEGRADED. Reported once at init
+// (the store choice is made then); not keep-alive. FcHealthReport/HealthLevel/
+// FcHealthReportIf are PHM's. See docs/autosar/communication-matrix.md.
+import system.services.phm.*
+
 // (Logging does NOT flow over a TIPC interface. Each node logs directly to its
 // runtime sink — file / syslog / null, selected by THEIA_LOGGER (Logger.hh).
 // svc/log[trace] handles TRACES, not logs; per has no LogStream port.)
@@ -170,6 +177,7 @@ node atomic PerClient {
         // override; this port models the intent. Mirrors the supervisor's
         // `sender child_ctrl provides ChildControlIf`.
         sender config_out provides ChildControlIf
+        sender to_phm     provides FcHealthReportIf   // backend health edge → PHM
     }
     params {
         // Per-cast connect budget (ms) for the ConfigUpdated push — a DOWN

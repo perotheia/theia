@@ -27,6 +27,7 @@
 #include "system/services/per/per.pb.h"
 
 #include "platform_runtime/runtime.pb.h"
+#include "system/services/phm/phm.pb.h"
 
 
 
@@ -35,6 +36,7 @@ THEIA_DECLARE_REMOTE_CODEC(system_services_per_ConfigSnapshot)
 THEIA_DECLARE_REMOTE_CODEC(system_services_per_PutConfigReq)
 THEIA_DECLARE_REMOTE_CODEC(system_services_per_PerReply)
 THEIA_DECLARE_REMOTE_CODEC(system_services_per_WatchConfigReq)
+THEIA_DECLARE_REMOTE_CODEC(system_services_phm_FcHealthReport)
 THEIA_DECLARE_REMOTE_CODEC(system_services_per_RegisterSchemaReq)
 THEIA_DECLARE_REMOTE_CODEC(system_services_per_ListSchemasReq)
 THEIA_DECLARE_REMOTE_CODEC(system_services_per_SchemaList)

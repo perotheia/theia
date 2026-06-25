@@ -62,6 +62,13 @@ message FwConfig {
     // `ip saddr { <cidrs> } tcp dport { <ports> } accept` — only those networks
     // reach gRPC, instead of exposing the ports globally. Empty = global (today).
     string grpc_client_cidrs = "" [max_size:512]
+    // Management interface: the TRUSTED LAN link (wired Ethernet) where inbound SSH
+    // (22) is allowed. SSH is allowed ONLY here — never on the untrusted WAN/wifi
+    // side, where only the DMZ gRPC-TLS ports are reachable inbound (+ outbound to
+    // the Mender gateway). Default "eth0" (the field rig's wired link); "" = SSH
+    // nowhere. Field-safety: a wifi-facing default-drop fw must not expose SSH on
+    // the WAN, yet must keep the operator's LAN SSH alive.
+    string mgmt_iface        = "eth0" [max_size:32]
     // Management-via-VPN: an interface (e.g. "wg0") that is fully trusted inbound
     // (`iif "wg0" accept`), so ssh/puppet/monitoring/diagnostics must arrive
     // through the VPN. Empty = no VPN allow rule.

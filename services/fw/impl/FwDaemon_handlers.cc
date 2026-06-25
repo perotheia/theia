@@ -47,6 +47,7 @@ void apply_now(FwDaemon& self, FwDaemonState& s) {
         int rules = 0, overrides = 0, egress_fcs = 0;
         // FW.d custom site policy, layered onto the comm-matrix baseline.
         FwPolicy custom;
+        custom.mgmt_iface        = s.mgmt_iface;
         custom.grpc_client_cidrs = s.grpc_client_cidrs;
         custom.vpn_iface         = s.vpn_iface;
         custom.forward_policy    = s.forward_policy;
@@ -152,6 +153,11 @@ void FwDaemon::on_config_update(
     s.reassert_ms    = c.reassert_ms;
     s.egress_policy  = c.egress_policy;
     if (c.egress_slice[0]) s.egress_slice = c.egress_slice;
+    // mgmt_iface (SSH-allowed LAN link) has a meaningful non-empty default ("eth0")
+    // — only override when the config sets it, so a config that omits the field
+    // (decodes to "") does NOT silently disable SSH. To deliberately drop SSH
+    // everywhere, a deployment sets mgmt_iface to a sentinel like "none".
+    if (c.mgmt_iface[0]) s.mgmt_iface = c.mgmt_iface;
     // FW.d custom policy. These are pass-through (empty clears the rule), so copy
     // unconditionally — a deployment turns a knob off by sending "".
     s.grpc_client_cidrs = c.grpc_client_cidrs;

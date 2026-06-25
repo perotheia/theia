@@ -26,6 +26,7 @@ struct FwDaemonState {
     std::string cgroup_root    = "/sys/fs/cgroup";
 
     // ---- FW.d custom policy (layered onto the comm-matrix baseline) --------
+    std::string mgmt_iface = "eth0";      // SSH-allowed mgmt iface (LAN); "" = SSH nowhere
     std::string grpc_client_cidrs;        // "" = DMZ ports global; else saddr-restrict
     std::string vpn_iface;                // "" = no VPN allow; else `iif "<if>" accept`
     std::string forward_policy;           // "" = no forward chain; "drop" = default-drop

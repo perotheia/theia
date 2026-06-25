@@ -190,6 +190,7 @@ inline std::vector<std::string> split_csv_(const std::string& csv) {
 // Custom site policy layered ONTO the comm-matrix baseline (FW.d). All optional;
 // an empty/false field leaves the baseline behaviour unchanged.
 struct FwPolicy {
+    std::string mgmt_iface;          // SSH-allowed mgmt iface, e.g. "eth0" ("" = SSH nowhere)
     std::string grpc_client_cidrs;   // saddr-restrict the DMZ ports ("" = global)
     std::string vpn_iface;           // trusted inbound iface, e.g. "wg0" ("" = none)
     std::string forward_policy;      // "drop" → default-drop forward chain ("" = none)
@@ -241,16 +242,20 @@ inline std::string build_ruleset(const std::string& dmz_csv,
     in_chain += "        ct state established,related accept\n";
     in_chain += "        ct state invalid drop\n";
     in_chain += "        iif lo accept\n";
-    // SSH management — ALWAYS allowed, regardless of the DMZ list / default-drop.
-    // FIELD-SAFETY INVARIANT: a headless remote rig (reached only over SSH/VPN)
-    // must NEVER be locked out by a firewall (mis)config. A full-stack fw with no
-    // deploy config defaults to `policy drop` + a DMZ list of {7700,7710,7711,2379}
-    // that OMITS 22 — which silently dropped all inbound SSH on the rpi4 field rig
-    // (link up, host unreachable). 22 is unconditionally accepted here so fw can
-    // never strand the operator; lock it down via a fw.d fragment (saddr-restrict)
-    // when a deployment genuinely wants to, but never by accident.
-    in_chain += "        tcp dport 22 accept\n";
-    ++rules;
+    // SSH management — allowed ONLY on the trusted MANAGEMENT interface (the LAN
+    // Ethernet link), NEVER on the untrusted WAN/wifi side. Security posture: on
+    // wifi only com's gRPC TLS (the DMZ ports below) is reachable inbound, plus
+    // outbound to the Mender gateway (the output chain) — SSH stays LAN-only.
+    // mgmt_iface defaults to "eth0" (the field rig's wired link); set "" to drop
+    // SSH everywhere, or override per deploy. This is the field-safety invariant
+    // (a wifi-facing default-drop fw must not strand the operator on the LAN AND
+    // must not expose SSH on the WAN) — it cost the rpi4 a lockout to find: the
+    // old fw had NO ssh rule at all, so default-drop killed LAN ssh too.
+    if (!custom.mgmt_iface.empty()) {
+        in_chain += "        iif \"" + custom.mgmt_iface +
+                    "\" tcp dport 22 accept\n";
+        ++rules;
+    }
 
     // FW.d: management VPN — a fully-trusted inbound interface. Emitted BEFORE
     // the dport rule so ssh/puppet/monitoring over the VPN bypass the saddr

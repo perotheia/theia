@@ -16,5 +16,6 @@ system_services_fw.FwConfig.forward_policy   max_size:16
 system_services_fw.FwConfig.output_policy   max_size:16
 system_services_fw.FwConfig.egress_policy   max_size:1024
 system_services_fw.FwConfig.egress_slice   max_size:64
+system_services_fw.FwConfig.mgmt_iface   max_size:32
 system_services_fw.FwStatusMsg.message   max_size:192
 system_services_fw.ReloadReply.message   max_size:192

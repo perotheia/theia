@@ -25,6 +25,7 @@ message FwConfig {
     uint32 log_drops_rate = 11;
     string egress_policy = 12;
     string egress_slice = 13;
+    string mgmt_iface = 14;
 }
 
 message FwStatusMsg {

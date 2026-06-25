@@ -1,15 +1,20 @@
 # install-supervisor-unit.yml — boot-time autostart for a baremetal rig. Ships
-# run-supervisor.sh to /opt/theia + installs the theia-supervisor.service unit
-# that exec's it. Use for a headless outdoor Pi (reached only over VPN) that must
-# come up on power-on. NOT for the docker-compose path (run-supervisor.sh is the
-# container entrypoint there).
+# theia-run.sh to /opt/theia/bin + installs the theia-supervisor.service unit that
+# exec's it. Use for a headless outdoor Pi (reached only over VPN) that must come
+# up on power-on.
+#
+# theia-run.sh is the OTA-CORRECT launcher: it REQUIRES $THEIA_ROOT_DIR/current
+# (the release symlink the supervisor launches children from) and does NOT
+# re-provision/clobber it — so a Mender/UCM `current → releases/<ver>` flip + FC
+# restart sticks. (run-supervisor.sh, the docker-compose container entrypoint,
+# OWNS + re-asserts `current` on every boot — fatal for OTA; NOT used here.)
 #
 # Run via a deploy play, or:
 #   ansible-playbook orchestrate.yml -l <host> -e machine=<m> -e autostart=true
-- name: "Ship run-supervisor.sh to the rig"
+- name: "Ship theia-run.sh (the OTA-correct launcher) to the rig"
   ansible.builtin.copy:
-    src: "{{ playbook_dir }}/../run-supervisor.sh"
-    dest: /opt/theia/run-supervisor.sh
+    src: "{{ playbook_dir }}/../theia-run.sh"
+    dest: /opt/theia/bin/theia-run
     mode: "0755"
 
 - name: "Render the theia-supervisor.service unit"

@@ -26,6 +26,7 @@
 #include "RemoteCodec.hh"   // THEIA_DECLARE_REMOTE_CODEC
 #include "system/services/osi/osi.pb.h"
 
+#include "system/services/phm/phm.pb.h"
 
 
 
@@ -33,3 +34,4 @@ THEIA_DECLARE_REMOTE_CODEC(system_services_osi_ResourceStatusReq)
 THEIA_DECLARE_REMOTE_CODEC(system_services_osi_ResourceStatus)
 THEIA_DECLARE_REMOTE_CODEC(system_services_osi_ResourceLimitReq)
 THEIA_DECLARE_REMOTE_CODEC(system_services_osi_ResourceLimitReply)
+THEIA_DECLARE_REMOTE_CODEC(system_services_phm_FcHealthReport)

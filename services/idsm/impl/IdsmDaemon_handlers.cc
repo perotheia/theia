@@ -95,6 +95,36 @@ void broadcast_status_(IdsmDaemon& self, IdsmDaemonState& s) {
                  sizeof(msg.last_signature) - 1);
     msg.ts_ns = now_ns_();
     self.broadcast_broadcast_status(msg);
+
+    // PHM health edge (escalation model): the DETECTOR's own health (not a threat
+    // — that's the per-detection IdsmModeStream → SM path). A dead eBPF backend
+    // leaves the host unmonitored. Report on the level EDGE only (this runs every
+    // poll). IDS_LOADED → OK; IDS_DEGRADED → DEGRADED (was up, failed); IDS_-
+    // UNAVAILABLE → WARNING (no backend — expected on the dev host).
+    int health;
+    if (s.state == system_services_idsm_IdsState_IdsState_IDS_DEGRADED)   health = 2;
+    else if (s.state == system_services_idsm_IdsState_IdsState_IDS_LOADED) health = 0;
+    else                                                                   health = 1;
+    if (health != s.last_health) {
+        s.last_health = health;
+        system_services_phm_FcHealthReport hr =
+            system_services_phm_FcHealthReport_init_zero;
+        std::snprintf(hr.entity, sizeof(hr.entity), "%s", IdsmDaemon::kNodeName);
+        hr.fg    = 2;          // FG_NETWORK (idsm ∈ network_sup)
+        hr.ts_ns = msg.ts_ns;
+        hr.code  = (health == 0) ? 0u : 1u;
+        if (health == 2) {
+            hr.level = system_services_phm_HealthLevel_HealthLevel_DEGRADED;
+            std::snprintf(hr.detail, sizeof(hr.detail), "eBPF detector failed");
+        } else if (health == 0) {
+            hr.level = system_services_phm_HealthLevel_HealthLevel_OK;
+            std::snprintf(hr.detail, sizeof(hr.detail), "detector loaded");
+        } else {
+            hr.level = system_services_phm_HealthLevel_HealthLevel_WARNING;
+            std::snprintf(hr.detail, sizeof(hr.detail), "no eBPF backend");
+        }
+        self.broadcast_to_phm_report(hr);
+    }
 }
 
 // Spill a batch of detections to the firehose + escalate the severe ones. Shared

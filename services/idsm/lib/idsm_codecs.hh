@@ -26,6 +26,7 @@
 #include "RemoteCodec.hh"   // THEIA_DECLARE_REMOTE_CODEC
 #include "system/services/idsm/idsm.pb.h"
 
+#include "system/services/phm/phm.pb.h"
 
 
 
@@ -33,3 +34,4 @@ THEIA_DECLARE_REMOTE_CODEC(system_services_idsm_IdsStatusReq)
 THEIA_DECLARE_REMOTE_CODEC(system_services_idsm_IdsStatusMsg)
 THEIA_DECLARE_REMOTE_CODEC(system_services_idsm_IdsmDigestUpdate)
 THEIA_DECLARE_REMOTE_CODEC(system_services_idsm_IdsmModeInput)
+THEIA_DECLARE_REMOTE_CODEC(system_services_phm_FcHealthReport)

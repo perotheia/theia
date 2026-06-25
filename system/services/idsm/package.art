@@ -27,6 +27,13 @@ package system.services.idsm
 // The firehose record type lives in log[trace]; IDSM is a PRODUCER on it.
 import system.services.log.*
 
+// PHM health edge (escalation model): idsm reports FcHealthReport to PHM on its
+// backend-state fault EDGE (IDS_LOADED ⇄ IDS_DEGRADED/UNAVAILABLE) — a dead eBPF
+// detector means the host is unmonitored, a security-relevant health fault PHM
+// aggregates. (Distinct from the per-detection IdsmModeStream → SM escalation:
+// that's a threat event; this is the detector's own health.) Edge only.
+import system.services.phm.*
+
 // ─── Detector state ─────────────────────────────────────────────────────────
 
 enum IdsState {
@@ -152,5 +159,6 @@ node atomic IdsmDaemon {
         receiver from_osi  requires OsiStatusStream    // Cat I: resource pressure (CAST)
         receiver from_ucm  requires IdsmDigestFeed      // Cat H: expected digests (CAST)
         sender   to_sm     provides IdsmModeStream      // escalate → SM mode input (CAST)
+        sender   to_phm    provides FcHealthReportIf     // detector health edge → PHM
     }
 }

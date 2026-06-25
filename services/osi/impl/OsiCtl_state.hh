@@ -47,6 +47,12 @@ struct OsiCtlState {
     struct Limit { uint32_t cpu_max_pct = 0; uint64_t mem_high = 0; };
     std::map<std::string, Limit> limits;
     // (The Orin power plane moved to services/shwa.)
+
+    // PHM health edge-latch: last resource-pressure level reported (-1 = none
+    // yet), so the poll escalates only when pressure appears/clears — not on
+    // every 2s poll tick (the ResourceStatus broadcast already carries the live
+    // numbers; PHM gets only the edge).
+    int last_health = -1;
 };
 
 }  // namespace ara::osi

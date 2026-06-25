@@ -41,6 +41,10 @@ struct IdsmDaemonState {
     uint64_t    events_total    = 0;
     uint64_t    escalated_total = 0;
     std::string last_signature;
+
+    // PHM health edge-latch: last detector-health level reported (-1 = none yet),
+    // so broadcast_status_ escalates only on a level CHANGE (it runs every poll).
+    int         last_health     = -1;
 };
 
 }  // namespace ara::idsm

@@ -20,6 +20,13 @@
 
 package system.services.osi
 
+// PHM health edge (escalation model): osi reports FcHealthReport to PHM on the
+// resource-pressure fault EDGE — any FC breaching its applied memory.high ceiling
+// is platform pressure PHM aggregates. Edge only (present↔absent), NOT a per-poll
+// stream (the ResourceStatus broadcast already carries the live numbers). FcHealth-
+// Report/HealthLevel/FcHealthReportIf are PHM's. See communication-matrix.md.
+import system.services.phm.*
+
 // ─── Runtime config (etcd-backed via services/per) ─────────────────────────
 
 message OsiConfig {
@@ -95,5 +102,6 @@ node atomic OsiCtl {
     ports {
         sender broadcast provides OsiStatusStream
         server ctl       provides OsiCtlIf
+        sender to_phm    provides FcHealthReportIf   // resource-pressure edge → PHM
     }
 }

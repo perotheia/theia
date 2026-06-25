@@ -122,6 +122,40 @@ void OsiCtl::handle_info(const char* info, OsiCtlState& s) {
 
     broadcast_broadcast_status(snap);
 
+    // PHM health edge (escalation model): resource PRESSURE — any FC over its
+    // applied memory.high ceiling — is a platform fault PHM aggregates. Report on
+    // the present↔absent EDGE only (the live per-FC numbers ride the ResourceStatus
+    // broadcast above; PHM gets just the edge, not a per-poll stream).
+    uint32_t over = 0;
+    const char* worst = "";
+    for (uint32_t i = 0; i < snap.fcs_count; ++i) {
+        const auto& r = snap.fcs[i];
+        if (r.mem_high != 0 && r.rss_bytes > r.mem_high) {
+            ++over;
+            if (worst[0] == '\0') worst = r.fc;
+        }
+    }
+    const int health = over ? 2 /*DEGRADED*/ : 0 /*OK*/;
+    if (health != s.last_health) {
+        s.last_health = health;
+        system_services_phm_FcHealthReport hr =
+            system_services_phm_FcHealthReport_init_zero;
+        std::snprintf(hr.entity, sizeof(hr.entity), "%s", OsiCtl::kNodeName);
+        hr.fg    = 1;          // FG_PLATFORM (osi owns the platform slices)
+        hr.ts_ns = snap.ts_ns;
+        if (over) {
+            hr.level = system_services_phm_HealthLevel_HealthLevel_DEGRADED;
+            hr.code  = over;
+            std::snprintf(hr.detail, sizeof(hr.detail),
+                          "%u FC(s) over memory.high (e.g. %s)", over, worst);
+        } else {
+            hr.level = system_services_phm_HealthLevel_HealthLevel_OK;
+            hr.code  = 0;
+            std::snprintf(hr.detail, sizeof(hr.detail), "resource pressure cleared");
+        }
+        broadcast_to_phm_report(hr);
+    }
+
     uint32_t ms = s.poll_ms ? s.poll_ms : 2000;
     ::theia::runtime::send_after(::theia::runtime::process_timers(), ms,
                                  *this, "poll");

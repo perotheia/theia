@@ -46,6 +46,7 @@ using IdsStatusMsg = system_services_idsm_IdsStatusMsg;
 using IdsStatusReq = system_services_idsm_IdsStatusReq;
 using IdsmDigestUpdate = system_services_idsm_IdsmDigestUpdate;
 using IdsmModeInput = system_services_idsm_IdsmModeInput;
+using FcHealthReport = system_services_phm_FcHealthReport;
 
 
 
@@ -217,6 +218,8 @@ public:
 
     void broadcast_to_sm_mode_input(const IdsmModeInput& msg);
 
+    void broadcast_to_phm_report(const FcHealthReport& msg);
+
 
 private:
     // The node's process-group client: owns the recv thread for joined groups, the
@@ -254,6 +257,19 @@ inline void IdsmDaemon::broadcast_to_sm_mode_input(const IdsmModeInput& msg) {
     if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<IdsmModeInput>::fields(), &msg))
         return;
     pg_.broadcast_members<IdsmModeInput>(_buf, static_cast<uint16_t>(_os.bytes_written));
+}
+
+inline void IdsmDaemon::broadcast_to_phm_report(const FcHealthReport& msg) {
+    // Ensure we're monitoring the group (OTP pg:monitor — idempotent), then cast
+    // `msg` to EACH watched member. group identity = msg_type_name<FcHealthReport>().
+    // The impl can call pg_members<FcHealthReport>() first to skip work when the list
+    // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
+    pg_watch<FcHealthReport>();
+    uint8_t _buf[8192];
+    pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
+    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<FcHealthReport>::fields(), &msg))
+        return;
+    pg_.broadcast_members<FcHealthReport>(_buf, static_cast<uint16_t>(_os.bytes_written));
 }
 
 

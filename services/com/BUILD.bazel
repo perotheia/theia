@@ -149,6 +149,18 @@ cc_library(
     linkopts = select({
         "@pero_theia//rules/config:is_arm64": [
             "-Wl,-Bstatic", "-Wl,--start-group",
+            # libprotobuf STATIC and explicit (-l:….a) inside the static group.
+            # The runtime/supervisor .pb.cc compiled in this lib reference the
+            # 3.21 C++ runtime; without pinning the .a, the `-lprotobuf` from the
+            # //third_party:system_protobuf dep (added AFTER the -Wl,-Bdynamic
+            # below) resolves DYNAMICALLY — fine on rpi4 (sysroot ships
+            # libprotobuf.so.32 == 3.21), but on the Jetson native build
+            # /usr/local has ONLY libprotobuf.a, so dynamic -lprotobuf falls back
+            # to focal's system libprotobuf17.so (3.6) → undefined refs to the
+            # 3.21 RepeatedPtrField / AddDescriptorsRunner symbols. Pinning the
+            # .a here resolves them in-group for BOTH targets; the later dynamic
+            # -lprotobuf then no-ops.
+            "-l:libprotobuf.a",
             "-lgrpc++", "-lgrpc", "-lgpr",
             "-laddress_sorting", "-lre2", "-lupb", "-lcares", "-lz",
             # ALL abseil archives (the full sysroot set) inside the group — no

@@ -217,6 +217,8 @@ int main(int argc, char** argv) {
         config_mux.register_cast<EvInstalled>(ucm_gate_cfg, ucm_gate);
         config_mux.register_cast<EvRestarted>(ucm_gate_cfg, ucm_gate);
         config_mux.register_cast<EvVerified>(ucm_gate_cfg, ucm_gate);
+        config_mux.register_cast<EvProvisional>(ucm_gate_cfg, ucm_gate);
+        config_mux.register_cast<EvConfirmed>(ucm_gate_cfg, ucm_gate);
         config_mux.register_cast<EvFailed>(ucm_gate_cfg, ucm_gate);
         config_mux.register_cast<EvRolledBack>(ucm_gate_cfg, ucm_gate);
         config_mux.register_cast<PhmHealthStatus>(ucm_gate_cfg, ucm_gate);
@@ -294,6 +296,10 @@ int main(int argc, char** argv) {
         // — lands on the same handle_call / handle_cast path. clientServer
         // ops → register_call; senderReceiver `in` data → register_cast.
         config_mux.register_call<PackageManifest, UcmReply>(
+            ucm_daemon_cfg, ucm_daemon);
+        config_mux.register_call<ConfirmRequest, UcmReply>(
+            ucm_daemon_cfg, ucm_daemon);
+        config_mux.register_call<CancelRequest, UcmReply>(
             ucm_daemon_cfg, ucm_daemon);
         // PG (manual pub/sub, OTP shape): attach this statem node's PgClient to
         // its demux binding (joined-group frames + PgMembership pushes route into

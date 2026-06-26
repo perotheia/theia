@@ -32,7 +32,7 @@
 
 #include "NodeRef.hh"   // TipcAddr + cast(Daemon&,Msg,TipcAddr); RemoteRef<>
 
-namespace ara::ucm::netgraph {
+namespace system_services_ucm::netgraph {
 
 
 

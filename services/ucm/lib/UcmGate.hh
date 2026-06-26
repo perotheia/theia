@@ -18,7 +18,7 @@
 // derived from the .art), so the struct lives in a WRITE-ONCE impl header
 // (seeded empty, never clobbered without --force) that the user fills in.
 // Included at GLOBAL scope (the header opens its own `namespace
-// ara::ucm`) so it isn't nested under this file's
+// system_services_ucm`) so it isn't nested under this file's
 // namespace block — bound as the GenServer State type below.
 #include "impl/UcmGate_state.hh"
 
@@ -49,6 +49,8 @@ using EvStaged = system_services_ucm_EvStaged;
 using EvInstalled = system_services_ucm_EvInstalled;
 using EvRestarted = system_services_ucm_EvRestarted;
 using EvVerified = system_services_ucm_EvVerified;
+using EvProvisional = system_services_ucm_EvProvisional;
+using EvConfirmed = system_services_ucm_EvConfirmed;
 using EvFailed = system_services_ucm_EvFailed;
 using EvRolledBack = system_services_ucm_EvRolledBack;
 using PhmHealthStatus = system_services_phm_PhmHealthStatus;
@@ -202,6 +204,10 @@ public:
     void handle_cast(const EvRestarted& msg, UcmGateState& s);
 
     void handle_cast(const EvVerified& msg, UcmGateState& s);
+
+    void handle_cast(const EvProvisional& msg, UcmGateState& s);
+
+    void handle_cast(const EvConfirmed& msg, UcmGateState& s);
 
     void handle_cast(const EvFailed& msg, UcmGateState& s);
 

@@ -18,7 +18,7 @@
 // derived from the .art), so the struct lives in a WRITE-ONCE impl header
 // (seeded empty, never clobbered without --force) that the user fills in.
 // Included at GLOBAL scope (the header opens its own `namespace
-// ara::ucm`) so it isn't nested under this file's
+// system_services_ucm`) so it isn't nested under this file's
 // namespace block — bound as the GenServer State type below.
 #include "impl/UcmDaemon_state.hh"
 
@@ -44,6 +44,8 @@ namespace ara::ucm {
 // signatures readable.
 using PackageManifest = system_services_ucm_PackageManifest;
 using UcmReply = system_services_ucm_UcmReply;
+using ConfirmRequest = system_services_ucm_ConfirmRequest;
+using CancelRequest = system_services_ucm_CancelRequest;
 
 // statem block declared in .art — see the corresponding StateMBase
 // header produced by `artheia gen-cpp-stubs`. The daemon below
@@ -183,6 +185,12 @@ public:
 
 
     UcmReply handle_call(const PackageManifest& req,
+                                            UcmDaemonState& s);
+
+    UcmReply handle_call(const ConfirmRequest& req,
+                                            UcmDaemonState& s);
+
+    UcmReply handle_call(const CancelRequest& req,
                                             UcmDaemonState& s);
 
 

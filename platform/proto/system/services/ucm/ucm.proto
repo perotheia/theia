@@ -24,6 +24,31 @@ enum UcmState {
     UcmState_VERIFYING = 6;
     UcmState_ACTIVE = 7;
     UcmState_ROLLBACK = 8;
+    UcmState_PROVISIONAL = 9;
+}
+
+// Two-phase-commit activation marker (hand-added additively; mirrors package.art).
+enum ActivationState {
+    ActivationState_ACT_NONE = 0;
+    ActivationState_ACT_PROVISIONAL = 1;
+    ActivationState_ACT_CONFIRMED = 2;
+}
+message UcmActivation {
+    ActivationState state = 1;
+    string version = 2;
+    string campaign_id = 3;
+    uint64 deadline_ns = 4;
+    UpdateScope scope = 5;
+}
+message ConfirmRequest {
+    string campaign_id = 1;
+}
+message CancelRequest {
+    string campaign_id = 1;
+}
+message EvProvisional {
+}
+message EvConfirmed {
 }
 
 message PackageManifest {

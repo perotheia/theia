@@ -81,4 +81,32 @@ UcmReply UcmDaemon::handle_call(
     return reply;
 }
 
+// Confirm — the remote half of the two-phase commit. A PROVISIONAL update (held
+// after a clean verify window, awaiting confirmation) is COMMITTED: cast
+// EvConfirmed into the gate → PROVISIONAL → ACTIVE + clear the marker. Idempotent
+// from the daemon's view; the gate ignores it if nothing is provisional.
+UcmReply UcmDaemon::handle_call(const ConfirmRequest& req, UcmDaemonState& /*s*/) {
+    UcmReply reply = system_services_ucm_UcmReply_init_zero;
+    auto& gate = ucm_gate_ref();
+    if (!gate.valid()) { reply.status = 2; return reply; }   // not-ready
+    this->log().info(std::string("Confirm campaign=") + req.campaign_id +
+        " → committing the provisional update");
+    theia::runtime::cast(gate, EvConfirmed{});
+    reply.status = 0;   // accepted
+    return reply;
+}
+
+// Cancel — the remote abort. A PROVISIONAL update is ROLLED BACK: cast EvFailed
+// into the gate → PROVISIONAL → ROLLBACK (current → previous) + clear the marker.
+UcmReply UcmDaemon::handle_call(const CancelRequest& req, UcmDaemonState& /*s*/) {
+    UcmReply reply = system_services_ucm_UcmReply_init_zero;
+    auto& gate = ucm_gate_ref();
+    if (!gate.valid()) { reply.status = 2; return reply; }
+    this->log().info(std::string("Cancel campaign=") + req.campaign_id +
+        " → rolling back the provisional update");
+    theia::runtime::cast(gate, EvFailed{});
+    reply.status = 0;
+    return reply;
+}
+
 }  // namespace ara::ucm

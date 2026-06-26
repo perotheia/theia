@@ -72,8 +72,17 @@ message UcmRequest { string package_id    string version [max_size:32] }
 message UcmReply   { uint32 status }
 
 // RequestUpdate carries the full manifest (com forwards the fleet campaign).
+// Confirm/Cancel are the two-phase-commit's remote half: while the agent is
+// PROVISIONAL (installed, running, unconfirmed) the fleet (GS/VUCM) either commits
+// (Confirm → ACTIVE) or aborts (Cancel → ROLLBACK). A PackageManifest with a
+// non-zero confirm window (manifest.requires "confirm=<ms>") puts the agent into
+// PROVISIONAL after VERIFYING instead of straight to ACTIVE.
+message ConfirmRequest { string campaign_id [max_size:64] }
+message CancelRequest  { string campaign_id [max_size:64] }
 interface clientServer UpdateCtl {
-    operation RequestUpdate(in r:PackageManifest) returns UcmReply
+    operation RequestUpdate(in r:PackageManifest)  returns UcmReply
+    operation Confirm(in r:ConfirmRequest)         returns UcmReply   // PROVISIONAL → ACTIVE
+    operation Cancel(in r:CancelRequest)           returns UcmReply   // PROVISIONAL → ROLLBACK
 }
 
 // ─── Agent FSM events (post_event'd IN-PROCESS by UcmGate into UcmFsm) ───────
@@ -88,6 +97,8 @@ message EvStaged       { }   // release dir materialised under releases/<ver>
 message EvInstalled    { }   // symlink switched (full) / binary swapped (partial)
 message EvRestarted    { }   // supervisor brought the FC(s) back on the new release
 message EvVerified     { }   // PHM health gate passed within the verify budget
+message EvProvisional  { }   // verify window clean BUT a confirm is required → hold
+message EvConfirmed    { }   // remote Confirm (GS/VUCM) arrived in window → commit
 message EvFailed       { }   // any step failed OR health gate failed → ROLLBACK
 message EvRolledBack   { }   // previous restored + restarted clean
 
@@ -105,6 +116,13 @@ enum UcmState {
     VERIFYING   = 6
     ACTIVE      = 7
     ROLLBACK    = 8
+    // The two-phase-commit gate: after the local PHM verify window the update is
+    // installed + running but UNCONFIRMED. It holds in PROVISIONAL until a remote
+    // Confirm (GS/VUCM aggregate) commits it → ACTIVE, OR the confirm deadline
+    // passes / a Cancel arrives → ROLLBACK. The marker is persisted to per/etcd so
+    // a reboot mid-window resumes PROVISIONAL (not a silent commit). Appended (=9)
+    // to keep the wire ordinals 0..8 stable.
+    PROVISIONAL = 9
 }
 message UcmProgress {
     UcmState    state
@@ -117,6 +135,19 @@ message UcmProgress {
 
 interface senderReceiver UcmProgressStream { data UcmProgress progress }
 
+// The ACTIVATION MARKER persisted to per/etcd — the reboot-surviving record of
+// "this version is installed but PROVISIONAL (unconfirmed), roll back if not
+// confirmed by deadline". A fresh UCM reads it on boot to reinitialize into
+// PROVISIONAL (the two-phase commit's durable half). Its own per config_type.
+enum ActivationState { ACT_NONE = 0   ACT_PROVISIONAL = 1   ACT_CONFIRMED = 2 }
+message UcmActivation {
+    ActivationState state
+    string  version     [max_size:32]
+    string  campaign_id [max_size:64]    // the Mender deployment / VUCM campaign
+    uint64  deadline_ns                  // confirm-by; past it → auto-rollback
+    UpdateScope scope
+}
+
 // The gate's in-process FSM ingress (the probe/UcmDaemon post these; the FSM is
 // never driven directly off the wire — the statem-takes-no-external rule).
 interface senderReceiver UcmLifecycleIn {
@@ -127,6 +158,8 @@ interface senderReceiver UcmLifecycleIn {
     data EvInstalled   installed
     data EvRestarted   restarted
     data EvVerified    verified
+    data EvProvisional provisional
+    data EvConfirmed   confirmed
     data EvFailed      failed
     data EvRolledBack  rolled_back
 }
@@ -157,7 +190,7 @@ node atomic UcmFsm {
     }
     statem {
         states  [IDLE, DOWNLOADED, VALIDATED, STAGED, INSTALLING,
-                 RESTARTING, VERIFYING, ACTIVE, ROLLBACK]
+                 RESTARTING, VERIFYING, PROVISIONAL, ACTIVE, ROLLBACK]
         initial IDLE
         data    UcmProgress
 
@@ -185,8 +218,13 @@ node atomic UcmFsm {
             event EvFailed      → ROLLBACK
 
         on VERIFYING:
-            event EvVerified    → ACTIVE       // PHM-gated commit
+            event EvVerified    → ACTIVE        // PHM-gated commit (no confirm required)
+            event EvProvisional → PROVISIONAL   // confirm required → hold unconfirmed
             event EvFailed      → ROLLBACK
+
+        on PROVISIONAL:
+            event EvConfirmed   → ACTIVE        // remote Confirm (GS/VUCM) committed it
+            event EvFailed      → ROLLBACK      // Cancel OR confirm deadline passed
 
         on ACTIVE:
             event EvStartUpdate → DOWNLOADED    // next campaign

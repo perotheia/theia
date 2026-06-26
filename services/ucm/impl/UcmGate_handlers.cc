@@ -20,7 +20,9 @@
 #include <pb_decode.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -80,13 +82,104 @@ void step(const char* name, Evt evt) {
     to_fsm(name, evt);
     to_gate(evt);
 }
+
+// ---- The two-phase-commit activation marker -------------------------------
+// Persisted OUTSIDE current/ (at <prefix>/.ucm_activation) so it survives BOTH a
+// reboot AND the current→releases/<ver> symlink swap. The reboot-surviving record
+// of "this version is PROVISIONAL (unconfirmed), roll back if not confirmed by
+// deadline". <prefix> = the parent of releases_root (e.g. /opt/theia). Plain text
+// (state|version|campaign_id|deadline_ns|scope) — no proto dep, trivially readable.
+// (Phase B mirrors this into per/etcd for the cross-board V-UCM aggregate read.)
+std::string marker_path(const std::string& releases_root) {
+    // releases_root = <prefix>/releases → marker at <prefix>/.ucm_activation
+    auto pos = releases_root.find_last_of('/');
+    std::string prefix = (pos == std::string::npos) ? "." : releases_root.substr(0, pos);
+    return prefix + "/.ucm_activation";
+}
+struct Marker {
+    int         state = 0;   // ActivationState: 0 NONE 1 PROVISIONAL 2 CONFIRMED
+    std::string version;
+    std::string campaign_id;
+    uint64_t    deadline_ns = 0;
+    uint32_t    scope = 0;
+    bool        valid = false;
+};
+void write_marker(const std::string& root, const Marker& m) {
+    FILE* f = std::fopen(marker_path(root).c_str(), "w");
+    if (!f) return;
+    std::fprintf(f, "%d|%s|%s|%llu|%u\n", m.state, m.version.c_str(),
+                 m.campaign_id.c_str(),
+                 static_cast<unsigned long long>(m.deadline_ns), m.scope);
+    std::fclose(f);
+}
+void clear_marker(const std::string& root) { std::remove(marker_path(root).c_str()); }
+Marker read_marker(const std::string& root) {
+    Marker m;
+    FILE* f = std::fopen(marker_path(root).c_str(), "r");
+    if (!f) return m;
+    char ver[64] = {0}, camp[96] = {0};
+    unsigned long long dl = 0; int st = 0; unsigned sc = 0;
+    if (std::fscanf(f, "%d|%63[^|]|%95[^|]|%llu|%u", &st, ver, camp, &dl, &sc) >= 1) {
+        m.state = st; m.version = ver; m.campaign_id = camp;
+        m.deadline_ns = dl; m.scope = sc; m.valid = true;
+    }
+    std::fclose(f);
+    return m;
+}
+uint64_t now_ns() {
+    auto now = std::chrono::steady_clock::now().time_since_epoch();
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(now).count());
+}
+// Parse a confirm window (ms) out of the manifest `requires` list: an entry
+// "confirm=<ms>" means "two-phase: hold PROVISIONAL <ms> for a remote Confirm".
+uint32_t parse_confirm_window(const system_services_ucm_PackageManifest& m) {
+    for (pb_size_t i = 0; i < m.requires_count; ++i) {
+        const char* r = m.requires[i];
+        if (std::strncmp(r, "confirm=", 8) == 0)
+            return static_cast<uint32_t>(std::strtoul(r + 8, nullptr, 10));
+    }
+    return 0;
+}
 }  // namespace
 
 // ---- OTP init/1 — publish self to the gate ref so the daemon can post into us.
-void UcmGate::init(UcmGateState& /*s*/) {
+void UcmGate::init(UcmGateState& s) {
     if (!ucm_gate_ref().valid())
         ucm_gate_ref() = theia::runtime::LocalRef<UcmGate>(*this);
     this->log().info("ucm gate up — release-dir executor + health gate ready");
+
+    // ---- REBOOT-RESUME (the two-phase commit's durable half) --------------
+    // Read the persistent activation marker. If a PROVISIONAL update was in flight
+    // when we went down, we are running the UNCONFIRMED N+1 right now — so:
+    //   deadline already passed → nobody confirmed in time → ROLL BACK.
+    //   still within window      → resume PROVISIONAL + re-arm the remaining time.
+    // (A CONFIRMED/absent marker = steady state, nothing to do.)
+    Marker m = read_marker(s.releases_root);
+    if (m.valid && m.state == 1 /*PROVISIONAL*/) {
+        s.version = m.version;
+        s.campaign_id = m.campaign_id;
+        s.scope = m.scope;
+        s.confirm_deadline_ns = m.deadline_ns;
+        const uint64_t now = now_ns();
+        if (now >= m.deadline_ns) {
+            this->log().warn(std::string("BOOT: provisional v") + m.version +
+                " unconfirmed past deadline — ROLLING BACK");
+            s.provisioning = false;
+            // drive the FSM through to ROLLBACK from IDLE: it'll restore previous.
+            step("EvFailed", EvFailed{});
+        } else {
+            uint32_t remain_ms =
+                static_cast<uint32_t>((m.deadline_ns - now) / 1000000ull);
+            s.provisioning = true;
+            this->log().warn(std::string("BOOT: resuming PROVISIONAL v") + m.version +
+                " (confirm within " + std::to_string(remain_ms) + "ms or rollback)");
+            ::theia::runtime::send_after(::theia::runtime::process_timers(),
+                remain_ms ? remain_ms : 1, *this, "confirm_deadline");
+            // reflect the provisional state in the FSM/progress for observers.
+            to_fsm("EvProvisional", EvProvisional{});
+        }
+    }
 }
 
 // ---- string handle_info — the verify-window timer lands here. If PHM hasn't
@@ -96,9 +189,54 @@ void UcmGate::init(UcmGateState& /*s*/) {
 void UcmGate::handle_info(const char* info, UcmGateState& s) {
     if (info && std::strcmp(info, "verify_done") == 0 && s.verifying) {
         s.verifying = false;
-        this->log().info("verify window clean — committing");
-        to_fsm("EvVerified", EvVerified{});   // VERIFYING → ACTIVE
+        if (s.confirm_window_ms == 0) {
+            // legacy / no confirm required → commit straight to ACTIVE.
+            this->log().info("verify window clean — committing");
+            to_fsm("EvVerified", EvVerified{});   // VERIFYING → ACTIVE
+        } else {
+            // TWO-PHASE: hold PROVISIONAL, persist the marker, arm the confirm
+            // deadline. A remote Confirm before then → ACTIVE; else auto-rollback.
+            s.provisioning = true;
+            s.confirm_deadline_ns = now_ns() +
+                static_cast<uint64_t>(s.confirm_window_ms) * 1000000ull;
+            Marker m{1 /*PROVISIONAL*/, s.version, s.campaign_id,
+                     s.confirm_deadline_ns, s.scope, true};
+            write_marker(s.releases_root, m);
+            ::theia::runtime::send_after(::theia::runtime::process_timers(),
+                s.confirm_window_ms, *this, "confirm_deadline");
+            this->log().info(std::string("verify clean — PROVISIONAL (awaiting "
+                "Confirm, ") + std::to_string(s.confirm_window_ms) + "ms)");
+            to_fsm("EvProvisional", EvProvisional{});   // VERIFYING → PROVISIONAL
+        }
+        return;
     }
+    // The confirm deadline fired and no Confirm cleared `provisioning` → roll back.
+    if (info && std::strcmp(info, "confirm_deadline") == 0 && s.provisioning) {
+        s.provisioning = false;
+        this->log().warn("confirm deadline passed — no Confirm; ROLLING BACK");
+        step("EvFailed", EvFailed{});   // PROVISIONAL → ROLLBACK
+    }
+}
+
+// EvProvisional — the gate side of VERIFYING→PROVISIONAL. The state + marker are
+// already set in handle_info; this is the FSM-broadcast pass (no extra work).
+void UcmGate::handle_cast(const EvProvisional& /*msg*/, UcmGateState& /*s*/) {
+}
+
+// EvConfirmed — a remote Confirm (GS/VUCM) arrived within the window. Clear the
+// provisional state + marker (now CONFIRMED) and commit: PROVISIONAL → ACTIVE.
+void UcmGate::handle_cast(const EvConfirmed& /*msg*/, UcmGateState& s) {
+    if (!s.provisioning) {
+        this->log().warn("Confirm with no provisional update in flight — ignored");
+        return;
+    }
+    s.provisioning = false;
+    clear_marker(s.releases_root);   // committed → drop the rollback marker
+    ReleaseLayout l(s.releases_root);
+    prune_releases(l, s.retain_releases ? s.retain_releases : 3);
+    this->log().info(std::string("CONFIRMED v") + s.version +
+        " → ACTIVE (committed; previous retained)");
+    to_fsm("EvConfirmed", EvConfirmed{});   // PROVISIONAL → ACTIVE
 }
 
 // ---- config update — apply the etcd-backed UcmConfig (releases_root / verify
@@ -143,7 +281,12 @@ void UcmGate::handle_cast(const EvStartUpdate& /*msg*/, UcmGateState& s) {
     s.kind    = static_cast<uint32_t>(m.kind);
     s.scope   = static_cast<uint32_t>(m.scope);
     s.verifying = false;
+    s.provisioning = false;
+    s.confirm_window_ms = parse_confirm_window(m);   // 0 = legacy direct commit
+    s.campaign_id = m.name;   // VUCM/Mender pass the campaign id as the manifest name
     this->log().info(std::string("update begin: ") + m.name + " v" + m.version +
+        (s.confirm_window_ms ? (" (two-phase, confirm window " +
+                                std::to_string(s.confirm_window_ms) + "ms)") : "") +
         " (downloaded)");
     step("EvValidated", EvValidated{});     // DOWNLOADED → VALIDATED (+drive gate)
 }
@@ -251,6 +394,8 @@ void UcmGate::handle_cast(const EvVerified& /*msg*/, UcmGateState& s) {
 // the release back (FULL: current→previous) and report.
 void UcmGate::handle_cast(const EvFailed& /*msg*/, UcmGateState& s) {
     s.verifying = false;
+    s.provisioning = false;
+    clear_marker(s.releases_root);   // a rollback drops the provisional marker
     ReleaseLayout l(s.releases_root);
     if (s.scope == 0u /*US_FULL*/) {
         if (rollback_full(l))

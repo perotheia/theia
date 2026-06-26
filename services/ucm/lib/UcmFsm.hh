@@ -48,8 +48,9 @@ enum class UcmFsmState : uint8_t {
     INSTALLING = 4,
     RESTARTING = 5,
     VERIFYING = 6,
-    ACTIVE = 7,
-    ROLLBACK = 8
+    PROVISIONAL = 7,
+    ACTIVE = 8,
+    ROLLBACK = 9
 };
 
 // Local-namespace aliases over the nanopb C structs. The nanopb
@@ -65,6 +66,8 @@ using EvStaged = system_services_ucm_EvStaged;
 using EvInstalled = system_services_ucm_EvInstalled;
 using EvRestarted = system_services_ucm_EvRestarted;
 using EvVerified = system_services_ucm_EvVerified;
+using EvProvisional = system_services_ucm_EvProvisional;
+using EvConfirmed = system_services_ucm_EvConfirmed;
 using EvRolledBack = system_services_ucm_EvRolledBack;
 
 
@@ -84,7 +87,7 @@ class UcmFsm;
 //   - init(UcmFsmData&) returns the initial state
 //     (UcmFsmState::IDLE)
 //   - one handle_event overload per declared event type
-//     (EvStartUpdate, EvValidated, EvFailed, EvStaged, EvFailed, EvInstalled, EvFailed, EvRestarted, EvFailed, EvVerified, EvFailed, EvVerified, EvFailed, EvStartUpdate, EvRolledBack)
+//     (EvStartUpdate, EvValidated, EvFailed, EvStaged, EvFailed, EvInstalled, EvFailed, EvRestarted, EvFailed, EvVerified, EvFailed, EvVerified, EvProvisional, EvFailed, EvConfirmed, EvFailed, EvStartUpdate, EvRolledBack)
 //   - handle_event for ::theia::runtime::StateTimeoutMsg<UcmFsmState>
 //     covering states with `timeout → ...` rules
 //   - subscribe/unsubscribe/broadcast helpers for sender ports
@@ -112,6 +115,7 @@ public:
         case UcmFsmState::INSTALLING: return "INSTALLING";
         case UcmFsmState::RESTARTING: return "RESTARTING";
         case UcmFsmState::VERIFYING: return "VERIFYING";
+        case UcmFsmState::PROVISIONAL: return "PROVISIONAL";
         case UcmFsmState::ACTIVE: return "ACTIVE";
         case UcmFsmState::ROLLBACK: return "ROLLBACK";
         }
@@ -228,7 +232,7 @@ public:
         return ::theia::runtime::keep_state<UcmFsmState>();
     }
 
-    // EvFailed — handled from: DOWNLOADED → ROLLBACK | VALIDATED → ROLLBACK | STAGED → ROLLBACK | INSTALLING → ROLLBACK | RESTARTING → ROLLBACK | VERIFYING → ROLLBACK
+    // EvFailed — handled from: DOWNLOADED → ROLLBACK | VALIDATED → ROLLBACK | STAGED → ROLLBACK | INSTALLING → ROLLBACK | RESTARTING → ROLLBACK | VERIFYING → ROLLBACK | PROVISIONAL → ROLLBACK
     ::theia::runtime::EventResult<UcmFsmState> handle_event(
             UcmFsmState s, const EvFailed& /*e*/,
             UcmFsmData& /*d*/) {
@@ -253,6 +257,10 @@ public:
                 UcmFsmState::ROLLBACK);
         }
         if (s == UcmFsmState::VERIFYING) {
+            return ::theia::runtime::transition_to<UcmFsmState>(
+                UcmFsmState::ROLLBACK);
+        }
+        if (s == UcmFsmState::PROVISIONAL) {
             return ::theia::runtime::transition_to<UcmFsmState>(
                 UcmFsmState::ROLLBACK);
         }
@@ -301,6 +309,28 @@ public:
                 UcmFsmState::VERIFYING);
         }
         if (s == UcmFsmState::VERIFYING) {
+            return ::theia::runtime::transition_to<UcmFsmState>(
+                UcmFsmState::ACTIVE);
+        }
+        return ::theia::runtime::keep_state<UcmFsmState>();
+    }
+
+    // EvProvisional — handled from: VERIFYING → PROVISIONAL
+    ::theia::runtime::EventResult<UcmFsmState> handle_event(
+            UcmFsmState s, const EvProvisional& /*e*/,
+            UcmFsmData& /*d*/) {
+        if (s == UcmFsmState::VERIFYING) {
+            return ::theia::runtime::transition_to<UcmFsmState>(
+                UcmFsmState::PROVISIONAL);
+        }
+        return ::theia::runtime::keep_state<UcmFsmState>();
+    }
+
+    // EvConfirmed — handled from: PROVISIONAL → ACTIVE
+    ::theia::runtime::EventResult<UcmFsmState> handle_event(
+            UcmFsmState s, const EvConfirmed& /*e*/,
+            UcmFsmData& /*d*/) {
+        if (s == UcmFsmState::PROVISIONAL) {
             return ::theia::runtime::transition_to<UcmFsmState>(
                 UcmFsmState::ACTIVE);
         }

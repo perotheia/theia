@@ -203,6 +203,67 @@ int read_board_marker(const std::string& board) {
     return static_cast<int>(a.state);
 }
 
+// ---- L4-C.4: V-UCM campaign PERSISTENCE — survive the supervisor restart in
+//      step 5 (and a coordinator reboot). The campaign lives in the SHARED etcd
+//      under key "vucm_campaign" so a restarted V-UCM reads it back + resumes the
+//      CONFIRMING poll (the GS poll then returns the right state before AND after
+//      the restart). Record = a tab-delimited line (V-UCM owns both ends; no proto
+//      churn): campaign_id \t version \t scope \t phase \t boards_csv. phase=="" /
+//      no key → idle.
+constexpr const char* kCampaignNode = "vucm_campaign";
+
+void write_campaign(const std::string& campaign_id, const std::string& version,
+                    uint32_t scope, const std::string& phase,
+                    const std::vector<std::string>& boards) {
+    std::string boards_csv;
+    for (size_t i = 0; i < boards.size(); ++i)
+        boards_csv += (i ? "," : "") + boards[i];
+    std::string rec = campaign_id + "\t" + version + "\t" +
+                      std::to_string(scope) + "\t" + phase + "\t" + boards_csv;
+
+    system_services_per_PutConfigReq req = system_services_per_PutConfigReq_init_zero;
+    std::snprintf(req.target_node, sizeof(req.target_node), "%s", kCampaignNode);
+    size_t n = rec.size();
+    if (n > sizeof(req.config.bytes)) n = sizeof(req.config.bytes);
+    std::memcpy(req.config.bytes, rec.data(), n);
+    req.config.size = static_cast<pb_size_t>(n);
+    req.expect_rev = 0;
+
+    auto& link = PerLink::instance();
+    std::lock_guard<std::mutex> lk(link.mu);
+    if (!link.ensure_started()) return;
+    ::theia::runtime::call<system_services_per_PerReply>(link.ref, req, 0, 3000);
+}
+
+// Read the persisted campaign on (re)start. Returns true + fills the out-params if
+// a non-idle campaign is stored. phase "" (or no key) → false (idle).
+bool read_campaign(std::string& id, std::string& version, uint32_t& scope,
+                   std::string& phase, std::vector<std::string>& boards) {
+    system_services_per_GetConfigReq req = system_services_per_GetConfigReq_init_zero;
+    std::snprintf(req.target_node, sizeof(req.target_node), "%s", kCampaignNode);
+    auto& link = PerLink::instance();
+    std::lock_guard<std::mutex> lk(link.mu);
+    if (!link.ensure_started()) return false;
+    auto r = ::theia::runtime::call<system_services_per_ConfigSnapshot>(
+        link.ref, req, 0, 3000);
+    if (r.tag != ::theia::runtime::CallTag::Reply || r.reply.config.size == 0)
+        return false;
+    std::string rec(reinterpret_cast<const char*>(r.reply.config.bytes),
+                    r.reply.config.size);
+    // split on tab
+    std::vector<std::string> f; size_t p = 0, t;
+    while ((t = rec.find('\t', p)) != std::string::npos) { f.push_back(rec.substr(p, t - p)); p = t + 1; }
+    f.push_back(rec.substr(p));
+    if (f.size() < 5 || f[3].empty() || f[3] == "IDLE") return false;
+    id = f[0]; version = f[1];
+    scope = static_cast<uint32_t>(std::strtoul(f[2].c_str(), nullptr, 10));
+    phase = f[3];
+    boards.clear();
+    { std::stringstream ss(f[4]); std::string b;
+      while (std::getline(ss, b, ',')) if (!b.empty()) boards.push_back(b); }
+    return true;
+}
+
 // Fan RequestUpdate to a SPECIFIC board's UCM (step 2 of the user story). The
 // manifest names the role package; UCM resolves its own slice + invokes its
 // installer back-end (Mender standalone), then holds PROVISIONAL. confirm_window>0
@@ -278,6 +339,24 @@ void VucmGate::init(VucmGateState& s) {
     this->log().info(std::string("vucm gate up — board=") + s.self_board +
                      " roster=" + std::to_string(s.cfg_boards.size()) +
                      " (L4-B campaign orchestrator)");
+
+    // L4-C.4 RECOVERY: a supervisor restart (step 5) or coordinator reboot wiped
+    // our in-memory campaign. Read the persisted campaign back from the shared
+    // etcd; if one was in CONFIRMING, RESUME the aggregate poll (the boards' own
+    // PROVISIONAL markers survive in etcd too — [[L4-A]] reboot-resume), so the GS
+    // poll returns the right state after the restart. A campaign that was still
+    // INSTALLING when we died re-enters CONFIRMING (the markers tell the truth).
+    std::string cid, ver, phase; uint32_t sc = 0; std::vector<std::string> bds;
+    if (read_campaign(cid, ver, sc, phase, bds)) {
+        s.campaign_id = cid; s.version = ver; s.scope = sc;
+        s.boards = bds.empty() ? s.cfg_boards : bds;
+        s.confirm_ticks = 0;
+        s.last_state = system_services_vucm_CampaignState_CampaignState_CMP_CONFIRMING;
+        this->log().info(std::string("RESUMING campaign ") + cid + " (was " +
+                         phase + ") — re-entering CONFIRMING aggregate poll");
+        ::theia::runtime::send_after(::theia::runtime::process_timers(),
+                                     kPollMs, *this, "confirm_poll");
+    }
 }
 
 // ---- string handle_info — the confirm-poll timer. Polls every board's
@@ -338,6 +417,9 @@ CampaignReply VucmGate::handle_call(const CampaignRequest& req, VucmGateState& s
     this->log().info(std::string("CheckForCampaign id=") + s.campaign_id +
                      " version=" + s.version + " boards=" +
                      std::to_string(s.boards.size()));
+    // L4-C.4: persist the campaign to the shared etcd BEFORE driving the FSM, so a
+    // restart at any point (incl. the step-5 restart) recovers it.
+    write_campaign(s.campaign_id, s.version, s.scope, "CONFIRMING", s.boards);
     to_fsm("EvDeployment", EvDeployment{});   // → CMP_PLANNING
     to_gate(EvDeployment{});
     reply.accepted = 1;
@@ -409,6 +491,9 @@ void VucmGate::handle_cast(const EvValidated& /*msg*/, VucmGateState& s) {
     s.last_state = system_services_vucm_CampaignState_CampaignState_CMP_DONE;
     this->log().info(std::string("campaign ") + s.campaign_id +
                      ": DONE — all boards confirmed ACTIVE");
+    // L4-C.4: clear the persisted campaign (phase IDLE) so a restart doesn't resume
+    // a finished campaign.
+    write_campaign("", "", 0, "IDLE", {});
     s.campaign_id.clear();
     s.boards.clear();
 }
@@ -420,6 +505,7 @@ void VucmGate::handle_cast(const EvBlocked& /*msg*/, VucmGateState& /*s*/) {
 void VucmGate::handle_cast(const EvFailed& /*msg*/, VucmGateState& s) {
     s.last_state = system_services_vucm_CampaignState_CampaignState_CMP_ROLLBACK;
     this->log().warn(std::string("campaign ") + s.campaign_id + ": FAILED — rolled back");
+    write_campaign("", "", 0, "IDLE", {});   // L4-C.4: clear the persisted campaign
     to_fsm("EvFailed", EvFailed{});
     s.campaign_id.clear();
     s.boards.clear();

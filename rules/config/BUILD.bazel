@@ -46,6 +46,19 @@ platform(
     ],
 )
 
+# NVIDIA Jetson AGX — aarch64 like rpi4, but a DIFFERENT ABI: L4T R35.2.1 / Ubuntu
+# 20.04 focal (glibc 2.31), vs rpi4's bookworm (glibc 2.36). The cpu constraint is
+# identical, so the platform alone can't pick the sysroot — the build also passes
+# `--define theia_target=jetson` (see target_jetson below) to select the focal
+# sysroot + the from-source grpc closure. See rules/config/targets.bzl.
+platform(
+    name = "jetson",
+    constraint_values = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:linux",
+    ],
+)
+
 # -----------------------------------------------------------------------------
 # config_setting shortcuts — let rules/rig.bzl select() on these names
 # instead of writing constraint expressions verbatim. The platform
@@ -62,6 +75,19 @@ config_setting(
 config_setting(
     name = "is_arm64",
     constraint_values = ["@platforms//cpu:aarch64"],
+)
+
+# Which aarch64 ABI/sysroot to target — both rpi4 + jetson are cpu:aarch64, so a
+# `--define theia_target=<name>` disambiguates the sysroot + the distro-specific
+# deb Depends. Default (no define) = rpi4 (the original aarch64 target). Mirrors
+# the distro_ubuntu24 pattern. Keep in lockstep with rules/config/targets.bzl.
+config_setting(
+    name = "target_jetson",
+    values = {"define": "theia_target=jetson"},
+)
+config_setting(
+    name = "target_rpi4",
+    values = {"define": "theia_target=rpi4"},
 )
 
 # Opt-in eBPF backend for services/idsm (the connect() ringbuf, Cat B v2). OFF by

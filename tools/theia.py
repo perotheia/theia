@@ -1123,13 +1123,49 @@ def _stage_local(dest: Path, supervisor_src: str,
 _DEFAULT_TARGET = "single"          # default test target (one-machine dev rig)
 _MANIFEST_DIR = "dist/manifest"
 
-# machine.json CPU arch → bazel platform label (for the per-host cross-build).
-# Qualified @pero_theia//… so it resolves from a CONSUMING workspace (whose own
-# //rules/config doesn't exist) as well as in-framework.
-_ARCH_PLATFORM = {
-    "x86_64": "@pero_theia//rules/config:host",
-    "aarch64": "@pero_theia//rules/config:rpi4",
+# ── Cross-compile TARGET REGISTRY ────────────────────────────────────────────
+# The Python mirror of rules/config/targets.bzl — the SINGLE place every target's
+# (platform, bazel-config name, deb ABI key, deb arch, min-glibc) lives, so adding
+# a board is ONE entry, not a rediscovery across theia.py + cmake + colony. A
+# target is a (cpu, libc/distro) PAIR — rpi4 (bookworm/2.36) and jetson
+# (focal/2.31) are DIFFERENT aarch64 ABIs with different sysroots + non-
+# interchangeable binaries (the Jetson lesson: rpi4 binaries need GLIBC_2.34/2.38).
+# Keep in lockstep with rules/config/targets.bzl::TARGETS.
+_TARGETS = {
+    "host":   {"cfg": "host",   "cpu": "x86_64",  "abi_key": "",
+               "deb_arch": "amd64", "libc_min": ""},
+    "rpi4":   {"cfg": "rpi4",   "cpu": "aarch64", "abi_key": "bookworm-arm64",
+               "deb_arch": "arm64", "libc_min": "2.36"},
+    "jetson": {"cfg": "jetson", "cpu": "aarch64", "abi_key": "focal-arm64",
+               "deb_arch": "arm64", "libc_min": "2.31"},
 }
+
+
+def _target(arch: str) -> dict | None:
+    """arch token (a target NAME like rpi4/jetson/host, OR a bare cpu for the
+    legacy default) → the target dict. Bare cpu picks the first matching target
+    (aarch64→rpi4) for back-compat with machine.json arch=aarch64."""
+    if arch in _TARGETS:
+        return _TARGETS[arch]
+    for t in _TARGETS.values():
+        if t["cpu"] == arch:
+            return t
+    return None
+
+
+def _platform_label(arch: str, qualified: bool = True) -> str | None:
+    """The bazel --platforms label for an arch token. qualified=True uses the
+    @pero_theia//… form (resolves from a consuming workspace too)."""
+    t = _target(arch)
+    if not t:
+        return None
+    prefix = "@pero_theia//rules/config:" if qualified else "//rules/config:"
+    return prefix + t["cfg"]
+
+
+# machine.json CPU arch → bazel platform label (the per-host cross-build). Derived
+# from the registry; qualified @pero_theia//… so a consuming workspace resolves it.
+_ARCH_PLATFORM = {a: _platform_label(a) for a in ("x86_64", "aarch64")}
 
 
 def _emit_manifest_build_files(mdir: Path, machines: list[str]) -> None:
@@ -1328,12 +1364,10 @@ def cmd_dist(args: list[str]) -> int:
 _DIST_DEBIAN = "dist/debian"
 _DIST_IPKG = "dist/ipkg"
 
-# arch token (from --arch) → bazel platform label. host = this machine (amd64);
-# rpi4 = aarch64 cross-build (needs the rpi4 C++ toolchain registered).
-_RELEASE_ARCH = {
-    "host": "//rules/config:host",
-    "rpi4": "//rules/config:rpi4",
-}
+# arch token (from --arch) → bazel platform label, derived from the target
+# registry. host = native amd64; rpi4/jetson = aarch64 cross-builds (each needs its
+# sysroot + the cross toolchain). Adding a board = a _TARGETS entry, nothing here.
+_RELEASE_ARCH = {a: _platform_label(a, qualified=False) for a in _TARGETS}
 
 # The bazel-buildable package targets: (deb_target, ipk_target). Python wheels
 # (framework, rf) + the CMake GUI are handled out-of-band below. The .ipk is the

@@ -34,7 +34,7 @@ _ETCD_CROSS_CACHE = select({
     # config_setting (cpu + define) is strictly more specialized than is_arm64
     # (cpu only), so bazel picks it over the rpi4 sysroot branch on the Jetson.
     "//rules/config:target_jetson": {},
-    "//rules/config:is_arm64": {
+    "//rules/config:arm64_cross": {
         "CMAKE_SYSROOT": RPI4_SYSROOT,
         "CMAKE_FIND_ROOT_PATH": RPI4_SYSROOT,
         "CMAKE_FIND_ROOT_PATH_MODE_PROGRAM": "NEVER",
@@ -66,7 +66,7 @@ _ETCD_CROSS_ENV = select({
     # Jetson native: no sysroot pkg-config rewrite — find the host .pc's. (See
     # the matching target_jetson branch in _ETCD_CROSS_CACHE above.)
     "//rules/config:target_jetson": {"CCACHE_DISABLE": "1"},
-    "//rules/config:is_arm64": {
+    "//rules/config:arm64_cross": {
         "CCACHE_DISABLE": "1",
         "PKG_CONFIG_PATH": RPI4_SYSROOT + "/usr/lib/aarch64-linux-gnu/pkgconfig",
         "PKG_CONFIG_SYSROOT_DIR": RPI4_SYSROOT,

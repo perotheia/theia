@@ -83,10 +83,23 @@ config_setting(
 # the distro_ubuntu24 pattern. Keep in lockstep with rules/config/targets.bzl.
 config_setting(
     name = "target_jetson",
+    constraint_values = ["@platforms//cpu:aarch64"],
     values = {"define": "theia_target=jetson"},
 )
 config_setting(
     name = "target_rpi4",
+    constraint_values = ["@platforms//cpu:aarch64"],
+    values = {"define": "theia_target=rpi4"},
+)
+
+# The aarch64 CROSS-build (rpi4 sysroot) — every aarch64 build that is NOT the
+# Jetson native build. Used by the etcd_cpp foreign_cc select so the sysroot
+# redirect is unambiguously distinct from target_jetson (both are cpu:aarch64,
+# so plain is_arm64 + target_jetson is an ILLEGAL ambiguous match). "no define"
+# falls here via the .bazelrc default `--define theia_target=rpi4`.
+config_setting(
+    name = "arm64_cross",
+    constraint_values = ["@platforms//cpu:aarch64"],
     values = {"define": "theia_target=rpi4"},
 )
 

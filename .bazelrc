@@ -3,6 +3,13 @@
 # ── Common ────────────────────────────────────────────────────────────────
 build --enable_bzlmod
 build --incompatible_enable_cc_toolchain_resolution
+# Default aarch64 ABI = rpi4 (bookworm sysroot). Both rpi4 + jetson are
+# cpu:aarch64, so //rules/config:{arm64_cross,target_jetson} disambiguate on this
+# define. Setting it here makes "no explicit define" resolve to the rpi4
+# sysroot path (preserving the original aarch64 behaviour); the Jetson native
+# build overrides with `--define theia_target=jetson`. Harmless on x86 (the
+# arm64_* config_settings also require cpu:aarch64, so x86 hits the default).
+build --define=theia_target=rpi4
 # Pass the host PATH into Bazel actions so they can find `artheia` from
 # the workspace venv (`PATH="$PWD/.venv/bin:$PATH" bazel build ...`).
 # Used by //rules/psp.bzl for PspGenerate.

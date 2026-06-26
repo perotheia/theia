@@ -39,12 +39,23 @@ _VERSION = "0.2.1"
 # ── theia-runtime (machine) ──────────────────────────────────────────────────
 # Just the supervisor binary — the fabric an app system runs under. No build
 # artifacts. tdb (python probe) is added by `theia release` (no bazel artifact).
+# Architecture is derived from the target cpu (not the build host) so a native
+# arm64 build OR an x86→arm64 cross both stamp the right Debian arch. Without this
+# the rule's default "amd64" lands on arm64 debs (the binaries are aarch64 but the
+# control file lies → dpkg --force-architecture needed on the rig). One shared
+# select for every theia-* deb below.
+_DEB_ARCH = select({
+    "@pero_theia//rules/config:is_arm64": "arm64",
+    "//conditions:default": "amd64",
+})
+
 pkg_deb(
     name = "theia-runtime_deb",
     package = "theia-runtime",
     version = _VERSION,
     description = "Theia runtime: the supervisor binary (run-time fabric)",
     section = "misc",
+    arch = _DEB_ARCH,
     files = {
         "//platform/supervisor/main:supervisor": "/opt/theia/bin/supervisor",
     },
@@ -96,6 +107,7 @@ pkg_deb(
     version = _VERSION,
     description = "Theia ARA platform services: com, per, sm, ucm, log, shwa (binaries)",
     section = "misc",
+    arch = _DEB_ARCH,
     # System .so's per's etcd stack pulls in at load time: grpc++ + the
     # reflection-capable protobuf + openssl (via libssl). The etcd client itself
     # is now STATICALLY linked into per (//third_party:etcd_cc → cmake()

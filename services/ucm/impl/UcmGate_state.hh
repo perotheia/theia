@@ -38,6 +38,14 @@ struct UcmGateState {
     std::string campaign_id;
     uint64_t    confirm_deadline_ns = 0;
     bool        provisioning = false;      // in PROVISIONAL, deadline timer armed
+    // Deadline GENERATION — bumped every time a confirm_deadline timer is armed
+    // (PROVISIONAL entry or boot-resume). The timer carries its generation
+    // ("confirm_deadline:<gen>"); on fire it only rolls back if the gen STILL
+    // matches. Without this, a stale timer from a CANCELLED/superseded campaign
+    // fires after its original window and rolls back the CURRENT PROVISIONAL
+    // (the L4-D race: a real install restarts UCM, a new campaign re-enters
+    // PROVISIONAL, and the prior campaign's still-pending timer kills it).
+    uint64_t    confirm_gen = 0;
 };
 
 }  // namespace ara::ucm

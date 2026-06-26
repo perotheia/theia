@@ -269,8 +269,10 @@ void UcmGate::init(UcmGateState& s) {
             s.provisioning = true;
             this->log().warn(std::string("BOOT: resuming PROVISIONAL v") + m.version +
                 " (confirm within " + std::to_string(remain_ms) + "ms or rollback)");
+            const uint64_t gen = ++s.confirm_gen;
             ::theia::runtime::send_after(::theia::runtime::process_timers(),
-                remain_ms ? remain_ms : 1, *this, "confirm_deadline");
+                remain_ms ? remain_ms : 1, *this,
+                ("confirm_deadline:" + std::to_string(gen)).c_str());
             // reflect the provisional state in the FSM/progress for observers.
             to_fsm("EvProvisional", EvProvisional{});
         }
@@ -297,8 +299,13 @@ void UcmGate::handle_info(const char* info, UcmGateState& s) {
             Marker m{1 /*PROVISIONAL*/, s.version, s.campaign_id,
                      s.confirm_deadline_ns, s.scope, true};
             write_marker(s.releases_root, m);
+            // New deadline generation — so a stale timer from a prior campaign
+            // (one cancelled/superseded before its window expired) can't roll this
+            // one back: the fired timer's generation won't match s.confirm_gen.
+            const uint64_t gen = ++s.confirm_gen;
             ::theia::runtime::send_after(::theia::runtime::process_timers(),
-                s.confirm_window_ms, *this, "confirm_deadline");
+                s.confirm_window_ms, *this,
+                ("confirm_deadline:" + std::to_string(gen)).c_str());
             this->log().info(std::string("verify clean — PROVISIONAL (awaiting "
                 "Confirm, ") + std::to_string(s.confirm_window_ms) + "ms)");
             to_fsm("EvProvisional", EvProvisional{});   // VERIFYING → PROVISIONAL
@@ -306,7 +313,17 @@ void UcmGate::handle_info(const char* info, UcmGateState& s) {
         return;
     }
     // The confirm deadline fired and no Confirm cleared `provisioning` → roll back.
-    if (info && std::strcmp(info, "confirm_deadline") == 0 && s.provisioning) {
+    // Guard on the GENERATION: a stale timer from a prior (cancelled/superseded)
+    // campaign carries an old gen; ignore it so it can't roll back the CURRENT
+    // PROVISIONAL. Only the timer for the live deadline (gen == s.confirm_gen) acts.
+    if (info && std::strncmp(info, "confirm_deadline:", 17) == 0 && s.provisioning) {
+        const uint64_t gen = std::strtoull(info + 17, nullptr, 10);
+        if (gen != s.confirm_gen) {
+            this->log().info(std::string("stale confirm_deadline (gen ") +
+                std::to_string(gen) + " != " + std::to_string(s.confirm_gen) +
+                ") — ignoring");
+            return;
+        }
         s.provisioning = false;
         this->log().warn("confirm deadline passed — no Confirm; ROLLING BACK");
         step("EvFailed", EvFailed{});   // PROVISIONAL → ROLLBACK

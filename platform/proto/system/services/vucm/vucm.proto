@@ -102,5 +102,6 @@ message VucmConfig {
     string mender_url = 3;
     string boards = 4;              // L4-B: comma-list of campaign target boards
     uint32 confirm_budget_ms = 5;  // L4-B: CMP_CONFIRMING aggregate-wait budget
+    string bundle_base = 6;        // L4-C/D: S3 dir of per-board role artifacts
 }
 

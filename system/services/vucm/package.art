@@ -242,11 +242,16 @@ message VucmConfig {
     // The Mender server base URL (the fleet edge; com proxies the actual HTTP).
     string mender_url [max_size:128]
     // L4-B: the boards this vehicle's campaigns fan out to (comma-separated
-    // machine names, e.g. "central,jetson"). V-UCM aggregates each board's
+    // machine names, e.g. "central,compute"). V-UCM aggregates each board's
     // PROVISIONAL marker (etcd ucm_activation_<board>) over this roster; the
     // CMP_CONFIRMING barrier waits for ALL before fanning the aggregate Confirm.
     string boards [max_size:128]
     // How long (ms) the CMP_CONFIRMING barrier waits for ALL boards PROVISIONAL
     // before giving up and fanning Cancel (a board that never installs).
     uint32 confirm_budget_ms = 120000
+    // L4-C/D: the BUNDLE base — the S3 dir holding the per-board role artifacts
+    // (e.g. http://<minio>/theia-roles/<fleet>/<ver>). V-UCM passes it as the
+    // RequestUpdate manifest artifact_path; each board's UCM resolves its role
+    // slice <bundle_base>/<role>.mender + runs `mender install` of it.
+    string bundle_base [max_size:200]
 }

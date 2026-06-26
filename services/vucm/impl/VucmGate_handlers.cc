@@ -270,13 +270,16 @@ bool read_campaign(std::string& id, std::string& version, uint32_t& scope,
 // → the manifest carries `confirm=<ms>` so UCM holds for the aggregate Confirm.
 bool ucm_request_update(const std::string& board, const std::string& version,
                         const std::string& campaign_id, uint32_t scope,
-                        uint32_t confirm_window_ms) {
+                        uint32_t confirm_window_ms, const std::string& bundle_base) {
     system_services_ucm_PackageManifest m =
         system_services_ucm_PackageManifest_init_zero;
     std::snprintf(m.name, sizeof(m.name), "theia");
     std::snprintf(m.version, sizeof(m.version), "%s", version.c_str());
     m.kind  = system_services_ucm_UpdateKind_UpdateKind_UK_SOFTWARE;
     m.scope = static_cast<system_services_ucm_UpdateScope>(scope);
+    // L4-C/D: the bundle base — UCM's role_artifact() appends /<role>.mender and
+    // runs `mender install` of it. Empty → UCM simulate (the bench/no-bundle path).
+    std::snprintf(m.artifact_path, sizeof(m.artifact_path), "%s", bundle_base.c_str());
     // carry confirm=<ms> + campaign=<id> in the manifest `requires` so UCM holds
     // PROVISIONAL for the aggregate Confirm and tags its marker with the campaign.
     int rc = 0;
@@ -332,6 +335,7 @@ void VucmGate::init(VucmGateState& s) {
     auto cfg = ::theia::runtime::get_config().node(kNodeName);
     s.cfg_boards        = split_boards(cfg.str("boards", ""));
     s.confirm_budget_ms = cfg.u32("confirm_budget_ms", 120000);
+    s.bundle_base       = cfg.str("bundle_base", "");
     const char* m = std::getenv("THEIA_MACHINE");
     s.self_board        = (m && *m) ? m : "central";
     s.last_state = system_services_vucm_CampaignState_CampaignState_CMP_IDLE;
@@ -505,7 +509,7 @@ void VucmGate::handle_cast(const EvAuthorized& /*msg*/, VucmGateState& s) {
                      std::to_string(s.boards.size()) + " boards");
     for (const auto& b : s.boards) {
         bool ok = ucm_request_update(b, s.version, s.campaign_id, s.scope,
-                                     s.confirm_budget_ms);
+                                     s.confirm_budget_ms, s.bundle_base);
         this->log().info(std::string("  → board ") + b + ": RequestUpdate " +
                          (ok ? "accepted" : "UNREACHABLE/rejected"));
     }

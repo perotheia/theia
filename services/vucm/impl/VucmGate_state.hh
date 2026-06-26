@@ -24,6 +24,9 @@ struct VucmGateState {
     std::vector<std::string> cfg_boards;
     // The CMP_CONFIRMING aggregate-wait budget (ms) before giving up → Cancel.
     uint32_t                 confirm_budget_ms = 120000;
+    // L4-C/D: the bundle base (S3 dir of per-board role .mender artifacts); passed
+    // as the RequestUpdate manifest artifact_path so each UCM resolves its role.
+    std::string              bundle_base;
     // This board's own machine name (THEIA_MACHINE) — the single-board fallback.
     std::string              self_board = "central";
 

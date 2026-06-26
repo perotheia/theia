@@ -37,3 +37,9 @@ boards: "central,compute"
 
 # L4-B: cluster-scope TIPC binds so the compute board reaches central singletons.
 tipc_scope: cluster
+
+# Per-machine TIPC instance index (central=0; from machines.json order). The
+# supervisor shifts each child node's --tipc instance by this, so the same FC
+# binary binds a DISTINCT cluster address per board (ucm_daemon 0x8001000E:0 here,
+# :1 on compute) — V-UCM reaches a SPECIFIC board's UCM via connect_instance(idx).
+machine_instance: 0

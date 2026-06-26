@@ -32,3 +32,7 @@ tipc_central_host: 10.0.0.22
 
 # L4-B: cluster-scope TIPC binds (reach central singletons over eth).
 tipc_scope: cluster
+
+# Per-machine TIPC instance index (compute=1; from machines.json order). UCM here
+# binds 0x8001000E:1, so V-UCM on central addresses it via connect_instance(1).
+machine_instance: 1

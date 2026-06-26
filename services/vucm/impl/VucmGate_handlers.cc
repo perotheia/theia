@@ -31,6 +31,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <mutex>
 #include <sstream>
 #include <string>
@@ -99,27 +100,84 @@ struct PerLink {
     }
 };
 
-// ---- ucm (local UpdateCtl) link — drives Confirm / Cancel on THIS board's UCM.
-//      Remote boards' UCMs are driven by their OWN Mender agent (the artifact
-//      transport); the aggregate read is the shared-etcd marker. For the lab
-//      2-board test the central drives its local UCM directly here.
+// ---- PER-BOARD ucm (UpdateCtl) link — L4-C. UcmDaemon serves UpdateCtl
+//      (RequestUpdate/Confirm/Cancel) at TIPC 0x8001000E, instance = the board's
+//      MACHINE INDEX (the supervisor shifts each child's --tipc instance by
+//      THEIA_MACHINE_INSTANCE: central=0, compute=1, …). So V-UCM reaches a
+//      SPECIFIC board's UCM via connect_instance(idx) — the cross-board fan-out.
+//      One link per board index, lazily connected; a board whose UCM isn't
+//      reachable just fails the call (logged, the campaign reacts).
+constexpr uint32_t kUcmDaemonTipcType = 0x8001000Eu;
+
 struct UcmLink {
     struct UcmDaemonTag { static constexpr const char* kNodeName = "ucm_daemon"; };
-    using UcmRef = ::theia::runtime::RemoteRef<UcmDaemonTag, 0x8001001Eu, 0u>;
+    using UcmRef = ::theia::runtime::RemoteRef<UcmDaemonTag, kUcmDaemonTipcType, 0u>;
     UcmRef                    ref;
     ::theia::runtime::TipcMux mux;
     bool                      started = false;
-    std::mutex                mu;
-    static UcmLink& instance() { static UcmLink l; return l; }
+    uint32_t                  board_idx = 0;
+    // One UcmLink per board index (central=0, compute=1, …). connect_instance()
+    // aims the ref at THAT board's UcmDaemon across the TIPC cluster bearer.
+    static UcmLink& for_board(uint32_t idx) {
+        static std::mutex mu;
+        static std::map<uint32_t, UcmLink*> links;
+        std::lock_guard<std::mutex> lk(mu);
+        auto it = links.find(idx);
+        if (it != links.end()) return *it->second;
+        auto* l = new UcmLink();
+        l->board_idx = idx;
+        links.emplace(idx, l);
+        return *l;
+    }
     bool ensure_started() {
         if (started) return true;
-        if (!ref.connect(/*timeout_ms=*/2000)) return false;
+        if (!ref.connect_instance(board_idx, /*timeout_ms=*/2000)) return false;
         mux.watch_remote_ref(ref);
         mux.start();
         started = true;
         return true;
     }
 };
+
+// Resolve a board NAME → its MACHINE INDEX (the TIPC instance shift), read from
+// the cluster machine manifest (THEIA_MACHINE_MANIFEST → machines.json order:
+// central=0, compute=1, …). Cached. Falls back to position in a process-global
+// roster cache if the manifest is absent (single-board dev → 0).
+uint32_t board_index(const std::string& board) {
+    static std::mutex mu;
+    static std::map<std::string, uint32_t> cache;
+    static std::vector<std::string> order;   // discovery order = index fallback
+    std::lock_guard<std::mutex> lk(mu);
+    auto it = cache.find(board);
+    if (it != cache.end()) return it->second;
+    // machines.json under THEIA_MACHINE_MANIFEST lists machine names in index
+    // order. Parse just the "machines":[...] array (no json dep — a tiny scan).
+    uint32_t idx = static_cast<uint32_t>(order.size());
+    if (const char* root = std::getenv("THEIA_MACHINE_MANIFEST"); root && *root) {
+        std::string path = std::string(root) + "/machines.json";
+        if (FILE* f = std::fopen(path.c_str(), "rb")) {
+            std::string buf;
+            char tmp[512]; size_t n;
+            while ((n = std::fread(tmp, 1, sizeof(tmp), f)) > 0) buf.append(tmp, n);
+            std::fclose(f);
+            // find the board name's ordinal among the quoted strings in machines[].
+            size_t pos = 0; uint32_t ord = 0; bool found = false;
+            while ((pos = buf.find('"', pos)) != std::string::npos) {
+                size_t end = buf.find('"', pos + 1);
+                if (end == std::string::npos) break;
+                std::string tok = buf.substr(pos + 1, end - pos - 1);
+                pos = end + 1;
+                if (tok == "machines") continue;   // the key itself
+                if (tok == board) { idx = ord; found = true; break; }
+                ++ord;
+            }
+            if (!found) idx = ord;   // append at the end if not listed
+        }
+    }
+    cache.emplace(board, idx);
+    order.push_back(board);
+    return idx;
+}
 
 // Read one board's PROVISIONAL marker from the SHARED etcd keyspace. Returns the
 // ActivationState (0 NONE / 1 PROVISIONAL / 2 CONFIRMED / -1 error) for
@@ -145,19 +203,48 @@ int read_board_marker(const std::string& board) {
     return static_cast<int>(a.state);
 }
 
-void ucm_confirm(const std::string& campaign_id) {
+// Fan RequestUpdate to a SPECIFIC board's UCM (step 2 of the user story). The
+// manifest names the role package; UCM resolves its own slice + invokes its
+// installer back-end (Mender standalone), then holds PROVISIONAL. confirm_window>0
+// → the manifest carries `confirm=<ms>` so UCM holds for the aggregate Confirm.
+bool ucm_request_update(const std::string& board, const std::string& version,
+                        const std::string& campaign_id, uint32_t scope,
+                        uint32_t confirm_window_ms) {
+    system_services_ucm_PackageManifest m =
+        system_services_ucm_PackageManifest_init_zero;
+    std::snprintf(m.name, sizeof(m.name), "theia");
+    std::snprintf(m.version, sizeof(m.version), "%s", version.c_str());
+    m.kind  = system_services_ucm_UpdateKind_UpdateKind_UK_SOFTWARE;
+    m.scope = static_cast<system_services_ucm_UpdateScope>(scope);
+    // carry confirm=<ms> + campaign=<id> in the manifest `requires` so UCM holds
+    // PROVISIONAL for the aggregate Confirm and tags its marker with the campaign.
+    int rc = 0;
+    if (confirm_window_ms > 0)
+        std::snprintf(m.requires[rc++], sizeof(m.requires[0]), "confirm=%u", confirm_window_ms);
+    std::snprintf(m.requires[rc++], sizeof(m.requires[0]), "campaign=%s", campaign_id.c_str());
+    m.requires_count = static_cast<pb_size_t>(rc);
+
+    auto& link = UcmLink::for_board(board_index(board));
+    if (!link.ensure_started()) {
+        std::fprintf(stderr, "[vucm_gate] board %s UCM (inst %u) unreachable\n",
+                     board.c_str(), board_index(board));
+        return false;
+    }
+    auto r = ::theia::runtime::call<system_services_ucm_UcmReply>(link.ref, m, 0, 6000);
+    return r.tag == ::theia::runtime::CallTag::Reply;
+}
+
+void ucm_confirm(const std::string& board, const std::string& campaign_id) {
     system_services_ucm_ConfirmRequest req = system_services_ucm_ConfirmRequest_init_zero;
     std::snprintf(req.campaign_id, sizeof(req.campaign_id), "%s", campaign_id.c_str());
-    auto& link = UcmLink::instance();
-    std::lock_guard<std::mutex> lk(link.mu);
+    auto& link = UcmLink::for_board(board_index(board));
     if (!link.ensure_started()) return;
     ::theia::runtime::call<system_services_ucm_UcmReply>(link.ref, req, 0, 3000);
 }
-void ucm_cancel(const std::string& campaign_id) {
+void ucm_cancel(const std::string& board, const std::string& campaign_id) {
     system_services_ucm_CancelRequest req = system_services_ucm_CancelRequest_init_zero;
     std::snprintf(req.campaign_id, sizeof(req.campaign_id), "%s", campaign_id.c_str());
-    auto& link = UcmLink::instance();
-    std::lock_guard<std::mutex> lk(link.mu);
+    auto& link = UcmLink::for_board(board_index(board));
     if (!link.ensure_started()) return;
     ::theia::runtime::call<system_services_ucm_UcmReply>(link.ref, req, 0, 3000);
 }
@@ -210,7 +297,7 @@ void VucmGate::handle_info(const char* info, VucmGateState& s) {
         this->log().info(std::string("campaign ") + s.campaign_id + ": ALL " +
                          std::to_string(s.boards.size()) +
                          " boards PROVISIONAL — fanning aggregate Confirm");
-        for (size_t i = 0; i < s.boards.size(); ++i) ucm_confirm(s.campaign_id);
+        for (const auto& b : s.boards) ucm_confirm(b, s.campaign_id);
         s.confirm_ticks = 0;
         to_fsm("EvProvisioned", EvProvisioned{});   // CMP_CONFIRMING → VALIDATING
         to_gate(EvProvisioned{});
@@ -223,7 +310,7 @@ void VucmGate::handle_info(const char* info, VucmGateState& s) {
                          std::to_string(provisional) + "/" +
                          std::to_string(s.boards.size()) +
                          " PROVISIONAL) — fanning Cancel");
-        for (size_t i = 0; i < s.boards.size(); ++i) ucm_cancel(s.campaign_id);
+        for (const auto& b : s.boards) ucm_cancel(b, s.campaign_id);
         to_fsm("EvFailed", EvFailed{});
         to_gate(EvFailed{});
         return;
@@ -284,12 +371,23 @@ void VucmGate::handle_cast(const EvPlanned& /*msg*/, VucmGateState& s) {
 }
 
 void VucmGate::handle_cast(const EvAuthorized& /*msg*/, VucmGateState& s) {
-    // INSTALLING: each board's UCM installs (RequestUpdate / each board's Mender
-    // agent), then HOLDS in PROVISIONAL. Arm the confirm-poll; the FSM moves to
-    // CONFIRMING (the barrier) and the poll (handle_info) drives the rest.
+    // INSTALLING (step 2): V-UCM FANS OUT RequestUpdate to EACH board's UCM
+    // (addressed per-board via connect_instance(machine_index)). Each board's UCM
+    // resolves its role package + invokes its installer (Mender standalone), then
+    // HOLDS PROVISIONAL with confirm=<budget> so it waits for the aggregate
+    // Confirm. Then arm the confirm-poll → the FSM CONFIRMING barrier waits for
+    // every board's marker. The fan-out is V-UCM INITIATING the install (the user
+    // story), not Mender server-pull.
     s.last_state = system_services_vucm_CampaignState_CampaignState_CMP_INSTALLING;
     this->log().info(std::string("campaign ") + s.campaign_id +
-                     ": INSTALLING — boards driving to PROVISIONAL; arming confirm poll");
+                     ": INSTALLING — fanning RequestUpdate to " +
+                     std::to_string(s.boards.size()) + " boards");
+    for (const auto& b : s.boards) {
+        bool ok = ucm_request_update(b, s.version, s.campaign_id, s.scope,
+                                     s.confirm_budget_ms);
+        this->log().info(std::string("  → board ") + b + ": RequestUpdate " +
+                         (ok ? "accepted" : "UNREACHABLE/rejected"));
+    }
     s.confirm_ticks = 0;
     to_fsm("EvInstalled", EvInstalled{});     // INSTALLING → CMP_CONFIRMING
     s.last_state = system_services_vucm_CampaignState_CampaignState_CMP_CONFIRMING;

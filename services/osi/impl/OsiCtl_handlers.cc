@@ -86,7 +86,10 @@ void OsiCtl::handle_info(const char* info, OsiCtlState& s) {
         fresh_jiffies[ps.fc] = ps.cpu_jiffies;
 
         system_services_osi_FcResource& r = snap.fcs[n++];
-        r = system_services_osi_FcResource_init_zero;
+        // Value-initialized temporary, NOT `r = {init_zero}`: the _init_zero
+        // braced-init-list of string literals isn't assignable to the char[]
+        // member under gcc-9 (focal / Jetson). Struct copy-assign is portable.
+        r = system_services_osi_FcResource{};
         std::strncpy(r.fc, ps.fc.c_str(), sizeof(r.fc) - 1);
         r.pid = static_cast<uint32_t>(ps.pid);
         r.rss_bytes = ps.rss_bytes;

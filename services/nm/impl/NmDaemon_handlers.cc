@@ -217,7 +217,12 @@ WifiScanReply NmDaemon::handle_call(
     for (const auto& b : obs.bss) {
         if (reply.bss_count >= cap) break;
         auto& row = reply.bss[reply.bss_count++];
-        row = system_services_nm_WifiBss_init_zero;
+        // Zero via a value-initialized temporary, NOT `row = {init_zero}`: the
+        // _init_zero macro is a braced-init-list of string literals, which is
+        // not assignable to the struct's char[] members under gcc-9 (focal /
+        // Jetson). Struct copy-assignment of a value-initialized temporary is
+        // portable (memberwise array copy) and equivalent.
+        row = system_services_nm_WifiBss{};
         std::strncpy(row.ssid, b.ssid.c_str(), sizeof(row.ssid) - 1);
         std::strncpy(row.bssid, b.bssid.c_str(), sizeof(row.bssid) - 1);
         row.signal_dbm = b.signal_dbm;

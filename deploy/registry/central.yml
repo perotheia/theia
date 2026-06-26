@@ -38,6 +38,13 @@ boards: "central,compute"
 # L4-B: cluster-scope TIPC binds so the compute board reaches central singletons.
 tipc_scope: cluster
 
+# L4-B: the cross-board TIPC eth bearer. The link is only DISCOVERED once the
+# bearer is enabled on BOTH ends — compute carries tipc_bearer too. Without it
+# here, central publishes at cluster scope but never brings up the eth bearer, so
+# compute's UCM → central's per (and V-UCM reading a remote marker) silently fail
+# even though the scope is right. (Single-board rpi4 targets omit this — no peer.)
+tipc_bearer: eth0
+
 # Per-machine TIPC instance index (central=0; from machines.json order). The
 # supervisor shifts each child node's --tipc instance by this, so the same FC
 # binary binds a DISTINCT cluster address per board (ucm_daemon 0x8001000E:0 here,

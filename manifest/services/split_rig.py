@@ -4,18 +4,20 @@ The vehicle's services split across two ECUs (the AUTOSAR Gateway + a domain
 ECU), provisioned from ONE manifest so the per-machine slices are consistent and
 the singletons land in exactly one place:
 
-  central (the Gateway ECU)  — the deployment-wide SINGLETONS: com (the gRPC/TIPC
-    bridge), sm (state mgmt), phm (health), vucm (the vehicle update coordinator),
-    crypto, nm, tsync, idsm, fw, osi, diag — PLUS the shared-etcd host (colony) +
-    the Mender gateway/proxy (colony mender_role=gateway). Runs its own per + ucm.
-  compute (a domain ECU)     — its OWN per (the shared-etcd client) + ucm (the
-    per-board AUTOSAR installer) + log + shwa (the Jetson's HW telemetry). NO
-    vucm/sm/phm/com singletons — it reaches the central's via TIPC/etcd.
+  central (the Gateway ECU)  — EVERYTHING except the compute-only pair: the
+    deployment-wide SINGLETONS (com, sm, phm, vucm), per (the SOLE shared-etcd
+    client), log (the trace/log hub), crypto, nm, tsync, idsm, fw, osi, diag, rds
+    — PLUS the shared-etcd host (colony) + the Mender gateway/proxy (colony
+    mender_role=gateway). 14 FCs.
+  compute (a domain ECU)     — ONLY ucm (the per-board AUTOSAR installer) + shwa
+    (the Jetson's HW telemetry). 2 FCs. It runs NO per/log/com/sm/phm/vucm — it
+    reaches central's per (→ the shared etcd) + the singletons over TIPC
+    (cluster scope).
 
-Why split this way (the user's L4-B layout): vucm/sm/phm/com are ONE-per-vehicle
-coordinators; running them on every board would mean N campaign coordinators
-fighting over one robot. Each board DOES run its own per (marker R/W against the
-shared etcd) + ucm (it installs ITS OWN artifacts). log is per-board (local ring).
+Why split this way (the user's L4-B layout): vucm/sm/phm/com/per/log are
+ONE-per-vehicle; running them on every board would mean N coordinators (and N
+etcd clients / N log hubs) fighting over one robot. Only ucm is per-board (each
+board installs ITS OWN OTA artifacts); shwa is per-board HW telemetry.
 
   serialize-manifest manifest.services.split_rig --attr HW   (rpi4 + jetson, aarch64)
   serialize-manifest manifest.services.split_rig --attr DOCKER (both x86, CI)
@@ -37,14 +39,17 @@ ALL = sorted(p.name for p in _members(BASE.execution.processes))
 # roles:
 #   central = the Gateway/coordinator ECU. The deployment-wide SINGLETONS
 #     (com, sm, phm, vucm) + per (the SOLE etcd client — every board's UCM reaches
-#     it over TIPC cluster-scope to R/W its ucm_activation_<board> marker) + the
-#     central-hosted services (crypto, nm, tsync, idsm, fw, osi, diag, rds).
-#   compute = the updatable domain ECU. Its OWN ucm (the per-board AUTOSAR
-#     installer) + log (local ring) + shwa (the Jetson HW telemetry). It has NO
-#     vucm/sm/phm/com/per — it reaches central's via TIPC + the shared etcd.
+#     it over TIPC cluster-scope to R/W its ucm_activation_<board> marker) + log
+#     (the trace/log hub) + the central-hosted services (crypto, nm, tsync, idsm,
+#     fw, osi, diag, rds). 14 FCs.
+#   compute = the updatable domain ECU. ONLY its OWN ucm (the per-board AUTOSAR
+#     installer) + shwa (the Jetson HW telemetry). 2 FCs. It has NO
+#     vucm/sm/phm/com/per/log — it reaches central's per (→ shared etcd) + the
+#     singletons over TIPC cluster scope.
 # So UCM lives on COMPUTE (the board that takes OTA payloads); central is the
 # coordinator (it keeps the log hub + every other singleton). A larger fleet adds
 # more compute ECUs the same way (one entry each).
+# KEEP IN SYNC: _ON_COMPUTE below is the source of truth for this split.
 _ON_COMPUTE = sorted({"ucm", "shwa"})
 _ON_CENTRAL = [n for n in ALL if n not in set(_ON_COMPUTE)]
 

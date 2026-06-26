@@ -27,4 +27,7 @@ mender_role: gateway
 # The boards this vehicle's V-UCM campaigns fan out to (the campaign roster). Set
 # into VucmConfig.boards so CMP_CONFIRMING waits for ALL before the aggregate
 # Confirm. Pushed via deploy/config/central/vucm.json.
-boards: "central,jetson"
+boards: "central,compute"
+
+# L4-B: cluster-scope TIPC binds so the compute board reaches central singletons.
+tipc_scope: cluster

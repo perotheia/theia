@@ -1,0 +1,34 @@
+# Deploy-target registry entry — `compute` (the L4-B updatable domain ECU).
+#
+# The Jetson AGX Orin ('jason' @ 10.0.0.67, focal/glibc 2.31). Provisioned from
+# the SPLIT manifest's compute slice (dist/manifest/compute/ — ucm + shwa, the
+# per-board AUTOSAR installer + HW telemetry). The deployment-wide singletons
+# (com/sm/phm/vucm/per) run on `central`; this board reaches them over TIPC
+# (cluster scope) + the shared etcd. ONE manifest (manifest.services.split_rig)
+# serializes BOTH boards' slices, so the singleton placement is consistent.
+#
+# Pulls the focal-arm64 runtime from S3 (0.2.1-focal-arm64 — the abi-qualified
+# key; a DIFFERENT glibc than the rpi4 central's bookworm-arm64).
+# mender_role agent: reaches the Mender server only via central's proxy.
+
+ansible_host: 10.0.0.67
+ansible_user: nvidia
+machine: compute
+arch: aarch64
+deb_arch: arm64
+
+runtime_version: 0.2.1-focal-arm64
+s3_endpoint: http://10.0.0.99:9000
+s3_runtime_bucket: theia-runtime
+
+# L4-B role: Mender agent (no direct cloud — reaches the server via central's
+# proxy). Its UCM writes ucm_activation_compute to the SHARED central etcd (over
+# TIPC to central's per); V-UCM on central aggregates it for the CMP_CONFIRMING
+# barrier. TIPC cluster-scope joins this board to the central's fabric.
+mender_role: agent
+mender_proxy_host: 10.0.0.22
+tipc_bearer: eth0
+tipc_central_host: 10.0.0.22
+
+# L4-B: cluster-scope TIPC binds (reach central singletons over eth).
+tipc_scope: cluster

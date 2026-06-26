@@ -45,12 +45,19 @@ InstallResult mender_standalone_install(const std::string& artifact_url) {
         return r;
     }
 
-    // Standalone install: `mender install <url>` (newer: `mender-update install`).
-    // The theia-release update module writes the bits + flips current; UCM then
-    // runs its PROVISIONAL/restart/verify lifecycle over the result.
+    // Standalone install — the CLI verb differs across Mender versions:
+    //   4.x:  mender-update install <url>
+    //   3.x:  mender install <url>          (subcommand)
+    //   2.x:  mender -install <url>         (flag)
+    // Try them in order; the first that exists + succeeds wins. The theia-release
+    // update module writes the bits + flips current; UCM then runs its
+    // PROVISIONAL/restart/verify lifecycle over the result.
     std::string out;
-    std::string cmd = "mender-update install '" + artifact_url +
-                      "' || mender install '" + artifact_url + "'";
+    std::string q = "'" + artifact_url + "'";
+    std::string cmd =
+        "mender-update install " + q +
+        " || mender install " + q +
+        " || mender -install " + q;
     r.rc = run_capture(cmd, out);
     r.ok = (r.rc == 0);
     r.detail = (r.ok ? "mender install ok: " : "mender install FAILED: ") +

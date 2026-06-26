@@ -172,7 +172,28 @@ void write_marker(const std::string& /*root*/, const Marker& m) {
         std::fprintf(stderr, "[ucm_gate] activation marker: per unreachable\n");
         return;
     }
-    ::theia::runtime::call<system_services_per_PerReply>(link.ref, req, 0, 3000);
+    // RETRY: a cross-board per call (compute UCM → central per over the TIPC
+    // cluster bearer) can drop a reply intermittently (stale name binding /
+    // load-balanced port). The marker is the two-phase-commit's durable half — a
+    // silent write loss leaves V-UCM seeing NONE forever → it Cancels a board that
+    // IS provisional. Retry on a FRESH connection until per ACKs (status in reply).
+    bool acked = false;
+    for (int attempt = 0; attempt < 4 && !acked; ++attempt) {
+        auto r = ::theia::runtime::call<system_services_per_PerReply>(
+            link.ref, req, 0, 3000);
+        if (r.tag == ::theia::runtime::CallTag::Reply) { acked = true; break; }
+        // Reconnect on a fresh socket for the next attempt — a TIPC name connect
+        // load-balances across the (possibly stale) per bindings, so a retry on a
+        // new socket lands on a live port (the probe-connect / stale-binding fix).
+        if (!link.ref.connect(/*timeout_ms=*/2000)) break;
+    }
+    if (!acked)
+        std::fprintf(stderr, "[ucm_gate] activation marker %s: per write FAILED "
+                     "after retries — V-UCM may not see PROVISIONAL\n",
+                     activation_node().c_str());
+    else
+        std::fprintf(stderr, "[ucm_gate] activation marker %s ← state=%d v=%s\n",
+                     activation_node().c_str(), m.state, m.version.c_str());
 }
 
 // Clear = PutConfig an ACT_NONE marker (per has no delete on this path; NONE reads

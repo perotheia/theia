@@ -154,11 +154,42 @@ bool UcmLink::request_update(const UcmUpdateReq& req, uint32_t& status_out,
     m.scope = static_cast<system_services_ucm_UpdateScope>(req.scope);
     set_str(m.artifact_path, sizeof(m.artifact_path), req.artifact_path);
     set_str(m.signature, sizeof(m.signature), req.signature);
+    // confirm_window_ms > 0 → carry "confirm=<ms>" in the manifest `requires` so the
+    // rig holds PROVISIONAL after the verify window (the two-phase commit opt-in).
+    if (req.confirm_window_ms > 0) {
+        std::snprintf(m.requires[0], sizeof(m.requires[0]), "confirm=%u",
+                      req.confirm_window_ms);
+        m.requires_count = 1;
+    }
 
     auto result = theia::runtime::call<system_services_ucm_UcmReply>(
         impl_->ref, m, /*act=*/0, timeout_ms);
     if (result.tag != theia::runtime::CallTag::Reply) return false;
     status_out = result.reply.status;
+    return true;
+}
+
+bool UcmLink::confirm(const std::string& campaign_id, bool cancel,
+                      uint32_t& status_out, int timeout_ms) {
+    if (!impl_->started) return false;
+    std::lock_guard<std::mutex> lk(impl_->call_mu);
+    if (cancel) {
+        system_services_ucm_CancelRequest c =
+            system_services_ucm_CancelRequest_init_zero;
+        set_str(c.campaign_id, sizeof(c.campaign_id), campaign_id);
+        auto r = theia::runtime::call<system_services_ucm_UcmReply>(
+            impl_->ref, c, /*act=*/0, timeout_ms);
+        if (r.tag != theia::runtime::CallTag::Reply) return false;
+        status_out = r.reply.status;
+    } else {
+        system_services_ucm_ConfirmRequest c =
+            system_services_ucm_ConfirmRequest_init_zero;
+        set_str(c.campaign_id, sizeof(c.campaign_id), campaign_id);
+        auto r = theia::runtime::call<system_services_ucm_UcmReply>(
+            impl_->ref, c, /*act=*/0, timeout_ms);
+        if (r.tag != theia::runtime::CallTag::Reply) return false;
+        status_out = r.reply.status;
+    }
     return true;
 }
 

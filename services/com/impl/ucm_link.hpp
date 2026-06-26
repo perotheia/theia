@@ -23,6 +23,7 @@ struct UcmUpdateReq {
     uint32_t    scope = 0;       // UpdateScope: 0=FULL 1=PARTIAL
     std::string artifact_path;   // staged tar/release ("" = current)
     std::string signature;
+    uint32_t    confirm_window_ms = 0;  // >0 → two-phase: hold PROVISIONAL for a remote Confirm
 };
 
 // One decoded UcmProgress sample, in primitives.
@@ -60,6 +61,11 @@ public:
     // Returns false on transport error / timeout / not-connected.
     bool request_update(const UcmUpdateReq& req, uint32_t& status_out,
                         int timeout_ms = 6000);
+
+    // Confirm (cancel=false) / Cancel (cancel=true) a PROVISIONAL update — the
+    // two-phase-commit remote half. → UcmReply.status (0=accepted 2=not-ready).
+    bool confirm(const std::string& campaign_id, bool cancel, uint32_t& status_out,
+                 int timeout_ms = 6000);
 
     // The latest UcmProgress sample the link has observed (the FSM state). When
     // no sample has arrived yet, returns a sample with valid=false.

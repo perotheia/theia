@@ -780,8 +780,23 @@ public:
         r.scope         = req->scope();
         r.artifact_path = req->artifact_path();
         r.signature     = req->signature();
+        r.confirm_window_ms = req->confirm_window_ms();
         uint32_t status = 0;
         if (!services_com::UcmLink::instance().request_update(r, status))
+            return grpc::Status(grpc::StatusCode::UNAVAILABLE,
+                                "ucm link unavailable / timeout");
+        out->set_status(status);
+        return grpc::Status::OK;
+    }
+
+    grpc::Status Confirm(
+            grpc::ServerContext*,
+            const services::com::UcmConfirmCall* req,
+            services::com::UcmConfirmReply* out) override {
+        if (!req) return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "no request");
+        uint32_t status = 0;
+        if (!services_com::UcmLink::instance().confirm(
+                req->campaign_id(), req->cancel(), status))
             return grpc::Status(grpc::StatusCode::UNAVAILABLE,
                                 "ucm link unavailable / timeout");
         out->set_status(status);

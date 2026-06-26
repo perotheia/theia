@@ -582,6 +582,7 @@ message UcmRequestUpdateCall {
     uint32 scope         = 4;   // UpdateScope: 0=FULL 1=PARTIAL
     string artifact_path = 5;   // staged tar/release the download landed at ("" = current)
     string signature     = 6;   // detached signature (verified via crypto pre-install)
+    uint32 confirm_window_ms = 7;  // >0 → two-phase: hold PROVISIONAL for a remote Confirm
 }
 message UcmRequestUpdateReply {
     uint32 status = 1;          // 0=accepted 1=reject 2=not-ready
@@ -606,6 +607,9 @@ message UcmProgressReply {
     bool   sm_ok       = 10;    // false = no SM sample yet
 }
 message UcmProgressCall { }     // GetProgress has no args
+// Two-phase-commit confirm/cancel of a PROVISIONAL update (the remote half).
+message UcmConfirmCall { string campaign_id = 1; bool cancel = 2; }  // cancel=true → rollback
+message UcmConfirmReply { uint32 status = 1; }                       // 0=accepted 2=not-ready
 
 service UcmView {
     // Kick an update on this rig: hand UCM the package manifest. Returns the
@@ -614,4 +618,7 @@ service UcmView {
     // The latest UcmProgress (the agent FSM state) + the SM-session state — the
     // ECU-lifecycle plane GS shows in parallel with the Mender deployment status.
     rpc GetProgress (UcmProgressCall) returns (UcmProgressReply);
+    // Commit (cancel=false → Confirm: PROVISIONAL→ACTIVE) or abort (cancel=true →
+    // Cancel: PROVISIONAL→ROLLBACK) a held update. The OTA client's commit decision.
+    rpc Confirm (UcmConfirmCall) returns (UcmConfirmReply);
 }

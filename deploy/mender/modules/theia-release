@@ -57,6 +57,14 @@ case "$STATE" in
     # Mender has materialised the payload into <tree>/files/ by now.
     ver="$(_artifact_name)"
     [ "$ver" != "unknown" ] || { echo "theia-release: no version.txt in payload" >&2; exit 1; }
+    # Snapshot the rollback target FIRST — the version running BEFORE this attempt —
+    # so a failure DURING staging (e.g. a corrupt tarball below) still rolls back to
+    # the right release. If we set `previous` only after a successful untar, a failed
+    # install leaves `previous` pointing at the version-before-last, and Rollback
+    # drops the board TWO versions back instead of to the running one.
+    if [ -L "$CURRENT" ]; then
+        ln -sfn "$(readlink "$CURRENT")" "$PREVIOUS"
+    fi
     stage="$RELEASES/$ver"
     mkdir -p "$stage"
     tarball="$(ls "$FILES"/files/release.tar.* 2>/dev/null | head -1 || true)"
@@ -68,11 +76,6 @@ case "$STATE" in
     esac
     echo "$ver" > "$stage/.mender_version"
     echo "theia-release: staged release $ver → $stage"
-    # save the outgoing current as previous (the rollback target)
-    if [ -L "$CURRENT" ]; then
-        oldtarget="$(readlink "$CURRENT")"
-        ln -sfn "$oldtarget" "$PREVIOUS"
-    fi
     # atomic re-aim: write a temp symlink + rename(2) over current
     tmp="$THEIA_ROOT/.current.$$"
     ln -sfn "releases/$ver" "$tmp"

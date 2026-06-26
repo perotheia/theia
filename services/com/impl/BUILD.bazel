@@ -250,6 +250,8 @@ cc_library(
         "//platform/runtime:runtime",
         # nanopb ucm structs (system/services/ucm/ucm.pb.h) + ucm_codecs.hh, via ucm_lib.
         "//services/ucm/lib:ucm_lib",
+        # nanopb sm structs (SmStateMsg) + sm_codecs.hh — the SM-session plane fold.
+        "//services/sm/lib:sm_lib",
     ],
 )
 

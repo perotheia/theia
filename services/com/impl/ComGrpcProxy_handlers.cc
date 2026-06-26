@@ -800,6 +800,11 @@ public:
         out->set_detail(p.detail);
         out->set_ts_ns(p.ts_ns);
         out->set_ok(p.valid);
+        // The SM-session plane, folded off the SmStateMsg group.
+        auto sm = services_com::UcmLink::instance().latest_sm_state();
+        out->set_sm_state(sm.state);
+        out->set_sm_ts_ns(sm.ts_ns);
+        out->set_sm_ok(sm.valid);
         return grpc::Status::OK;
     }
 };

@@ -36,6 +36,14 @@ struct UcmProgressSample {
     bool        valid = false;   // false = no sample yet
 };
 
+// The SM-session state (the machine state UCM drives into UPDATE during an
+// install), folded off the SmStateMsg PG group — the other half of the ECU plane.
+struct SmStateSample {
+    uint32_t    state = 0;       // SmState ordinal (0 OFF..2 RUNNING, 4 UPDATE)
+    uint64_t    ts_ns = 0;
+    bool        valid = false;
+};
+
 // Singleton link to UcmDaemon (+ the UcmFsm progress stream). Opened by
 // ComGrpcProxy::do_start, torn down by do_stop. Thread-safe.
 class UcmLink {
@@ -56,6 +64,10 @@ public:
     // The latest UcmProgress sample the link has observed (the FSM state). When
     // no sample has arrived yet, returns a sample with valid=false.
     UcmProgressSample latest_progress();
+
+    // The latest SM-session state (the machine-state plane). valid=false until a
+    // SmStateMsg arrives on its PG group.
+    SmStateSample latest_sm_state();
 
 private:
     UcmLink();

@@ -597,6 +597,13 @@ message UcmProgressReply {
     string detail  = 5;         // human note (last step / error)
     uint64 ts_ns   = 6;
     bool   ok      = 7;         // false = UCM link unreachable / no sample yet
+    // The SM-session plane: the machine state UCM drives into UPDATE during an
+    // install (system_services_sm.SmState: 0 OFF..2 RUNNING, 3 DEGRADED, 4 UPDATE,
+    // 5 SHUTDOWN). Folded off the SmStateMsg PG group — GS shows it beside the
+    // UCM FSM state so the operator sees the FULL ECU lifecycle (UCM + SM).
+    uint32 sm_state    = 8;
+    uint64 sm_ts_ns    = 9;
+    bool   sm_ok       = 10;    // false = no SM sample yet
 }
 message UcmProgressCall { }     // GetProgress has no args
 
@@ -604,7 +611,7 @@ service UcmView {
     // Kick an update on this rig: hand UCM the package manifest. Returns the
     // agent's accept/reject status; the install runs the AUTOSAR lifecycle async.
     rpc RequestUpdate (UcmRequestUpdateCall) returns (UcmRequestUpdateReply);
-    // The latest UcmProgress (the agent FSM state) — the ECU-lifecycle plane GS
-    // shows in parallel with the Mender deployment status.
+    // The latest UcmProgress (the agent FSM state) + the SM-session state — the
+    // ECU-lifecycle plane GS shows in parallel with the Mender deployment status.
     rpc GetProgress (UcmProgressCall) returns (UcmProgressReply);
 }

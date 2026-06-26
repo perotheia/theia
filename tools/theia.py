@@ -1835,6 +1835,160 @@ def _extract_app_subtree(executor: dict, app: str, procs: list[str]):
     return {"app": app, "nodes": found}
 
 
+# The mender-artifact CLI (the build host's .mender packer). Prefer the
+# OpenSSL-1.1-shim wrapper (taycann runs OpenSSL 3; mender-artifact links 1.1)
+# if present, else the bare binary.
+def _mender_artifact_bin() -> "str | None":
+    for cand in ("mender-artifact-wrap", "mender-artifact"):
+        if shutil.which(cand):
+            return cand
+    return None
+
+
+def cmd_release_role(args: list[str]) -> int:
+    """Build a per-board ROLE .mender artifact for the L4-C vehicle campaign.
+
+    The L4-C update STORY: V-UCM fans RequestUpdate to each board's UCM with a
+    BUNDLE base; each UCM resolves ITS role slice (<bundle>/<role>.mender, role =
+    the board's machine name) and runs `mender install` of it. This verb builds
+    that per-board role artifact: a `theia-release`-type Mender artifact carrying
+    the board's runtime+services tree (/opt/theia/{bin,lib}), which the on-device
+    `theia-release` update module stages as releases/<ver> + flips current.
+
+    Usage:
+      theia release-role --role R --arch A [opts]
+        --role R         the board's machine/role name (e.g. central, compute) —
+                         the artifact base name <role>.mender + the install slice
+        --arch A         the board's target arch (rpi4 | jetson | host) — picks
+                         the abi-keyed deb (bookworm-arm64 / focal-arm64)
+        --version V      the release version (default 0.2.1)
+        --fleet F        the Mender device-group / S3 key (default theia-rig)
+        --deb PATH       the prebuilt theia-services .deb to slice (default: build
+                         it for --arch). A focal-arm64 deb must be built ON the
+                         jetson (native) — pass it with --deb.
+        --runtime-deb P  the theia-runtime .deb (the supervisor) to fold in too.
+        --s3 URL         publish to the role plane on this MinIO (the bundle base).
+        --mender-only    just write dist/roles/<role>-<V>.mender (no S3 push).
+
+    Output:
+      dist/roles/<role>-<V>.mender   the role Mender artifact (theia-release module)
+      → s3://theia-roles/<fleet>/<V>/<role>.mender   (when --s3 given) — the bundle
+        base V-UCM passes as the manifest artifact_path."""
+    import json   # noqa: F401
+    import os
+    import shutil as _sh
+    import subprocess
+    import tarfile
+    import tempfile
+
+    if "-h" in args or "--help" in args:
+        print(cmd_release_role.__doc__, file=sys.stderr)
+        return 0
+
+    def _opt(name, default=None):
+        for i, a in enumerate(args):
+            if a == name and i + 1 < len(args):
+                return args[i + 1]
+        return default
+
+    role = _opt("--role")
+    arch = _opt("--arch", "rpi4")
+    ver = _opt("--version", "0.2.1")
+    fleet = _opt("--fleet", "theia-rig")
+    s3_url = _opt("--s3")
+    services_deb = _opt("--deb")
+    runtime_deb = _opt("--runtime-deb")
+    mender_only = "--mender-only" in args or not s3_url
+    if not role:
+        print("theia release-role: --role <board> required.", file=sys.stderr)
+        return 2
+
+    ma = _mender_artifact_bin()
+    if not ma:
+        print("theia release-role: mender-artifact not found — install it (or the "
+              "mender-artifact-wrap OpenSSL-1.1 shim) to pack the .mender.",
+              file=sys.stderr)
+        return 1
+
+    # ── Resolve / build the board's services deb (the role payload source). ────
+    if not services_deb:
+        platform = _RELEASE_ARCH.get(arch)
+        if not platform:
+            print(f"theia release-role: unknown arch '{arch}'.", file=sys.stderr)
+            return 2
+        if (rc := _run(["bazel", "build", "//packaging/theia:theia-services_deb",
+                        "//packaging/theia:theia-runtime_deb",
+                        f"--platforms={platform}"])) != 0:
+            return rc
+        bin_root = WORKSPACE / "bazel-bin" / "packaging" / "theia"
+        deb_arch = _target(arch).get("deb_arch", "amd64")
+        services_deb = str(bin_root / f"theia-services_{ver}_{deb_arch}.deb")
+        runtime_deb = runtime_deb or str(bin_root / f"theia-runtime_{ver}_{deb_arch}.deb")
+    if not Path(services_deb).is_file():
+        print(f"theia release-role: services deb not found: {services_deb}\n"
+              "  (a focal-arm64 role must be built ON the jetson; pass --deb.)",
+              file=sys.stderr)
+        return 1
+
+    out_dir = WORKSPACE / "dist" / "roles"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    artifact_name = f"{role}-{ver}"
+
+    with tempfile.TemporaryDirectory() as td:
+        tdp = Path(td)
+        rel = tdp / "release"
+        rel.mkdir()
+        for deb in (services_deb, runtime_deb):
+            if deb and Path(deb).is_file():
+                subprocess.run(["dpkg-deb", "-x", deb, str(tdp / "x")], check=True)
+        src = tdp / "x" / "opt" / "theia"
+        if not src.is_dir():
+            print("theia release-role: deb has no /opt/theia tree.", file=sys.stderr)
+            return 1
+        for sub in ("bin", "lib"):
+            if (src / sub).is_dir():
+                _sh.copytree(src / sub, rel / sub)
+        (tdp / "version.txt").write_text(artifact_name + "\n")
+        tarball = tdp / "release.tar.gz"
+        with tarfile.open(tarball, "w:gz") as tf:
+            tf.add(rel, arcname=".")
+
+        mender_out = out_dir / f"{artifact_name}.mender"
+        rc = _run([ma, "write", "module-image",
+                   "--type", "theia-release",
+                   "--artifact-name", artifact_name,
+                   "--device-type", fleet,
+                   "--file", str(tarball),
+                   "--file", str(tdp / "version.txt"),
+                   "--output-path", str(mender_out)])
+        if rc != 0:
+            print("theia release-role: mender-artifact pack failed.", file=sys.stderr)
+            return rc
+        print(f"theia release-role: wrote {mender_out} "
+              f"(role={role} arch={arch} v{ver})", file=sys.stderr)
+
+        if not mender_only and s3_url:
+            if not shutil.which("aws"):
+                print("theia release-role: aws cli not found — built the artifact; "
+                      "push from a host with aws.", file=sys.stderr)
+                return 1
+            env = {**os.environ,
+                   "AWS_ACCESS_KEY_ID": os.environ.get("MINIO_USER", "theia"),
+                   "AWS_SECRET_ACCESS_KEY": os.environ.get("MINIO_PASSWORD", "theiaminio"),
+                   "AWS_DEFAULT_REGION": "us-east-1"}
+            bucket = "theia-roles"
+            key = f"{fleet}/{ver}"
+            aws = ["aws", "--endpoint-url", s3_url, "s3"]
+            subprocess.run([*aws, "mb", f"s3://{bucket}"], env=env)
+            dst = f"s3://{bucket}/{key}/{role}.mender"
+            print(f"$ aws cp {mender_out.name} {dst}", file=sys.stderr)
+            if subprocess.run([*aws, "cp", str(mender_out), dst],
+                              env=env).returncode != 0:
+                return 1
+            print(f"theia release-role: published → {dst}", file=sys.stderr)
+    return 0
+
+
 def _publish_app_plane(s3_url: str, fleet: str, app: str, ver: str,
                        mender: "Path | None", tarball: "Path",
                        app_json: "Path") -> int:
@@ -2676,6 +2830,7 @@ COMMANDS = {
     "dist":        (cmd_dist,        "per-host .ipk from dist/manifest/ JSON (no rig.py)"),
     "release":     (cmd_release,     "build the installable package set (.deb+.ipk) → dist/debian + dist/ipkg"),
     "release-app": (cmd_release_app, "build + publish a user-ws app bundle (day-2 Mender OTA, the app plane)"),
+    "release-role": (cmd_release_role, "build + publish a per-board role .mender (L4-C vehicle campaign)"),
     "compdb":      (cmd_compdb,      "regen compile_commands.json from bazel (clangd)"),
     "observer":    (cmd_observer,    "launch the supervisor-GUI against the local cluster (always mTLS)"),
 }

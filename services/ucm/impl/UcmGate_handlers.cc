@@ -16,8 +16,20 @@
 #include "GenStateM.hh"         // theia::runtime::post_event
 #include "NodeRef.hh"           // theia::runtime::LocalRef
 #include "TimerService.hh"      // send_after / process_timers (verify window)
+#include "TipcMux.hh"           // reply pump for the per (PerClient) call
+#include "RemoteCodec.hh"       // THEIA_DECLARE_REMOTE_CODEC
+#include "system/services/per/per.pb.h"   // PutConfigReq / GetConfigReq / etc.
 
 #include <pb_decode.h>
+#include <pb_encode.h>
+#include <mutex>
+
+// per's config-store types UCM sends/receives over TIPC (declared locally, like
+// nm's NmCfgTxn, to avoid a header-path collision with ucm's own lib/).
+THEIA_DECLARE_REMOTE_CODEC(system_services_per_PutConfigReq)
+THEIA_DECLARE_REMOTE_CODEC(system_services_per_GetConfigReq)
+THEIA_DECLARE_REMOTE_CODEC(system_services_per_ConfigSnapshot)
+THEIA_DECLARE_REMOTE_CODEC(system_services_per_PerReply)
 
 #include <algorithm>
 #include <chrono>
@@ -83,19 +95,16 @@ void step(const char* name, Evt evt) {
     to_gate(evt);
 }
 
-// ---- The two-phase-commit activation marker -------------------------------
-// Persisted OUTSIDE current/ (at <prefix>/.ucm_activation) so it survives BOTH a
-// reboot AND the current→releases/<ver> symlink swap. The reboot-surviving record
-// of "this version is PROVISIONAL (unconfirmed), roll back if not confirmed by
-// deadline". <prefix> = the parent of releases_root (e.g. /opt/theia). Plain text
-// (state|version|campaign_id|deadline_ns|scope) — no proto dep, trivially readable.
-// (Phase B mirrors this into per/etcd for the cross-board V-UCM aggregate read.)
-std::string marker_path(const std::string& releases_root) {
-    // releases_root = <prefix>/releases → marker at <prefix>/.ucm_activation
-    auto pos = releases_root.find_last_of('/');
-    std::string prefix = (pos == std::string::npos) ? "." : releases_root.substr(0, pos);
-    return prefix + "/.ucm_activation";
-}
+// ---- The two-phase-commit activation marker — PERSISTED IN per/etcd --------
+// The reboot-surviving record of "this version is PROVISIONAL (unconfirmed), roll
+// back if not confirmed by deadline". Stored via per (the SOLE etcd client) under
+// target_node="ucm_activation" → etcd key /theia/config/ucm_activation. Why etcd
+// and not a local file: V-UCM aggregates the WHOLE vehicle's provisional state by
+// reading every board's marker from the SHARED etcd keyspace — a per-board file is
+// invisible to a central-board V-UCM. etcd also survives a release-dir reprovision.
+// `root` is unused now (kept so the call sites don't change).
+constexpr const char* kActivationNode = "ucm_activation";
+
 struct Marker {
     int         state = 0;   // ActivationState: 0 NONE 1 PROVISIONAL 2 CONFIRMED
     std::string version;
@@ -104,30 +113,92 @@ struct Marker {
     uint32_t    scope = 0;
     bool        valid = false;
 };
-void write_marker(const std::string& root, const Marker& m) {
-    FILE* f = std::fopen(marker_path(root).c_str(), "w");
-    if (!f) return;
-    std::fprintf(f, "%d|%s|%s|%llu|%u\n", m.state, m.version.c_str(),
-                 m.campaign_id.c_str(),
-                 static_cast<unsigned long long>(m.deadline_ns), m.scope);
-    std::fclose(f);
-}
-void clear_marker(const std::string& root) { std::remove(marker_path(root).c_str()); }
-Marker read_marker(const std::string& root) {
-    Marker m;
-    FILE* f = std::fopen(marker_path(root).c_str(), "r");
-    if (!f) return m;
-    char ver[64] = {0}, camp[96] = {0};
-    unsigned long long dl = 0; int st = 0; unsigned sc = 0;
-    if (std::fscanf(f, "%d|%63[^|]|%95[^|]|%llu|%u", &st, ver, camp, &dl, &sc) >= 1) {
-        m.state = st; m.version = ver; m.campaign_id = camp;
-        m.deadline_ns = dl; m.scope = sc; m.valid = true;
+
+// Singleton link to per's PerClient (Get/Put config) — its own TipcMux reply pump,
+// lazily connected. Mirrors nm's NmCfgTxn PerLink exactly.
+struct PerLink {
+    struct PerClientTag { static constexpr const char* kNodeName = "per_client"; };
+    using PerRef = ::theia::runtime::RemoteRef<PerClientTag, 0x80010007u, 0u>;
+    PerRef                  ref;
+    ::theia::runtime::TipcMux mux;
+    bool                    started = false;
+    std::mutex              mu;
+    static PerLink& instance() { static PerLink l; return l; }
+    bool ensure_started() {
+        if (started) return true;
+        if (!ref.connect(/*timeout_ms=*/2000)) return false;
+        mux.watch_remote_ref(ref);
+        mux.start();
+        started = true;
+        return true;
     }
-    std::fclose(f);
+};
+
+// Encode the marker as a system_services_ucm_UcmActivation + PutConfig it to per.
+void write_marker(const std::string& /*root*/, const Marker& m) {
+    system_services_ucm_UcmActivation a = system_services_ucm_UcmActivation_init_zero;
+    a.state = static_cast<system_services_ucm_ActivationState>(m.state);
+    std::snprintf(a.version, sizeof(a.version), "%s", m.version.c_str());
+    std::snprintf(a.campaign_id, sizeof(a.campaign_id), "%s", m.campaign_id.c_str());
+    a.deadline_ns = m.deadline_ns;
+    a.scope = static_cast<system_services_ucm_UpdateScope>(m.scope);
+
+    system_services_per_PutConfigReq req = system_services_per_PutConfigReq_init_zero;
+    std::snprintf(req.target_node, sizeof(req.target_node), "%s", kActivationNode);
+    pb_ostream_t os = pb_ostream_from_buffer(req.config.bytes, sizeof(req.config.bytes));
+    if (!pb_encode(&os, system_services_ucm_UcmActivation_fields, &a)) return;
+    req.config.size = static_cast<pb_size_t>(os.bytes_written);
+    req.expect_rev = 0;
+
+    auto& link = PerLink::instance();
+    std::lock_guard<std::mutex> lk(link.mu);
+    if (!link.ensure_started()) {
+        std::fprintf(stderr, "[ucm_gate] activation marker: per unreachable\n");
+        return;
+    }
+    ::theia::runtime::call<system_services_per_PerReply>(link.ref, req, 0, 3000);
+}
+
+// Clear = PutConfig an ACT_NONE marker (per has no delete on this path; NONE reads
+// back as !valid). A fresh boot then sees nothing provisional.
+void clear_marker(const std::string& root) {
+    Marker none;            // state 0 = ACT_NONE
+    write_marker(root, none);
+}
+
+// GetConfig the marker from per (the boot-resume read).
+Marker read_marker(const std::string& /*root*/) {
+    Marker m;
+    system_services_per_GetConfigReq req = system_services_per_GetConfigReq_init_zero;
+    std::snprintf(req.target_node, sizeof(req.target_node), "%s", kActivationNode);
+
+    auto& link = PerLink::instance();
+    std::lock_guard<std::mutex> lk(link.mu);
+    if (!link.ensure_started()) return m;
+    auto result = ::theia::runtime::call<system_services_per_ConfigSnapshot>(
+        link.ref, req, 0, 3000);
+    if (result.tag != ::theia::runtime::CallTag::Reply) return m;
+    if (result.reply.config.size == 0) return m;   // no marker stored yet
+
+    system_services_ucm_UcmActivation a = system_services_ucm_UcmActivation_init_zero;
+    pb_istream_t is = pb_istream_from_buffer(result.reply.config.bytes,
+                                             result.reply.config.size);
+    if (!pb_decode(&is, system_services_ucm_UcmActivation_fields, &a)) return m;
+    if (a.state == system_services_ucm_ActivationState_ActivationState_ACT_NONE)
+        return m;  // cleared
+    m.state = static_cast<int>(a.state);
+    m.version = a.version;
+    m.campaign_id = a.campaign_id;
+    m.deadline_ns = a.deadline_ns;
+    m.scope = static_cast<uint32_t>(a.scope);
+    m.valid = true;
     return m;
 }
+// WALL-CLOCK (system_clock), NOT steady_clock: the deadline is persisted to etcd
+// and compared after a REBOOT (a different process), so it must be an absolute
+// epoch time both processes agree on — steady_clock resets across a reboot.
 uint64_t now_ns() {
-    auto now = std::chrono::steady_clock::now().time_since_epoch();
+    auto now = std::chrono::system_clock::now().time_since_epoch();
     return static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(now).count());
 }

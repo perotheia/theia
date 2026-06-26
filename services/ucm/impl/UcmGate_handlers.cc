@@ -184,8 +184,7 @@ Marker read_marker(const std::string& /*root*/) {
     pb_istream_t is = pb_istream_from_buffer(result.reply.config.bytes,
                                              result.reply.config.size);
     if (!pb_decode(&is, system_services_ucm_UcmActivation_fields, &a)) return m;
-    if (a.state == system_services_ucm_ActivationState_ActivationState_ACT_NONE)
-        return m;  // cleared
+    if (a.state == ACT_NONE) return m;  // cleared (gen-app enum-value alias)
     m.state = static_cast<int>(a.state);
     m.version = a.version;
     m.campaign_id = a.campaign_id;

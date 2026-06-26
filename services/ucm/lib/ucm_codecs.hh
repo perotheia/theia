@@ -47,3 +47,33 @@ THEIA_DECLARE_REMOTE_CODEC(system_services_ucm_PackageManifest)
 THEIA_DECLARE_REMOTE_CODEC(system_services_ucm_UcmReply)
 THEIA_DECLARE_REMOTE_CODEC(system_services_ucm_ConfirmRequest)
 THEIA_DECLARE_REMOTE_CODEC(system_services_ucm_CancelRequest)
+
+// FC-wide enum aliases — the enum TYPE and each VALUE inside the FC namespace, so
+// impl code writes the readable `UpdateKind` / `UK_SOFTWARE`
+// instead of nanopb's double-prefixed name
+// (system_services_ucm_<Enum>_<Enum>_<VALUE>). Emitted ONCE here (this header
+// is #pragma once + included by every node header) — NOT per-node, so two node
+// headers in one TU don't redefine them.
+namespace ara::ucm {
+using UpdateKind = system_services_ucm_UpdateKind;
+inline constexpr UpdateKind UK_SOFTWARE = system_services_ucm_UpdateKind_UpdateKind_UK_SOFTWARE;
+inline constexpr UpdateKind UK_CONFIG = system_services_ucm_UpdateKind_UpdateKind_UK_CONFIG;
+using UpdateScope = system_services_ucm_UpdateScope;
+inline constexpr UpdateScope US_FULL = system_services_ucm_UpdateScope_UpdateScope_US_FULL;
+inline constexpr UpdateScope US_PARTIAL = system_services_ucm_UpdateScope_UpdateScope_US_PARTIAL;
+using UcmState = system_services_ucm_UcmState;
+inline constexpr UcmState IDLE = system_services_ucm_UcmState_UcmState_IDLE;
+inline constexpr UcmState DOWNLOADED = system_services_ucm_UcmState_UcmState_DOWNLOADED;
+inline constexpr UcmState VALIDATED = system_services_ucm_UcmState_UcmState_VALIDATED;
+inline constexpr UcmState STAGED = system_services_ucm_UcmState_UcmState_STAGED;
+inline constexpr UcmState INSTALLING = system_services_ucm_UcmState_UcmState_INSTALLING;
+inline constexpr UcmState RESTARTING = system_services_ucm_UcmState_UcmState_RESTARTING;
+inline constexpr UcmState VERIFYING = system_services_ucm_UcmState_UcmState_VERIFYING;
+inline constexpr UcmState ACTIVE = system_services_ucm_UcmState_UcmState_ACTIVE;
+inline constexpr UcmState ROLLBACK = system_services_ucm_UcmState_UcmState_ROLLBACK;
+inline constexpr UcmState PROVISIONAL = system_services_ucm_UcmState_UcmState_PROVISIONAL;
+using ActivationState = system_services_ucm_ActivationState;
+inline constexpr ActivationState ACT_NONE = system_services_ucm_ActivationState_ActivationState_ACT_NONE;
+inline constexpr ActivationState ACT_PROVISIONAL = system_services_ucm_ActivationState_ActivationState_ACT_PROVISIONAL;
+inline constexpr ActivationState ACT_CONFIRMED = system_services_ucm_ActivationState_ActivationState_ACT_CONFIRMED;
+}  // namespace ara::ucm

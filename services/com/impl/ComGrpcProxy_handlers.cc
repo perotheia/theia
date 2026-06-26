@@ -42,6 +42,7 @@
 #include "impl/per_link.hpp"      // per (persistency) proxy — ListSchemas/Snapshot
 #include "impl/nm_link.hpp"       // nm (network mgmt) proxy — GetStatus/WifiScan
 #include "impl/diag_link.hpp"     // diag (DoIP/UDS) proxy — SendUds
+#include "impl/ucm_link.hpp"      // ucm (ara::ucm) proxy — RequestUpdate + progress
 #include "impl/shwa_link.hpp"     // SHWA AccelTelemetry egress receiver (GPU/host)
 #include "impl/machine_manifest.hpp"  // cluster index→name map (per-machine label)
 #include "impl/com_tls.hpp"       // shared TLS-or-insecure ServerCredentials
@@ -759,6 +760,50 @@ public:
     }
 };
 
+// ---- gRPC service: UcmView — services/ucm (ara::ucm) over com gRPC ---------
+// The ara::com edge an OTA client (GS / VUCM) uses to drive + observe the UCM
+// agent. RequestUpdate forwards a package manifest to UcmDaemon (→ kicks the FSM:
+// verify → SM-session → stop → install → activate → restart → PHM-verify →
+// ACTIVE/ROLLBACK). GetProgress reads the latest UcmProgress the link folded off
+// the PG group (the ECU-lifecycle plane GS shows beside the Mender plane).
+class UcmViewImpl final : public services::com::UcmView::Service {
+public:
+    grpc::Status RequestUpdate(
+            grpc::ServerContext*,
+            const services::com::UcmRequestUpdateCall* req,
+            services::com::UcmRequestUpdateReply* out) override {
+        if (!req) return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "no request");
+        services_com::UcmUpdateReq r;
+        r.name          = req->name();
+        r.version       = req->version();
+        r.kind          = req->kind();
+        r.scope         = req->scope();
+        r.artifact_path = req->artifact_path();
+        r.signature     = req->signature();
+        uint32_t status = 0;
+        if (!services_com::UcmLink::instance().request_update(r, status))
+            return grpc::Status(grpc::StatusCode::UNAVAILABLE,
+                                "ucm link unavailable / timeout");
+        out->set_status(status);
+        return grpc::Status::OK;
+    }
+
+    grpc::Status GetProgress(
+            grpc::ServerContext*,
+            const services::com::UcmProgressCall*,
+            services::com::UcmProgressReply* out) override {
+        auto p = services_com::UcmLink::instance().latest_progress();
+        out->set_state(p.state);
+        out->set_version(p.version);
+        out->set_kind(p.kind);
+        out->set_scope(p.scope);
+        out->set_detail(p.detail);
+        out->set_ts_ns(p.ts_ns);
+        out->set_ok(p.valid);
+        return grpc::Status::OK;
+    }
+};
+
 // ---- gRPC service: Provisioning — rig enrollment over com -----------------
 // The centralized enrollment utility (colocated with Headscale) calls this to
 // write the rig's identity (uuid/vin) + PKI creds under
@@ -877,6 +922,7 @@ std::unique_ptr<SupervisorViewImpl>         g_sup_svc;
 std::unique_ptr<PerViewImpl>                g_per_svc;
 std::unique_ptr<NmViewImpl>                 g_nm_svc;
 std::unique_ptr<DiagViewImpl>               g_diag_svc;
+std::unique_ptr<UcmViewImpl>                g_ucm_svc;
 std::unique_ptr<ProvisioningImpl>           g_prov_svc;
 std::unique_ptr<grpc::Server>               g_server;
 std::atomic<bool>                           g_up{false};
@@ -978,6 +1024,20 @@ void ComGrpcProxy::do_start() {
                          kNodeName);
     }).detach();
 
+    // Same detached-link treatment for ucm (ara::ucm OTA agent): UcmView.RequestUpdate
+    // returns UNAVAILABLE until UcmDaemon (0x8001000E) links; GetProgress reads the
+    // UcmProgress PG group. The ara::com edge for GS/VUCM-driven installs.
+    std::thread([] {
+        if (services_com::UcmLink::instance().start())
+            std::fprintf(stderr,
+                         "[%s] ucm link up (RemoteRef 0x8001000E/0 + UcmProgress pg)\n",
+                         kNodeName);
+        else
+            std::fprintf(stderr,
+                         "[%s] WARN: ucm link (ucm 0x8001000E) not reachable; "
+                         "UcmView RPCs return UNAVAILABLE\n", kNodeName);
+    }).detach();
+
     // Load the cluster machine manifest (index→name) once, up front, so the
     // first AccelSample's machine_name lookup is warm and the load is logged at
     // startup (vs lazily on the recv thread). Best-effort: no manifest → "mN".
@@ -1002,6 +1062,7 @@ void ComGrpcProxy::do_start() {
     g_per_svc  = std::make_unique<PerViewImpl>();
     g_nm_svc   = std::make_unique<NmViewImpl>();
     g_diag_svc = std::make_unique<DiagViewImpl>();
+    g_ucm_svc  = std::make_unique<UcmViewImpl>();
     g_prov_svc = std::make_unique<ProvisioningImpl>();
 
     const std::string listen = listen_addr();
@@ -1020,6 +1081,7 @@ void ComGrpcProxy::do_start() {
         b.RegisterService(g_per_svc.get());
         b.RegisterService(g_nm_svc.get());
         b.RegisterService(g_diag_svc.get());
+        b.RegisterService(g_ucm_svc.get());
         b.RegisterService(g_prov_svc.get());
         g_server = b.BuildAndStart();
         if (!g_server && attempt < kBindAttempts) {
@@ -1038,11 +1100,13 @@ void ComGrpcProxy::do_start() {
         g_per_svc.reset();
         g_nm_svc.reset();
         g_diag_svc.reset();
+        g_ucm_svc.reset();
         g_prov_svc.reset();
         services_com::SupLink::instance().stop();
         services_com::PerLink::instance().stop();
         services_com::NmLink::instance().stop();
         services_com::DiagLink::instance().stop();
+        services_com::UcmLink::instance().stop();
         services_com::ShwaLink::instance().stop();
         return;
     }
@@ -1127,6 +1191,7 @@ void ComGrpcProxy::do_stop() {
     g_per_svc.reset();
     g_nm_svc.reset();
     g_diag_svc.reset();
+    g_ucm_svc.reset();
     g_prov_svc.reset();
     g_sup_topology.stop();
     g_topology_up.store(false);
@@ -1134,6 +1199,7 @@ void ComGrpcProxy::do_stop() {
     services_com::PerLink::instance().stop();
     services_com::NmLink::instance().stop();
     services_com::DiagLink::instance().stop();
+    services_com::UcmLink::instance().stop();
     services_com::ShwaLink::instance().stop();
     g_up.store(false);
 }

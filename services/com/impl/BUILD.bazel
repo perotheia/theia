@@ -231,6 +231,28 @@ cc_library(
     ],
 )
 
+# ucm (ara::ucm) proxy link — isolated nanopb TU like per_link/diag_link. Includes
+# the NANOPB ucm headers (ucm_codecs.hh → ucm.pb.h) for the RequestUpdate RemoteRef-
+# call to UcmDaemon (0x8001000E) + the UcmProgress PG-group fold; com_impl's gRPC
+# edge sees only ucm_link.hpp's primitive UcmUpdateReq/UcmProgressSample surface.
+cc_library(
+    name = "ucm_link",
+    srcs = ["ucm_link.cc"],
+    hdrs = ["ucm_link.hpp"],
+    includes = [".."],
+    copts = [
+        "-std=c++17",
+        "-Wall",
+        "-Wextra",
+        "-fPIC",
+    ],
+    deps = [
+        "//platform/runtime:runtime",
+        # nanopb ucm structs (system/services/ucm/ucm.pb.h) + ucm_codecs.hh, via ucm_lib.
+        "//services/ucm/lib:ucm_lib",
+    ],
+)
+
 # machine_manifest — com's read-only index→name map of the cluster machines,
 # loaded once from THEIA_MACHINE_MANIFEST (exported by the supervisor, inherited
 # by com). Used to label per-machine telemetry (the AccelSample demux) with a
@@ -299,6 +321,7 @@ cc_library(
         # diag (DoIP/UDS) proxy link (nanopb, isolated above). DiagView only sees
         # diag_link.hpp's primitive DiagUdsResult surface.
         ":diag_link",
+        ":ucm_link",
         # SHWA AccelTelemetry egress receiver (raw-bytes, isolated above).
         # ComGrpcProxy_handlers.cc folds AccelSample into the Subscribe stream.
         ":shwa_link",

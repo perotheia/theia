@@ -565,3 +565,46 @@ service DiagView {
     // Run one UDS request through the diag FC's router; return the response.
     rpc SendUds (DiagUdsRequest) returns (DiagUdsReply);
 }
+
+// ---- UcmView — services/ucm (ara::ucm Update & Config Mgmt) over com gRPC --
+//
+// The ara::com edge an OTA client (GS / VUCM) uses to drive + observe the
+// on-device UCM agent WITHOUT a TIPC client. UcmLink RemoteRef-calls UcmDaemon
+// (TIPC 0x8001000E, op RequestUpdate) translating these libprotobuf messages ↔
+// the nanopb system_services_ucm.{PackageManifest,UcmReply} structs (isolated TU,
+// like per_link/nm_link). RequestUpdate kicks the UCM FSM (verify → SM-session →
+// stop → install → activate → restart → PHM-verify → ACTIVE/ROLLBACK); the
+// caller polls GetProgress for the lifecycle state (Layer-3 observability).
+message UcmRequestUpdateCall {
+    string name          = 1;   // "theia" (full) or an FC name (partial), e.g. "gateway"
+    string version       = 2;   // target release version
+    uint32 kind          = 3;   // UpdateKind: 0=SOFTWARE 1=CONFIG
+    uint32 scope         = 4;   // UpdateScope: 0=FULL 1=PARTIAL
+    string artifact_path = 5;   // staged tar/release the download landed at ("" = current)
+    string signature     = 6;   // detached signature (verified via crypto pre-install)
+}
+message UcmRequestUpdateReply {
+    uint32 status = 1;          // 0=accepted 1=reject 2=not-ready
+}
+// One UCM progress sample (mirrors system_services_ucm.UcmProgress). The OTA
+// client polls this to follow the ECU-lifecycle plane (vs the Mender transport
+// plane): which UcmState the agent is in, the version in flight, the last note.
+message UcmProgressReply {
+    uint32 state   = 1;         // UcmState: 0 IDLE..7 ACTIVE, 8 ROLLBACK
+    string version = 2;         // target version in flight
+    uint32 kind    = 3;
+    uint32 scope   = 4;
+    string detail  = 5;         // human note (last step / error)
+    uint64 ts_ns   = 6;
+    bool   ok      = 7;         // false = UCM link unreachable / no sample yet
+}
+message UcmProgressCall { }     // GetProgress has no args
+
+service UcmView {
+    // Kick an update on this rig: hand UCM the package manifest. Returns the
+    // agent's accept/reject status; the install runs the AUTOSAR lifecycle async.
+    rpc RequestUpdate (UcmRequestUpdateCall) returns (UcmRequestUpdateReply);
+    // The latest UcmProgress (the agent FSM state) — the ECU-lifecycle plane GS
+    // shows in parallel with the Mender deployment status.
+    rpc GetProgress (UcmProgressCall) returns (UcmProgressReply);
+}

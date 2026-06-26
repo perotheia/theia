@@ -43,6 +43,7 @@
 #include "impl/nm_link.hpp"       // nm (network mgmt) proxy — GetStatus/WifiScan
 #include "impl/diag_link.hpp"     // diag (DoIP/UDS) proxy — SendUds
 #include "impl/ucm_link.hpp"      // ucm (ara::ucm) proxy — RequestUpdate + progress
+#include "impl/vucm_link.hpp"     // vucm (L4-B vehicle campaign) proxy — CheckForCampaign
 #include "impl/shwa_link.hpp"     // SHWA AccelTelemetry egress receiver (GPU/host)
 #include "impl/machine_manifest.hpp"  // cluster index→name map (per-machine label)
 #include "impl/com_tls.hpp"       // shared TLS-or-insecure ServerCredentials
@@ -824,6 +825,47 @@ public:
     }
 };
 
+// ---- gRPC service: VucmView — services/vucm (the L4-B vehicle campaign) -----
+// UcmView drives ONE board's installer; VucmView drives the VEHICLE campaign
+// (V-UCM on the coordinator board): CheckForCampaign fans the package to every
+// board's UCM + holds CMP_CONFIRMING until ALL are PROVISIONAL, then fans the
+// aggregate Confirm. On a worker-only board (no vucm) the link stays unconnected
+// and these RPCs return UNAVAILABLE.
+class VucmViewImpl final : public services::com::VucmView::Service {
+public:
+    grpc::Status CheckForCampaign(
+            grpc::ServerContext*,
+            const services::com::VucmCampaignCall* req,
+            services::com::VucmCampaignReply* out) override {
+        if (!req) return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "no request");
+        services_com::VucmCampaignReq r;
+        r.campaign_id = req->campaign_id();
+        r.version     = req->version();
+        r.scope       = req->scope();
+        uint32_t accepted = 0, state = 0;
+        if (!services_com::VucmLink::instance().check_for_campaign(r, accepted, state))
+            return grpc::Status(grpc::StatusCode::UNAVAILABLE,
+                                "vucm link unavailable / timeout (no V-UCM on this board?)");
+        out->set_accepted(accepted);
+        out->set_state(state);
+        return grpc::Status::OK;
+    }
+
+    grpc::Status GetCampaignStatus(
+            grpc::ServerContext*,
+            const services::com::VucmStatusCall*,
+            services::com::VucmStatusReply* out) override {
+        auto s = services_com::VucmLink::instance().status();
+        out->set_state(s.state);
+        out->set_campaign_id(s.campaign_id);
+        out->set_version(s.version);
+        out->set_detail(s.detail);
+        out->set_ts_ns(s.ts_ns);
+        out->set_valid(s.valid);
+        return grpc::Status::OK;
+    }
+};
+
 // ---- gRPC service: Provisioning — rig enrollment over com -----------------
 // The centralized enrollment utility (colocated with Headscale) calls this to
 // write the rig's identity (uuid/vin) + PKI creds under
@@ -943,6 +985,7 @@ std::unique_ptr<PerViewImpl>                g_per_svc;
 std::unique_ptr<NmViewImpl>                 g_nm_svc;
 std::unique_ptr<DiagViewImpl>               g_diag_svc;
 std::unique_ptr<UcmViewImpl>                g_ucm_svc;
+std::unique_ptr<VucmViewImpl>               g_vucm_svc;
 std::unique_ptr<ProvisioningImpl>           g_prov_svc;
 std::unique_ptr<grpc::Server>               g_server;
 std::atomic<bool>                           g_up{false};
@@ -1058,6 +1101,19 @@ void ComGrpcProxy::do_start() {
                          "UcmView RPCs return UNAVAILABLE\n", kNodeName);
     }).detach();
 
+    // vucm (L4-B vehicle campaign) — only the COORDINATOR board runs V-UCM, so a
+    // worker-only board's link simply stays down (VucmView RPCs → UNAVAILABLE).
+    std::thread([] {
+        if (services_com::VucmLink::instance().start())
+            std::fprintf(stderr,
+                         "[%s] vucm link up (RemoteRef 0x8001005E/0 — VucmView)\n",
+                         kNodeName);
+        else
+            std::fprintf(stderr,
+                         "[%s] vucm link (vucm 0x8001005E) not reachable "
+                         "(worker board?); VucmView RPCs return UNAVAILABLE\n", kNodeName);
+    }).detach();
+
     // Load the cluster machine manifest (index→name) once, up front, so the
     // first AccelSample's machine_name lookup is warm and the load is logged at
     // startup (vs lazily on the recv thread). Best-effort: no manifest → "mN".
@@ -1083,6 +1139,7 @@ void ComGrpcProxy::do_start() {
     g_nm_svc   = std::make_unique<NmViewImpl>();
     g_diag_svc = std::make_unique<DiagViewImpl>();
     g_ucm_svc  = std::make_unique<UcmViewImpl>();
+    g_vucm_svc = std::make_unique<VucmViewImpl>();
     g_prov_svc = std::make_unique<ProvisioningImpl>();
 
     const std::string listen = listen_addr();
@@ -1102,6 +1159,7 @@ void ComGrpcProxy::do_start() {
         b.RegisterService(g_nm_svc.get());
         b.RegisterService(g_diag_svc.get());
         b.RegisterService(g_ucm_svc.get());
+        b.RegisterService(g_vucm_svc.get());
         b.RegisterService(g_prov_svc.get());
         g_server = b.BuildAndStart();
         if (!g_server && attempt < kBindAttempts) {

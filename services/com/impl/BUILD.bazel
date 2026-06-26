@@ -255,6 +255,30 @@ cc_library(
     ],
 )
 
+# vucm (ara::vucm) proxy link — the L4-B campaign orchestrator. Isolated nanopb TU
+# like ucm_link: the NANOPB vucm headers (vucm.pb.h) for the CheckForCampaign /
+# GetCampaignStatus RemoteRef-call to VucmGate (0x8001005E); com_impl's gRPC edge
+# sees only vucm_link.hpp's primitive VucmCampaignReq/VucmCampaignSample surface.
+cc_library(
+    name = "vucm_link",
+    srcs = ["vucm_link.cc"],
+    hdrs = ["vucm_link.hpp"],
+    includes = [".."],
+    copts = [
+        "-std=c++17",
+        "-Wall",
+        "-Wextra",
+        "-fPIC",
+    ],
+    deps = [
+        "//platform/runtime:runtime",
+        # nanopb vucm structs (system/services/vucm/vucm.pb.h) via the platform
+        # protos (vucm.pb.h transitively pulls ucm.pb.h for UpdateScope on
+        # CampaignRequest).
+        "//platform/proto:platform_protos",
+    ],
+)
+
 # machine_manifest — com's read-only index→name map of the cluster machines,
 # loaded once from THEIA_MACHINE_MANIFEST (exported by the supervisor, inherited
 # by com). Used to label per-machine telemetry (the AccelSample demux) with a
@@ -324,6 +348,7 @@ cc_library(
         # diag_link.hpp's primitive DiagUdsResult surface.
         ":diag_link",
         ":ucm_link",
+        ":vucm_link",
         # SHWA AccelTelemetry egress receiver (raw-bytes, isolated above).
         # ComGrpcProxy_handlers.cc folds AccelSample into the Subscribe stream.
         ":shwa_link",

@@ -622,3 +622,37 @@ service UcmView {
     // Cancel: PROVISIONAL→ROLLBACK) a held update. The OTA client's commit decision.
     rpc Confirm (UcmConfirmCall) returns (UcmConfirmReply);
 }
+
+// ---- L4-B: V-UCM (the vehicle campaign orchestrator) -----------------------
+// UcmView drives a SINGLE board's installer; VucmView drives the VEHICLE campaign
+// (V-UCM on the central/coordinator board). V-UCM fans the package to each board's
+// UCM, holds CMP_CONFIRMING until ALL boards are PROVISIONAL (read from the shared
+// etcd markers), then fans the aggregate Confirm. GS drives the CAMPAIGN here; the
+// per-board UCM lifecycle is still visible via UcmView.
+message VucmCampaignCall {
+    string campaign_id = 1;   // the Mender deployment id
+    string version     = 2;   // target release
+    uint32 scope       = 3;   // UpdateScope: 0=FULL 1=PARTIAL
+}
+message VucmCampaignReply {
+    uint32 accepted = 1;      // 1 = queued
+    uint32 state    = 2;      // CampaignState ordinal (wire)
+}
+message VucmStatusCall { }    // GetCampaignStatus has no args
+message VucmStatusReply {
+    uint32 state       = 1;   // CampaignState (wire: 0 IDLE..6 ROLLBACK, 7 CONFIRMING)
+    string campaign_id = 2;
+    string version     = 3;
+    string detail      = 4;
+    uint64 ts_ns       = 5;
+    bool   valid       = 6;   // false = V-UCM not reachable / no campaign
+}
+
+service VucmView {
+    // Start a vehicle campaign: hand V-UCM the deployment. Returns accept + the
+    // campaign FSM state; the fan-out + aggregate Confirm run async.
+    rpc CheckForCampaign (VucmCampaignCall) returns (VucmCampaignReply);
+    // The current CampaignProgress (the aggregate-barrier state) — the vehicle
+    // plane GS shows above the per-board UCM lifecycle.
+    rpc GetCampaignStatus (VucmStatusCall) returns (VucmStatusReply);
+}

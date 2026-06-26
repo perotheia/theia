@@ -1,0 +1,30 @@
+# Deploy-target registry entry — `central` (the L4-B GATEWAY board).
+#
+# The rpi4 ('raspberrypi' @ 10.0.0.22) — the robot's Gateway ECU + the ONE Mender
+# device-of-record. It runs the full services_rig slice (dist/manifest/central/)
+# and is the cluster's etcd singleton: L4-B SHARED ETCD lives here, bound on
+# 0.0.0.0:2379 so the compute board's per (deploy/config/jetson/per.json →
+# etcd_endpoint 10.0.0.22:2379) reaches it. V-UCM (central) aggregates every
+# board's PROVISIONAL marker (ucm_activation_<board>) from this one keyspace.
+#
+# L4-B role: mender_role gateway → mender-agent + gateway + proxy + V-UCM enabled
+# (the cloud-facing identity; the compute board reaches the server via this
+# board's proxy, never directly). See docs/tasks/BACKLOG/L4B-multiboard-vucm.md.
+
+ansible_host: 10.0.0.22
+ansible_user: axadmin
+machine: central
+arch: aarch64
+deb_arch: arm64
+
+# This board IS the etcd singleton (colony etcd.yml installs + configures it here).
+# Bind 0.0.0.0 + advertise the eth IP so the compute board's per can reach it.
+etcd_listen_host: 0.0.0.0
+etcd_advertise_host: 10.0.0.22
+
+# ── L4-B multi-board role ────────────────────────────────────────────────────
+mender_role: gateway
+# The boards this vehicle's V-UCM campaigns fan out to (the campaign roster). Set
+# into VucmConfig.boards so CMP_CONFIRMING waits for ALL before the aggregate
+# Confirm. Pushed via deploy/config/central/vucm.json.
+boards: "central,jetson"

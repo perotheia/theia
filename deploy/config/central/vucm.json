@@ -1,0 +1,9 @@
+{
+  "_comment": "L4-B: the V-UCM campaign roster. VucmGate reads boards (comma-list of machine names) and aggregates each board's ucm_activation_<board> PROVISIONAL marker from the shared etcd; CMP_CONFIRMING waits for ALL before fanning the aggregate Confirm. confirm_budget_ms bounds the wait before fanning Cancel.",
+  "nodes": {
+    "vucm_gate": {
+      "boards": "central,jetson",
+      "confirm_budget_ms": "120000"
+    }
+  }
+}

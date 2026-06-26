@@ -5,6 +5,12 @@ syntax = "proto3";
 package system_services_vucm;
 
 import "system/services/ucm/ucm.proto";
+// L4-B: VucmCampaign's to_per client port reads each board's PROVISIONAL marker
+// via PerClientIf, so the per config-store types (GetConfigReq/ConfigSnapshot/…)
+// must be visible. Imported here so vucm.pb.h transitively pulls per.pb.h (the
+// codecs header declares per codecs but, like ucm, relies on the transitive .pb.h
+// rather than its own #include — the client-port include gap in gen-proto).
+import "system/services/per/per.proto";
 
 enum CampaignState {
     CampaignState_CMP_IDLE = 0;
@@ -14,6 +20,7 @@ enum CampaignState {
     CampaignState_CMP_VALIDATING = 4;
     CampaignState_CMP_DONE = 5;
     CampaignState_CMP_ROLLBACK = 6;
+    CampaignState_CMP_CONFIRMING = 7;   // L4-B aggregate-confirm barrier (appended; ordinals 0..6 stable)
 }
 
 message CampaignProgress {
@@ -38,6 +45,10 @@ message EvAuthorized {
 
 message EvInstalled {
     // empty body
+}
+
+message EvProvisioned {
+    // empty body — L4-B: every board reached PROVISIONAL, fan the aggregate Confirm
 }
 
 message EvValidated {
@@ -71,5 +82,7 @@ message VucmConfig {
     uint32 authorize_budget_ms = 1;
     uint32 validate_budget_ms = 2;
     string mender_url = 3;
+    string boards = 4;              // L4-B: comma-list of campaign target boards
+    uint32 confirm_budget_ms = 5;  // L4-B: CMP_CONFIRMING aggregate-wait budget
 }
 

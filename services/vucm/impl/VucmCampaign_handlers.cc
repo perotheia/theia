@@ -16,33 +16,52 @@
 
 #include "lib/VucmCampaign.hh"
 
+#include "NodeRef.hh"   // theia::runtime::LocalRef — publish self to the gate
+
 #include <cstdio>
+#include <string>
 
 namespace ara::vucm {
 
+// The gate post_event()s into this peer (defined in VucmGate_handlers.cc); the
+// campaign FSM publishes ITS ref here so the gate's post_event finds the target.
+theia::runtime::LocalRef<VucmCampaign>& vucm_campaign_ref();
 
+namespace {
+// The C++ VucmCampaignState enum is DENSE 0..7 (CONFIRMING=4, VALIDATING=5,
+// DONE=6, ROLLBACK=7) but the WIRE CampaignState keeps the original ordinals
+// stable (CONFIRMING appended =7, VALIDATING=4, DONE=5, ROLLBACK=6). A direct
+// cast would be WRONG — map explicitly so the broadcast carries the wire value
+// consumers (com / the GS fleet view) decode.
+system_services_vucm_CampaignState wire_state(VucmCampaignState s) {
+    switch (s) {
+        case VucmCampaignState::CMP_IDLE:        return system_services_vucm_CampaignState_CampaignState_CMP_IDLE;
+        case VucmCampaignState::CMP_PLANNING:    return system_services_vucm_CampaignState_CampaignState_CMP_PLANNING;
+        case VucmCampaignState::CMP_AUTHORIZING: return system_services_vucm_CampaignState_CampaignState_CMP_AUTHORIZING;
+        case VucmCampaignState::CMP_INSTALLING:  return system_services_vucm_CampaignState_CampaignState_CMP_INSTALLING;
+        case VucmCampaignState::CMP_CONFIRMING:  return system_services_vucm_CampaignState_CampaignState_CMP_CONFIRMING;
+        case VucmCampaignState::CMP_VALIDATING:  return system_services_vucm_CampaignState_CampaignState_CMP_VALIDATING;
+        case VucmCampaignState::CMP_DONE:        return system_services_vucm_CampaignState_CampaignState_CMP_DONE;
+        case VucmCampaignState::CMP_ROLLBACK:    return system_services_vucm_CampaignState_CampaignState_CMP_ROLLBACK;
+    }
+    return system_services_vucm_CampaignState_CampaignState_CMP_IDLE;
+}
+}  // namespace
 
-// on_enter — runs on the FSM thread AFTER every committed
-// transition. The framework also fires it once at init with
-// new_s == old_s == CMP_IDLE. SAFE to call
-// cast/post_event/broadcast from here; UNSAFE to transition.
+// on_enter — runs on the FSM thread AFTER every committed transition (and once at
+// init with new_s == old_s == CMP_IDLE). Publishes self to the gate, stamps the
+// wire state into the CampaignProgress data, and broadcasts it to every
+// CampaignStream subscriber (com / the GS fleet view watch the campaign walk its
+// lifecycle — the same way they watch UcmProgress one layer down).
 void VucmCampaign::on_enter(VucmCampaignState new_s,
                               VucmCampaignState /*old_s*/,
-                              VucmCampaignData& /*d*/) {
-    static const char* names[] = {
-        "CMP_IDLE",
-        "CMP_PLANNING",
-        "CMP_AUTHORIZING",
-        "CMP_INSTALLING",
-        "CMP_VALIDATING",
-        "CMP_DONE",
-        "CMP_ROLLBACK",
-    };
-    const auto idx = static_cast<std::size_t>(new_s);
-    std::fprintf(stderr, "[%s] → %s\n",
-                 kNodeName,
-                 idx < sizeof(names)/sizeof(names[0]) ? names[idx] : "?");
-    // TODO: fan out to subscribe_<port>_<msg> registrations here.
+                              VucmCampaignData& d) {
+    if (!vucm_campaign_ref().valid()) {
+        vucm_campaign_ref() = theia::runtime::LocalRef<VucmCampaign>(*this);
+    }
+    d.state = wire_state(new_s);
+    this->log().info(std::string("→ ") + VucmCampaign::state_name(new_s));
+    broadcast_progress_progress(d);
 }
 // ---- config update — services/per casts ConfigUpdated when this statem
 //      node's etcd-backed `config VucmConfig` changes. The GenServer base

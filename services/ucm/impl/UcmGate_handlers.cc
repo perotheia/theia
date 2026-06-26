@@ -98,12 +98,27 @@ void step(const char* name, Evt evt) {
 // ---- The two-phase-commit activation marker — PERSISTED IN per/etcd --------
 // The reboot-surviving record of "this version is PROVISIONAL (unconfirmed), roll
 // back if not confirmed by deadline". Stored via per (the SOLE etcd client) under
-// target_node="ucm_activation" → etcd key /theia/config/ucm_activation. Why etcd
-// and not a local file: V-UCM aggregates the WHOLE vehicle's provisional state by
-// reading every board's marker from the SHARED etcd keyspace — a per-board file is
-// invisible to a central-board V-UCM. etcd also survives a release-dir reprovision.
+// target_node="ucm_activation_<board>" → etcd key /theia/config/ucm_activation_<board>.
+// Why etcd and not a local file: V-UCM aggregates the WHOLE vehicle's provisional
+// state by reading every board's marker from the SHARED etcd keyspace (L4-B: the
+// compute board's per points at the central's etcd) — a per-board file is invisible
+// to a central-board V-UCM. etcd also survives a release-dir reprovision.
+//
+// L4-B per-board NAMESPACING: every board writes the SAME logical marker, so a
+// single fixed key would let central + compute CLOBBER each other in the one shared
+// etcd. Suffix the key with the board identity (THEIA_MACHINE, the supervisor's
+// machine label, inherited by every child) so V-UCM can read each board's marker
+// independently: ucm_activation_central, ucm_activation_jetson, … A board with no
+// THEIA_MACHINE (a standalone dev run) falls back to the bare "ucm_activation".
 // `root` is unused now (kept so the call sites don't change).
-constexpr const char* kActivationNode = "ucm_activation";
+inline const std::string& activation_node() {
+    static const std::string node = [] {
+        const char* m = std::getenv("THEIA_MACHINE");
+        return (m && *m) ? std::string("ucm_activation_") + m
+                         : std::string("ucm_activation");
+    }();
+    return node;
+}
 
 struct Marker {
     int         state = 0;   // ActivationState: 0 NONE 1 PROVISIONAL 2 CONFIRMED
@@ -144,7 +159,7 @@ void write_marker(const std::string& /*root*/, const Marker& m) {
     a.scope = static_cast<system_services_ucm_UpdateScope>(m.scope);
 
     system_services_per_PutConfigReq req = system_services_per_PutConfigReq_init_zero;
-    std::snprintf(req.target_node, sizeof(req.target_node), "%s", kActivationNode);
+    std::snprintf(req.target_node, sizeof(req.target_node), "%s", activation_node().c_str());
     pb_ostream_t os = pb_ostream_from_buffer(req.config.bytes, sizeof(req.config.bytes));
     if (!pb_encode(&os, system_services_ucm_UcmActivation_fields, &a)) return;
     req.config.size = static_cast<pb_size_t>(os.bytes_written);
@@ -170,7 +185,7 @@ void clear_marker(const std::string& root) {
 Marker read_marker(const std::string& /*root*/) {
     Marker m;
     system_services_per_GetConfigReq req = system_services_per_GetConfigReq_init_zero;
-    std::snprintf(req.target_node, sizeof(req.target_node), "%s", kActivationNode);
+    std::snprintf(req.target_node, sizeof(req.target_node), "%s", activation_node().c_str());
 
     auto& link = PerLink::instance();
     std::lock_guard<std::mutex> lk(link.mu);

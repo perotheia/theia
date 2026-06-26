@@ -50,6 +50,7 @@ using EvDeployment = system_services_vucm_EvDeployment;
 using EvPlanned = system_services_vucm_EvPlanned;
 using EvAuthorized = system_services_vucm_EvAuthorized;
 using EvInstalled = system_services_vucm_EvInstalled;
+using EvProvisioned = system_services_vucm_EvProvisioned;
 using EvValidated = system_services_vucm_EvValidated;
 using EvBlocked = system_services_vucm_EvBlocked;
 using EvFailed = system_services_vucm_EvFailed;
@@ -199,6 +200,8 @@ public:
     void handle_cast(const EvAuthorized& msg, VucmGateState& s);
 
     void handle_cast(const EvInstalled& msg, VucmGateState& s);
+
+    void handle_cast(const EvProvisioned& msg, VucmGateState& s);
 
     void handle_cast(const EvValidated& msg, VucmGateState& s);
 

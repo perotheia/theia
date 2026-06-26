@@ -34,6 +34,13 @@
 THEIA_DECLARE_REMOTE_CODEC(system_services_vucm_CampaignProgress)
 THEIA_DECLARE_REMOTE_CODEC(system_services_ucm_PackageManifest)
 THEIA_DECLARE_REMOTE_CODEC(system_services_ucm_UcmReply)
+THEIA_DECLARE_REMOTE_CODEC(system_services_ucm_ConfirmRequest)
+THEIA_DECLARE_REMOTE_CODEC(system_services_ucm_CancelRequest)
+THEIA_DECLARE_REMOTE_CODEC(system_services_per_GetConfigReq)
+THEIA_DECLARE_REMOTE_CODEC(system_services_per_ConfigSnapshot)
+THEIA_DECLARE_REMOTE_CODEC(system_services_per_PutConfigReq)
+THEIA_DECLARE_REMOTE_CODEC(system_services_per_PerReply)
+THEIA_DECLARE_REMOTE_CODEC(system_services_per_WatchConfigReq)
 THEIA_DECLARE_REMOTE_CODEC(system_services_vucm_CampaignRequest)
 THEIA_DECLARE_REMOTE_CODEC(system_services_vucm_CampaignReply)
 THEIA_DECLARE_REMOTE_CODEC(system_services_vucm_CampaignStatusReq)
@@ -41,8 +48,27 @@ THEIA_DECLARE_REMOTE_CODEC(system_services_vucm_EvDeployment)
 THEIA_DECLARE_REMOTE_CODEC(system_services_vucm_EvPlanned)
 THEIA_DECLARE_REMOTE_CODEC(system_services_vucm_EvAuthorized)
 THEIA_DECLARE_REMOTE_CODEC(system_services_vucm_EvInstalled)
+THEIA_DECLARE_REMOTE_CODEC(system_services_vucm_EvProvisioned)
 THEIA_DECLARE_REMOTE_CODEC(system_services_vucm_EvValidated)
 THEIA_DECLARE_REMOTE_CODEC(system_services_vucm_EvBlocked)
 THEIA_DECLARE_REMOTE_CODEC(system_services_vucm_EvFailed)
 THEIA_DECLARE_REMOTE_CODEC(system_services_sm_SmStateMsg)
 THEIA_DECLARE_REMOTE_CODEC(system_services_phm_PhmHealthStatus)
+
+// FC-wide enum aliases — the enum TYPE and each VALUE inside the FC namespace, so
+// impl code writes the readable `CampaignState` / `CMP_IDLE`
+// instead of nanopb's double-prefixed name
+// (system_services_vucm_<Enum>_<Enum>_<VALUE>). Emitted ONCE here (this header
+// is #pragma once + included by every node header) — NOT per-node, so two node
+// headers in one TU don't redefine them.
+namespace ara::vucm {
+using CampaignState = system_services_vucm_CampaignState;
+inline constexpr CampaignState CMP_IDLE = system_services_vucm_CampaignState_CampaignState_CMP_IDLE;
+inline constexpr CampaignState CMP_PLANNING = system_services_vucm_CampaignState_CampaignState_CMP_PLANNING;
+inline constexpr CampaignState CMP_AUTHORIZING = system_services_vucm_CampaignState_CampaignState_CMP_AUTHORIZING;
+inline constexpr CampaignState CMP_INSTALLING = system_services_vucm_CampaignState_CampaignState_CMP_INSTALLING;
+inline constexpr CampaignState CMP_CONFIRMING = system_services_vucm_CampaignState_CampaignState_CMP_CONFIRMING;
+inline constexpr CampaignState CMP_VALIDATING = system_services_vucm_CampaignState_CampaignState_CMP_VALIDATING;
+inline constexpr CampaignState CMP_DONE = system_services_vucm_CampaignState_CampaignState_CMP_DONE;
+inline constexpr CampaignState CMP_ROLLBACK = system_services_vucm_CampaignState_CampaignState_CMP_ROLLBACK;
+}  // namespace ara::vucm

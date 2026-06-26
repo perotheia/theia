@@ -21,7 +21,12 @@ cc_library(
     # root is the FC out_dir (one above impl/).
     includes = [".."],
     copts = ["-std=c++17", "-fPIC"],
-    deps = ["//platform/runtime:runtime"],
+    # platform_protos: VucmGate_state.hh includes vucm.pb.h for the cached
+    # CampaignState (last_state served by GetCampaignStatus).
+    deps = [
+        "//platform/runtime:runtime",
+        "//platform/proto:platform_protos",
+    ],
 )
 
 cc_library(

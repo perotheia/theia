@@ -45,9 +45,10 @@ enum class VucmCampaignState : uint8_t {
     CMP_PLANNING = 1,
     CMP_AUTHORIZING = 2,
     CMP_INSTALLING = 3,
-    CMP_VALIDATING = 4,
-    CMP_DONE = 5,
-    CMP_ROLLBACK = 6
+    CMP_CONFIRMING = 4,
+    CMP_VALIDATING = 5,
+    CMP_DONE = 6,
+    CMP_ROLLBACK = 7
 };
 
 // Local-namespace aliases over the nanopb C structs. The nanopb
@@ -62,9 +63,17 @@ using EvFailed = system_services_vucm_EvFailed;
 using EvAuthorized = system_services_vucm_EvAuthorized;
 using EvBlocked = system_services_vucm_EvBlocked;
 using EvInstalled = system_services_vucm_EvInstalled;
+using EvProvisioned = system_services_vucm_EvProvisioned;
 using EvValidated = system_services_vucm_EvValidated;
 using PackageManifest = system_services_ucm_PackageManifest;
 using UcmReply = system_services_ucm_UcmReply;
+using ConfirmRequest = system_services_ucm_ConfirmRequest;
+using CancelRequest = system_services_ucm_CancelRequest;
+using GetConfigReq = system_services_per_GetConfigReq;
+using ConfigSnapshot = system_services_per_ConfigSnapshot;
+using PutConfigReq = system_services_per_PutConfigReq;
+using PerReply = system_services_per_PerReply;
+using WatchConfigReq = system_services_per_WatchConfigReq;
 
 
 using VucmCampaignData = CampaignProgress;
@@ -83,7 +92,7 @@ class VucmCampaign;
 //   - init(VucmCampaignData&) returns the initial state
 //     (VucmCampaignState::CMP_IDLE)
 //   - one handle_event overload per declared event type
-//     (EvDeployment, EvPlanned, EvFailed, EvAuthorized, EvBlocked, EvFailed, EvInstalled, EvFailed, EvValidated, EvFailed, EvDeployment, EvValidated)
+//     (EvDeployment, EvPlanned, EvFailed, EvAuthorized, EvBlocked, EvFailed, EvInstalled, EvFailed, EvProvisioned, EvFailed, EvValidated, EvFailed, EvDeployment, EvValidated)
 //   - handle_event for ::theia::runtime::StateTimeoutMsg<VucmCampaignState>
 //     covering states with `timeout → ...` rules
 //   - subscribe/unsubscribe/broadcast helpers for sender ports
@@ -108,6 +117,7 @@ public:
         case VucmCampaignState::CMP_PLANNING: return "CMP_PLANNING";
         case VucmCampaignState::CMP_AUTHORIZING: return "CMP_AUTHORIZING";
         case VucmCampaignState::CMP_INSTALLING: return "CMP_INSTALLING";
+        case VucmCampaignState::CMP_CONFIRMING: return "CMP_CONFIRMING";
         case VucmCampaignState::CMP_VALIDATING: return "CMP_VALIDATING";
         case VucmCampaignState::CMP_DONE: return "CMP_DONE";
         case VucmCampaignState::CMP_ROLLBACK: return "CMP_ROLLBACK";
@@ -225,7 +235,7 @@ public:
         return ::theia::runtime::keep_state<VucmCampaignState>();
     }
 
-    // EvFailed — handled from: CMP_PLANNING → CMP_ROLLBACK | CMP_AUTHORIZING → CMP_ROLLBACK | CMP_INSTALLING → CMP_ROLLBACK | CMP_VALIDATING → CMP_ROLLBACK
+    // EvFailed — handled from: CMP_PLANNING → CMP_ROLLBACK | CMP_AUTHORIZING → CMP_ROLLBACK | CMP_INSTALLING → CMP_ROLLBACK | CMP_CONFIRMING → CMP_ROLLBACK | CMP_VALIDATING → CMP_ROLLBACK
     ::theia::runtime::EventResult<VucmCampaignState> handle_event(
             VucmCampaignState s, const EvFailed& /*e*/,
             VucmCampaignData& /*d*/) {
@@ -238,6 +248,10 @@ public:
                 VucmCampaignState::CMP_ROLLBACK);
         }
         if (s == VucmCampaignState::CMP_INSTALLING) {
+            return ::theia::runtime::transition_to<VucmCampaignState>(
+                VucmCampaignState::CMP_ROLLBACK);
+        }
+        if (s == VucmCampaignState::CMP_CONFIRMING) {
             return ::theia::runtime::transition_to<VucmCampaignState>(
                 VucmCampaignState::CMP_ROLLBACK);
         }
@@ -270,11 +284,22 @@ public:
         return ::theia::runtime::keep_state<VucmCampaignState>();
     }
 
-    // EvInstalled — handled from: CMP_INSTALLING → CMP_VALIDATING
+    // EvInstalled — handled from: CMP_INSTALLING → CMP_CONFIRMING
     ::theia::runtime::EventResult<VucmCampaignState> handle_event(
             VucmCampaignState s, const EvInstalled& /*e*/,
             VucmCampaignData& /*d*/) {
         if (s == VucmCampaignState::CMP_INSTALLING) {
+            return ::theia::runtime::transition_to<VucmCampaignState>(
+                VucmCampaignState::CMP_CONFIRMING);
+        }
+        return ::theia::runtime::keep_state<VucmCampaignState>();
+    }
+
+    // EvProvisioned — handled from: CMP_CONFIRMING → CMP_VALIDATING
+    ::theia::runtime::EventResult<VucmCampaignState> handle_event(
+            VucmCampaignState s, const EvProvisioned& /*e*/,
+            VucmCampaignData& /*d*/) {
+        if (s == VucmCampaignState::CMP_CONFIRMING) {
             return ::theia::runtime::transition_to<VucmCampaignState>(
                 VucmCampaignState::CMP_VALIDATING);
         }

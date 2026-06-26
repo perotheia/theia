@@ -217,6 +217,7 @@ int main(int argc, char** argv) {
         config_mux.register_cast<EvPlanned>(vucm_gate_cfg, vucm_gate);
         config_mux.register_cast<EvAuthorized>(vucm_gate_cfg, vucm_gate);
         config_mux.register_cast<EvInstalled>(vucm_gate_cfg, vucm_gate);
+        config_mux.register_cast<EvProvisioned>(vucm_gate_cfg, vucm_gate);
         config_mux.register_cast<EvValidated>(vucm_gate_cfg, vucm_gate);
         config_mux.register_cast<EvBlocked>(vucm_gate_cfg, vucm_gate);
         config_mux.register_cast<EvFailed>(vucm_gate_cfg, vucm_gate);

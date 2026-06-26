@@ -1,11 +1,12 @@
 # Generated nanopb sources for the system.services.vucm package.
 # .pb.{c,h} are produced by the genrule from vucm.proto; not committed.
 #
-# vucm.proto IMPORTS system/services/ucm/ucm.proto (it reuses ucm's UpdateScope on
-# the CampaignRequest), so unlike the self-contained service protos the nanopb -I
-# root is platform/proto/ (where the imported path resolves) and ucm.proto is a
-# build input. nanopb emits a stub for the imported message; the real ucm nanopb
-# struct comes from //platform/proto/system/services/ucm:ucm_pb at link.
+# vucm.proto IMPORTS system/services/ucm/ucm.proto (UpdateScope on CampaignRequest)
+# AND system/services/per/per.proto (L4-B: the to_per client port's PerClientIf
+# config-store types). So unlike the self-contained service protos the nanopb -I
+# root is platform/proto/ (where the imported paths resolve) and both ucm.proto +
+# per.proto are build inputs. nanopb emits stubs for the imported messages; the
+# real ucm/per nanopb structs come from their own _pb targets at link.
 
 package(default_visibility = ["//visibility:public"])
 
@@ -15,6 +16,7 @@ genrule(
         "vucm.proto",
         "vucm.options",
         "//platform/proto/system/services/ucm:ucm_proto",
+        "//platform/proto/system/services/per:per_proto",
     ],
     outs = [
         "vucm.pb.c",

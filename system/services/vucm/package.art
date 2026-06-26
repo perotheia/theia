@@ -29,21 +29,37 @@ import system.services.ucm.*
 import system.services.sm.*
 import system.services.phm.*
 
+// per is the shared-etcd config store. V-UCM reads each board's PROVISIONAL marker
+// (ucm_activation_<board>) through PerClientIf — the L4-B aggregate barrier reads
+// the WHOLE vehicle's provisional state from the one shared keyspace.
+import system.services.per.*
+
 // ─── Campaign state ──────────────────────────────────────────────────────────
 
 // A fleet campaign's lifecycle. VUCM owns this; UCM owns the per-artifact install
 // FSM one layer down. PLANNING: a deployment arrived from Mender; AUTHORIZING:
-// gate on SM-state + PHM-health; INSTALLING: UCM is executing (RequestUpdate sent);
-// VALIDATING: post-install health confirm; DONE: reported success to the fleet;
-// ROLLBACK: a gate or install/validate step failed → UCM rolls back, report failure.
+// gate on SM-state + PHM-health; INSTALLING: every board's UCM is executing
+// (RequestUpdate fanned out); CONFIRMING: the L4-B two-phase-commit barrier — all
+// boards installed + running but PROVISIONAL (unconfirmed); V-UCM waits for EVERY
+// board's PROVISIONAL marker (read from the shared etcd keyspace), then fans the
+// aggregate Confirm so all boards activate together (or any-fail/timeout → fan
+// Cancel → all rollback); VALIDATING: post-confirm fleet health confirm; DONE:
+// reported success to the fleet; ROLLBACK: a gate/install/confirm step failed.
+//
+// CMP_CONFIRMING is the vehicle-level half of the two-phase commit: UCM's own
+// PROVISIONAL state (one layer down) holds a SINGLE board unconfirmed; V-UCM's
+// CONFIRMING holds the WHOLE vehicle until every board is PROVISIONAL, so a board
+// that fails to install never leaves its siblings activated alone (synchronized
+// cross-ECU activation — the AUTOSAR vehicle-update contract).
 enum CampaignState {
     CMP_IDLE        = 0   // no active campaign
     CMP_PLANNING    = 1   // deployment received; resolving artifacts/dependencies
     CMP_AUTHORIZING = 2   // gating on SM vehicle-state + PHM health
-    CMP_INSTALLING  = 3   // UCM is downloading/verifying/staging/installing
-    CMP_VALIDATING  = 4   // post-install PHM health confirm
+    CMP_INSTALLING  = 3   // every board's UCM is downloading/verifying/staging/installing
+    CMP_CONFIRMING  = 7   // ALL boards PROVISIONAL — aggregate-confirm barrier (L4-B)
+    CMP_VALIDATING  = 4   // post-confirm fleet health confirm
     CMP_DONE        = 5   // campaign succeeded; reported to fleet
-    CMP_ROLLBACK    = 6   // a step failed; UCM rolled back; failure reported
+    CMP_ROLLBACK    = 6   // a step failed; UCM(s) rolled back; failure reported
 }
 
 // The campaign's persistent data + the progress payload VUCM broadcasts/reports.
@@ -61,20 +77,22 @@ message CampaignProgress {
 // idiom). VucmGate is the only ingress; the statem takes no off-the-wire message.
 message EvDeployment    { }   // Mender deployment arrived → begin PLANNING
 message EvPlanned       { }   // artifacts/dependencies resolved → AUTHORIZING
-message EvAuthorized    { }   // SM-state + PHM-health both allow → INSTALLING
-message EvInstalled     { }   // UCM reported the install ACTIVE → VALIDATING
-message EvValidated     { }   // post-install health confirmed → DONE
+message EvAuthorized    { }   // SM-state + PHM-health both allow → INSTALLING (fan out)
+message EvInstalled     { }   // every board's UCM reported PROVISIONAL → CONFIRMING
+message EvProvisioned   { }   // ALL boards PROVISIONAL-OK → fan the aggregate Confirm
+message EvValidated     { }   // all boards confirmed ACTIVE + healthy → DONE
 message EvBlocked       { }   // SM/PHM denied (recoverable: retry when state changes)
-message EvFailed        { }   // any step failed → ROLLBACK
+message EvFailed        { }   // any step/board failed or timed out → ROLLBACK (fan Cancel)
 
 interface senderReceiver VucmLifecycleIn {
-    data EvDeployment deployment
-    data EvPlanned    planned
-    data EvAuthorized authorized
-    data EvInstalled  installed
-    data EvValidated  validated
-    data EvBlocked    blocked
-    data EvFailed     failed
+    data EvDeployment  deployment
+    data EvPlanned     planned
+    data EvAuthorized  authorized
+    data EvInstalled   installed
+    data EvProvisioned provisioned
+    data EvValidated   validated
+    data EvBlocked     blocked
+    data EvFailed      failed
 }
 
 // ─── Fleet/cloud control surface (Mender deployment API, proxied by com) ─────
@@ -125,11 +143,12 @@ node atomic VucmCampaign {
     config VucmConfig
     ports {
         sender progress provides CampaignStream
-        client to_ucm   requires UpdateCtl          // drive the HOW layer (RequestUpdate)
+        client to_ucm   requires UpdateCtl          // drive the HOW layer (RequestUpdate/Confirm/Cancel)
+        client to_per   requires PerClientIf        // read each board's PROVISIONAL marker (shared etcd)
     }
     statem {
         states  [CMP_IDLE, CMP_PLANNING, CMP_AUTHORIZING, CMP_INSTALLING,
-                 CMP_VALIDATING, CMP_DONE, CMP_ROLLBACK]
+                 CMP_CONFIRMING, CMP_VALIDATING, CMP_DONE, CMP_ROLLBACK]
         initial CMP_IDLE
         data    CampaignProgress
 
@@ -146,11 +165,15 @@ node atomic VucmCampaign {
             event EvFailed     → CMP_ROLLBACK
 
         on CMP_INSTALLING:
-            event EvInstalled  → CMP_VALIDATING      // UCM reported ACTIVE
-            event EvFailed     → CMP_ROLLBACK
+            event EvInstalled  → CMP_CONFIRMING      // every board reached PROVISIONAL
+            event EvFailed     → CMP_ROLLBACK        // a board failed to install
+
+        on CMP_CONFIRMING:
+            event EvProvisioned → CMP_VALIDATING     // all PROVISIONAL → fanned Confirm
+            event EvFailed      → CMP_ROLLBACK       // a board missing/timed out → fan Cancel
 
         on CMP_VALIDATING:
-            event EvValidated  → CMP_DONE            // PHM-confirmed healthy
+            event EvValidated  → CMP_DONE            // all boards confirmed + healthy
             event EvFailed     → CMP_ROLLBACK
 
         on CMP_DONE:
@@ -198,4 +221,12 @@ message VucmConfig {
     uint32 validate_budget_ms  = 30000
     // The Mender server base URL (the fleet edge; com proxies the actual HTTP).
     string mender_url [max_size:128]
+    // L4-B: the boards this vehicle's campaigns fan out to (comma-separated
+    // machine names, e.g. "central,jetson"). V-UCM aggregates each board's
+    // PROVISIONAL marker (etcd ucm_activation_<board>) over this roster; the
+    // CMP_CONFIRMING barrier waits for ALL before fanning the aggregate Confirm.
+    string boards [max_size:128]
+    // How long (ms) the CMP_CONFIRMING barrier waits for ALL boards PROVISIONAL
+    // before giving up and fanning Cancel (a board that never installs).
+    uint32 confirm_budget_ms = 120000
 }

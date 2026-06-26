@@ -17,6 +17,9 @@ THEIA_DECLARE_REMOTE_CODEC(system_services_vucm_CampaignRequest)
 THEIA_DECLARE_REMOTE_CODEC(system_services_vucm_CampaignReply)
 THEIA_DECLARE_REMOTE_CODEC(system_services_vucm_CampaignStatusReq)
 THEIA_DECLARE_REMOTE_CODEC(system_services_vucm_CampaignProgress)
+THEIA_DECLARE_REMOTE_CODEC(system_services_vucm_CommitRequest)
+THEIA_DECLARE_REMOTE_CODEC(system_services_vucm_RollbackRequest)
+THEIA_DECLARE_REMOTE_CODEC(system_services_vucm_DecisionReply)
 
 #include <cstdio>
 #include <mutex>
@@ -88,6 +91,30 @@ bool VucmLink::check_for_campaign(const VucmCampaignReq& req, uint32_t& accepted
     if (result.tag != theia::runtime::CallTag::Reply) return false;
     accepted_out = result.reply.accepted;
     state_out    = static_cast<uint32_t>(result.reply.state);
+    return true;
+}
+
+bool VucmLink::decide(const std::string& campaign_id, bool rollback,
+                      uint32_t& accepted_out, uint32_t& state_out, int timeout_ms) {
+    if (!impl_->started) return false;
+    std::lock_guard<std::mutex> lk(impl_->call_mu);
+    if (rollback) {
+        system_services_vucm_RollbackRequest req =
+            system_services_vucm_RollbackRequest_init_zero;
+        set_str(req.campaign_id, sizeof(req.campaign_id), campaign_id);
+        auto r = theia::runtime::call<system_services_vucm_DecisionReply>(
+            impl_->ref, req, /*act=*/0, timeout_ms);
+        if (r.tag != theia::runtime::CallTag::Reply) return false;
+        accepted_out = r.reply.accepted; state_out = static_cast<uint32_t>(r.reply.state);
+    } else {
+        system_services_vucm_CommitRequest req =
+            system_services_vucm_CommitRequest_init_zero;
+        set_str(req.campaign_id, sizeof(req.campaign_id), campaign_id);
+        auto r = theia::runtime::call<system_services_vucm_DecisionReply>(
+            impl_->ref, req, /*act=*/0, timeout_ms);
+        if (r.tag != theia::runtime::CallTag::Reply) return false;
+        accepted_out = r.reply.accepted; state_out = static_cast<uint32_t>(r.reply.state);
+    }
     return true;
 }
 

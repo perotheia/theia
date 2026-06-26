@@ -55,6 +55,12 @@ public:
     // state the GS fleet view shows). valid=false until the first reply.
     VucmCampaignSample status(int timeout_ms = 4000);
 
+    // L4-C operator commit/rollback (step 7): once V-UCM reports AWAITING_COMMIT,
+    // commit (rollback=false → fan Confirm) or roll back (rollback=true → fan
+    // Cancel) the campaign. → DecisionReply.accepted (1 if applied) + state.
+    bool decide(const std::string& campaign_id, bool rollback,
+                uint32_t& accepted_out, uint32_t& state_out, int timeout_ms = 8000);
+
 private:
     VucmLink();
     ~VucmLink();

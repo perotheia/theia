@@ -21,6 +21,7 @@ enum CampaignState {
     CampaignState_CMP_DONE = 5;
     CampaignState_CMP_ROLLBACK = 6;
     CampaignState_CMP_CONFIRMING = 7;   // L4-B aggregate-confirm barrier (appended; ordinals 0..6 stable)
+    CampaignState_CMP_AWAITING_COMMIT = 8;   // L4-C: all PROVISIONAL, holding for operator commit
 }
 
 message CampaignProgress {
@@ -48,7 +49,11 @@ message EvInstalled {
 }
 
 message EvProvisioned {
-    // empty body — L4-B: every board reached PROVISIONAL, fan the aggregate Confirm
+    // empty body — L4-B/C: every board reached PROVISIONAL, HOLD for operator commit
+}
+
+message EvCommit {
+    // empty body — L4-C: operator committed, fan the aggregate Confirm
 }
 
 message EvValidated {
@@ -76,6 +81,19 @@ message CampaignReply {
 
 message CampaignStatusReq {
     // empty body
+}
+
+// L4-C operator commit/rollback (step 7). Distinct request types so the
+// gen_server dispatches by type (the Confirm/Cancel idiom).
+message CommitRequest {
+    string campaign_id = 1;
+}
+message RollbackRequest {
+    string campaign_id = 1;
+}
+message DecisionReply {
+    uint32 accepted = 1;        // 1 if applied
+    CampaignState state = 2;
 }
 
 message VucmConfig {

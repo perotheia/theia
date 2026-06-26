@@ -40,6 +40,7 @@ system_services_vucm_CampaignState wire_state(VucmCampaignState s) {
         case VucmCampaignState::CMP_AUTHORIZING: return system_services_vucm_CampaignState_CampaignState_CMP_AUTHORIZING;
         case VucmCampaignState::CMP_INSTALLING:  return system_services_vucm_CampaignState_CampaignState_CMP_INSTALLING;
         case VucmCampaignState::CMP_CONFIRMING:  return system_services_vucm_CampaignState_CampaignState_CMP_CONFIRMING;
+        case VucmCampaignState::CMP_AWAITING_COMMIT: return system_services_vucm_CampaignState_CampaignState_CMP_AWAITING_COMMIT;
         case VucmCampaignState::CMP_VALIDATING:  return system_services_vucm_CampaignState_CampaignState_CMP_VALIDATING;
         case VucmCampaignState::CMP_DONE:        return system_services_vucm_CampaignState_CampaignState_CMP_DONE;
         case VucmCampaignState::CMP_ROLLBACK:    return system_services_vucm_CampaignState_CampaignState_CMP_ROLLBACK;

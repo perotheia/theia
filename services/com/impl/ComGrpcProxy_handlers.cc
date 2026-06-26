@@ -864,6 +864,21 @@ public:
         out->set_valid(s.valid);
         return grpc::Status::OK;
     }
+
+    grpc::Status Decide(
+            grpc::ServerContext*,
+            const services::com::VucmDecisionCall* req,
+            services::com::VucmDecisionReply* out) override {
+        if (!req) return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "no request");
+        uint32_t accepted = 0, state = 0;
+        if (!services_com::VucmLink::instance().decide(
+                req->campaign_id(), req->rollback(), accepted, state))
+            return grpc::Status(grpc::StatusCode::UNAVAILABLE,
+                                "vucm link unavailable / timeout");
+        out->set_accepted(accepted);
+        out->set_state(state);
+        return grpc::Status::OK;
+    }
 };
 
 // ---- gRPC service: Provisioning — rig enrollment over com -----------------

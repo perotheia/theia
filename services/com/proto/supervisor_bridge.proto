@@ -640,19 +640,26 @@ message VucmCampaignReply {
 }
 message VucmStatusCall { }    // GetCampaignStatus has no args
 message VucmStatusReply {
-    uint32 state       = 1;   // CampaignState (wire: 0 IDLE..6 ROLLBACK, 7 CONFIRMING)
+    uint32 state       = 1;   // CampaignState (wire: 0 IDLE..7 CONFIRMING, 8 AWAITING_COMMIT)
     string campaign_id = 2;
     string version     = 3;
     string detail      = 4;
     uint64 ts_ns       = 5;
     bool   valid       = 6;   // false = V-UCM not reachable / no campaign
 }
+// L4-C operator commit/rollback (step 7): once status==AWAITING_COMMIT, the
+// operator commits (rollback=false → V-UCM fans Confirm) or rolls back
+// (rollback=true → fans Cancel) the held campaign.
+message VucmDecisionCall  { string campaign_id = 1; bool rollback = 2; }
+message VucmDecisionReply { uint32 accepted = 1; uint32 state = 2; }
 
 service VucmView {
     // Start a vehicle campaign: hand V-UCM the deployment. Returns accept + the
-    // campaign FSM state; the fan-out + aggregate Confirm run async.
+    // campaign FSM state; the fan-out + aggregate barrier run async.
     rpc CheckForCampaign (VucmCampaignCall) returns (VucmCampaignReply);
     // The current CampaignProgress (the aggregate-barrier state) — the vehicle
     // plane GS shows above the per-board UCM lifecycle.
     rpc GetCampaignStatus (VucmStatusCall) returns (VucmStatusReply);
+    // Operator commit/rollback once the campaign is AWAITING_COMMIT.
+    rpc Decide (VucmDecisionCall) returns (VucmDecisionReply);
 }

@@ -373,13 +373,16 @@ void VucmGate::handle_info(const char* info, VucmGateState& s) {
     }
 
     if (provisional == s.boards.size()) {
+        // L4-C: all boards PROVISIONAL → HOLD for the operator (do NOT auto-confirm).
+        // V-UCM reports AWAITING_COMMIT; the GS operator audits + commits/rolls back.
         this->log().info(std::string("campaign ") + s.campaign_id + ": ALL " +
                          std::to_string(s.boards.size()) +
-                         " boards PROVISIONAL — fanning aggregate Confirm");
-        for (const auto& b : s.boards) ucm_confirm(b, s.campaign_id);
+                         " boards PROVISIONAL — AWAITING OPERATOR COMMIT");
         s.confirm_ticks = 0;
-        to_fsm("EvProvisioned", EvProvisioned{});   // CMP_CONFIRMING → VALIDATING
-        to_gate(EvProvisioned{});
+        s.last_state = system_services_vucm_CampaignState_CampaignState_CMP_AWAITING_COMMIT;
+        write_campaign(s.campaign_id, s.version, s.scope, "AWAITING_COMMIT", s.boards);
+        to_fsm("EvProvisioned", EvProvisioned{});   // CMP_CONFIRMING → CMP_AWAITING_COMMIT
+        // NO to_gate / no auto-advance: the gate waits for CommitCampaign/Rollback.
         return;
     }
 
@@ -435,6 +438,42 @@ CampaignProgress VucmGate::handle_call(const CampaignStatusReq& /*req*/, VucmGat
     return p;
 }
 
+// ---- L4-C operator commit/rollback (step 7). Valid only while AWAITING_COMMIT.
+//      CommitCampaign → fan Confirm to every board → ACTIVE. RollbackCampaign →
+//      fan Cancel → all roll back. Both reject if no campaign is awaiting commit.
+DecisionReply VucmGate::handle_call(const CommitRequest& req, VucmGateState& s) {
+    DecisionReply reply = system_services_vucm_DecisionReply_init_zero;
+    if (s.campaign_id.empty() ||
+        s.last_state != system_services_vucm_CampaignState_CampaignState_CMP_AWAITING_COMMIT) {
+        this->log().warn(std::string("CommitCampaign ") + req.campaign_id +
+                         " — no campaign awaiting commit");
+        reply.accepted = 0; reply.state = s.last_state;
+        return reply;
+    }
+    this->log().info(std::string("operator COMMIT campaign ") + s.campaign_id);
+    to_gate(EvCommit{});   // EvCommit handler fans Confirm + advances to VALIDATING
+    reply.accepted = 1;
+    reply.state = system_services_vucm_CampaignState_CampaignState_CMP_VALIDATING;
+    return reply;
+}
+
+DecisionReply VucmGate::handle_call(const RollbackRequest& req, VucmGateState& s) {
+    DecisionReply reply = system_services_vucm_DecisionReply_init_zero;
+    if (s.campaign_id.empty()) {
+        this->log().warn(std::string("RollbackCampaign ") + req.campaign_id +
+                         " — no active campaign");
+        reply.accepted = 0; reply.state = s.last_state;
+        return reply;
+    }
+    this->log().info(std::string("operator ROLLBACK campaign ") + s.campaign_id +
+                     " — fanning Cancel");
+    for (const auto& b : s.boards) ucm_cancel(b, s.campaign_id);
+    to_gate(EvFailed{});   // EvFailed handler advances to ROLLBACK + clears persist
+    reply.accepted = 1;
+    reply.state = system_services_vucm_CampaignState_CampaignState_CMP_ROLLBACK;
+    return reply;
+}
+
 // ---- Lifecycle event handlers — the gate↔FSM chain. Each advances the FSM
 //      (state + broadcast) and re-posts the NEXT step. The lab auto-advances the
 //      PLANNING/AUTHORIZING legs (the SM/PHM go/no-go gates are observed via
@@ -481,7 +520,18 @@ void VucmGate::handle_cast(const EvInstalled& /*msg*/, VucmGateState& /*s*/) {
     // FSM now in CMP_CONFIRMING; the confirm-poll (handle_info) drives the rest.
 }
 
-void VucmGate::handle_cast(const EvProvisioned& /*msg*/, VucmGateState& s) {
+void VucmGate::handle_cast(const EvProvisioned& /*msg*/, VucmGateState& /*s*/) {
+    // FSM is now in CMP_AWAITING_COMMIT — HOLD. The gate advances only on the
+    // operator's CommitCampaign (→ EvCommit) or RollbackCampaign (→ EvFailed).
+}
+
+// EvCommit — the operator committed (via CommitCampaign): fan the aggregate
+// Confirm to every board's UCM (PROVISIONAL → ACTIVE) and advance to VALIDATING.
+void VucmGate::handle_cast(const EvCommit& /*msg*/, VucmGateState& s) {
+    this->log().info(std::string("campaign ") + s.campaign_id +
+                     ": operator COMMIT — fanning Confirm to " +
+                     std::to_string(s.boards.size()) + " boards");
+    for (const auto& b : s.boards) ucm_confirm(b, s.campaign_id);
     s.last_state = system_services_vucm_CampaignState_CampaignState_CMP_VALIDATING;
     to_fsm("EvValidated", EvValidated{});     // VALIDATING → DONE
     to_gate(EvValidated{});

@@ -14,3 +14,5 @@ system_services_vucm.CampaignRequest.campaign_id   max_size:64
 system_services_vucm.CampaignRequest.version   max_size:32
 system_services_vucm.VucmConfig.mender_url   max_size:128
 system_services_vucm.VucmConfig.boards   max_size:128
+system_services_vucm.CommitRequest.campaign_id   max_size:64
+system_services_vucm.RollbackRequest.campaign_id   max_size:64

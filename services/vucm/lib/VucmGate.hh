@@ -46,11 +46,15 @@ using CampaignRequest = system_services_vucm_CampaignRequest;
 using CampaignReply = system_services_vucm_CampaignReply;
 using CampaignStatusReq = system_services_vucm_CampaignStatusReq;
 using CampaignProgress = system_services_vucm_CampaignProgress;
+using CommitRequest = system_services_vucm_CommitRequest;
+using DecisionReply = system_services_vucm_DecisionReply;
+using RollbackRequest = system_services_vucm_RollbackRequest;
 using EvDeployment = system_services_vucm_EvDeployment;
 using EvPlanned = system_services_vucm_EvPlanned;
 using EvAuthorized = system_services_vucm_EvAuthorized;
 using EvInstalled = system_services_vucm_EvInstalled;
 using EvProvisioned = system_services_vucm_EvProvisioned;
+using EvCommit = system_services_vucm_EvCommit;
 using EvValidated = system_services_vucm_EvValidated;
 using EvBlocked = system_services_vucm_EvBlocked;
 using EvFailed = system_services_vucm_EvFailed;
@@ -203,6 +207,8 @@ public:
 
     void handle_cast(const EvProvisioned& msg, VucmGateState& s);
 
+    void handle_cast(const EvCommit& msg, VucmGateState& s);
+
     void handle_cast(const EvValidated& msg, VucmGateState& s);
 
     void handle_cast(const EvBlocked& msg, VucmGateState& s);
@@ -218,6 +224,12 @@ public:
                                             VucmGateState& s);
 
     CampaignProgress handle_call(const CampaignStatusReq& req,
+                                            VucmGateState& s);
+
+    DecisionReply handle_call(const CommitRequest& req,
+                                            VucmGateState& s);
+
+    DecisionReply handle_call(const RollbackRequest& req,
                                             VucmGateState& s);
 
 

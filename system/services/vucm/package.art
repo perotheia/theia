@@ -56,7 +56,8 @@ enum CampaignState {
     CMP_PLANNING    = 1   // deployment received; resolving artifacts/dependencies
     CMP_AUTHORIZING = 2   // gating on SM vehicle-state + PHM health
     CMP_INSTALLING  = 3   // every board's UCM is downloading/verifying/staging/installing
-    CMP_CONFIRMING  = 7   // ALL boards PROVISIONAL — aggregate-confirm barrier (L4-B)
+    CMP_CONFIRMING  = 7   // waiting for EVERY board to reach PROVISIONAL (the barrier)
+    CMP_AWAITING_COMMIT = 8 // ALL boards PROVISIONAL — HOLDING for the operator's commit (L4-C)
     CMP_VALIDATING  = 4   // post-confirm fleet health confirm
     CMP_DONE        = 5   // campaign succeeded; reported to fleet
     CMP_ROLLBACK    = 6   // a step failed; UCM(s) rolled back; failure reported
@@ -79,7 +80,8 @@ message EvDeployment    { }   // Mender deployment arrived → begin PLANNING
 message EvPlanned       { }   // artifacts/dependencies resolved → AUTHORIZING
 message EvAuthorized    { }   // SM-state + PHM-health both allow → INSTALLING (fan out)
 message EvInstalled     { }   // every board's UCM reported PROVISIONAL → CONFIRMING
-message EvProvisioned   { }   // ALL boards PROVISIONAL-OK → fan the aggregate Confirm
+message EvProvisioned   { }   // ALL boards PROVISIONAL → HOLD for operator (AWAITING_COMMIT)
+message EvCommit        { }   // operator committed → fan the aggregate Confirm → VALIDATING
 message EvValidated     { }   // all boards confirmed ACTIVE + healthy → DONE
 message EvBlocked       { }   // SM/PHM denied (recoverable: retry when state changes)
 message EvFailed        { }   // any step/board failed or timed out → ROLLBACK (fan Cancel)
@@ -90,6 +92,7 @@ interface senderReceiver VucmLifecycleIn {
     data EvAuthorized  authorized
     data EvInstalled   installed
     data EvProvisioned provisioned
+    data EvCommit      commit
     data EvValidated   validated
     data EvBlocked     blocked
     data EvFailed      failed
@@ -108,9 +111,21 @@ message CampaignRequest {
 message CampaignReply  { uint32 accepted    CampaignState state }   // accepted=1 if queued
 message CampaignStatusReq { }
 
+// Operator commit/rollback (L4-C step 7). After V-UCM reports ALL boards PROVISIONAL
+// (the CMP_CONFIRMING barrier HOLDS — awaiting approval), the GS operator audits the
+// new software and COMMITS (→ V-UCM fans Confirm to every board → ACTIVE) or ROLLS
+// BACK (→ fans Cancel → all roll back). The human-in-the-loop close.
+// Distinct request messages so the gen_server dispatches the two ops by type
+// (Commit vs Rollback share no request type — the ConfirmRequest/CancelRequest idiom).
+message CommitRequest   { string campaign_id [max_size:64] }
+message RollbackRequest { string campaign_id [max_size:64] }
+message DecisionReply    { uint32 accepted    CampaignState state }   // 1 if applied
+
 interface clientServer VucmCtlIf {
     operation CheckForCampaign(in r: CampaignRequest)  returns CampaignReply   // Mender → device
     operation GetCampaignStatus(in r: CampaignStatusReq) returns CampaignProgress
+    operation CommitCampaign(in r: CommitRequest)   returns DecisionReply   // operator: fan Confirm
+    operation RollbackCampaign(in r: RollbackRequest) returns DecisionReply // operator: fan Cancel
 }
 
 // Campaign progress broadcast — any observer (the fleet inventory aggregator, the
@@ -148,7 +163,8 @@ node atomic VucmCampaign {
     }
     statem {
         states  [CMP_IDLE, CMP_PLANNING, CMP_AUTHORIZING, CMP_INSTALLING,
-                 CMP_CONFIRMING, CMP_VALIDATING, CMP_DONE, CMP_ROLLBACK]
+                 CMP_CONFIRMING, CMP_AWAITING_COMMIT, CMP_VALIDATING,
+                 CMP_DONE, CMP_ROLLBACK]
         initial CMP_IDLE
         data    CampaignProgress
 
@@ -165,12 +181,16 @@ node atomic VucmCampaign {
             event EvFailed     → CMP_ROLLBACK
 
         on CMP_INSTALLING:
-            event EvInstalled  → CMP_CONFIRMING      // every board reached PROVISIONAL
+            event EvInstalled  → CMP_CONFIRMING      // fanned RequestUpdate; await markers
             event EvFailed     → CMP_ROLLBACK        // a board failed to install
 
         on CMP_CONFIRMING:
-            event EvProvisioned → CMP_VALIDATING     // all PROVISIONAL → fanned Confirm
-            event EvFailed      → CMP_ROLLBACK       // a board missing/timed out → fan Cancel
+            event EvProvisioned → CMP_AWAITING_COMMIT // all PROVISIONAL → HOLD for operator
+            event EvFailed      → CMP_ROLLBACK        // a board missing/timed out → fan Cancel
+
+        on CMP_AWAITING_COMMIT:
+            event EvCommit     → CMP_VALIDATING       // operator committed → fan Confirm
+            event EvFailed     → CMP_ROLLBACK         // operator rolled back → fan Cancel
 
         on CMP_VALIDATING:
             event EvValidated  → CMP_DONE            // all boards confirmed + healthy

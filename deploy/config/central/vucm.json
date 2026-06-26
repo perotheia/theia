@@ -4,7 +4,8 @@
     "vucm_gate": {
       "boards": "compute",
       "confirm_budget_ms": "120000",
-      "bundle_base": "http://10.0.0.99:9000/theia-roles/theia-rig/0.2.1"
+      "bundle_base": "http://10.0.0.99:9000/theia-roles/theia-rig/0.2.1",
+      "board_instances": "central:0,compute:1"
     }
   }
 }

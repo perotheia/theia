@@ -139,15 +139,41 @@ struct UcmLink {
     }
 };
 
-// Resolve a board NAME → its MACHINE INDEX (the TIPC instance shift), read from
-// the cluster machine manifest (THEIA_MACHINE_MANIFEST → machines.json order:
-// central=0, compute=1, …). Cached. Falls back to position in a process-global
-// roster cache if the manifest is absent (single-board dev → 0).
+// The board→machine-index map. PRIMARY source: an EXPLICIT config string
+// (VucmConfig.board_instances = "central:0,compute:1") set in init() — robust, no
+// dependency on the cluster machine manifest being deployed (it often isn't on a
+// colony rig). The machine-manifest scan below is the fallback.
+std::map<std::string, uint32_t>& board_index_map() {
+    static std::map<std::string, uint32_t> m;
+    return m;
+}
+void set_board_instances(const std::string& csv) {
+    auto& m = board_index_map();
+    std::stringstream ss(csv);
+    std::string tok;
+    while (std::getline(ss, tok, ',')) {
+        auto c = tok.find(':');
+        if (c == std::string::npos) continue;
+        std::string name = tok.substr(0, c);
+        // trim
+        size_t a = name.find_first_not_of(" \t");
+        size_t z = name.find_last_not_of(" \t");
+        if (a != std::string::npos) name = name.substr(a, z - a + 1);
+        m[name] = static_cast<uint32_t>(std::strtoul(tok.c_str() + c + 1, nullptr, 10));
+    }
+}
+
+// Resolve a board NAME → its MACHINE INDEX (the TIPC instance shift). PRIMARY:
+// the explicit board_instances config map. FALLBACK: the cluster machine manifest
+// (THEIA_MACHINE_MANIFEST → machines.json order); then a discovery-order cache.
 uint32_t board_index(const std::string& board) {
     static std::mutex mu;
     static std::map<std::string, uint32_t> cache;
-    static std::vector<std::string> order;   // discovery order = index fallback
+    static std::vector<std::string> order;   // discovery order = last-resort index
     std::lock_guard<std::mutex> lk(mu);
+    // PRIMARY: the explicit config map.
+    if (auto it = board_index_map().find(board); it != board_index_map().end())
+        return it->second;
     auto it = cache.find(board);
     if (it != cache.end()) return it->second;
     // machines.json under THEIA_MACHINE_MANIFEST lists machine names in index
@@ -336,6 +362,10 @@ void VucmGate::init(VucmGateState& s) {
     s.cfg_boards        = split_boards(cfg.str("boards", ""));
     s.confirm_budget_ms = cfg.u32("confirm_budget_ms", 120000);
     s.bundle_base       = cfg.str("bundle_base", "");
+    // board_instances: the explicit board→machine-index map ("central:0,compute:1")
+    // so connect_instance(idx) reaches the right board's UCM without depending on
+    // the cluster machine manifest being deployed.
+    set_board_instances(cfg.str("board_instances", ""));
     const char* m = std::getenv("THEIA_MACHINE");
     s.self_board        = (m && *m) ? m : "central";
     s.last_state = system_services_vucm_CampaignState_CampaignState_CMP_IDLE;

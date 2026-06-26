@@ -129,6 +129,8 @@ std::unique_ptr<Node> load_worker(const json& j) {
     }
     w.restart  = parse_restart_type(get_str(j, "restart", "permanent"));
     w.shutdown = read_shutdown(j.value("shutdown", json()));
+    // run_on_start (default true): false = define-but-don't-boot (see spec.h).
+    w.run_on_start = get_bool(j, "run_on_start", true);
 
     // Per-process memory cap (RLIMIT_AS), bytes. 0/absent = no cap.
     w.mem_limit_bytes = j.value("mem_limit_bytes", static_cast<uint64_t>(0));

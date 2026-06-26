@@ -91,6 +91,15 @@ struct WorkerNode {
     std::string                          working_dir;
     std::vector<NodeInfo>                nodes;  // per-art-node metadata
 
+    // run_on_start (executor.json, default true). When false, the worker is
+    // DEFINED in the tree (so the supervisor knows it + a probe/operator can
+    // start it later via ctl_start_child) but is NOT started at boot. For
+    // HW-dependent FCs that must not auto-touch the environment in a given deploy
+    // — e.g. nm on a container/CI rig, where it would reconfigure the host's
+    // SSH-bearing interface. Distinct from `held` (a runtime SuspendChild) and
+    // from RestartType (post-exit behavior): this gates the BOOT start only.
+    bool                                 run_on_start{true};
+
     // CPU affinity, AUTOSAR-flavoured (ProcessToMachineMapping in §9.4).
     // Mutually exclusive: either shall_run_on or shall_not_run_on, not
     // both. Empty lists mean "no affinity constraint".

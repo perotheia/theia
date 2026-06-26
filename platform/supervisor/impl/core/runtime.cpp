@@ -1019,8 +1019,20 @@ void Supervisor::start_worker(WorkerNode& w) {
 
 void Supervisor::start_subtree(SupervisorNode& sup) {
     for (const auto& c : sup.children) {
-        if (c->is_worker())     start_worker(c->worker);
-        else                    start_subtree(c->sup);
+        if (c->is_worker()) {
+            // run_on_start=false: defined in the tree but NOT booted here (a
+            // HW-dependent FC opted out for this deploy — e.g. nm on a container
+            // rig). The watchdog skips a never-started worker (pid<0); a probe or
+            // operator can bring it up later via ctl_start_child. See spec.h.
+            if (!c->worker.run_on_start) {
+                log_info("child '" + c->worker.name +
+                         "' run_on_start=false — defined, not started at boot");
+                continue;
+            }
+            start_worker(c->worker);
+        } else {
+            start_subtree(c->sup);
+        }
     }
 }
 

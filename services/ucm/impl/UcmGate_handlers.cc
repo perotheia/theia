@@ -12,6 +12,7 @@
 #include "lib/UcmGate.hh"
 #include "lib/UcmFsm.hh"        // the agent FSM the gate post_event()s into
 #include "impl/release_dir.hpp" // the release-directory model (A/B replacement)
+#include "impl/mender_install.hpp" // role resolution + standalone mender install
 
 #include "GenStateM.hh"         // theia::runtime::post_event
 #include "NodeRef.hh"           // theia::runtime::LocalRef
@@ -226,6 +227,15 @@ uint32_t parse_confirm_window(const system_services_ucm_PackageManifest& m) {
     }
     return 0;
 }
+// V-UCM tags the manifest with campaign=<id> in `requires` (L4-C). Fall back to
+// the manifest name (the legacy single-board path passes the campaign id there).
+std::string parse_campaign_id(const system_services_ucm_PackageManifest& m) {
+    for (pb_size_t i = 0; i < m.requires_count; ++i) {
+        const char* r = m.requires[i];
+        if (std::strncmp(r, "campaign=", 9) == 0) return std::string(r + 9);
+    }
+    return std::string(m.name);
+}
 }  // namespace
 
 // ---- OTP init/1 — publish self to the gate ref so the daemon can post into us.
@@ -357,9 +367,14 @@ namespace {
 //   EvStartUpdate→DOWNLOADED, EvValidated→VALIDATED, EvStaged→STAGED,
 //   EvInstalled→INSTALLING, EvRestarted→RESTARTING, EvVerified→VERIFYING/ACTIVE.
 
-// EvStartUpdate (→ DOWNLOADED) — snapshot the manifest + "download" the artifact
-// (in this in-process demo the package is pre-staged at artifact_path; a real
-// build fetches it here). Then trigger VALIDATED.
+// EvStartUpdate (→ DOWNLOADED) — snapshot the manifest + DELEGATE the fetch+write
+// to Mender (L4-C step 3/4): resolve THIS board's ROLE slice of the bundle
+// (<artifact_path>/<role>.mender, role = THEIA_MACHINE) and run a STANDALONE
+// `mender install <role-artifact>`. Mender's update module writes the bits; UCM
+// then runs the AUTOSAR lifecycle over the result. The ARA story (this FSM) stays
+// separate from the Mender story (the install back-end). A non-zero install →
+// EvFailed (fail-closed). `simulate` back-end (or no mender on PATH) succeeds so
+// the lifecycle runs on a bench without a live artifact.
 void UcmGate::handle_cast(const EvStartUpdate& /*msg*/, UcmGateState& s) {
     const auto& m = ucm_pending_manifest();
     s.version = m.version;
@@ -368,11 +383,21 @@ void UcmGate::handle_cast(const EvStartUpdate& /*msg*/, UcmGateState& s) {
     s.verifying = false;
     s.provisioning = false;
     s.confirm_window_ms = parse_confirm_window(m);   // 0 = legacy direct commit
-    s.campaign_id = m.name;   // VUCM/Mender pass the campaign id as the manifest name
-    this->log().info(std::string("update begin: ") + m.name + " v" + m.version +
+    s.campaign_id = parse_campaign_id(m);            // campaign=<id> in requires, else name
+    this->log().info(std::string("update begin: campaign=") + s.campaign_id +
+        " v" + m.version + " role=" + board_role() +
         (s.confirm_window_ms ? (" (two-phase, confirm window " +
-                                std::to_string(s.confirm_window_ms) + "ms)") : "") +
-        " (downloaded)");
+                                std::to_string(s.confirm_window_ms) + "ms)") : ""));
+
+    // Delegate the fetch+write to Mender (standalone install of the role slice).
+    const std::string url = role_artifact(m.artifact_path, m.version);
+    auto inst = mender_standalone_install(url);
+    this->log().info(std::string("mender install [") + url + "]: " + inst.detail);
+    if (!inst.ok) {
+        this->log().warn("role install FAILED — rolling back");
+        step("EvFailed", EvFailed{});
+        return;
+    }
     step("EvValidated", EvValidated{});     // DOWNLOADED → VALIDATED (+drive gate)
 }
 

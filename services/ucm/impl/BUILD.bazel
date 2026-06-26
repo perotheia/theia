@@ -31,13 +31,18 @@ cc_library(
         "UcmFsm_handlers.cc",
         "UcmGate_handlers.cc",
         "UcmDaemon_handlers.cc",
+        "mender_install.cc",       # L4-C: standalone-mender-install back-end
     ],
     # release_dir.hpp is the release-directory model (A/B replacement) UcmGate
     # #includes as "impl/release_dir.hpp" — the FC out_dir (one above impl/) is
     # the include root. HAND-OWNED: a hands-off `gen-app --force` regen scaffolds
     # ucm_impl WITHOUT these two lines, and the build then loses the header
     # (fatal: impl/release_dir.hpp: No such file). Do NOT drop them on regen.
-    hdrs = ["release_dir.hpp"],
+    # mender_install.hpp: the role-resolution + Mender standalone-install back-end.
+    hdrs = [
+        "release_dir.hpp",
+        "mender_install.hpp",
+    ],
     includes = [".."],
     copts = [
         "-std=c++17",

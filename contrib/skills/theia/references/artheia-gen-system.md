@@ -49,7 +49,8 @@ process/execution tree, and the supervisor hierarchy).
   the `.art` TIPC addresses, the per-FC processes, and the supervisor tree.
 - **`services/manifest/service.py`** — the FC-layer + the hand-authored
   supervisor tree (`ar_sup`/`core_sup`/`network_sup`/`host_svc_sup`/
-  `pltf_sup`/`app_sup`), with `shwa` pinned to the compute machine.
+  `pltf_sup`/`app_sup`). `shwa` (the host monitor) runs on EVERY machine via a
+  set-valued process placement (`machines={...}`), one instance per board.
 - **`apps/manifest/rig.py`** (+ `zonal_rig.py`) — the demo vehicle (`apps`):
   composes layers, then splits onto two target machines (central runs the
   platform services minus `shwa` + apps; compute runs `shwa` + p3). In a

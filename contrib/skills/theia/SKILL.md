@@ -168,7 +168,7 @@ AUTOSAR-named interface contract but no process:
 | `per` | Persistency | ✅ |
 | `sm` | State Management — a `GenStateM` FSM | ✅ |
 | `ucm` | Update & Config Mgmt | ✅ |
-| `shwa` | Safe Hardware Accelerator (pinned to the compute machine) | ✅ |
+| `shwa` | Safe Hardware Accelerator + host monitor (runs on every machine) | ✅ |
 | `exec` | Execution Mgmt — **realized BY the supervisor**, not a separate process | ⛔ (nop) |
 | `core` `crypto` `diag` `fw` `idsm` `nm` `osi` `phm` `rds` `tsync` `vucm` | AUTOSAR placeholders | ⛔ (nop) |
 

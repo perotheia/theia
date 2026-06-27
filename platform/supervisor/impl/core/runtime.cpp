@@ -163,8 +163,10 @@ Supervisor::Supervisor(std::unique_ptr<Node> root,
     last_heartbeat_  = start_time_;
     last_snapshot_   = start_time_;
 
-    // machine_name is retained for logs only (etcd dropped). Resolve a
-    // sensible default but don't act on it beyond logging.
+    // machine_name identifies THIS board (from executor.json's root "machine").
+    // Reported in GetSystemInfo so com labels per-machine telemetry by the real
+    // name. Fall back to the hostname when the manifest doesn't carry one
+    // (hand-written / legacy executor.json).
     if (machine_name.empty()) {
         const char* h = std::getenv("HOSTNAME");
         if (h && *h) {
@@ -175,7 +177,7 @@ Supervisor::Supervisor(std::unique_ptr<Node> root,
                                ? std::string(buf) : std::string("unknown");
         }
     }
-    (void)machine_name;
+    machine_name_ = std::move(machine_name);
 
     // Block SIGCHLD only and read it via signalfd — child reaping is the
     // engine's concern. SIGTERM/SIGINT are NOT ours: the generic gen-app main.cc
@@ -2413,6 +2415,10 @@ std::string parse_os_release_pretty(const std::string& body) {
 
 
 void Supervisor::do_get_system_info(SystemInfoData& info) {
+    // This board's machine name (executor.json root "machine"), so com labels
+    // per-machine telemetry by the real name instead of a hostname/"mN" guess.
+    info.machine_name = machine_name_;
+
     struct utsname u{};
     if (::uname(&u) == 0) {
         info.hostname = u.nodename;

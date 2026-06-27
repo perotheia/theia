@@ -164,8 +164,13 @@ void SupervisorWorker::do_start() {
         // (std::abort below) rather than limp on with a null engine.
         const std::string manifest = manifest_path();
         ::supervisor::Manifest m(manifest);
+        // executor.json carries this board's machine name on its root; pass it to
+        // the engine so GetSystemInfo reports it (com labels per-machine telemetry
+        // by the real name). Empty (legacy manifest) → the engine falls back to
+        // the hostname, as before.
+        const std::string machine = m.machine_name();
         g_engine = std::make_unique<::supervisor::Supervisor>(
-            m.take_tree(), root);
+            m.take_tree(), root, machine);
         g_engine->set_emit_sink(make_sink());
         // Engine writes through THIS node's logger so its lines wear the
         // [#supervisor_worker] tag. &this->log() outlives the engine (the node

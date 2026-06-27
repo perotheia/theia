@@ -98,6 +98,7 @@ struct NodeStateData {
 // Supervisor IDENTITY only. The host hardware stats (cpu_count/total_ram/
 // uptime/disk) moved to services/shwa, the host system-monitor.
 struct SystemInfoData {
+    std::string machine_name;   // this board's name (executor.json root "machine")
     std::string hostname;
     std::string kernel;
     std::string os_pretty_name;
@@ -494,6 +495,7 @@ private:
     // thread (the manifest topology never changes). See registry.h.
     Registry                         registry_;
     std::string                      root_dir_;
+    std::string                      machine_name_;   // this board (GetSystemInfo)
     std::atomic<bool>                shutdown_requested_{false};
     bool                             escalated_{false};
 

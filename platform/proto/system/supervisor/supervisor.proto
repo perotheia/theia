@@ -146,6 +146,11 @@ message SystemInfo {
     string theia_git_sha = 7;
     string build_timestamp = 8;
     uint64 start_timestamp_ms = 9;
+    // This board's machine name (executor.json root "machine"); "" if the
+    // manifest carries none. com reads it to label per-machine telemetry by the
+    // REAL name (central/compute), instead of a hostname/manifest/"mN" guess.
+    // (Tags 4,5,6,10-13 are reserved above — host hw stats moved to shwa.)
+    string machine_name = 14;
 }
 
 message ChildSelector {

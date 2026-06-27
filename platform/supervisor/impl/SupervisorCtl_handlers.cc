@@ -569,6 +569,8 @@ SystemInfo SupervisorCtl::handle_call(
         eng ? eng->call(exec_cmd(Op::GetSystemInfo)).sysinfo
             : ::supervisor::SystemInfoData{};
     SystemInfo m{};
+    std::snprintf(m.machine_name, sizeof(m.machine_name), "%s",
+                  info.machine_name.c_str());
     std::snprintf(m.hostname, sizeof(m.hostname), "%s", info.hostname.c_str());
     std::snprintf(m.kernel, sizeof(m.kernel), "%s", info.kernel.c_str());
     std::snprintf(m.os_pretty_name, sizeof(m.os_pretty_name), "%s",

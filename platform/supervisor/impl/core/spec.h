@@ -198,8 +198,11 @@ struct Node {
     bool is_supervisor()  const { return kind == kSupervisor; }
 };
 
-// YAML loader. Throws std::runtime_error on malformed input.
-std::unique_ptr<Node> load_manifest(const std::string& path);
+// JSON loader. Throws std::runtime_error on malformed input. *machine_out (when
+// non-null) receives the root's optional "machine" name (the board this manifest
+// is for); "" if absent.
+std::unique_ptr<Node> load_manifest(const std::string& path,
+                                    std::string* machine_out = nullptr);
 
 // String <-> enum helpers (used by both loader and logging).
 RestartStrategy parse_strategy(const std::string& s);

@@ -35,12 +35,22 @@ public:
     // The root supervisor node of the parsed tree (non-null after ctor).
     const Node& root() const { return *root_; }
 
+    // The machine this executor.json is for (root "machine" field); "" if the
+    // manifest doesn't carry one (hand-written / legacy). The engine reports it
+    // in GetSystemInfo so com labels per-machine telemetry by the real name.
+    const std::string& machine_name() const { return machine_name_; }
+
     // Hand the owned tree to the engine (consumes it — call once). The engine
     // takes the MUTABLE tree; the Registry is built from it first (before the
     // move) or from a separate const walk.
     std::unique_ptr<Node> take_tree() { return std::move(root_); }
 
 private:
+    // machine_name_ MUST be declared BEFORE root_: the ctor's init list calls
+    // load_manifest(path, &machine_name_) to populate root_, so machine_name_
+    // has to be already-constructed when that write happens (member init runs in
+    // declaration order). Reversing this order is a use-before-construction crash.
+    std::string           machine_name_;
     std::unique_ptr<Node> root_;
 };
 

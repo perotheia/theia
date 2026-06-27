@@ -205,7 +205,8 @@ std::unique_ptr<Node> load_node(const json& j, SupervisorNode* parent) {
 
 }  // namespace
 
-std::unique_ptr<Node> load_manifest(const std::string& path) {
+std::unique_ptr<Node> load_manifest(const std::string& path,
+                                    std::string* machine_out) {
     std::ifstream f(path);
     if (!f) {
         throw std::runtime_error("cannot open manifest: " + path);
@@ -219,6 +220,12 @@ std::unique_ptr<Node> load_manifest(const std::string& path) {
     if (!root.contains("children")) {
         throw std::runtime_error("manifest root must be a supervisor (have 'children')");
     }
+    // The machine this executor.json is for (serialize-manifest stamps it on the
+    // root). The supervisor reports it in GetSystemInfo so com labels per-machine
+    // telemetry by the REAL name — no separate manifest/env lookup. Optional:
+    // a hand-written / legacy executor.json without it just yields "".
+    if (machine_out)
+        *machine_out = root.value("machine", std::string());
     return load_node(root, nullptr);
 }
 

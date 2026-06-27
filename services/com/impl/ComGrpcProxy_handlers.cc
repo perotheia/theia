@@ -171,8 +171,12 @@ std::atomic<bool>            g_topology_up{false};
 // by parent_name, so each machine's root (parent_name=="") becomes its own
 // top-level subtree. route_target() resolves the prefix back to an instance via
 // the manifest's name→index lookup.
+// Forward decl — defined just below the registry (it reads g_machines first,
+// then falls back to the manifest).
+std::string machine_name_of(uint32_t inst);
+
 std::string machine_prefix(uint32_t inst) {
-    return services_com::MachineManifest::instance().name(inst) + "/";
+    return machine_name_of(inst) + "/";
 }
 
 // ---- Machine registry — the cluster scan's per-instance identity cache -------
@@ -188,10 +192,27 @@ std::string machine_prefix(uint32_t inst) {
 // the STATIC identity only.
 struct MachineEntry {
     bool        present = false;
+    std::string name;          // machine name REPORTED BY the supervisor (SystemInfo
+                               // .machine_name from executor.json); authoritative
+                               // over the manifest/"mN" fallback. "" until fetched.
     std::string system_info;   // raw system_supervisor::SystemInfo bytes ("" until fetched)
 };
 std::mutex                                   g_machines_mtx;
 std::unordered_map<uint32_t, MachineEntry>   g_machines;     // instance → entry
+
+// The machine NAME for an instance: prefer the supervisor-REPORTED name (cached
+// off GetSystemInfo, sourced from executor.json), else the manifest, else "mN".
+// This is why a single-machine dev stack with no THEIA_MACHINE_MANIFEST still
+// shows "central": the supervisor tells com its own name.
+std::string machine_name_of(uint32_t inst) {
+    {
+        std::lock_guard<std::mutex> lk(g_machines_mtx);
+        auto it = g_machines.find(inst);
+        if (it != g_machines.end() && !it->second.name.empty())
+            return it->second.name;
+    }
+    return services_com::MachineManifest::instance().name(inst);
+}
 
 // Mark an instance present/absent (called from the topology callback). The
 // identity (system_info) is filled separately by cache_machine_sysinfo so a
@@ -210,15 +231,34 @@ void cache_machine_sysinfo(uint32_t inst) {
     if (!link.connected() && !link.start(/*connect_timeout_ms=*/1500)) return;
     if (!link.get_system_info(r, /*timeout_ms=*/2000) || r.system_info.empty())
         return;
-    std::lock_guard<std::mutex> lk(g_machines_mtx);
-    g_machines[inst].system_info = r.system_info;
+    // The supervisor reports its OWN machine name (executor.json root "machine")
+    // in SystemInfo.machine_name — the authoritative source. Extract it so the
+    // registry names the machine even with no THEIA_MACHINE_MANIFEST.
+    std::string reported;
+    {
+        system_supervisor::SystemInfo si;
+        if (si.ParseFromString(r.system_info) && !si.machine_name().empty())
+            reported = si.machine_name();
+    }
+    {
+        std::lock_guard<std::mutex> lk(g_machines_mtx);
+        g_machines[inst].system_info = r.system_info;
+        if (!reported.empty()) g_machines[inst].name = reported;
+    }
     std::fprintf(stderr, "[com] cached host identity for machine %u (%s)\n",
-                 inst, machine_prefix(inst).c_str());
+                 inst, machine_name_of(inst).c_str());
 }
 
 // Resolve a machine NAME (the selector on Subscribe / GetSystemInfo) → instance.
-// Returns false for an unknown name (the caller then errors / yields empty).
+// Checks the supervisor-reported registry names FIRST (so "central" resolves
+// even without a manifest), then the manifest's name→index (incl. the "mN"
+// synthetic form). Returns false for an unknown name.
 bool machine_name_to_instance(const std::string& name, uint32_t& inst) {
+    {
+        std::lock_guard<std::mutex> lk(g_machines_mtx);
+        for (const auto& kv : g_machines)
+            if (kv.second.name == name) { inst = kv.first; return true; }
+    }
     return services_com::MachineManifest::instance().index_of(name, inst);
 }
 
@@ -413,11 +453,9 @@ public:
                         // Drop samples from other machines when a single-machine
                         // selector is active (the per-machine view stays pure).
                         if (has_sel && a->machine_index() != sel_inst) continue;
-                        // Label with the human machine name (manifest lookup by
-                        // the index shwa stamped); falls back to "mN".
-                        a->set_machine_name(
-                            services_com::MachineManifest::instance().name(
-                                a->machine_index()));
+                        // Label with the human machine name (supervisor-reported,
+                        // else manifest, else "mN") for the index shwa stamped.
+                        a->set_machine_name(machine_name_of(a->machine_index()));
                         if (!writer->Write(obs)) { client_gone = true; break; }
                     }
                     if (client_gone) break;
@@ -588,7 +626,11 @@ public:
         for (const auto& kv : snap) {
             auto* mi = out->add_machines();
             mi->set_instance(kv.first);
-            mi->set_name(services_com::MachineManifest::instance().name(kv.first));
+            // Prefer the supervisor-reported name (kv.second.name), else manifest.
+            mi->set_name(!kv.second.name.empty()
+                             ? kv.second.name
+                             : services_com::MachineManifest::instance()
+                                   .name(kv.first));
             mi->set_present(kv.second.present);
             if (!kv.second.system_info.empty())
                 mi->mutable_info()->ParseFromString(kv.second.system_info);

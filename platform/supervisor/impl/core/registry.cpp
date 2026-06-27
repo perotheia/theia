@@ -15,7 +15,7 @@ namespace supervisor {
 // missing or malformed file. We let that propagate: a supervisor with no
 // manifest cannot supervise anything, so process startup aborts.
 Manifest::Manifest(const std::string& path)
-    : root_(load_manifest(path)) {
+    : root_(load_manifest(path, &machine_name_)) {
     if (!root_) {
         // load_manifest throws rather than returning null, so this is defensive
         // — but make the contract explicit.

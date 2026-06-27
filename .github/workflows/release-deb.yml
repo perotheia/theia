@@ -47,7 +47,8 @@ jobs:
             libboost-system-dev libboost-thread-dev libboost-random-dev \
             libssl-dev libprotobuf-dev protobuf-compiler \
             libgrpc++-dev protobuf-compiler-grpc libabsl-dev \
-            libcpprest-dev
+            libcpprest-dev \
+            libnftables-dev
           # The runtime/FC protos #include <pb.h> at the TOP level, but Ubuntu
           # 24.04's libnanopb-dev (0.4.8) nests the headers under
           # /usr/include/nanopb/. 22.04 ships them top-level. Symlink them up so

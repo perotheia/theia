@@ -139,6 +139,79 @@ def _find_child(reply, name: str):
     return None
 
 
+def _machine_names(sup) -> "list[str]":
+    """The cluster's machine names, via the client's ListMachines (rtdb → com's
+    scan registry). Returns [] when the transport has no enumeration (tdb over
+    TIPC talks to one supervisor; it uses `-i <instance>` instead)."""
+    lm = getattr(sup, "list_machines", None)
+    if lm is None:
+        return []
+    try:
+        reply = lm()
+        return [_g(m, "name", "") for m in (_g(reply, "machines", []) or [])]
+    except Exception:
+        return []
+
+
+def _split_machine(args, sup):
+    """Pull a MACHINE selector out of the positionals: if a non-flag positional
+    matches a known machine name, return (machine, remaining_args); else
+    ("", args). Lets `ps central` / `apps compute` select one machine the same
+    way the GUI does (rtdb → com routes to that instance). A node name (not a
+    machine) is left in place for the per-node detail view.
+
+    Only queries the cluster list when there IS a candidate positional (a
+    non-flag, non-numeric token) — so the common `ps` / `ps --follow` path pays
+    no extra round-trip."""
+    cand = [a for a in args if not a.startswith("-") and not _is_number(a)]
+    if not cand:
+        return "", args
+    machines = set(_machine_names(sup))
+    for a in cand:
+        if a in machines:
+            rest = [x for x in args if x != a]
+            return a, rest
+    return "", args
+
+
+def _get_tree(sup, *, timeout: float, machine: str = ""):
+    """get_tree with an optional machine selector, tolerant of a client whose
+    get_tree predates the kwarg (tdb's TIPC client targets one supervisor via
+    -i, so it ignores `machine`)."""
+    try:
+        return sup.get_tree(timeout=timeout, machine=machine)
+    except TypeError:
+        return sup.get_tree(timeout=timeout)
+
+
+def cmd_machines(args, sup, _tf) -> int:
+    """machines — the cluster's machines (instance, name, present, host facts),
+    from com's TIPC-scan registry. The deterministic list the GUI uses; mirrors
+    `rtdb ps <machine>` addressing. tdb (single-supervisor TIPC) has no com
+    registry — it prints a hint to use `-i <instance>`."""
+    lm = getattr(sup, "list_machines", None)
+    if lm is None:
+        print("machines: enumeration is a com/rtdb feature; over TIPC use "
+              "`tdb -i <instance>` (central=0, compute=1, …)")
+        return 0
+    reply = lm()
+    rows = list(_g(reply, "machines", []) or [])
+    if not rows:
+        print("(no machines reported — is com's cluster scan up?)")
+        return 0
+    hdr = f"{'INST':<5} {'MACHINE':<12} {'PRESENT':<8} {'HOST':<18} UPTIME"
+    out = [hdr]
+    for m in rows:
+        info = _g(m, "info", None)
+        host = _g(info, "hostname", "") if info is not None else ""
+        start_ms = _g(info, "start_timestamp_ms", 0) if info is not None else 0
+        up = _fmt_epoch_ms(start_ms) if start_ms else ""
+        out.append(f"{_g(m, 'instance', 0):<5} {_g(m, 'name', ''):<12} "
+                   f"{'yes' if _g(m, 'present') else 'no':<8} {host:<18} {up}")
+    print("\n".join(out))
+    return 0
+
+
 def cmd_apps(args, sup, _tf) -> int:
     # `apps`                — the whole supervisor TREE (hierarchy; the GUI
     #                         "Applications" view). Renamed from `ps` so `ps`
@@ -149,6 +222,7 @@ def cmd_apps(args, sup, _tf) -> int:
     #                         is the live source. com's gRPC Subscribe mirrors it)
     # `apps <name> --follow` — poll one process's metrics
     follow = "--follow" in args or "-f" in args
+    machine, args = _split_machine(args, sup)   # `apps <machine>` selects a board
     positional = [a for a in args if not a.startswith("-")]
     # A non-numeric positional is a process NAME (numeric = the follow interval).
     name = next((a for a in positional if not _is_number(a)), None)
@@ -156,7 +230,7 @@ def cmd_apps(args, sup, _tf) -> int:
     interval = float(nums[0]) if nums else 1.0
 
     def render() -> str:
-        reply = sup.get_tree(timeout=3.0)
+        reply = _get_tree(sup, timeout=3.0, machine=machine)
         if name:
             ch = _find_child(reply, name)
             if ch is None:
@@ -167,7 +241,9 @@ def cmd_apps(args, sup, _tf) -> int:
     if not follow:
         print(render())
         return 0
-    label = f"apps {name}" if name else "apps"
+    label = f"apps {machine}" if machine else "apps"
+    if name:
+        label += f" {name}"
     try:
         while True:
             sys.stdout.write("\x1b[2J\x1b[H")   # clear + home
@@ -184,16 +260,19 @@ def cmd_ps(args, sup, _tf) -> int:
     #                      process, PID) and one row per THREAD under it (TID +
     #                      comm), with cpu/rss/state. The GUI "Processes" panel
     #                      shows the same. (The hierarchical tree moved to `apps`.)
+    # `ps <machine>`     — restrict to ONE machine's processes (e.g. `ps central`
+    #                      / `ps compute`); mirrors the GUI's per-machine view.
     # `ps <name>`        — the key/value detail for one process/node.
     # `ps [<name>] --follow [int]` — poll on an interval.
     follow = "--follow" in args or "-f" in args
+    machine, args = _split_machine(args, sup)   # `ps <machine>` selects a board
     positional = [a for a in args if not a.startswith("-")]
     name = next((a for a in positional if not _is_number(a)), None)
     nums = [a for a in positional if _is_number(a)]
     interval = float(nums[0]) if nums else 1.0
 
     def render() -> str:
-        reply = sup.get_tree(timeout=3.0)
+        reply = _get_tree(sup, timeout=3.0, machine=machine)
         if name:
             ch = _find_child(reply, name)
             if ch is None:
@@ -204,7 +283,9 @@ def cmd_ps(args, sup, _tf) -> int:
     if not follow:
         print(render())
         return 0
-    label = f"ps {name}" if name else "ps"
+    label = f"ps {machine}" if machine else "ps"
+    if name:
+        label += f" {name}"
     try:
         while True:
             sys.stdout.write("\x1b[2J\x1b[H")   # clear + home
@@ -250,8 +331,19 @@ def _render_proc(ch) -> str:
     return "\n".join(f"{k:12} {v}" for k, v in rows)
 
 
+def _get_sysinfo(sup, *, timeout: float, machine: str = ""):
+    """get_system_info with an optional machine selector, tolerant of a client
+    whose get_system_info predates the kwarg (tdb's TIPC client targets one
+    supervisor via -i, so it ignores `machine`)."""
+    try:
+        return sup.get_system_info(timeout=timeout, machine=machine)
+    except TypeError:
+        return sup.get_system_info(timeout=timeout)
+
+
 def cmd_supervisor(args, sup, _tf) -> int:
-    info = sup.get_system_info(timeout=3.0)
+    machine, _ = _split_machine(args, sup)   # `supervisor <machine>` per board
+    info = _get_sysinfo(sup, timeout=3.0, machine=machine)
     for k in ("hostname", "kernel", "os_pretty_name", "cpu_count",
               "total_ram_kb", "uptime_sec"):
         print(f"{k:16} {_g(info, k, '')}")
@@ -293,8 +385,10 @@ def _fmt_uptime(sec: int) -> str:
 def cmd_info(args, sup, _tf) -> int:
     """Full host + BUILD facts (GetSystemInfo) — like `supervisor`, plus the
     running build's git sha / timestamp (THEIA_GIT_SHA / THEIA_BUILD_TIMESTAMP,
-    baked at build time) and when this supervisor process started."""
-    info = sup.get_system_info(timeout=3.0)
+    baked at build time) and when this supervisor process started.
+    `info <machine>` selects a board (per-machine GetSystemInfo via com)."""
+    machine, _ = _split_machine(args, sup)
+    info = _get_sysinfo(sup, timeout=3.0, machine=machine)
     rows = [
         ("hostname",       _g(info, "hostname", "")),
         ("kernel",         _g(info, "kernel", "")),
@@ -811,6 +905,7 @@ _NETSTATE = {0: "DOWN", 1: "LINK_UP", 2: "READY", 3: "DEGRADED", 4: "WIFI_ASSOCI
 
 
 _COMMANDS = {
+    "machines": cmd_machines, # cluster machine list (com scan registry; rtdb)
     "apps": cmd_apps,         # the supervisor TREE (hierarchy; GUI Applications)
     "ps": cmd_ps,             # flat Linux-ps list: PID/TID/name (GUI Processes)
     "supervisor": cmd_supervisor,
@@ -828,12 +923,13 @@ _COMMANDS = {
 }
 
 _HELP = """tdb — Theia Debug Bridge. commands:
+  machines                 cluster machines (instance/name/present/host) [rtdb]
   apps                     the supervisor tree (hierarchy; GUI Applications)
-  apps <name>              one process/node's metrics
+  apps [<machine>] [<name>]  one machine's tree / one process's metrics
   ps                       flat Linux-ps list: PID/TID/name/cpu/rss (GUI Processes)
-  ps <name>                one process/node's metrics
-  supervisor               supervisor host facts
-  info                     host facts + running build (git sha / ts) + start time
+  ps [<machine>] [<name>]  one machine's processes / one process's metrics
+  supervisor [<machine>]   supervisor host facts (per-board via com)
+  info [<machine>]         host facts + running build (git sha / ts) + start time
   trace                    list every node with an active trace + its kinds
   trace off                stop ALL active traces
   trace <node>             show that node's trace kinds (or off)

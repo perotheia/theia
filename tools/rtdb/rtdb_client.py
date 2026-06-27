@@ -123,11 +123,15 @@ class SupervisorClient:
         return cls(target)
 
     # ---- live tree --------------------------------------------------------
-    def get_tree(self, timeout: float = 4.0) -> Any:
+    def get_tree(self, timeout: float = 4.0, machine: str = "") -> Any:
         """One TreeSnapshot. com has no unary GetTree rpc — the live tree is the
         Subscribe poll-stream (the supervisor's event firehose has no remote
         egress). Pull a snapshot and return it (cmd_ps reads .children).
         cmd_ps --follow just calls this on an interval, same as tdb.
+
+        `machine` is the optional selector: "" → the whole-cluster aggregate
+        (legacy); a name (e.g. "central") → that ONE machine's tree, so
+        `rtdb ps central` mirrors the GUI's per-machine view deterministically.
 
         SKIP empty snapshots: com's FIRST poll tick after a (re)connect can emit
         an empty/partial TreeSnapshot before its SupLink GetTree to the
@@ -135,7 +139,8 @@ class SupervisorClient:
         `rtdb ps` that returned that first frame printed "(empty tree)" for a live
         cluster. Wait (within the timeout) for the first snapshot that actually
         has children; fall back to the last (possibly empty) one we saw."""
-        stream = self._stub.Subscribe(_br.SubscribeRequest(), timeout=timeout)
+        stream = self._stub.Subscribe(
+            _br.SubscribeRequest(machine=machine), timeout=timeout)
         last = _sup.TreeSnapshot()
         try:
             for obs in stream:
@@ -150,8 +155,17 @@ class SupervisorClient:
         return last                        # empty only if nothing arrived in time
 
     # ---- host facts -------------------------------------------------------
-    def get_system_info(self, timeout: float = 2.0) -> Any:
-        return self._stub.GetSystemInfo(_br.GetSystemInfoCall(), timeout=timeout)
+    def get_system_info(self, timeout: float = 2.0, machine: str = "") -> Any:
+        # `machine` selects which board's supervisor answers ("" → central).
+        return self._stub.GetSystemInfo(
+            _br.GetSystemInfoCall(machine=machine), timeout=timeout)
+
+    # ---- cluster enumeration ---------------------------------------------
+    def list_machines(self, timeout: float = 3.0) -> Any:
+        """The cluster's machines (instance, name, present, cached host info)
+        from com's scan-driven registry — the deterministic list `rtdb machines`
+        and the GUI use to address machines by name."""
+        return self._stub.ListMachines(_br.ListMachinesCall(), timeout=timeout)
 
     # ---- trace ------------------------------------------------------------
     def configure_trace(self, *, target_node: str, msg_type: str = "",

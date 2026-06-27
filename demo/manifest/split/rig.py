@@ -27,9 +27,16 @@ from manifest.assemble import (
     PROCESS_NAMES,
 )
 
-# the demo binaries + shwa live on compute; every other process on central.
-_ON_COMPUTE = {"p1", "p2", "p3", "p4", "shwa"}
-_ON_CENTRAL = [n for n in PROCESS_NAMES if n not in _ON_COMPUTE]
+# the demo binaries live on compute; every other process on central. shwa is a
+# HOST MONITOR — the SAME logical FC fanned onto BOTH machines via a set-valued
+# placement (machines=), not pinned to one. Each board runs its own shwa instance
+# (central inst 0, compute inst 1: the supervisor machine-shifts the injected
+# --tipc per machine, and shwa stamps its resolved instance as machine_index on
+# every AccelSample). Without it the machine that lacks shwa (was: central) shows
+# no disk/uptime/load in the GUI/rtdb System view.
+_ON_COMPUTE = {"p1", "p2", "p3", "p4"}
+_ON_BOTH    = {"shwa"}
+_ON_CENTRAL = [n for n in PROCESS_NAMES if n not in _ON_COMPUTE and n not in _ON_BOTH]
 
 # arch-agnostic split: two machines + every process bound to one of them.
 SPLIT = BASE.combine(DeploymentLayer(
@@ -40,6 +47,10 @@ SPLIT = BASE.combine(DeploymentLayer(
     execution=ExecutionLayer(processes={
         *(Append(ProcessLayer(name=n, machine=Explicit("central"))) for n in _ON_CENTRAL),
         *(Append(ProcessLayer(name=n, machine=Explicit("compute"))) for n in sorted(_ON_COMPUTE)),
+        # shwa fanned onto BOTH machines (host monitor) via a set placement; the
+        # supervisor shifts each board's instance by its machine_index.
+        *(Append(ProcessLayer(name=n, machines={"central", "compute"}))
+          for n in sorted(_ON_BOTH)),
     }),
     applications=ApplicationSetLayer(applications={
         Append(ApplicationLayer(name="services", host_machine=Explicit("central"))),

@@ -24,6 +24,7 @@ constexpr uint16_t kTagSystemInfo  = 0x0004;   // GetSystemInfo (host + build fa
 constexpr uint16_t kTagTraceRecord = 0x0005;   // TraceStream egress (:7710)
 constexpr uint16_t kTagAccel       = 0x0006;   // SHWA AccelSample (GPU / host monitor)
 constexpr uint16_t kTagLogRecord   = 0x0007;   // LogStream egress (:7711) — log lines
+constexpr uint16_t kTagMachineInfo = 0x0008;   // ListMachines row (cluster enumeration)
 
 std::string read_file_(const char* env) {
     const char* path = std::getenv(env);
@@ -437,10 +438,37 @@ void GrpcClient::run() {
         std::fprintf(stderr, "grpc_client[%s]: subscribed to %s\n",
                      machine_name_.c_str(), host_port_.c_str());
 
-        // One-shot host + build facts on connect (the `tdb info` surface). It's
-        // per-boot-static (hostname/kernel/ram fixed; sha/build_ts/started per
-        // supervisor process), so polling it once per (re)connect is enough.
-        // GetSystemInfo is a unary RPC on the SAME SupervisorView stub.
+        // Enumerate the CLUSTER on connect (the deterministic ListMachines from
+        // com's TIPC-scan registry), and emit each machine's cached host facts as
+        // its OWN per-machine SystemInfo frame. This (a) makes EVERY machine
+        // appear in the Machines list immediately — by its REAL name, even one
+        // whose tree is momentarily empty or that has no SHWA broadcasting; and
+        // (b) fills each machine's System tab with static identity (hostname /
+        // kernel / supervisor-start) from the supervisor itself, so a board that
+        // isn't running SHWA still shows its identity (the live disk/uptime/gpu
+        // overlay still rides the per-machine AccelSample). Best-effort: an older
+        // com without ListMachines just leaves the stream-discovery path below.
+        {
+            ::services::com::ListMachinesCall lm_req;
+            ::services::com::MachineList lm;
+            grpc::ClientContext lm_ctx;
+            lm_ctx.set_deadline(std::chrono::system_clock::now() +
+                                std::chrono::seconds(3));
+            if (stub->ListMachines(&lm_ctx, lm_req, &lm).ok() && callback_) {
+                for (const auto& mi : lm.machines()) {
+                    if (mi.name().empty()) continue;
+                    callback_(mi.name(), kTagMachineInfo, mi.SerializeAsString());
+                    if (mi.has_info())
+                        callback_(mi.name(), kTagSystemInfo,
+                                  mi.info().SerializeAsString());
+                }
+            }
+        }
+
+        // One-shot host + build facts on connect (the `tdb info` surface) for
+        // THIS connection's local machine — a fallback if ListMachines is absent
+        // (older com) or didn't carry cached info for it yet. Per-boot-static, so
+        // once per (re)connect is enough. Same unary stub.
         {
             ::services::com::GetSystemInfoCall si_req;
             ::system_supervisor::SystemInfo si;

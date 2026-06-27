@@ -590,8 +590,8 @@ void MainFrame::on_sup_frame(wxThreadEvent& evt) {
     }
     if (tag == 0x0006) {
         // AccelSample: the SHWA telemetry self-describes its machine. Route to
-        // that machine's Load/System boxes (shwa is compute-only today, so this
-        // is one machine, but the demux is general).
+        // that machine's Load/System boxes. SHWA now runs on BOTH machines, so
+        // each board's sample fills its own box; the demux is general.
         services::com::AccelSample a;
         if (a.ParseFromString(msg.payload)) {
             const std::string m =
@@ -601,9 +601,27 @@ void MainFrame::on_sup_frame(wxThreadEvent& evt) {
         }
         return;
     }
+    if (tag == 0x0008) {
+        // MachineInfo (ListMachines row): com enumerated this machine off its
+        // TIPC cluster scan. Register it by its REAL name so the Machines list
+        // populates immediately + deterministically — even a board with an empty
+        // tree or no SHWA. The paired SystemInfo (0x0004) lands under the same
+        // name below. msg.machine_name is the machine this row describes.
+        note_machine(msg.machine_name);
+        return;
+    }
+    if (tag == 0x0004) {
+        // SystemInfo: now PER-MACHINE (com's ListMachines emits each machine's
+        // cached identity under its own name; the local one-shot uses local_name_
+        // too). Route by the carried machine name so each board's System tab gets
+        // ITS host facts — not all collapsed onto central.
+        note_machine(msg.machine_name);
+        dispatch_to_panels(msg.machine_name, tag, msg.payload);
+        return;
+    }
 
-    // Health (0x0002) + SystemInfo (0x0004) are RIG-COMMON (one supervisor
-    // identity / beacon — central's): dispatch under the local machine name.
+    // Health (0x0002) is RIG-COMMON (the connected supervisor's beacon):
+    // dispatch under the local machine name.
     dispatch_to_panels(local_name_, tag, msg.payload);
 }
 

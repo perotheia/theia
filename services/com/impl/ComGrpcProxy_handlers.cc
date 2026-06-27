@@ -175,6 +175,53 @@ std::string machine_prefix(uint32_t inst) {
     return services_com::MachineManifest::instance().name(inst) + "/";
 }
 
+// ---- Machine registry — the cluster scan's per-instance identity cache -------
+//
+// com discovers supervisors over the TIPC topology scan (g_sup_topology); on
+// each PUBLISH it fetches that instance's GetSystemInfo (static host identity:
+// hostname/kernel/OS/git-sha/supervisor-start) and caches it HERE, keyed by
+// instance. This is the authoritative per-machine identity the GUI / rtdb read
+// via ListMachines — recovered from the supervisor itself, not just inferred
+// from a name-prefix. A WITHDRAWN machine keeps its last-known identity with
+// present=false (so it's still listed; it just shows offline). Live host metrics
+// (disk/uptime/ram/gpu) ride the SHWA AccelSample arm of Subscribe — this holds
+// the STATIC identity only.
+struct MachineEntry {
+    bool        present = false;
+    std::string system_info;   // raw system_supervisor::SystemInfo bytes ("" until fetched)
+};
+std::mutex                                   g_machines_mtx;
+std::unordered_map<uint32_t, MachineEntry>   g_machines;     // instance → entry
+
+// Mark an instance present/absent (called from the topology callback). The
+// identity (system_info) is filled separately by cache_machine_sysinfo so a
+// WITHDRAWN→PUBLISHED flap keeps the cached facts.
+void set_machine_present(uint32_t inst, bool present) {
+    std::lock_guard<std::mutex> lk(g_machines_mtx);
+    g_machines[inst].present = present;
+}
+
+// Fetch + cache one instance's GetSystemInfo (best-effort; called on a detached
+// thread off the topology PUBLISH so a slow/wedged supervisor never stalls the
+// scan callback). Stores the raw SystemInfo bytes under the instance.
+void cache_machine_sysinfo(uint32_t inst) {
+    services_com::SupReply r;
+    auto& link = services_com::SupLink::for_instance(inst);
+    if (!link.connected() && !link.start(/*connect_timeout_ms=*/1500)) return;
+    if (!link.get_system_info(r, /*timeout_ms=*/2000) || r.system_info.empty())
+        return;
+    std::lock_guard<std::mutex> lk(g_machines_mtx);
+    g_machines[inst].system_info = r.system_info;
+    std::fprintf(stderr, "[com] cached host identity for machine %u (%s)\n",
+                 inst, machine_prefix(inst).c_str());
+}
+
+// Resolve a machine NAME (the selector on Subscribe / GetSystemInfo) → instance.
+// Returns false for an unknown name (the caller then errors / yields empty).
+bool machine_name_to_instance(const std::string& name, uint32_t& inst) {
+    return services_com::MachineManifest::instance().index_of(name, inst);
+}
+
 // One present supervisor's children, machine-tagged, appended to `merged`.
 // Returns true if it contributed a parseable, non-empty tree. `newest_gen` /
 // `newest_ts` accumulate the freshest generation/timestamp across machines.
@@ -253,6 +300,25 @@ bool merge_present_trees(system_supervisor::TreeSnapshot* merged) {
     return any;
 }
 
+// Single-machine tree: fold ONLY the named machine's supervisor (the explicit
+// Subscribe.machine / `rtdb ps <machine>` selector). Resolves the name → its
+// TIPC instance and folds just that one — deterministic, no interleaving, no
+// dependence on which peer answered first. Returns false (empty snapshot) for an
+// unknown machine or one that doesn't answer this tick.
+bool fold_named_machine(const std::string& machine,
+                        system_supervisor::TreeSnapshot* merged) {
+    uint32_t inst = 0;
+    if (!machine_name_to_instance(machine, inst)) return false;
+    // The selected machine gets the full local budget (the client asked for
+    // exactly this one — no other peer to protect from a slow answer).
+    uint64_t newest_gen = 0, newest_ts = 0;
+    bool any = fold_instance_tree(inst, merged, newest_gen, newest_ts,
+                                  /*timeout_ms=*/3000);
+    merged->set_generation(newest_gen);
+    merged->set_timestamp_ms(newest_ts);
+    return any;
+}
+
 // ---- gRPC service: forwards control RPCs onto the supervisor uplink ------
 class SupervisorViewImpl final
     : public services::com::SupervisorView::Service {
@@ -270,7 +336,7 @@ public:
     // Interval: THEIA_COM_POLL_MS (default 1000ms), Ctrl-C/cancel-aware.
     grpc::Status Subscribe(
             grpc::ServerContext* ctx,
-            const services::com::SubscribeRequest*,
+            const services::com::SubscribeRequest* req,
             grpc::ServerWriter<services::com::SupervisorObservation>* writer)
             override {
         int poll_ms = 1000;
@@ -278,8 +344,17 @@ public:
             int v = std::atoi(e);
             if (v >= 50) poll_ms = v;
         }
+        // Optional machine selector: "" → whole-cluster aggregate (legacy);
+        // a name → that ONE machine's tree (deterministic per-machine view).
+        // The accel arm is filtered to the same machine when a selector is set.
+        const std::string sel_machine = req ? req->machine() : std::string();
+        uint32_t sel_inst = 0;
+        const bool has_sel =
+            !sel_machine.empty() &&
+            machine_name_to_instance(sel_machine, sel_inst);
         std::fprintf(stderr, "com: gRPC subscriber attached "
-                     "(GetTree poll every %dms)\n", poll_ms);
+                     "(GetTree poll every %dms, machine=%s)\n",
+                     poll_ms, sel_machine.empty() ? "*" : sel_machine.c_str());
         // GATE on: enable the SHWA AccelTelemetry fold-in while this subscriber
         // is connected (LogForwarder-mirrored subscriber-count gate). The recv
         // thread only stores samples while this is > 0.
@@ -292,7 +367,9 @@ public:
             {
                 services::com::SupervisorObservation obs;
                 auto* s = obs.mutable_snapshot();
-                if (merge_present_trees(s) && s->children_size() > 0) {
+                const bool got = has_sel ? fold_named_machine(sel_machine, s)
+                                         : merge_present_trees(s);
+                if (got && s->children_size() > 0) {
                     if (!writer->Write(obs)) break;   // client gone
                 }
             }
@@ -300,8 +377,10 @@ public:
             // panel + "heartbeat" status). The supervisor's GetHealth returns
             // its latest beacon — no TIPC event-firehose subscription needed.
             services_com::SupReply hr;
-            if (services_com::SupLink::instance().get_health(hr) &&
-                !hr.health.empty()) {
+            auto& health_link = has_sel
+                ? services_com::SupLink::for_instance(sel_inst)
+                : services_com::SupLink::instance();
+            if (health_link.get_health(hr) && !hr.health.empty()) {
                 services::com::SupervisorObservation obs;
                 auto* h = obs.mutable_health();
                 if (h->ParseFromString(hr.health)) {
@@ -331,6 +410,9 @@ public:
                         services::com::SupervisorObservation obs;
                         auto* a = obs.mutable_accel();
                         if (!a->ParseFromString(raw)) continue;
+                        // Drop samples from other machines when a single-machine
+                        // selector is active (the per-machine view stays pure).
+                        if (has_sel && a->machine_index() != sel_inst) continue;
                         // Label with the human machine name (manifest lookup by
                         // the index shwa stamped); falls back to "mN".
                         a->set_machine_name(
@@ -452,14 +534,64 @@ public:
     // unpack into the caller's libprotobuf SystemInfo.
     grpc::Status GetSystemInfo(
             grpc::ServerContext*,
-            const services::com::GetSystemInfoCall*,
+            const services::com::GetSystemInfoCall* req,
             system_supervisor::SystemInfo* out) override {
+        // Machine selector: "" → instance 0 (central, legacy). A name routes to
+        // that instance's supervisor for ITS host identity. We serve from the
+        // cluster-scan cache first (filled on discovery), falling back to a live
+        // fetch if the cache is cold — so a known machine answers fast.
+        const std::string machine = req ? req->machine() : std::string();
+        uint32_t inst = 0;
+        if (!machine.empty() && !machine_name_to_instance(machine, inst)) {
+            return grpc::Status(grpc::StatusCode::NOT_FOUND,
+                                "unknown machine: " + machine);
+        }
+        {   // cache hit?
+            std::lock_guard<std::mutex> lk(g_machines_mtx);
+            auto it = g_machines.find(inst);
+            if (it != g_machines.end() && !it->second.system_info.empty()) {
+                if (out->ParseFromString(it->second.system_info))
+                    return grpc::Status::OK;
+            }
+        }
         services_com::SupReply r;
-        if (!services_com::SupLink::instance().get_system_info(r))
+        if (!services_com::SupLink::for_instance(inst).get_system_info(r))
             return unavailable();
         if (!r.system_info.empty() && !out->ParseFromString(r.system_info)) {
             return grpc::Status(grpc::StatusCode::INTERNAL,
                                 "malformed SystemInfo from supervisor");
+        }
+        // Warm the cache for next time (and ListMachines).
+        if (!r.system_info.empty()) {
+            std::lock_guard<std::mutex> lk(g_machines_mtx);
+            g_machines[inst].system_info = r.system_info;
+        }
+        return grpc::Status::OK;
+    }
+
+    // Enumerate the cluster's machines from the scan-driven registry (instance,
+    // name, present, cached host identity). The deterministic machine list the
+    // GUI / `rtdb machines` use; names here are exactly what the Subscribe /
+    // GetSystemInfo selectors accept.
+    grpc::Status ListMachines(
+            grpc::ServerContext*,
+            const services::com::ListMachinesCall*,
+            services::com::MachineList* out) override {
+        // Snapshot the registry under lock, then build the reply outside it.
+        std::vector<std::pair<uint32_t, MachineEntry>> snap;
+        {
+            std::lock_guard<std::mutex> lk(g_machines_mtx);
+            snap.assign(g_machines.begin(), g_machines.end());
+        }
+        std::sort(snap.begin(), snap.end(),
+                  [](const auto& a, const auto& b) { return a.first < b.first; });
+        for (const auto& kv : snap) {
+            auto* mi = out->add_machines();
+            mi->set_instance(kv.first);
+            mi->set_name(services_com::MachineManifest::instance().name(kv.first));
+            mi->set_present(kv.second.present);
+            if (!kv.second.system_info.empty())
+                mi->mutable_info()->ParseFromString(kv.second.system_info);
         }
         return grpc::Status::OK;
     }
@@ -1040,7 +1172,19 @@ void ComGrpcProxy::do_start() {
             std::fprintf(stderr,
                          "[com] supervisor instance %u %s\n",
                          ev.instance, ev.present ? "PUBLISHED" : "WITHDRAWN");
+            // Maintain the machine registry off the cluster scan: mark presence,
+            // and on a fresh PUBLISH fetch+cache that supervisor's host identity
+            // (GetSystemInfo) on a DETACHED thread so a slow peer never stalls
+            // this callback. WITHDRAWN keeps the cached identity (present=false).
+            set_machine_present(ev.instance, ev.present);
+            if (ev.present)
+                std::thread(cache_machine_sysinfo, ev.instance).detach();
         })) {
+        // Instance 0 (the local supervisor) is always "present" and may have
+        // PUBLISHED before this callback was wired — seed it explicitly so the
+        // single-machine stack lists central immediately.
+        set_machine_present(0u, true);
+        std::thread(cache_machine_sysinfo, 0u).detach();
         g_topology_up.store(true);
         std::fprintf(stderr,
                      "[%s] supervisor-instance topology up "

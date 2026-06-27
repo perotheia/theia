@@ -64,10 +64,16 @@ message SupervisorObservation {
     }
 }
 
-// Empty subscribe request — observers attach blindly. Future extensions
-// could carry a filter (e.g. "only events kind=X") but the current GUI
-// wants the whole firehose.
-message SubscribeRequest {}
+// Subscribe request. `machine` is an OPTIONAL machine selector: "" (the
+// default) keeps the whole-cluster firehose every existing client expects (com
+// merges all present machines' trees, name-prefixed). A non-empty machine name
+// (e.g. "central", "compute") restricts the stream to that ONE machine — com
+// routes the GetTree poll to that instance only, so `rtdb ps central` and the
+// GUI's per-machine view get a deterministic single-machine tree instead of the
+// interleaved aggregate. Unknown name → the stream yields empty snapshots.
+message SubscribeRequest {
+    string machine = 1;
+}
 
 // Unary RPC carriers. Each wraps a supervisor-side request.
 message StartChildCall  { system_supervisor.ChildSpec     spec = 1; }
@@ -96,8 +102,43 @@ message GetTraceConfigCall {}
 // config (GetLogLevelConfig). Both empty requests — the supervisor returns the
 // full SystemInfo / LogLevelConfigList. These back rtdb's `supervisor`/`info`
 // and no-arg `loglevel` verbs (the SAME supervisor calls tdb's probe makes).
-message GetSystemInfoCall {}
+// `machine` is an OPTIONAL selector: "" → instance 0 (central, the legacy
+// behaviour). A machine name routes GetSystemInfo to THAT instance's supervisor
+// so each machine reports its OWN host identity (hostname/kernel/OS/git-sha/
+// supervisor start). com also caches this per machine off the cluster scan (see
+// ListMachines), so a known machine answers from cache even if momentarily slow.
+message GetSystemInfoCall {
+    string machine = 1;
+}
 message GetLogLevelConfigCall {}
+
+// ---- ListMachines — enumerate the cluster (the deterministic machine list) --
+//
+// com discovers supervisors over a TIPC topology scan (instance 0=central,
+// 1=compute, …) and, on each PUBLISH, caches that instance's GetSystemInfo
+// (static host identity). ListMachines returns that registry so the GUI / rtdb
+// enumerate machines by REAL name without scraping name-prefixes out of the
+// interleaved tree or waiting for a poll to warm up. `present` reflects the live
+// topology (a withdrawn machine stays listed with its last-known identity but
+// present=false). This is the entry point for explicit per-machine addressing:
+// the names here are exactly what Subscribe.machine / GetSystemInfoCall.machine
+// accept.
+message ListMachinesCall {}
+
+message MachineInfo {
+    uint32 instance = 1;   // TIPC instance (central=0, compute=1, …)
+    string name     = 2;   // machine name from the manifest (or "mN" fallback)
+    bool   present  = 3;   // currently published in the TIPC topology
+    // The machine's host identity, cached from its supervisor's GetSystemInfo on
+    // first discovery. Empty until the first successful fetch. (Live host metrics
+    // — disk/uptime/ram/gpu — ride the SHWA AccelSample arm of Subscribe, stamped
+    // per machine_index; this carries the STATIC identity only.)
+    system_supervisor.SystemInfo info = 4;
+}
+
+message MachineList {
+    repeated MachineInfo machines = 1;
+}
 
 // Fetch a crashed child's tombstone (the libtombstone TEXT forensics file:
 // signal/fault + backtrace + maps). Backs the GUI "Download tombstone" menu
@@ -214,6 +255,11 @@ service SupervisorView {
         returns (system_supervisor.SystemInfo);
     rpc GetLogLevelConfig (GetLogLevelConfigCall)
         returns (system_supervisor.LogLevelConfigList);
+
+    // Enumerate the cluster's machines (instance, name, present, cached host
+    // identity) from com's TIPC-topology-driven registry. The deterministic
+    // machine list the GUI / `rtdb machines` use to address machines by name.
+    rpc ListMachines (ListMachinesCall) returns (MachineList);
 
     // Crash forensics: fetch a crashed child's tombstone bytes (capped).
     // Backs the GUI "Download tombstone" menu item on a CORE_DUMPED FC.

@@ -20,7 +20,7 @@ cc_binary(
         "//apps/Demo3WayP4/lib:apps_lib",
         "//apps/Demo3WayP4/impl:apps_impl",
         # Crash forensics — main.cc installs the fatal-signal handler.
-        "//platform/supervisor/tombstone:tombstone",
+        "@pero_theia//platform/supervisor/tombstone:tombstone",
     ],
     linkopts = [
         "-lpthread",

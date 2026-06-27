@@ -137,27 +137,34 @@ consuming workspace then runs `theia init` against it (see the theia skill's
 
 ## The downstream workspace
 
-`templates/workspace/` is the scaffold a user copies to a NEW repo to build
-apps against the **installed** runtime (framework + runtime[-dev] only — no
-ARA services, GUI, or rf needed):
+`theia init [--with-services]` scaffolds a NEW consuming workspace beside the
+framework (the gataway_ws/demo pattern). It builds the user's app C++ against
+the framework as a **sibling Bazel module** — no vendored runtime, no alias
+shims:
 
 ```sh
-artheia gen-app --kind fc system/myapp/package.art --out myapp --ns my::app
-bazel build //myapp/...        # compiles against /opt/theia/src runtime headers
-theia install                  # the workspace's own rig drives the tree
-theia start; tdb ps
+theia init my_ws                                          # scaffold beside theia
+artheia gen-app --kind fc system/apps/component.art \
+        --out apps --proto-out proto                      # emits @pero_theia//… labels
+bazel build //apps/...                                    # compiles against @pero_theia
+theia manifest bootstrap && theia install && theia start  # the ws's own rig drives the tree
 ```
 
 - `MODULE.bazel` is a stripped Theia module (keeps `rules_cc`/`rules_python`/
   `nanopb`/`rules_pkg` + the `rig_ext` extension; drops the PERO
-  gateway/PSP/firmware toolchains) and declares the user's rig (`@rig_myapp`).
-- `platform/runtime/BUILD.bazel` + `platform/supervisor/tombstone/BUILD.bazel`
-  are thin `cc_library` wrappers so the labels gen-app emits resolve to the
-  installed deb under `/opt/theia/src`. **The runtime is NOT vendored.**
-- `templates/workspace/setup.sh` links `/opt/theia/src` into the workspace
-  AND links the runtime `.art` (`platform/runtime/package.art` +
-  `system/runtime`) so a downstream service `.art`'s `import
-  platform.runtime.*` (e.g. `ChildControlIf`) resolves.
+  gateway/PSP/firmware toolchains), consumes the framework via
+  `bazel_dep(pero_theia)` + `local_path_override` (relative ws→theia), and
+  declares the user's rig (`@rig_myapp`).
+- **No platform shims.** gen-app detects the consuming-workspace layout and
+  emits the framework labels already qualified —
+  `@pero_theia//platform/runtime:runtime`,
+  `@pero_theia//platform/supervisor/tombstone:tombstone` — so they resolve
+  straight against the sibling module. (Earlier `theia init` wrote per-label
+  `alias()` shims under `platform/`; gen-app emitting `@pero_theia//…` directly
+  removed them.)
+- The app's OWN proto stays local: gen-app writes `proto/system/apps/*` and the
+  `//proto:platform_protos` aggregator the lib links is in-workspace (a
+  consumer whose `.art` differs from the framework's gets its own wire types).
 
 ## Name-independence: rig discovery + aggregator manifest
 

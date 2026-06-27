@@ -28,7 +28,7 @@ cc_library(
         "-fPIC",
     ],
     deps = [
-        "//platform/runtime:runtime",
+        "@pero_theia//platform/runtime:runtime",
         "//proto:platform_protos",
         # The State structs the lib binds as the GenServer State type live
         # in the (write-once, app-owned) impl/<Node>_state.hh headers,

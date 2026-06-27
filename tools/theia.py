@@ -2209,6 +2209,7 @@ def cmd_init(args: list[str]) -> int:
         runtime_art = runtime_pkg / "package.art"
         supervisor_pkg = theia_root / "system" / "supervisor"
         services_pkg = theia_root / "system" / "services"
+        msgs_pkg = theia_root / "system" / "platform" / "msgs"
     else:
         # Installed deb layout (theia-runtime-dev + theia-services-dev):
         #   runtime spec  → system/platform/runtime/package.art
@@ -2219,6 +2220,7 @@ def cmd_init(args: list[str]) -> int:
         runtime_art = runtime_pkg / "package.art"
         supervisor_pkg = theia_root / "system" / "supervisor"
         services_pkg = theia_root / "services"
+        msgs_pkg = theia_root / "system" / "platform" / "msgs"
     if not runtime_art.is_file():
         print(f"theia init: THEIA_ROOT={theia_root} doesn't look like a Theia "
               "source checkout OR an installed /opt/theia prefix "
@@ -2276,9 +2278,15 @@ def cmd_init(args: list[str]) -> int:
     if supervisor_pkg.exists():
         _link("system/supervisor", supervisor_pkg)
     # --with-services: link the framework's ARA service FCs so `cluster Services`
-    # resolves + the rig can import manifest.services.{manifest,executor}.
+    # resolves + the rig can import manifest.services.{manifest,executor}. The
+    # service .art's import `system.platform.msgs.{std,geometry,sensor,nav}.*` (e.g.
+    # tsync uses nav.GnssSolution), so link the msgs namespace dir too — one link
+    # covers all four subpackages (FQN system.platform.msgs.<x> → msgs/<x>/). Without
+    # it a service that references a platform msg fails to resolve (Unknown object).
     if with_services:
         _link("system/services", services_pkg)
+        if msgs_pkg.exists():
+            _link("system/platform/msgs", msgs_pkg)
     # The workspace's OWN empty app package (no compositions yet). gen-manifest
     # walks `cluster Applications` here — empty → an empty app manifest +
     # executor sidecar, which the rig imports as-is.

@@ -1,4 +1,0 @@
-# Alias → the supervisor tombstone (crash-handler) lib in pero_theia. gen-app's
-# main BUILD references //platform/supervisor/tombstone:tombstone.
-package(default_visibility = ["//visibility:public"])
-alias(name = "tombstone", actual = "@pero_theia//platform/supervisor/tombstone:tombstone")

@@ -886,22 +886,39 @@ def cmd_install(args: list[str]) -> int:
     return _stage_local(dest, sup_src, bins)
 
 
-def _deep_merge(base: dict, override: dict) -> dict:
-    """Recursively merge *override* onto *base*, returning *base* (mutated).
+_warned_legacy_machine_cfg: set = set()
 
-    Dict values are merged key-by-key; any non-dict value in *override*
-    (scalar, list) REPLACES the corresponding value in *base*. This is the
-    per-machine config override semantics: the override carries only the keys
-    it wants to change (e.g. nodes.ptp4l.args), leaving every untouched default
-    (e.g. nodes.ptp4l.enabled) intact. stdlib-only — no third-party deepmerge.
-    """
-    for key, ov_val in override.items():
-        base_val = base.get(key)
-        if isinstance(base_val, dict) and isinstance(ov_val, dict):
-            _deep_merge(base_val, ov_val)
-        else:
-            base[key] = ov_val
-    return base
+
+def _warn_legacy_machine_config(machine: str) -> None:
+    """Warn (once per machine) if a stale deploy/config/<machine>/ override dir
+    exists — it is NO LONGER baked into the built artifact.
+
+    Config overrides used to be deep-merged into the gen-params default here, at
+    install/manifest time, keyed by the artheia `machine`. That coupled the
+    build-once artifact to a rig's config and conflated machine (a manifest
+    slice) with rig (a physical deploy target). Overrides are now a DEPLOY-time
+    concern, applied per TARGET by colony's tasks/config-override.yml. A
+    leftover deploy/config/<machine>/ dir is the legacy layout: tell the operator
+    to re-key it under the deploy TARGET name (deploy/registry/<target>.yml) so
+    it's applied at deploy time. Machine-shared config (e.g. central=GPS-
+    grandmaster vs compute=slave) still works — colony also merges
+    deploy/config/<machine>/ at deploy time using the target's resolved machine,
+    just not baked into the artifact."""
+    if machine in _warned_legacy_machine_cfg:
+        return
+    _warned_legacy_machine_cfg.add(machine)
+    legacy = WORKSPACE / "deploy" / "config" / machine
+    if legacy.is_dir() and any(legacy.glob("*.json")):
+        files = ", ".join(sorted(p.name for p in legacy.glob("*.json")))
+        print(
+            f"WARNING: deploy/config/{machine}/ ({files}) is NOT baked into the "
+            f"artifact — config overrides are applied at DEPLOY time, per rig.\n"
+            f"         It still works if a deploy target runs the '{machine}' "
+            f"machine (colony merges it at orchestrate time), but a per-RIG "
+            f"change belongs under deploy/config/<target>/ "
+            f"(deploy/registry/<target>.yml).",
+            file=sys.stderr,
+        )
 
 
 def _emit_fc_config(machine: str, binaries: dict, cfg_dir: Path) -> int:
@@ -922,10 +939,15 @@ def _emit_fc_config(machine: str, binaries: dict, cfg_dir: Path) -> int:
     SHARED by `theia install` (→ install/<machine>/config/) and `theia manifest`
     (→ dist/manifest/<machine>/config/) so a local stage and a remote deploy
     ship byte-identical per-FC config. Returns 0 on success, non-zero rc on a
-    gen-params failure."""
-    import json as _json
+    gen-params failure.
+
+    The output is the MACHINE-GENERIC default ONLY — no deploy/config override is
+    baked in here. Config overrides are a DEPLOY-time concern (per rig), applied
+    by colony's tasks/config-override.yml against the running device, so the built
+    artifact stays a pure function of (arch, os, version) — never rig-specific.
+    See _warn_legacy_machine_config for the migration warning."""
     cfg_dir.mkdir(parents=True, exist_ok=True)
-    override_root = WORKSPACE / "deploy" / "config" / machine
+    _warn_legacy_machine_config(machine)
     for fc, target in binaries.items():
         art = _fc_art_path(fc, target)
         if art is None:
@@ -935,14 +957,6 @@ def _emit_fc_config(machine: str, binaries: dict, cfg_dir: Path) -> int:
             "artheia", "gen-params", str(art), "--out", str(out_json),
         ])) != 0:
             return rc
-        ov_path = override_root / f"{fc}.json"
-        if ov_path.is_file():
-            base = _json.loads(out_json.read_text())
-            override = _json.loads(ov_path.read_text())
-            merged = _deep_merge(base, override)
-            out_json.write_text(_json.dumps(merged, indent=2) + "\n")
-            print(f"applied per-machine config override "
-                  f"{ov_path.relative_to(WORKSPACE)}")
     print(f"staged {cfg_dir}/<fc>.json (static params)")
     return 0
 
@@ -997,10 +1011,14 @@ def _emit_machine_config(machine: str, mdir: Path) -> int:
     boots with its REAL profile (e.g. tsync central=GPS-grandmaster vs
     compute=PTP-slave) — not just the .art slave default.
 
-    Without this, the docker flow laid down only executor.json + binaries; the
-    per-machine tsync config (deploy/config/<machine>/tsync.json) never reached
-    the container, so both machines ran the .art slave profile. mdir is the
-    machine's manifest dir (dist/manifest/<machine>)."""
+    The emitted config is the MACHINE-GENERIC default (gen-params) ONLY — no
+    deploy/config override is baked in. A per-rig config change (e.g. the rpi4
+    RTK-GPS box disabling ptp4l/gpsd) is a DEPLOY-time concern, applied by
+    colony's tasks/config-override.yml against the device keyed by the deploy
+    TARGET (the rig in deploy/registry/<target>.yml). Keeping it out of the
+    artifact preserves build-once: dist/manifest/<machine>/ is a pure function of
+    (arch, os, version), reused across every rig that runs this machine slice.
+    mdir is the machine's manifest dir (dist/manifest/<machine>)."""
     import json as _json
     app = mdir / "application.json"
     if not app.is_file():
@@ -1016,7 +1034,7 @@ def _emit_machine_config(machine: str, mdir: Path) -> int:
                 binaries[name] = target
     cfg_dir = mdir / "config"
     cfg_dir.mkdir(parents=True, exist_ok=True)
-    override_root = WORKSPACE / "deploy" / "config" / machine
+    _warn_legacy_machine_config(machine)
     for fc, target in binaries.items():
         art = _fc_art_path(fc, target)
         if art is None:
@@ -1026,13 +1044,6 @@ def _emit_machine_config(machine: str, mdir: Path) -> int:
             "artheia", "gen-params", str(art), "--out", str(out_json),
         ])) != 0:
             return rc
-        ov_path = override_root / f"{fc}.json"
-        if ov_path.is_file():
-            base = _json.loads(out_json.read_text())
-            merged = _deep_merge(base, _json.loads(ov_path.read_text()))
-            out_json.write_text(_json.dumps(merged, indent=2) + "\n")
-            print(f"  {machine}: applied per-machine config override "
-                  f"{ov_path.relative_to(WORKSPACE)}", file=sys.stderr)
     return 0
 
 
@@ -2341,12 +2352,13 @@ def cmd_init(args: list[str]) -> int:
 
     # ── Bazel module: the workspace builds its OWN app C++ against the sibling
     # Theia (the gataway_ws pattern). Its own MODULE.bazel consumes pero_theia
-    # via local_path_override; alias shims forward the framework labels gen-app
-    # emits (//platform/runtime, //platform/supervisor/tombstone) to @pero_theia.
-    # The app's OWN proto (//platform/proto:platform_protos → system/apps) builds
-    # LOCALLY so a workspace whose .art differs from the framework's gets its own
-    # wire types. Without this a pure consumer fell back to building from
-    # THEIA_ROOT (wrong source tree). ─────────────────────────────────────────
+    # via local_path_override; gen-app emits the framework labels already
+    # qualified as @pero_theia//platform/... (it detects the consuming-workspace
+    # layout), so they resolve directly against the sibling module — NO per-
+    # workspace alias shims to write. The app's OWN proto
+    # (//proto:platform_protos → system/apps) builds LOCALLY so a workspace whose
+    # .art differs from the framework's gets its own wire types. Without this a
+    # pure consumer fell back to building from THEIA_ROOT (wrong source tree). ──
     _mod_name = _py_ident_safe(name)
     # local_path_override path: relative ws→theia (keeps the ws+theia pair
     # relocatable), abs fallback if they share no useful common prefix.
@@ -2358,8 +2370,6 @@ def cmd_init(args: list[str]) -> int:
                                              .replace("@THEIA_REL@", _theia_rel))
     _write(".bazelrc", _INIT_BAZELRC)
     _write(".bazelversion", _read_or(theia_root / ".bazelversion", "8.0.0"))
-    _write("platform/runtime/BUILD.bazel", _INIT_SHIM_RUNTIME)
-    _write("platform/supervisor/tombstone/BUILD.bazel", _INIT_SHIM_TOMBSTONE)
     # The app's own proto package: gen-app writes apps.proto + apps.options under
     # proto/system/apps/ (--proto-out proto); this BUILD nanopb-compiles them.
     # //proto:platform_protos aggregates it (+ the runtime proto from @pero_theia)
@@ -2764,21 +2774,6 @@ build --copt=-I/usr/include/nanopb
 build:linux --cpu=k8
 build:linux --compiler=gcc
 build --config=linux
-'''
-
-_INIT_SHIM_RUNTIME = '''\
-# Alias → the Theia runtime in the sibling pero_theia module. gen-app's lib/main
-# BUILD files reference //platform/runtime:runtime; forward to @pero_theia.
-package(default_visibility = ["//visibility:public"])
-alias(name = "runtime", actual = "@pero_theia//platform/runtime:runtime")
-alias(name = "runtime_proto_cc", actual = "@pero_theia//platform/runtime:runtime_proto_cc")
-'''
-
-_INIT_SHIM_TOMBSTONE = '''\
-# Alias → the supervisor tombstone (crash-handler) lib in pero_theia. gen-app's
-# main BUILD references //platform/supervisor/tombstone:tombstone.
-package(default_visibility = ["//visibility:public"])
-alias(name = "tombstone", actual = "@pero_theia//platform/supervisor/tombstone:tombstone")
 '''
 
 _INIT_PROTO_AGG = '''\

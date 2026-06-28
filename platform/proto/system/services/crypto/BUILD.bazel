@@ -15,6 +15,11 @@ genrule(
         # nanopb_generator auto-loads the same-basename .options next to the
         # .proto (pins data/signature/pem sizes) — list it so it's in the sandbox.
         "crypto.options",
+        # HERMETICITY: nanopb generator runs off PATH (host .venv); listing its
+        # package source puts the generator CODE in this action's cache key, so
+        # a generator/.venv upgrade invalidates stale codegen. See
+        # toolchains/codegen/theia_codegen.bzl.
+        "@theia_codegen//:nanopb_generator_src",
     ],
     outs = [
         "crypto.pb.c",

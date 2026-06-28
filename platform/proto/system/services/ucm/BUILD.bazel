@@ -5,7 +5,7 @@ package(default_visibility = ["//visibility:public"])
 
 genrule(
     name = "ucm_pb",
-    srcs = ["ucm.proto"],
+    srcs = ["ucm.proto", "@theia_codegen//:nanopb_generator_src"],
     outs = [
         "ucm.pb.c",
         "ucm.pb.h",

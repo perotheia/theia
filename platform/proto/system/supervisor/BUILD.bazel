@@ -23,6 +23,12 @@ genrule(
         # resolves). We only need the .proto here to satisfy the import; the
         # runtime's own pb.h is built by //platform/runtime.
         "//platform/runtime:runtime_proto_src",
+        # HERMETICITY: the nanopb generator runs off PATH (host .venv), but
+        # listing its package source here puts the GENERATOR'S CODE in this
+        # action's cache key — so a generator/.venv upgrade invalidates the
+        # cached .pb.{c,h} instead of silently shipping stale codegen (the hole
+        # that once dropped a new field; see toolchains/codegen/).
+        "@theia_codegen//:nanopb_generator_src",
     ],
     outs = [
         "supervisor.pb.c",

@@ -1,0 +1,2 @@
+# Hermetic proto codegen toolset capture. See theia_codegen.bzl.
+package(default_visibility = ["//visibility:public"])

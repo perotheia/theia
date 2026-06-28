@@ -32,7 +32,7 @@ package(default_visibility = ["//visibility:public"])
 #       --out platform/runtime/proto
 genrule(
     name = "control_pb",
-    srcs = ["proto/platform_runtime/runtime.proto"],
+    srcs = ["proto/platform_runtime/runtime.proto", "@theia_codegen//:nanopb_generator_src"],
     outs = [
         "proto/platform_runtime/runtime.pb.c",
         "proto/platform_runtime/runtime.pb.h",

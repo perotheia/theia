@@ -5,7 +5,7 @@ package(default_visibility = ["//visibility:public"])
 
 genrule(
     name = "com_pb",
-    srcs = ["com.proto"],
+    srcs = ["com.proto", "@theia_codegen//:nanopb_generator_src"],
     outs = [
         "com.pb.c",
         "com.pb.h",

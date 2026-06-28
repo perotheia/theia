@@ -58,6 +58,13 @@ rpi4_sysroot_ext = use_extension("//toolchains/aarch64_linux_gnu:extension.bzl",
 use_repo(rpi4_sysroot_ext, "rpi4_sysroot")
 register_toolchains("//toolchains/aarch64_linux_gnu:cc_suite")
 
+# ── Hermetic proto codegen (@theia_codegen) ───────────────────────────────
+# Content-hashes the staged x86 protoc 3.21.12 + grpc_cpp_plugin so the proto
+# genrules declare them as `tools` instead of resolving off host PATH. Closes
+# the stale-descriptor hole (see toolchains/codegen/theia_codegen.bzl).
+theia_codegen_ext = use_extension("//toolchains/codegen:extension.bzl", "theia_codegen_ext")
+use_repo(theia_codegen_ext, "theia_codegen")
+
 # ── Rig module extension ──────────────────────────────────────────────────
 # The per-rig synthetic deploy repos (@rig_apps / @rig_test / @rig_zonal) are NO
 # LONGER declared here. They are owned by the CONSUMING workspaces (e.g. demo/),

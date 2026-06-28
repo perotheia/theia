@@ -1,7 +1,7 @@
 package(default_visibility = ["//visibility:public"])
 genrule(
     name = "rdsdemo_pb",
-    srcs = ["rdsdemo.proto", "rdsdemo.options"],
+    srcs = ["rdsdemo.proto", "rdsdemo.options", "@theia_codegen//:nanopb_generator_src"],
     outs = ["rdsdemo.pb.c", "rdsdemo.pb.h"],
     cmd = "set -e; in_dir=$$(dirname $(location rdsdemo.proto)); out_dir=$$(dirname $(location rdsdemo.pb.c)); nanopb_generator -I $$in_dir -D $$out_dir rdsdemo.proto;",
     local = True,

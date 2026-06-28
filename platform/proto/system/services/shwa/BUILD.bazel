@@ -5,7 +5,7 @@ package(default_visibility = ["//visibility:public"])
 
 genrule(
     name = "shwa_pb",
-    srcs = ["shwa.proto"],
+    srcs = ["shwa.proto", "@theia_codegen//:nanopb_generator_src"],
     outs = [
         "shwa.pb.c",
         "shwa.pb.h",

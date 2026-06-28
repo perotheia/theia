@@ -16,28 +16,33 @@
 # wire) — the deliberate two-codec, one-process design.
 
 load("@rules_cc//cc:defs.bzl", "cc_library")
-load("@rpi4_sysroot//:path.bzl", "RPI4_SYSROOT")
 
 package(default_visibility = ["//visibility:public"])
 
 # The proto codegen toolset (protoc + grpc_cpp_plugin) must match the protobuf
-# the .pb.{cc,h} are LINKED against, or the headers `#error regenerate ... newer
-# protoc`. On the host (x86) that's the system protoc/plugin (= the host
-# libprotobuf the cc_binary links). Targeting aarch64 the link uses the rpi4
-# SYSROOT's libprotobuf (bookworm 3.21.12 / grpc 1.51), so codegen must run a
-# host-x86 protoc 3.21.12 + grpc_cpp_plugin 1.51 — staged (with their runtime
-# .so's) under third_party/codegen-bookworm-x86/ (gitignored host data; the
-# RPI4_SYSROOT repo rule captures the workspace abs path the same way).
-# These _CG_* select strings PREFIX the genrule cmd with the right PATH/lib env.
-# RPI4_SYSROOT = <ws>/third_party/sysroot/rpi4 → the codegen dir is at
-# <ws>/third_party/codegen-bookworm-x86 (two dirs up, then down).
-_CG_DIR = RPI4_SYSROOT + "/../../codegen-bookworm-x86"
-_CODEGEN_ENV = select({
+# the .pb.{cc,h} are LINKED against, or the headers `#error ... newer protoc`.
+# The two targets link DIFFERENT libprotobuf, so codegen is per-target:
+#   - arm64 (the shipped .deb): rpi4 sysroot's libprotobuf 3.21.12 / grpc 1.51,
+#     so use the staged x86 protoc 3.21.12 — exposed CONTENT-HASHED via
+#     @theia_codegen (was off host PATH; that non-hermeticity once shipped a
+#     stale descriptor. see toolchains/codegen/theia_codegen.bzl). THIS is the
+#     path the stale-descriptor bug shipped on, so hashing it is the fix.
+#   - host x86 (dev/test box): host libprotobuf 3.12.4, so use host protoc off
+#     PATH. A protoc/runtime version drift here is SELF-DETECTING (the .pb.h
+#     #error guard fails the compile loudly), unlike the silent nanopb case.
+#
+# _PROTOC_SETUP picks the protoc binary per-target: arm64 resolves the
+# content-hashed staged protoc (+ its libs on LD_LIBRARY_PATH); host uses the
+# system protoc off PATH (matching the host libprotobuf it links).
+_PROTOC_SETUP = select({
     "//rules/config:is_arm64": (
-        "export PATH=\"" + _CG_DIR + "/bin:$$PATH\";" +
-        " export LD_LIBRARY_PATH=\"" + _CG_DIR + "/lib:$${LD_LIBRARY_PATH:-}\";"
+        " protoc=$(location @theia_codegen//:protoc);" +
+        " grpc_plugin=$(location @theia_codegen//:grpc_cpp_plugin);" +
+        " export LD_LIBRARY_PATH=\"$$(dirname $$(dirname $$protoc))/lib:$${LD_LIBRARY_PATH:-}\";"
     ),
-    "//conditions:default": "",
+    "//conditions:default": (
+        " protoc=protoc; grpc_plugin=$$(which grpc_cpp_plugin);"
+    ),
 })
 
 # .proto sources consumed by external CMake builds (the repo-root
@@ -80,8 +85,19 @@ genrule(
         "cpp/platform_runtime/runtime.pb.cc",
         "cpp/platform_runtime/runtime.pb.h",
     ],
+    # arm64 stages the CONTENT-HASHED protoc/plugin + their .so's (closes the
+    # stale-descriptor hole on the shipped path); host ignores these and uses
+    # system protoc (harmless to list them on host). See _PROTOC_SETUP above.
+    tools = select({
+        "//rules/config:is_arm64": [
+            "@theia_codegen//:protoc",
+            "@theia_codegen//:grpc_cpp_plugin",
+            "@theia_codegen//:libs",  # the staged .so's protoc/plugin dlopen
+        ],
+        "//conditions:default": [],
+    }),
     cmd = ("set -e;" +
-           _CODEGEN_ENV +   # aarch64: use the staged bookworm-x86 protoc/plugin
+           _PROTOC_SETUP +
            " com_dir=$$(dirname $(location proto/supervisor_bridge.proto));" +
            " sup_proto=$(location //platform/proto/system/supervisor:supervisor_proto);" +
            " sup_dir=$$(dirname $$sup_proto);" +
@@ -91,15 +107,12 @@ genrule(
            # bridge imports supervisor.proto (flat, on sup_dir); supervisor.proto
            # imports platform_runtime/runtime.proto (on rt_root). protoc all
            # three so the .pb.cc for the supervisor + runtime messages exist.
-           " protoc -I $$com_dir -I $$sup_dir -I $$rt_root" +
+           " $$protoc -I $$com_dir -I $$sup_dir -I $$rt_root" +
            "   --cpp_out=$$out_dir --grpc_out=$$out_dir" +
-           "   --plugin=protoc-gen-grpc=$$(which grpc_cpp_plugin)" +
+           "   --plugin=protoc-gen-grpc=$$grpc_plugin" +
            "   $$com_dir/supervisor_bridge.proto;" +
-           " protoc -I $$sup_dir -I $$rt_root --cpp_out=$$out_dir $$sup_proto;" +
-           " protoc -I $$rt_root --cpp_out=$$out_dir $$rt_proto;"),
-    # host-installed protoc + grpc_cpp_plugin, same policy as the supervisor
-    # and nanopb genrules.
-    local = True,
+           " $$protoc -I $$sup_dir -I $$rt_root --cpp_out=$$out_dir $$sup_proto;" +
+           " $$protoc -I $$rt_root --cpp_out=$$out_dir $$rt_proto;"),
 )
 
 cc_library(

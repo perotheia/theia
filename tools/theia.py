@@ -1794,6 +1794,30 @@ def cmd_release_app(args: list[str]) -> int:
         shutil.copy2(src, dst)
         dst.chmod(0o755)
 
+    # --asset <src>:<destdir> — stage extra support files into the app tree (e.g.
+    # the gateway's PSP plugin: libpsp.so:psp → stage/psp/libpsp.so). The theia-app
+    # module overlays the psp/ + lib/ subtrees into $CURRENT alongside bin/.
+    for i, a in enumerate(args):
+        if i == 0 or args[i - 1] != "--asset":
+            continue
+        if ":" not in a:
+            print(f"theia release-app: bad --asset '{a}' (want <src>:<destdir>).",
+                  file=sys.stderr)
+            return 2
+        asrc, adest = a.rsplit(":", 1)
+        asrc_p = Path(asrc)
+        if not asrc_p.exists():
+            print(f"theia release-app: --asset source missing: {asrc_p}",
+                  file=sys.stderr)
+            return 1
+        adest_dir = stage / adest
+        adest_dir.mkdir(parents=True, exist_ok=True)
+        if asrc_p.is_dir():
+            shutil.copytree(asrc_p, adest_dir / asrc_p.name, dirs_exist_ok=True)
+        else:
+            shutil.copy2(asrc_p, adest_dir / asrc_p.name)
+        print(f"theia release-app: staged asset {asrc_p} → {adest}/", file=sys.stderr)
+
     # The executor subtree for just this app (the supervisor merges it under its
     # tree on install). Pull the app's slice from the machine's executor.json.
     exec_subtree = None

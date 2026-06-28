@@ -117,6 +117,15 @@ case "$STATE" in
         install -m 0755 "$b" "$CURRENT/bin/$bn"
         echo "theia-app: overlaid $CURRENT/bin/$bn"
     done
+    # overlay any support-asset subtrees the app ships (e.g. the gateway's PSP
+    # plugin: psp/libpsp.so → $CURRENT/psp/). Whole-dir, recorded for rollback.
+    for d in psp lib; do
+        [ -d "$work/$d" ] || continue
+        if [ -d "$CURRENT/$d" ]; then cp -a "$CURRENT/$d" "$rec/prev-$d"; fi
+        mkdir -p "$CURRENT/$d"
+        cp -a "$work/$d/." "$CURRENT/$d/"
+        echo "theia-app: overlaid $CURRENT/$d/ (app asset dir)"
+    done
     # merge the app's executor subtree + record the install
     cp -f "$work/app.json" "$rec/app.json"
     echo "$art" > "$rec/.artifact"
@@ -138,7 +147,11 @@ case "$STATE" in
         for b in "$rec"/prev-bin/*; do
             [ -f "$b" ] && install -m 0755 "$b" "$CURRENT/bin/$(basename "$b")"
         done
-        echo "theia-app: ROLLBACK app '$app' (executor + binaries restored)"
+        # restore any displaced asset dirs (psp/, lib/)
+        for d in psp lib; do
+            [ -d "$rec/prev-$d" ] && { rm -rf "$CURRENT/$d"; cp -a "$rec/prev-$d" "$CURRENT/$d"; }
+        done
+        echo "theia-app: ROLLBACK app '$app' (executor + binaries + assets restored)"
         _reload_supervisor
     else
         echo "theia-app: nothing to roll back" >&2

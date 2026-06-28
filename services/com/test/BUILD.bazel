@@ -18,3 +18,17 @@ cc_test(
         "//services/com/impl:com_impl",
     ],
 )
+
+# Regression gate for the nanopb→C++ SystemInfo cross-format parse (the m0 /
+# empty-release_version Heisenbug). com_impl links BOTH the nanopb supervisor
+# (system/supervisor/supervisor.pb.h) AND the C++ libprotobuf supervisor
+# (cpp/supervisor.pb.h), exactly what the test needs — so we dep com_impl. Pure
+# encode/parse, no stack, always-on.
+cc_test(
+    name = "test_systeminfo_roundtrip",
+    srcs = ["test_systeminfo_roundtrip.cc"],
+    copts = ["-std=c++17", "-fPIC"],
+    deps = [
+        "//services/com/impl:com_impl",
+    ],
+)

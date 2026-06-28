@@ -1751,9 +1751,26 @@ def cmd_release_app(args: list[str]) -> int:
     print(f"theia release-app: {app} v{app_ver} fleet={fleet} arch={arch} "
           f"machine={machine} procs={app_procs}", file=sys.stderr)
 
-    # ── Build the app's FC binaries (target-arch). The app FCs live under
-    #    //apps/<app>/main:<fc> in the user-ws; cross-compile to the fleet arch. ──
-    fc_targets = [f"//apps/{app}/main:{p}" for p in app_procs]
+    # ── Resolve the app's bazel package prefix. The canonical (per-composition)
+    #    layout is //apps/<app>/<Composition>/main:<cluster>; the executor records
+    #    the "<app>/<Composition>" subtree in each process's `modules`. Fall back
+    #    to the flat //apps/<app>/main for legacy single-composition apps. ────────
+    ej0 = (mdir / machine / "executor.json") if machine else None
+    app_prefix = f"apps/{app}"   # flat fallback
+    if ej0 and ej0.is_file():
+        mods = _app_module_paths(json.loads(ej0.read_text()), app_procs)
+        # mods like {"gateway/GatewayBridge"} → prefix "apps/gateway/GatewayBridge"
+        if len(mods) == 1:
+            app_prefix = "apps/" + next(iter(mods))
+        elif len(mods) > 1:
+            print(f"theia release-app: {app} spans multiple compositions {mods} "
+                  "— build each separately (--machine / per-composition).",
+                  file=sys.stderr)
+            return 1
+
+    # ── Build the app's FC binaries (target-arch), cross-compiled to the fleet
+    #    arch. The cluster target is the package's last segment. ─────────────────
+    fc_targets = [f"//{app_prefix}/main:{p}" for p in app_procs]
     if (rc := _run(["bazel", "build", *fc_targets,
                     f"--platforms={platform}"])) != 0:
         print("theia release-app: app FC build failed.", file=sys.stderr)
@@ -1766,7 +1783,7 @@ def cmd_release_app(args: list[str]) -> int:
     if stage.exists():
         shutil.rmtree(stage)
     (stage / "bin").mkdir(parents=True)
-    bzbin = WORKSPACE / "bazel-bin" / "apps" / app / "main"
+    bzbin = WORKSPACE / "bazel-bin" / Path(app_prefix) / "main"
     for p in app_procs:
         src = bzbin / p
         if not src.is_file():
@@ -1844,6 +1861,28 @@ def _extract_app_subtree(executor: dict, app: str, procs: list[str]):
                     walk(c)
     walk(executor)
     return {"app": app, "nodes": found}
+
+
+def _app_module_paths(executor: dict, procs: list[str]) -> set:
+    """The set of "<app>/<Composition>" bazel-package subtrees for the app's
+    processes, read from each process node's `modules` (the executor records the
+    composition path there, e.g. "gateway/GatewayBridge"). Used to derive the
+    //apps/<app>/<Composition>/main target for the canonical per-composition
+    layout (vs the flat //apps/<app>/main). Empty set → fall back to flat."""
+    procset = set(procs)
+    mods: set = set()
+
+    def walk(node):
+        if isinstance(node, dict):
+            if node.get("name") in procset and node.get("start_cmd"):
+                for m in node.get("modules", []) or []:
+                    if isinstance(m, str) and "/" in m:
+                        mods.add(m)
+            for k in ("children", "workers", "nodes"):
+                for c in node.get(k, []) or []:
+                    walk(c)
+    walk(executor)
+    return mods
 
 
 # The mender-artifact CLI (the build host's .mender packer). Prefer the

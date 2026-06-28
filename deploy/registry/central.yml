@@ -30,6 +30,10 @@ etcd_advertise_host: 10.0.0.22
 
 # ── L4-B multi-board role ────────────────────────────────────────────────────
 mender_role: gateway
+# This board IS the gateway ECU — enrol it as theia-gateway so the gateway app
+# artifact (compatible-devices: [theia-gateway]) targets it via the GS app plane,
+# and the central/compute role artifacts (theia-rig) never land here by mistake.
+mender_device_type: theia-gateway
 # The boards this vehicle's V-UCM campaigns fan out to (the campaign roster). Set
 # into VucmConfig.boards so CMP_CONFIRMING waits for ALL before the aggregate
 # Confirm. Pushed via deploy/config/central/vucm.json.

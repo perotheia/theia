@@ -32,6 +32,7 @@ system_supervisor.SystemInfo.os_pretty_name   max_size:128
 system_supervisor.SystemInfo.theia_git_sha   max_size:64
 system_supervisor.SystemInfo.build_timestamp   max_size:48
 system_supervisor.SystemInfo.machine_name   max_size:64
+system_supervisor.SystemInfo.release_version   max_size:48
 system_supervisor.ChildSelector.name   max_size:64
 system_supervisor.ChildSpec.name   max_size:64
 system_supervisor.ChildSpec.parent_supervisor   max_size:64

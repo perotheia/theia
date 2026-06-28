@@ -1801,6 +1801,26 @@ def cmd_release_app(args: list[str]) -> int:
     if ej and ej.is_file():
         full = json.loads(ej.read_text())
         exec_subtree = _extract_app_subtree(full, app, app_procs)
+        # --env <proc>:<K>=<V> bakes per-process env into the shipped subtree (the
+        # supervisor exports it to the child). The fleet's deploy knobs an FC reads
+        # from the environment — e.g. gateway THEIA_GW_CAPTURE_IFACE=eth0 (the rig
+        # NIC) / THEIA_GW_PSP_ROOT — that differ from the build-host defaults.
+        env_specs = [a for i, a in enumerate(args)
+                     if i > 0 and args[i - 1] == "--env"]
+        if env_specs and exec_subtree:
+            by_proc: dict = {}
+            for spec in env_specs:
+                if ":" not in spec or "=" not in spec.split(":", 1)[1]:
+                    print(f"theia release-app: bad --env '{spec}' "
+                          "(want <proc>:<KEY>=<VAL>).", file=sys.stderr)
+                    return 2
+                proc, kv = spec.split(":", 1)
+                k, v = kv.split("=", 1)
+                by_proc.setdefault(proc, {})[k] = v
+            for node in exec_subtree.get("nodes", []):
+                extra = by_proc.get(node.get("name"))
+                if extra:
+                    node.setdefault("env", {}).update(extra)
     (stage / "app.json").write_text(json.dumps({
         "name": app, "version": app_ver, "fleet": fleet, "arch": arch,
         "processes": app_procs, "executor_subtree": exec_subtree,

@@ -581,6 +581,8 @@ SystemInfo SupervisorCtl::handle_call(
                   info.theia_git_sha.c_str());
     std::snprintf(m.build_timestamp, sizeof(m.build_timestamp), "%s",
                   info.build_timestamp.c_str());
+    std::snprintf(m.release_version, sizeof(m.release_version), "%s",
+                  info.release_version.c_str());
     m.start_timestamp_ms = info.start_timestamp_ms;
     return m;
 }

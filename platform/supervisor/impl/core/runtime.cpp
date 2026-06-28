@@ -2447,6 +2447,23 @@ void Supervisor::do_get_system_info(SystemInfoData& info) {
     info.build_timestamp = THEIA_BUILD_TIMESTAMP;
 #endif
 
+    // The installed runtime RELEASE version = the basename of $prefix/current
+    // (releases/<ver>). The LIVE source GS reads (stateless) for a board's base.
+    {
+        const char* root = std::getenv("THEIA_ROOT_DIR");
+        std::string cur = (root && *root ? std::string(root) : std::string("/opt/theia"))
+                          + "/current";
+        char buf[256];
+        ssize_t n = ::readlink(cur.c_str(), buf, sizeof(buf) - 1);
+        if (n > 0) {
+            buf[n] = '\0';
+            std::string tgt(buf);                 // e.g. "releases/0.2.2-bookworm-arm64"
+            auto slash = tgt.find_last_of('/');
+            info.release_version = (slash == std::string::npos) ? tgt
+                                                                : tgt.substr(slash + 1);
+        }
+    }
+
     // Wall-clock millis when this supervisor process started.
     // start_time_ is a steady_clock point, so we approximate by
     // measuring delta-since-now in milliseconds and subtracting

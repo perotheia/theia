@@ -104,6 +104,11 @@ struct SystemInfoData {
     std::string os_pretty_name;
     std::string theia_git_sha;
     std::string build_timestamp;
+    // The installed runtime+services RELEASE — the basename of $prefix/current
+    // (e.g. "0.2.2-bookworm-arm64"). The LIVE, stateless source GS reads to know a
+    // board's base version (vs a stored Mender-tag mirror). OTA flips current → a
+    // new release; this reflects it immediately. Empty if `current` is absent.
+    std::string release_version;
     uint64_t    start_timestamp_ms{0};
 };
 

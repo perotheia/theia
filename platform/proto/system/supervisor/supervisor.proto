@@ -151,6 +151,11 @@ message SystemInfo {
     // REAL name (central/compute), instead of a hostname/manifest/"mN" guess.
     // (Tags 4,5,6,10-13 are reserved above — host hw stats moved to shwa.)
     string machine_name = 14;
+    // The installed runtime+services RELEASE (basename of $prefix/current, e.g.
+    // "0.2.2-bookworm-arm64"). The LIVE, stateless source GS reads for a board's
+    // base version — OTA flips current → a new release and this reflects it at
+    // once. "" if `current` is absent.
+    string release_version = 15;
 }
 
 message ChildSelector {

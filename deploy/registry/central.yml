@@ -19,7 +19,7 @@ deb_arch: arm64
 
 # Runtime plane (S3): pull the bookworm-arm64 runtime+services (the rpi4 ABI —
 # DIFFERENT glibc than the compute board's focal-arm64). Seeded by seed-official.sh.
-runtime_version: 0.2.1-bookworm-arm64
+runtime_version: 0.2.2-bookworm-arm64
 s3_endpoint: http://10.0.0.99:9000
 s3_runtime_bucket: theia-runtime
 

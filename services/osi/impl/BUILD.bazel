@@ -11,9 +11,16 @@ load("@rules_cc//cc:defs.bzl", "cc_library")
 
 package(default_visibility = ["//visibility:public"])
 
-# Eigen is a header-only SYSTEM lib (eigen3-dev present); pull it via a copt
-# include path, the way idsm/crypto link their system libs via linkopts.
-EIGEN_COPTS = ["-I/usr/include/eigen3"]
+# Eigen is a header-only SYSTEM lib. Native (host) pulls it from /usr/include/
+# eigen3; a cross-build (rpi4/jetson sysroot) CANNOT use a host absolute path
+# (bazel rejects "outside the execution root") — use GCC's sysroot-relative
+# include syntax `-I=/usr/include/eigen3`, where the leading `=` expands to the
+# active --sysroot. The header-only eigen3 is staged into each aarch64 sysroot
+# (arch-independent; setup_<board>.sh / a copy of host eigen3).
+EIGEN_COPTS = select({
+    "//rules/config:is_arm64": ["-I=/usr/include/eigen3"],
+    "//conditions:default": ["-I/usr/include/eigen3"],
+})
 
 # ---- V2V relative-topology SLAM estimator ---------------------------------
 # Self-contained (no Theia/runtime deps) so it's unit-testable in isolation. Port
@@ -35,6 +42,10 @@ cc_library(
     ],
     includes = [".."],   # so includes resolve as "impl/v2v/<x>.hpp"
     copts = ["-std=c++17", "-Wall", "-fPIC"] + EIGEN_COPTS,
+    # The estimator uses std::log10/hypot (libm). The host link pulls libm
+    # implicitly; the aarch64 cross-link needs it explicit ("DSO missing from
+    # command line"). linkopts propagate to every binary linking this lib.
+    linkopts = ["-lm"],
 )
 
 # ---- pluggable mesh-transport backend -------------------------------------

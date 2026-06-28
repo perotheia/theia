@@ -136,6 +136,16 @@ config_setting(
     values = {"define": "gps=nmea"},
 )
 
+# V2V mesh-transport backend selector for services/osi's Meshtastic node. The
+# default (no --define) compiles the NULL backend (mesh_null.cc — no-op, radio
+# compiled OUT) so the dev/CI box builds + runs clean with NO serial/radio
+# dependency. The real radio is opt-in:
+#   --define mesh=meshtastic → mesh_meshtastic.cc (serial protobuf stream; no MQTT)
+config_setting(
+    name = "mesh_meshtastic",
+    values = {"define": "mesh=meshtastic"},
+)
+
 # Build-distro ABI selector for the theia-services .deb Depends. com + per link
 # grpc++/libprotobuf SHARED on x86 (the rig's own apt provides them — the host is
 # a real distro, not a cross sysroot with .a's), so the package's library

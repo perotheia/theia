@@ -1,8 +1,12 @@
 package system.services.osi
 
 
-// The OS-Interface FC: a single OsiCtl node owning cgroup v2 resource
-// partitioning + per-FC accounting + Orin power-mode reconciliation.
+// The OS-Interface FC: OsiCtl (cgroup v2 resource partitioning + per-FC
+// accounting) PLUS the V2V relative-topology plane — OsiV2v (the SLAM estimator
+// + constellation state/broadcast) fed by Meshtastic (the pluggable mesh
+// transport). See package.art for the V2V data flow.
 composition Osi {
-    prototype OsiCtl osi_ctl
+    prototype OsiCtl     osi_ctl
+    prototype OsiV2v     osi_v2v
+    prototype Meshtastic meshtastic
 }

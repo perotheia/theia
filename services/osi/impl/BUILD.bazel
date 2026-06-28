@@ -2,34 +2,78 @@
 #
 # Impl slice — handler bodies. The user owns this BUILD.bazel: it adds
 # osi_backend.hpp (the cgroup v2 + /proc + Orin-power observer/controller) to the
-# state + impl targets, and gives osi_state the osi proto dep (its cached
-# snapshot field is the raw pb type). gen-app can't derive these from the .art —
-# excluded from the regen-stability diff (see fc_regen_lib.py hand_owned_impl_build).
+# state + impl targets, the V2V SLAM estimator (impl/v2v/, Eigen), and the
+# pluggable mesh-transport backend (mesh_null.cc default / mesh_meshtastic.cc via
+# --define mesh=meshtastic). gen-app can't derive these from the .art — excluded
+# from the regen-stability diff (see fc_regen_lib.py hand_owned_impl_build).
 
 load("@rules_cc//cc:defs.bzl", "cc_library")
 
 package(default_visibility = ["//visibility:public"])
 
+# Eigen is a header-only SYSTEM lib (eigen3-dev present); pull it via a copt
+# include path, the way idsm/crypto link their system libs via linkopts.
+EIGEN_COPTS = ["-I/usr/include/eigen3"]
+
+# ---- V2V relative-topology SLAM estimator ---------------------------------
+# Self-contained (no Theia/runtime deps) so it's unit-testable in isolation. Port
+# of mesh_topo/estimator/*.py (tts/HANDOFF_CPP_V2V.md). Header-only factors +
+# beacon; association/graph/estimator are compiled.
+cc_library(
+    name = "v2v_estimator",
+    srcs = [
+        "v2v/association.cpp",
+        "v2v/graph.cpp",
+        "v2v/estimator.cpp",
+    ],
+    hdrs = [
+        "v2v/beacon.hpp",
+        "v2v/factors.hpp",
+        "v2v/association.hpp",
+        "v2v/graph.hpp",
+        "v2v/estimator.hpp",
+    ],
+    includes = [".."],   # so includes resolve as "impl/v2v/<x>.hpp"
+    copts = ["-std=c++17", "-Wall", "-fPIC"] + EIGEN_COPTS,
+)
+
+# ---- pluggable mesh-transport backend -------------------------------------
+# Exactly ONE module compiled in (module inclusion, not #ifdef), mirroring shwa's
+# host/jetson select: mesh_meshtastic.cc on `--define mesh=meshtastic`, else the
+# no-op mesh_null.cc (the default — radio compiled OUT, zero serial dependency).
+cc_library(
+    name = "mesh_backend",
+    srcs = select({
+        "//rules/config:mesh_meshtastic": ["v2v/mesh_meshtastic.cc"],
+        "//conditions:default": ["v2v/mesh_null.cc"],
+    }),
+    hdrs = ["v2v/mesh_backend.hpp"],
+    includes = [".."],
+    copts = ["-std=c++17", "-Wall", "-fPIC"],
+)
+
 # State structs (write-once, app-owned). A leaf header-only target so
 # BOTH the lib (which #includes "impl/<Node>_state.hh" as the GenServer
 # State type) and the impl can depend on it WITHOUT a lib<->impl cycle:
 #   osi_state  ←  lib  ←  impl
-# OsiCtl_state.hh #includes osi_backend.hpp (accounting types) + the osi proto
-# (its last_snapshot field is system_services_osi_ResourceStatus), so both ride
-# along here.
+# OsiCtl_state.hh #includes osi_backend.hpp + the osi proto; OsiV2v_state.hh
+# #includes the v2v estimator (its window + last constellation are app state).
 cc_library(
     name = "osi_state",
     hdrs = [
         "OsiCtl_state.hh",
+        "OsiV2v_state.hh",
+        "Meshtastic_state.hh",
         "osi_backend.hpp",
     ],
     # The lib #includes these as "impl/<Node>_state.hh" / "impl/osi_backend.hpp",
     # so the include root is the FC out_dir (one above impl/).
     includes = [".."],
-    copts = ["-std=c++17", "-fPIC"],
+    copts = ["-std=c++17", "-fPIC"] + EIGEN_COPTS,
     deps = [
         "//platform/runtime:runtime",
         "//platform/proto:platform_protos",   # system/services/osi/osi.pb.h
+        ":v2v_estimator",                      # OsiV2v_state.hh holds the estimator
     ],
 )
 
@@ -37,6 +81,8 @@ cc_library(
     name = "osi_impl",
     srcs = [
         "OsiCtl_handlers.cc",
+        "OsiV2v_handlers.cc",
+        "Meshtastic_handlers.cc",
     ],
     hdrs = ["osi_backend.hpp"],
     includes = [".."],
@@ -45,8 +91,10 @@ cc_library(
         "-Wall",
         "-Wextra",
         "-fPIC",
-    ],
+    ] + EIGEN_COPTS,
     deps = [
         "//services/osi/lib:osi_lib",
+        ":v2v_estimator",   # the OsiV2v handler runs the estimator
+        ":mesh_backend",    # the Meshtastic handler drives the radio backend
     ],
 )

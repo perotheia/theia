@@ -1,0 +1,16 @@
+# HAND-OWNED. osi tests.
+load("@rules_cc//cc:defs.bzl", "cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+# V2V relative-topology SLAM estimator parity test. Synthesizes beacons from
+# known constellations via the path-loss model and asserts the estimator recovers
+# the relative topology (pairwise distances) within tolerance + deterministically
+# (fixed-seed restarts). Pins the port against mesh_topo/estimator (HANDOFF). The
+# estimator lib is self-contained (Eigen-only) — no Theia/runtime deps needed.
+cc_test(
+    name = "test_estimator",
+    srcs = ["test_estimator.cc"],
+    copts = ["-std=c++17", "-fPIC", "-I/usr/include/eigen3"],
+    deps = ["//services/osi/impl:v2v_estimator"],
+)

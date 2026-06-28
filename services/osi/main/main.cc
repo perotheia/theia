@@ -6,6 +6,8 @@
 // impl/<Node>_handlers.cc (one per node).
 
 #include "lib/OsiCtl.hh"
+#include "lib/OsiV2v.hh"
+#include "lib/Meshtastic.hh"
 
 #include "lib/Log.hh"    // per-node MakeContextLogger(tag) — tagged + $THEIA_LOGGER sink
 #include "TimerService.hh"
@@ -194,6 +196,161 @@ int main(int argc, char** argv) {
     }
 
 
+    OsiV2v osi_v2v;
+    // Per-node logger: tagged [#osi_v2v] (kNodeName, matches `tdb ps`),
+    // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so do_start/init
+    // log through it. The FIRST node's logger also backs process_logger() — the
+    // ConfigureLogLevel-push fallback target + any process_logger() caller.
+    {
+        auto osi_v2v_log = MakeContextLogger(OsiV2v::kNodeName);
+        osi_v2v_log->set_level(boot_level);
+        osi_v2v.set_logger(std::move(osi_v2v_log));
+    }
+    osi_v2v.start();
+    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (the supervisor
+    // sets it from the rig's NodeToCPUMapping). No-op when unset / no entry for
+    // this node; soft-fails (logs) on EPERM. Applied AFTER start() — the thread
+    // exists now.
+    ::theia::runtime::apply_node_affinity(osi_v2v.native_handle(),
+        OsiV2v::kNodeName, std::getenv("THEIA_NODE_CFG"));
+    // Resolve this node's TIPC address from the --tipc arg the supervisor built
+    // from executor.json (per node, instance machine-shifted), so the BINARY is
+    // address-agnostic — same binary on every machine. Falls back to the compiled
+    // kTipcType/kTipcInstance (the .art instance) for a standalone run.
+    uint32_t osi_v2v_type, osi_v2v_inst;
+    ::theia::runtime::resolve_node_tipc(OsiV2v::kNodeName,
+        OsiV2v::kTipcType, OsiV2v::kTipcInstance,
+        osi_v2v_type, osi_v2v_inst);
+    {
+        char _tipc[64];
+        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
+                      osi_v2v_type, osi_v2v_inst);
+        osi_v2v.log().info(_tipc);
+    }
+
+    if (auto* osi_v2v_cfg = config_mux.bind_node(
+            osi_v2v, osi_v2v_type,
+            osi_v2v_inst)) {
+        config_mux.register_cast<platform_runtime_LogLevelPush>(
+            osi_v2v_cfg, osi_v2v);
+        // Trace control (#403): supervisor pushes TraceControlPush to flip
+        // this node's Tracer kind filter — same path as LogLevelPush.
+        config_mux.register_cast<platform_runtime_TraceControlPush>(
+            osi_v2v_cfg, osi_v2v);
+        // Config update: services/per casts ConfigUpdated when a watched
+        // config changes — same framework path; GenServer base handle_cast
+        // applies it (decode + on_config_update hook).
+        config_mux.register_cast<platform_runtime_ConfigUpdated>(
+            osi_v2v_cfg, osi_v2v);
+        // Receiver ports (#387): register the node's declared inbound
+        // types so a real peer — or a robot-test inject via services/com
+        // — lands on the same handle_call / handle_cast path. clientServer
+        // ops → register_call; senderReceiver `in` data → register_cast.
+        config_mux.register_call<GetConstellationReq, ConstellationUpdate>(
+            osi_v2v_cfg, osi_v2v);
+        config_mux.register_cast<Beacon>(osi_v2v_cfg, osi_v2v);
+        // ---- process groups (pg): MANUAL pub/sub control (OTP pg shape) ----
+        // The node OWNS its membership: pg_join<T>() to CONSUME a group,
+        // pg_watch<T>()/broadcast_*() to PRODUCE, pg_leave<T>() to stop — from its
+        // OWN logic (init()/handlers), never automatically here. We ATTACH the
+        // node's PgClient to its demux binding (so a joined group's frames + the
+        // supervisor's PgMembership pushes route into handle_cast) and pass its
+        // BOUND ADDRESS as the watcher address — where the supervisor casts
+        // PgMembership when this node pg_watch'es a group it produces to.
+        osi_v2v.pg_attach(OsiV2v::kNodeName, osi_v2v_cfg,
+                                osi_v2v_type, osi_v2v_inst);
+    } else {
+        osi_v2v.log().warn("config service bind failed; live log-level "
+                                 "push + signal inject disabled");
+    }
+
+
+
+    // Liveness beat to the supervisor watchdog (#PHM). A reporting node — of
+    // EITHER base — must beat or the watchdog SIGTERMs it after K missed
+    // deadlines. One publisher per node, own timer thread; period TODO from the
+    // manifest (1s default matches the supervisor's check cadence).
+    {
+        auto osi_v2v_hb = std::make_unique<
+            ::theia::runtime::HeartbeatPublisher>(OsiV2v::kNodeName);
+        if (osi_v2v_hb->open()) {
+            osi_v2v_hb->start(/*period_ms=*/1000);
+            heartbeats.push_back(std::move(osi_v2v_hb));
+        } else {
+            osi_v2v.log().warn("heartbeat publisher open failed; "
+                                     "supervisor watchdog will not see beats");
+        }
+    }
+
+
+    Meshtastic meshtastic;
+    // Per-node logger: tagged [#meshtastic] (kNodeName, matches `tdb ps`),
+    // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so do_start/init
+    // log through it. The FIRST node's logger also backs process_logger() — the
+    // ConfigureLogLevel-push fallback target + any process_logger() caller.
+    {
+        auto meshtastic_log = MakeContextLogger(Meshtastic::kNodeName);
+        meshtastic_log->set_level(boot_level);
+        meshtastic.set_logger(std::move(meshtastic_log));
+    }
+    meshtastic.start();
+    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (the supervisor
+    // sets it from the rig's NodeToCPUMapping). No-op when unset / no entry for
+    // this node; soft-fails (logs) on EPERM. Applied AFTER start() — the thread
+    // exists now.
+    ::theia::runtime::apply_node_affinity(meshtastic.native_handle(),
+        Meshtastic::kNodeName, std::getenv("THEIA_NODE_CFG"));
+    // Resolve this node's TIPC address from the --tipc arg the supervisor built
+    // from executor.json (per node, instance machine-shifted), so the BINARY is
+    // address-agnostic — same binary on every machine. Falls back to the compiled
+    // kTipcType/kTipcInstance (the .art instance) for a standalone run.
+    uint32_t meshtastic_type, meshtastic_inst;
+    ::theia::runtime::resolve_node_tipc(Meshtastic::kNodeName,
+        Meshtastic::kTipcType, Meshtastic::kTipcInstance,
+        meshtastic_type, meshtastic_inst);
+    {
+        char _tipc[64];
+        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
+                      meshtastic_type, meshtastic_inst);
+        meshtastic.log().info(_tipc);
+    }
+
+
+    // GenRunnable has no mailbox, so it can't take the supervisor's control
+    // pushes via the GenServer handle_cast/mailbox path. Bind a listener and
+    // register the LogLevelPush / TraceControlPush INLINE — the mux dispatch
+    // thread applies them directly (on_log_level_push / on_trace_control_push,
+    // touching only atomics). This is what makes a runnable's log level + trace
+    // live-controllable (`tdb loglevel`/`trace <node>`), same as a gen_server.
+    if (auto* meshtastic_cfg = config_mux.bind_listener(
+            meshtastic_type, meshtastic_inst)) {
+        config_mux.register_cast_inline<platform_runtime_LogLevelPush>(
+            meshtastic_cfg, meshtastic, &Meshtastic::on_log_level_push);
+        config_mux.register_cast_inline<platform_runtime_TraceControlPush>(
+            meshtastic_cfg, meshtastic, &Meshtastic::on_trace_control_push);
+    } else {
+        meshtastic.log().warn("config service bind failed; live log-level "
+                                 "push disabled");
+    }
+
+
+    // Liveness beat to the supervisor watchdog (#PHM). A reporting node — of
+    // EITHER base — must beat or the watchdog SIGTERMs it after K missed
+    // deadlines. One publisher per node, own timer thread; period TODO from the
+    // manifest (1s default matches the supervisor's check cadence).
+    {
+        auto meshtastic_hb = std::make_unique<
+            ::theia::runtime::HeartbeatPublisher>(Meshtastic::kNodeName);
+        if (meshtastic_hb->open()) {
+            meshtastic_hb->start(/*period_ms=*/1000);
+            heartbeats.push_back(std::move(meshtastic_hb));
+        } else {
+            meshtastic.log().warn("heartbeat publisher open failed; "
+                                     "supervisor watchdog will not see beats");
+        }
+    }
+
+
 
     config_mux.start();
 
@@ -207,6 +364,10 @@ int main(int argc, char** argv) {
 
 
     osi_ctl.stop("signal");
+
+    osi_v2v.stop("signal");
+
+    meshtastic.stop("signal");
 
     return 0;
 }

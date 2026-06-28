@@ -15,6 +15,10 @@ cc_library(
     hdrs = [
         "OsiCtl.hh",
         "OsiCtl_netgraph.hh",
+        "OsiV2v.hh",
+        "OsiV2v_netgraph.hh",
+        "Meshtastic.hh",
+        "Meshtastic_netgraph.hh",
         "osi_codecs.hh",
         "Log.hh",
     ],

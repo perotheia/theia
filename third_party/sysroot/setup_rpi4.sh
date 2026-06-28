@@ -95,6 +95,8 @@ PACKAGES=(
     libmnl-dev         # services/nm  — minimal netlink
     libnl-3-dev        # services/nm  — libnl link/addr
     libnl-route-3-dev
+    libeigen3-dev      # services/osi — V2V SLAM estimator (header-only; the osi
+                       #   impl BUILD pulls it sysroot-relative via -I=/usr/include/eigen3)
 )
 
 err() { echo "setup_rpi4: $*" >&2; }

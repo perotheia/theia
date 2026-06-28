@@ -18,6 +18,13 @@ cc_library(
     # Apps include "ara/rds/stream.h" — the include root is services/rds/include.
     includes = ["../include"],
     copts = ["-std=c++17", "-fPIC"],
+    # HOST-ONLY: the iceoryx C binding's headers + libs come from the host apt
+    # (libiceoryx-*-dev) and are NOT staged in the aarch64 sysroots. RDS is a
+    # DEFERRED service (not in any arm64 rig — see project-shwa-rds), so mark it
+    # x86_64-only: a wildcard `//services/... --platforms=rpi4` build SKIPS rds
+    # + its dependents (rds demo/test) as incompatible rather than failing. When
+    # RDS ships on arm64, stage iceoryx into the sysroot and drop this gate.
+    target_compatible_with = ["@platforms//cpu:x86_64"],
     # iceoryx system libs (the C binding pulls in posh/utils/platform).
     linkopts = [
         "-liceoryx_binding_c",

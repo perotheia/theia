@@ -8,9 +8,19 @@ package(default_visibility = ["//visibility:public"])
 # the relative topology (pairwise distances) within tolerance + deterministically
 # (fixed-seed restarts). Pins the port against mesh_topo/estimator (HANDOFF). The
 # estimator lib is self-contained (Eigen-only) — no Theia/runtime deps needed.
+# Eigen is a header-only SYSTEM lib. A cross-build (rpi4/jetson sysroot) CANNOT
+# use the host absolute `-I/usr/include/eigen3` (bazel rejects "outside the
+# execution root") — use GCC's sysroot-relative `-I=/usr/include/eigen3` (the
+# leading `=` expands to the active --sysroot, where eigen3 is staged). Mirrors
+# EIGEN_COPTS in //services/osi/impl:BUILD.bazel.
+_EIGEN_COPTS = select({
+    "//rules/config:is_arm64": ["-I=/usr/include/eigen3"],
+    "//conditions:default": ["-I/usr/include/eigen3"],
+})
+
 cc_test(
     name = "test_estimator",
     srcs = ["test_estimator.cc"],
-    copts = ["-std=c++17", "-fPIC", "-I/usr/include/eigen3"],
+    copts = ["-std=c++17", "-fPIC"] + _EIGEN_COPTS,
     deps = ["//services/osi/impl:v2v_estimator"],
 )

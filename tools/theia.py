@@ -1719,6 +1719,11 @@ def cmd_release_app(args: list[str]) -> int:
     app_ver = _opt("--app-version", "0.1.0")
     fleet = _opt("--fleet", "theia-rig")
     arch = _opt("--arch", "x86_64")
+    # The runtime release this app is built against. NO BACKWARD COMPAT — an app
+    # depends on EXACTLY ONE runtime+services version (its ABI/proto/runtime are
+    # pinned at build time). Recorded in app.json as `requires_runtime`; the GS
+    # deploy gate refuses to install onto a device whose base_version differs.
+    requires_runtime = _opt("--requires-runtime", "")
     s3_url = _opt("--s3")
     mender_only = "--mender-only" in args or not s3_url
     platform = _ARCH_PLATFORM.get(arch)
@@ -1847,6 +1852,10 @@ def cmd_release_app(args: list[str]) -> int:
                     node.setdefault("env", {}).update(extra)
     (stage / "app.json").write_text(json.dumps({
         "name": app, "version": app_ver, "fleet": fleet, "arch": arch,
+        # The pinned runtime dependency (no backward compat). Empty = unpinned
+        # (legacy / arch-only compatibility); the GS deploy gate then only checks
+        # arch. A real release SHOULD pass --requires-runtime <key>.
+        "requires_runtime": requires_runtime,
         "processes": app_procs, "executor_subtree": exec_subtree,
     }, indent=2))
     artifact_name = f"{app}-{app_ver}"
@@ -2116,8 +2125,16 @@ def _publish_app_plane(s3_url: str, fleet: str, app: str, ver: str,
             if _aws([*aws, "cp", str(f), f"s3://{bucket}/{key}/{f.name}"]) != 0:
                 return 1
             objs.append(f.name)
+    # surface the runtime dependency in the index so the catalog reads it without
+    # fetching the full app.json (no backward compat — app pins ONE runtime).
+    requires_runtime = ""
+    try:
+        requires_runtime = json.loads(app_json.read_text()).get("requires_runtime", "")
+    except Exception:  # noqa: BLE001
+        pass
     idx = {"plane": "app", "fleet": fleet, "app": app, "version": ver,
            "artifact": (mender.name if mender and mender.is_file() else None),
+           "requires_runtime": requires_runtime,
            "files": objs}
     idx_path = WORKSPACE / "dist" / "apps" / app / f"index-{ver}.json"
     idx_path.write_text(json.dumps(idx, indent=2))

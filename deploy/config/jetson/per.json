@@ -1,8 +1,8 @@
 {
-  "_comment": "STANDALONE Jetson (the `jetson` full-rig machine slice): it hosts its OWN etcd singleton (colony etcd.yml installs it here), so per points at the LOCAL endpoint. Superseded the L4-B shared-etcd config that pointed at the rpi4 central — the Jetson is no longer a central-dependent compute board (that was the `compute` machine slice + compute.yml).",
+  "_comment": "L4-B shared-etcd: the Jetson compute board has NO local etcd — its per points at the CENTRAL board's etcd (one etcd per robot) so V-UCM on central reads every board's ucm_activation_<board> marker from the one shared keyspace. central's etcd binds 0.0.0.0:2379 (colony etcd.yml).",
   "nodes": {
     "per_client": {
-      "etcd_endpoint": "127.0.0.1:2379"
+      "etcd_endpoint": "10.0.0.22:2379"
     }
   }
 }

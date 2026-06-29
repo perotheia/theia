@@ -1850,12 +1850,27 @@ def cmd_release_app(args: list[str]) -> int:
                 extra = by_proc.get(node.get("name"))
                 if extra:
                     node.setdefault("env", {}).update(extra)
+    # ── App ARITY + role names — the app's machine set (manifest machines.json).
+    #    arity = how many machines the app spans (single rig = 1; central+compute
+    #    split = 2). GS reads this on S3 scan to show app/N + role names and to
+    #    drive the per-role Distribution/deploy model. See
+    #    project-distribution-deploy-model. (Machine = a manifest role NAME here;
+    #    the physical rig + its abi are resolved at deploy.)
+    machines_roles: list[str] = []
+    mjson = mdir / "machines.json"
+    if mjson.is_file():
+        try:
+            machines_roles = json.loads(mjson.read_text()).get("machines", []) or []
+        except Exception:  # noqa: BLE001
+            machines_roles = []
     (stage / "app.json").write_text(json.dumps({
         "name": app, "version": app_ver, "fleet": fleet, "arch": arch,
         # The pinned runtime dependency (no backward compat). Empty = unpinned
         # (legacy / arch-only compatibility); the GS deploy gate then only checks
         # arch. A real release SHOULD pass --requires-runtime <key>.
         "requires_runtime": requires_runtime,
+        # arity = len(roles); roles = the manifest machine names this app spans.
+        "roles": machines_roles, "arity": len(machines_roles) or 1,
         "processes": app_procs, "executor_subtree": exec_subtree,
     }, indent=2))
     artifact_name = f"{app}-{app_ver}"

@@ -1143,7 +1143,7 @@ _MANIFEST_DIR = "dist/manifest"
 # interchangeable binaries (the Jetson lesson: rpi4 binaries need GLIBC_2.34/2.38).
 # Keep in lockstep with rules/config/targets.bzl::TARGETS.
 _TARGETS = {
-    "host":   {"cfg": "host",   "cpu": "x86_64",  "abi_key": "",
+    "host":   {"cfg": "host",   "cpu": "x86_64",  "abi_key": "amd64",
                "deb_arch": "amd64", "libc_min": ""},
     "rpi4":   {"cfg": "rpi4",   "cpu": "aarch64", "abi_key": "bookworm-arm64",
                "deb_arch": "arm64", "libc_min": "2.36"},
@@ -2193,16 +2193,20 @@ def _publish_swp_plane(s3_url: str, fleet: str, app: str, ver: str,
             if _aws([*aws, "cp", str(f), f"s3://{bucket}/{key}/{f.name}"]) != 0:
                 return 1
             objs.append(f.name)
-    # surface the runtime dependency in the index so the catalog reads it without
-    # fetching the full swp.json (no backward compat — an SWP pins ONE runtime).
-    requires_runtime = ""
+    # surface the SWP's key fields in the index so the catalog reads them without
+    # fetching the full swp.json: requires_runtime (the pinned runtime), and the
+    # arity/roles/abi the Distribution model needs (GS shows <app>/N + role names).
+    sj: dict = {}
     try:
-        requires_runtime = json.loads(swp_json.read_text()).get("requires_runtime", "")
+        sj = json.loads(swp_json.read_text())
     except Exception:  # noqa: BLE001
         pass
     idx = {"plane": "swp", "fleet": fleet, "app": app, "version": ver,
            "artifact": (mender.name if mender and mender.is_file() else None),
-           "requires_runtime": requires_runtime,
+           "requires_runtime": sj.get("requires_runtime", ""),
+           "abi": sj.get("abi", ""),
+           "arity": sj.get("arity", len(sj.get("roles", []) or []) or 1),
+           "roles": sj.get("roles", []) or [],
            "files": objs}
     idx_path = WORKSPACE / "dist" / "apps" / app / f"index-{ver}.json"
     idx_path.write_text(json.dumps(idx, indent=2))

@@ -1,11 +1,11 @@
 {
-  "_comment": "L4-B: the V-UCM campaign roster. VucmGate reads boards (comma-list of machine names) and aggregates each board's ucm_activation_<board> PROVISIONAL marker from the shared etcd; CMP_CONFIRMING waits for ALL before fanning the aggregate Confirm. confirm_budget_ms bounds the wait before fanning Cancel.",
+  "_comment": "STANDALONE gateway (rpi4): single-board V-UCM roster — just this board (central:0). CMP_CONFIRMING waits only on its own ucm_activation marker from the LOCAL etcd. Superseded the L4-B multi-board roster (boards: compute, board_instances central:0,compute:1) — the Jetson is now its own standalone rig (jason), no longer a central-coordinated compute board.",
   "nodes": {
     "vucm_gate": {
-      "boards": "compute",
+      "boards": "central",
       "confirm_budget_ms": "120000",
       "bundle_base": "http://10.0.0.99:9000/theia-roles/theia-rig/0.2.1",
-      "board_instances": "central:0,compute:1"
+      "board_instances": "central:0"
     }
   }
 }

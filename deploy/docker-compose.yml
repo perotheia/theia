@@ -1,46 +1,38 @@
-# deploy/docker-compose.yml — two-host Theia bringup in Docker (host network).
+# deploy/docker-compose.yml — local two-rig Theia bringup in Docker.
 #
-# Topology (matches apps/manifest/test_rig.py::DemoSoftware — all-x86 docker):
+# The containers are treated AS RIGS: bare boards that colony provisions over
+# SSH, driven from the Ground Station UI — NOT self-provisioning. This is the
+# local mirror of a real fleet (rpi4 + jetson), but all-amd64 (host abi), so no
+# cross-build and no physical board is needed to exercise the full
+# enrol → provision (runtime) → deploy (app) → Distribution flow.
 #
-#   central — services (the FC daemons) + gateway.
-#   compute — demo binaries.
+#   central — a rig (sshd :2201). Provisioned with the `central` manifest slice.
+#   compute — a rig (sshd :2202). Provisioned with the `compute` slice.
 #
-# Both services run on `network_mode: host` so they share the HOST network AND
-# the host TIPC namespace — the supervisor + FC nodes bind to localhost, and a
-# host-side `tdb` (TIPC via artheia.probe) can reach the containerized
-# supervisor directly.
+# Both run `network_mode: host` → they share the HOST network AND the host TIPC
+# namespace (one TIPC nametable; central=instance 0, compute=instance 1 per the
+# manifest). Because they share the host port space, their sshd ports MUST
+# differ (2201/2202) — a real rig owns :22, but two rigs on one host net can't.
 #
-# These containers DO NOT self-provision. They start EMPTY (/opt/theia/{bin,
-# config} are empty dirs from the image) and the entrypoint loops with a
-# "waiting for orchestration" message until provisioning has been pushed in
-# FROM OUTSIDE — an operator / CI runs `theia provision` + `theia orchestrate`
-# (ansible) against the container, which lays down /opt/theia/bin/supervisor +
-# /opt/theia/config/executor.json. The entrypoint then runs the supervisor.
-# On `docker compose down` the container is destroyed → back to empty; a fresh
-# `up` waits again until re-provisioned. (No persistent volume by design.)
-#
-# Pre-flight (from workspace root, venv on PATH):
-#
+# Bring up (from workspace root, venv on PATH):
 #   export PATH="$PWD/.venv/bin:$PATH"
 #   docker compose -f deploy/docker-compose.yml build
-#   docker compose -f deploy/docker-compose.yml up          # waits for orchestration
-#   # then, from the host, provision + orchestrate each machine into its container
+#   docker compose -f deploy/docker-compose.yml up -d
+#   # then, from the Ground Station UI:
+#   #   Connect a new device → SSH-probe central @ <dalek-ip>:2201 / compute :2202
+#   #   (colony-api's pubkey is already in the rig's authorized_keys)
+#   #   provision (runtime, from S3) → deploy a Distribution (app, via Mender)
 #
-# Drive it from the host:  tdb ps   (shares the host TIPC namespace).
-# Tear-down:  Ctrl-C, then `docker compose -f deploy/docker-compose.yml down`.
-#
-# NOTE: the supervisor dropped etcd — live state flows over the TIPC
-# NodeEdge/NodeState firehose, not etcd. No etcd endpoint/lib mounts here.
+# Drive TIPC directly from the host:  tdb ps   (shares the host TIPC namespace).
+# Tear-down:  docker compose -f deploy/docker-compose.yml down.
 
 services:
 
   # etcd — ONE per cluster (central's machine.json declares it). Behind the
-  # `etcd` profile because in a dev box the HOST already runs etcd on
-  # 127.0.0.1:2379 (and under network_mode: host a second one would collide on
-  # :2380). Bring it up only on a clean machine with no host etcd:
-  #     docker compose --profile etcd up
-  # Either way central treats etcd as externally provided (FACTER_theia_etcd_
-  # external) and connects at 127.0.0.1:2379 (machine.json etcd_endpoint).
+  # `etcd` profile because a dev box usually already runs etcd on
+  # 127.0.0.1:2379 (under network_mode: host a second one collides on :2380).
+  # Bring it up only on a clean host with no etcd:
+  #     docker compose --profile etcd up -d
   etcd:
     image: quay.io/coreos/etcd:v3.5.12
     container_name: theia-etcd
@@ -61,100 +53,51 @@ services:
       - ./logs/etcd:/var/lib/theia-etcd
     restart: unless-stopped
 
+  # central — a bare rig colony provisions over SSH (:2201). The coordinator
+  # board: runs the cluster singletons (supervisor, com, per, vucm, …) once
+  # provisioned. Empty until colony pushes a release.
   central:
-    image: theia-central:latest
+    image: theia-rig:latest
     build:
       context: .                       # deploy/
-      dockerfile: central/Dockerfile
+      dockerfile: rig/Dockerfile
     container_name: theia-central
+    hostname: central
     network_mode: host
-    # Capabilities the Theia binaries hold (the setcap contract in
-    # deploy/ansible tasks/setcap.yml, applied at provisioning). cap_add raises the
-    # container's bounding/ambient set so the file caps (+eip) actually take on
-    # exec; without it setcap'd binaries silently run uncapped under Docker's
-    # default cap drop:
-    #   SYS_NICE — supervisor: realtime sched (SCHED_FIFO/RR) + CPU affinity on
-    #              the FC node threads, raised into ambient so forked children
-    #              inherit it.
-    #   NET_RAW + NET_ADMIN — gateway: AF_PACKET / raw CAN+UDP for ASAM-CMP
-    #              capture (gateway is dropped from the build today; kept here
-    #              so it works the moment it's re-added).
+    command: ["-p", "2201"]            # sshd port (host net → must not be :22)
+    # Capabilities the Theia binaries hold (the setcap contract colony applies
+    # at provision, deploy/ansible setcap.yml). cap_add raises the bounding/
+    # ambient set so the file caps (+eip) take on exec:
+    #   SYS_NICE  — supervisor realtime sched + CPU affinity on FC node threads.
+    #   NET_RAW + NET_ADMIN — gateway AF_PACKET / raw CAN+UDP (when re-added).
     cap_add:
       - SYS_NICE
       - NET_RAW
       - NET_ADMIN
     volumes:
-      # NO PUPPET. run-supervisor.sh does thin in-container provisioning (stage
-      # the release tree + executor.json + per-FC config, setcap) directly. It
-      # needs the per-machine JSON manifests + the built .ipk bundles, read-only.
-      - ../dist/manifest:/etc/theia/manifest:ro
-      - ../bazel-bin/dist/manifest:/opt/theia/ipk:ro
-      # The VUCM artifact repo (theia-package.tar.zst + a campaign script). The
-      # self-hosted `vucm` service writes here; the UCM agent downloads from it.
-      - ./artifacts:/opt/theia/artifacts
       - ./logs/central:/var/log/theia
     environment:
-      - HOSTNAME=central
       - TZ=UTC
-      # etcd is provided by the compose `etcd` service; central is the etcd host
-      # (one writer per cluster) so it runs the first-boot all-FC config seed.
-      - FACTER_theia_etcd_external=1
     restart: unless-stopped
 
+  # compute — a second bare rig (:2202). The compute board: runs the app's
+  # compute-role processes; reached over TIPC through the shared host namespace
+  # and over com THROUGH central (central is the only remote com endpoint).
   compute:
-    image: theia-compute:latest
+    image: theia-rig:latest
     build:
       context: .
-      dockerfile: compute/Dockerfile
+      dockerfile: rig/Dockerfile
     container_name: theia-compute
+    hostname: compute
     network_mode: host
-    # Same cap contract as central (see its comment) — supervisor needs
-    # SYS_NICE; NET_RAW/NET_ADMIN for the gateway when re-added.
+    command: ["-p", "2202"]
     cap_add:
       - SYS_NICE
       - NET_RAW
       - NET_ADMIN
     volumes:
-      # Same thin-provisioning inputs as central (compute has no etcd, no seed).
-      - ../dist/manifest:/etc/theia/manifest:ro
-      - ../bazel-bin/dist/manifest:/opt/theia/ipk:ro
-      - ./artifacts:/opt/theia/artifacts
       - ./logs/compute:/var/log/theia
     environment:
-      - HOSTNAME=compute
       - TZ=UTC
-      # Avoid a :7700 collision with central's com bridge on the shared host
-      # network (com is currently hidden from the build; harmless either way).
-      - THEIA_COM_LISTEN=0.0.0.0:7701
-      # compute's supervisor binds TIPC instance 1 (central's is 0) so the two
-      # don't collide on the shared host TIPC namespace. The instance is NOT set
-      # here — run-supervisor.sh reads it from the manifest
-      # (<machine>/execution.json.supervisor_instance, set by the rig's
-      # SoftwareSpecification.supervisor). Manifest-driven, no hardcoded env.
-    restart: unless-stopped
-
-  # ── VUCM — the self-hosted fleet / Mender-server role ──────────────────────
-  # AUTOSAR VUCM = fleet campaign management (vs UCM = the on-device agent). In
-  # this self-hosted demo it's a thin sidecar: it OWNS the artifact repo
-  # (theia-package.tar.zst under ./artifacts, shared with central/compute) + a
-  # campaign script (deploy/vucm/campaign.sh) that triggers an update by reaching
-  # the on-device UCM agent through services/com gRPC (UcmView — the
-  # PerView/SupervisorView-style proxy) or, for the minimal demo, the artheia
-  # probe driving UcmDaemon.RequestUpdate. Idle by default (no auto-rollout);
-  # `docker compose exec vucm /opt/theia/vucm/campaign.sh <pkg>` pushes one.
-  vucm:
-    image: theia-central:latest          # reuse the framework image (has probe + python)
-    container_name: theia-vucm
-    network_mode: host
-    profiles: ["vucm"]                    # opt-in: docker compose --profile vucm up
-    depends_on: [central]
-    volumes:
-      - ./artifacts:/opt/theia/artifacts  # the artifact repo (release packages)
-      - ./vucm:/opt/theia/vucm:ro         # the campaign script
-      - ../dist/manifest:/etc/theia/manifest:ro
-    environment:
-      - HOSTNAME=vucm
-      - TZ=UTC
-    # No supervisor here — VUCM is a control sidecar. Stay alive for `exec`.
-    entrypoint: ["sleep", "infinity"]
     restart: unless-stopped

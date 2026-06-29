@@ -1,167 +1,89 @@
-# deploy/ — multi-host Theia bringup in Docker
+# deploy/ — local two-rig Theia bringup in Docker
 
-Brings up Theia as two containers (`central` + `compute`) on a
-shared Docker bridge network. Each runs its own supervisor;
-together they realize the two-machine topology described in
-`demo/manifest/rig.py::DemoSoftware`.
+Brings up two **bare-rig** containers (`central` + `compute`) that
+[colony](https://github.com/perotheia/colony) provisions over SSH, driven from
+the Ground Station UI — the **local mirror of a real fleet** (rpi4 + jetson),
+but all-amd64 so no cross-build or physical board is needed.
+
+The containers do **not** self-provision. They boot empty, run an `sshd` with
+colony-api's pubkey in `root`'s `authorized_keys`, and wait. The full lifecycle
+— enrol → provision (runtime from S3) → deploy (app via Mender / a Distribution)
+— runs through the Ground Station exactly as it would against a physical rig.
 
 ## Topology
 
 ```
-   host
+   host (shared network_mode: host → one network + one TIPC namespace)
   ┌─────────────────────────────────────────────────────────────┐
-  │                                                             │
-  │   ┌──────────────────┐         ┌──────────────────┐         │
-  │   │  theia-central   │         │  theia-compute   │         │
-  │   │  hostname=central│         │  hostname=compute│         │
-  │   │  alias=central_  │         │  alias=compute_  │         │
-  │   │        host      │         │        host      │         │
-  │   │                  │         │                  │         │
-  │   │ /usr/bin/theia-  │         │ /usr/bin/theia-  │         │
-  │   │   supervisor     │         │   supervisor     │         │
-  │   │ /usr/bin/{18 FCs}│ ◄─TIPC─►│ /usr/bin/demo_p1 │         │
-  │   │ /usr/bin/gateway │         │ /usr/bin/demo_p2 │         │
-  │   │                  │         │ /usr/bin/demo_p3 │         │
-  │   │ gRPC :7700       │         │ gRPC :7701       │         │
-  │   └────────┬─────────┘         └────────┬─────────┘         │
-  │            │                            │                   │
-  │            └────────── theia_net ───────┘                   │
-  │                       (172.30.0.0/24)                       │
-  └─────────────┬──────────────────────────────────────┬────────┘
-                │                                      │
-            host:7700                              host:7701
-            (GUI → central)                       (GUI → compute)
+  │   ┌──────────────────┐         ┌──────────────────┐          │
+  │   │  theia-central   │         │  theia-compute   │          │
+  │   │  hostname=central│         │  hostname=compute│          │
+  │   │  sshd  :2201     │         │  sshd  :2202     │          │
+  │   │  (TIPC inst 0)   │ ◄─TIPC─► │  (TIPC inst 1)  │          │
+  │   │  coordinator:    │         │  app compute     │          │
+  │   │  supervisor+      │         │  processes       │          │
+  │   │  singletons,com   │         │                  │          │
+  │   └──────────────────┘         └──────────────────┘          │
+  └───────┬───────────────────────────────┬─────────────────────┘
+       host:2201                       host:2202
+       (colony SSH → central)          (colony SSH → compute)
 ```
 
-## Lifecycle
+Both rigs share the host network, so their sshd ports **must** differ
+(2201/2202) — a real rig owns `:22`, but two rigs on one host net can't.
 
-Each container's lifecycle:
+## Lifecycle (colony-driven, over SSH)
 
-1. Docker spawns the container with the entrypoint
-   `/usr/local/bin/run-supervisor.sh`.
-2. The script picks the Puppet manifest matching its `$HOSTNAME`
-   (`/etc/puppet/manifests/central.pp` or `compute.pp`).
-3. `puppet apply` runs the `theia` module:
-   - `theia::install` — `dpkg --install /opt/theia/ipk/<machine>.ipk`.
-   - `theia::config` — drops `executor.json` + `machines.json`
-     into `/etc/theia/`.
-   - `theia::service` — placeholder (in the dev compose, the
-     supervisor runs in foreground after Puppet returns).
-4. The script verifies `/usr/bin/theia-supervisor` exists and
-   `/etc/theia/executor.json` is present.
-5. `exec`s the supervisor binary in foreground (Docker signals
-   reach the supervisor directly; `docker stop` → SIGTERM →
-   graceful shutdown).
+1. `docker compose up` starts each rig: `sshd -D` on its port. Empty
+   `/opt/theia/{bin,config}` until provisioned.
+2. From the Ground Station UI → **Connect a new device**: SSH-probe the rig
+   (`<host-ip>:2201` / `:2202`). colony-api's key is already authorized, so the
+   probe + identity-set succeed and the rig appears as a target.
+3. **Provision** (colony `orchestrate`): ansible installs the runtime/base from
+   the S3 runtime plane, lays down the supervisor + executor.json, setcaps the
+   binaries, configures the TIPC bearer, and starts the supervisor (systemd
+   inside the container, or a foreground supervisor — colony's choice).
+4. **Deploy a Distribution**: the runtime build → colony (base), the app build
+   → Mender (overlay), each fanned out to the role's assigned rig.
 
 ## Quick-start
 
 ```bash
-# 1. Install the workspace venv.
-python3 -m venv .venv
-.venv/bin/pip install -e ./artheia
 export PATH="$PWD/.venv/bin:$PATH"
 
-# 2. Build the per-machine .ipks (the 2-machine zonal rig) + the
-#    supervisor binary (a bazel gen-app FC).
-theia dist                                          # @rig_zonal bundles
-PATH="$PWD/.venv/bin:$PATH" bazel build //platform/supervisor/main:supervisor
-
-# 3. Stage artifacts into deploy/.staging/.
-./deploy/stage.sh
-
-# 5. Build the base Docker image + per-host images.
+# Build the rig image + bring up the two rigs.
 docker compose -f deploy/docker-compose.yml build
+docker compose -f deploy/docker-compose.yml up -d
 
-# 6. Bring it up (Ctrl-C to stop).
-docker compose -f deploy/docker-compose.yml up
+# (optional) a cluster etcd, only on a host with no etcd already:
+#   docker compose -f deploy/docker-compose.yml --profile etcd up -d
+
+# Verify colony (on the GS host) can reach them:
+#   ssh -p 2201 root@<host-ip> hostname   # → central
+#   ssh -p 2202 root@<host-ip> hostname   # → compute
+
+# Then drive enrol → provision → deploy from the Ground Station UI.
 ```
 
-After `up`:
-
-- `docker logs -f theia-central` — central's supervisor + Puppet apply
-- `docker logs -f theia-compute` — compute's
-- GUI: connect to `localhost:7700` (central) and `localhost:7701`
-  (compute) from the host.
+Drive TIPC directly from the host: `tdb ps` (shares the host TIPC namespace).
+Tear-down: `docker compose -f deploy/docker-compose.yml down`.
 
 ## Files
 
 | File | Role |
 |---|---|
-| `Dockerfile.base`           | Ubuntu + opkg + puppet + bash. Shared base image. |
-| `central/Dockerfile`        | Sets HOSTNAME=central, exposes 7700. |
-| `compute/Dockerfile`        | Sets HOSTNAME=compute, exposes 7701. |
-| `run-supervisor.sh`         | Container entrypoint (`puppet apply` then `exec supervisor`). |
-| `docker-compose.yml`        | Two services + shared bridge network. |
-| `stage.sh`                  | Copies Bazel artifacts to `.staging/` for compose to mount. |
-| `puppet/central.pp`         | Per-host manifest: include the theia module with machine="central_host". |
-| `puppet/compute.pp`         | Same, machine="compute_host". |
-| `puppet/modules/theia/manifests/init.pp`    | Aggregator class. |
-| `puppet/modules/theia/manifests/install.pp` | `dpkg --install <ipk>`. |
-| `puppet/modules/theia/manifests/config.pp`  | Drop executor.json + machines.json. |
-| `puppet/modules/theia/manifests/service.pp` | Lifecycle (placeholder; entrypoint handles it). |
-| `.staging/` (gitignored)    | Staged Bazel artifacts. Populated by `stage.sh`. |
-| `logs/` (gitignored)        | Container stdout/stderr captures. |
+| `rig/Dockerfile`              | The bare-rig image: Ubuntu + sshd + ansible-target prereqs (python3, sudo, awscli, dpkg, libcap2-bin, tipc) + the FC runtime libs. No Theia baked in. |
+| `rig/colony_authorized_keys`  | colony-api's pubkey (the provisioning key), baked into the rig's `root` authorized_keys. Matches `GET /pubkey` on colony-api. |
+| `docker-compose.yml`          | The two rigs (central :2201, compute :2202) + an optional etcd profile. |
+| `run-supervisor.sh`           | The local-install (non-Docker) supervisor entrypoint, exported by `BUILD.bazel` for the top-level `//:install` bundle. Not used by the rig containers. |
+| `logs/` (gitignored)          | Per-rig log captures (bind-mounted to `/var/log/theia`). |
 
-## Known limits
+## Notes
 
-- **Central image's .ipk is empty today**. The 18 FC SwComponents
-  are `bazel_buildable=False` (their binaries are bash daemons
-  under `theia_runtime/`, not yet bridged into Bazel). So
-  `@rig_apps//central_host:image` is an empty filegroup; opkg-install
-  becomes a no-op. The supervisor runs but has no FC binaries to
-  spawn — it logs "module missing" for each.
-
-  **Fix path**: bridge `theia_runtime/services/<short>/daemon.sh` →
-  cc_binary (or sh_binary) targets, flip `bazel_buildable=True` in
-  `services/manifest/fc.py`.
-
-- **Supervisor binary is bind-mounted, not installed via opkg**.
-  Until packaged as part of an .ipk, we mount the bazel-built FC
-  binary from the workspace. See `docker-compose.yml`'s
-  `../bazel-bin/platform/supervisor/main/supervisor:/usr/bin/theia-supervisor`.
-
-- **No systemd in the dev compose**. The entrypoint exec's the
-  supervisor in foreground. Production deploys with
-  `--privileged` + systemd as PID 1 are a future task; the Puppet
-  `theia::service` class has the systemd unit code commented out
-  ready to enable.
-
-- **Cross-container TIPC not yet plumbed**. The demo's TIPC
-  multicast doesn't traverse Docker bridges out of the box; the
-  current rig is designed for in-host TIPC. For real
-  multi-container TIPC, either run with `--network=host` or
-  configure `tipc-config link` to span the Docker bridge.
-  Tracked in `docs/tasks/TODO/cross-container-tipc.md`.
-
-## Troubleshooting
-
-**`puppet apply` errors with "no such file or directory:
-/opt/theia/ipk/<machine>.ipk"**
-You forgot `./deploy/stage.sh`. The compose mount expects the
-.ipk to exist under `.staging/<machine>/ipk/`.
-
-**Container exits immediately with rc=3**
-The supervisor binary isn't at `/usr/bin/theia-supervisor`. Check
-the bind-mount path in `docker-compose.yml` — the source is
-`../bazel-bin/platform/supervisor/main/supervisor`, which only
-exists after `bazel build //platform/supervisor/main:supervisor`.
-
-**Both containers up but supervisor logs "service missing"**
-The FC binaries aren't installed. Expected today; see "Known
-limits" above.
-
-**Want to inspect the .ipk before deploy**
-```bash
-ar t deploy/.staging/compute/ipk/compute_host.ipk     # list members
-ar x deploy/.staging/compute/ipk/compute_host.ipk      # extract
-tar -tzf data.tar.gz                                   # see /usr/bin/* entries
-```
-
-## Related docs
-
-- [Bazel integration](../docs/artheia/bazel.md) — how `bazel build`
-  drives the per-machine `.ipk`s.
-- [Manifest DSL](../docs/artheia/manifest-dsl.md) — how the rig.py
-  describes machine bindings.
-- [Tutorial: gen-rig](../docs/artheia/gen-rig.md) — bootstrapping
-  a new rig.py.
+- **All-amd64 (host abi).** Both rigs probe as `amd64`, so a Distribution role
+  must carry the `amd64`/host build. To exercise the heterogeneous
+  bookworm-arm64 + focal-arm64 path you need real boards (rpi4 + jetson).
+- **The VUCM *sidecar* is gone.** The old self-hosted fleet mock (artifact repo
+  + `campaign.sh`) was deleted — GS / Mender / colony are the fleet plane now.
+  The **VUCM FC** still runs on central via the manifest; that's untouched.
+- **Legacy headscale compose deleted** (VPN killed).

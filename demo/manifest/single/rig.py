@@ -24,7 +24,8 @@ from manifest.assemble import (
 
 RIG = BASE.combine(DeploymentLayer(
     machines=MachineSetLayer(machines={
-        MachineLayer(name="central", arch=Explicit("x86_64"),
+        # The sole rig hosts etcd (one per cluster).
+        MachineLayer(name="central", arch=Explicit("x86_64"), etcd=Explicit(True),
                      cores={0, 1, 2, 3}, machine_states={"Startup", "Running"}),
     }),
     execution=ExecutionLayer(processes={

@@ -1880,44 +1880,42 @@ def cmd_release_swp(args: list[str]) -> int:
                 extra = by_proc.get(node.get("name"))
                 if extra:
                     node.setdefault("env", {}).update(extra)
-    # ── SWP ARITY + role names — the SWP's machine set (manifest machines.json).
-    #    arity = how many machines the SWP spans (single rig = 1; central+compute
-    #    split = 2). GS reads this on S3 scan to show <app>/N + role names and to
-    #    drive the per-role Distribution/deploy model. See
-    #    project-distribution-deploy-model. (Machine = a manifest role NAME here;
-    #    the physical rig + its abi are resolved at deploy.)
-    machines_roles: list[str] = []
-    mjson = mdir / "machines.json"
-    if mjson.is_file():
+    # ── SWP arity + roles come from the SERIALIZED MANIFEST (machines.json) — the
+    #    SINGLE source, NOT a synthetic swp.json (which only duplicates it). roles
+    #    = the deployment machine list, arity = len(roles), `on` = the machines the
+    #    SWP's processes run on (the overlay target). See project-software-package-swp.
+    mjson_path = mdir / "machines.json"
+    mjson: dict = {}
+    if mjson_path.is_file():
         try:
-            machines_roles = json.loads(mjson.read_text()).get("machines", []) or []
+            mjson = json.loads(mjson_path.read_text())
         except Exception:  # noqa: BLE001
-            machines_roles = []
-    swp_manifest = {
-        "name": app, "version": app_ver, "fleet": fleet, "arch": arch,
-        # The ABI this build targets (bookworm-arm64 / focal-arm64 / "" for host).
-        # The Distribution model matches a role's abi to its swp_build's abi; the
-        # swp_build identifier is the artifact-name below (carries the abi).
-        "abi": abi,
-        # The pinned runtime dependency (no backward compat). Empty = unpinned
-        # (legacy / arch-only compatibility); the GS deploy gate then only checks
-        # arch. A real release SHOULD pass --requires-runtime <key>.
-        "requires_runtime": requires_runtime,
-        # arity = len(roles); roles = the manifest machine names this SWP spans.
-        "roles": machines_roles, "arity": len(machines_roles) or 1,
-        "processes": app_procs, "executor_subtree": exec_subtree,
-    }
-    swp_json = json.dumps(swp_manifest, indent=2)
-    (stage / "swp.json").write_text(swp_json)
-    # Back-compat: also emit app.json (same content) for any reader still on the
-    # old name (the on-device module + GS index reader during the rename window).
-    (stage / "app.json").write_text(swp_json)
+            mjson = {}
+    roles = mjson.get("roles") or mjson.get("machines", []) or []
+    arity = mjson.get("arity") or (len(roles) or 1)
+    swp_on = mjson.get("on") or roles
+    # SHIP THE MANIFEST in the artifact (not swp.json): machines.json + the SWP's
+    # per-machine slice (machine.json/executor.json) for the boards it runs on. The
+    # on-device module + GS read arity/roles/abi straight from these.
+    import shutil as _sh
+    (stage / "manifest").mkdir(exist_ok=True)
+    _sh.copy2(mjson_path, stage / "manifest" / "machines.json")
+    for mname in swp_on:
+        msrc = mdir / mname
+        if msrc.is_dir():
+            for fn in ("machine.json", "executor.json", "application.json"):
+                if (msrc / fn).is_file():
+                    (stage / "manifest" / mname).mkdir(parents=True, exist_ok=True)
+                    _sh.copy2(msrc / fn, stage / "manifest" / mname / fn)
     # The Mender artifact-name == the Distribution swp_build identifier == what the
     # GS per-role deploy hands Mender. ABI-keyed so central (bookworm-arm64) and
     # compute (focal-arm64) of the SAME SWP version are distinct, non-colliding
     # artifacts (e.g. gateway-1.0-bookworm-arm64 vs gateway-1.0-focal-arm64).
     artifact_name = f"{app}-{ver_key}"
     (stage / "version.txt").write_text(artifact_name + "\n")
+    # The plane-index fields the GS catalog reads, all DERIVED from the manifest.
+    swp_meta = {"abi": abi, "arity": arity, "roles": roles, "on": swp_on,
+                "requires_runtime": requires_runtime}
 
     # ── Pack the Mender artifact (theia-swp module). Reuse mender-artifact if
     #    present; else leave the staged tree + a tarball for the GW to pack. ─────
@@ -1935,7 +1933,7 @@ def cmd_release_swp(args: list[str]) -> int:
             "--device-type", fleet,
             "--file", str(tarball),
             "--file", str(stage / "version.txt"),
-            "--file", str(stage / "swp.json"),
+            "--file", str(stage / "manifest" / "machines.json"),
             "--output-path", str(mender_out),
         ])
         if rc != 0:
@@ -1954,7 +1952,7 @@ def cmd_release_swp(args: list[str]) -> int:
         # other and the GS catalog can offer each abi as a distinct swp_build.
         rc = _publish_swp_plane(s3_url, fleet, app, ver_key,
                                 mender_out if mender_out.exists() else None,
-                                tarball, stage / "swp.json")
+                                tarball, swp_meta)
         if rc != 0:
             return rc
     return 0
@@ -2159,11 +2157,12 @@ def cmd_release_role(args: list[str]) -> int:
 
 def _publish_swp_plane(s3_url: str, fleet: str, app: str, ver: str,
                        mender: "Path | None", tarball: "Path",
-                       swp_json: "Path") -> int:
+                       swp_meta: dict) -> int:
     """Push the Software Package to the S3 package plane
     user-software/<fleet>/<app>/<ver>/. Uses the aws cli (S3-compatible) against
     MinIO. Writes an index.json the GW / ground-station reads to drive a Mender
-    deployment."""
+    deployment. `swp_meta` (abi/arity/roles/on/requires_runtime) is DERIVED from
+    the serialized manifest by the caller — the index needs no swp.json."""
     import json
     import os
     import subprocess
@@ -2188,25 +2187,21 @@ def _publish_swp_plane(s3_url: str, fleet: str, app: str, ver: str,
 
     subprocess.run([*aws, "mb", f"s3://{bucket}"], env=env)  # idempotent
     objs = []
-    for f in (mender, tarball, swp_json):
+    for f in (mender, tarball):
         if f and f.is_file():
             if _aws([*aws, "cp", str(f), f"s3://{bucket}/{key}/{f.name}"]) != 0:
                 return 1
             objs.append(f.name)
-    # surface the SWP's key fields in the index so the catalog reads them without
-    # fetching the full swp.json: requires_runtime (the pinned runtime), and the
-    # arity/roles/abi the Distribution model needs (GS shows <app>/N + role names).
-    sj: dict = {}
-    try:
-        sj = json.loads(swp_json.read_text())
-    except Exception:  # noqa: BLE001
-        pass
+    # The index carries the SWP fields the GS catalog reads (abi/arity/roles/on +
+    # requires_runtime) — all DERIVED from the serialized manifest by the caller,
+    # so the catalog needs neither a swp.json nor a fetch of the artifact.
+    roles = swp_meta.get("roles", []) or []
     idx = {"plane": "swp", "fleet": fleet, "app": app, "version": ver,
            "artifact": (mender.name if mender and mender.is_file() else None),
-           "requires_runtime": sj.get("requires_runtime", ""),
-           "abi": sj.get("abi", ""),
-           "arity": sj.get("arity", len(sj.get("roles", []) or []) or 1),
-           "roles": sj.get("roles", []) or [],
+           "requires_runtime": swp_meta.get("requires_runtime", ""),
+           "abi": swp_meta.get("abi", ""),
+           "arity": swp_meta.get("arity", len(roles) or 1),
+           "roles": roles, "on": swp_meta.get("on", roles),
            "files": objs}
     idx_path = WORKSPACE / "dist" / "apps" / app / f"index-{ver}.json"
     idx_path.write_text(json.dumps(idx, indent=2))

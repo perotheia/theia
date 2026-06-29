@@ -41,7 +41,10 @@ _ON_CENTRAL = [n for n in PROCESS_NAMES if n not in _ON_COMPUTE and n not in _ON
 # arch-agnostic split: two machines + every process bound to one of them.
 SPLIT = BASE.combine(DeploymentLayer(
     machines=MachineSetLayer(machines={
-        MachineLayer(name="central", cores={0, 1, 2, 3}, machine_states={"Startup", "Running"}),
+        # etcd lives on central ONLY (one per cluster, the coordinator); compute
+        # connects to it. Provisioning reads machine.json.etcd to place it.
+        MachineLayer(name="central", etcd=Explicit(True),
+                     cores={0, 1, 2, 3}, machine_states={"Startup", "Running"}),
         MachineLayer(name="compute", cores={0, 1, 2, 3, 4, 5, 6, 7}, machine_states={"Startup", "Running"}),
     }),
     execution=ExecutionLayer(processes={

@@ -1663,54 +1663,60 @@ def cmd_release(args: list[str]) -> int:
     return 0
 
 
-def cmd_release_app(args: list[str]) -> int:
-    """Build + publish a USER-WS APP bundle for day-2 Mender OTA (the app plane).
+def cmd_release_swp(args: list[str]) -> int:
+    """Build + publish a USER-WS SOFTWARE PACKAGE (SWP) for day-2 Mender OTA.
 
-    The runtime/app dichotomy: `theia release [--runtime]` ships the UNIVERSAL
+    A Software Package (ARA/UCM term — see services/ucm: "binaries/libs/assets,
+    via release directories") is the user's WHOLE deployable: every user-FC
+    executable across ALL the SWP's compositions (one composition == one
+    executable), bundled as ONE Mender overlay. It is NOT a single composition.
+
+    The runtime/SWP dichotomy: `theia release [--runtime]` ships the UNIVERSAL
     platform (supervisor + services) to the runtime plane (colony factory-installs
-    it). `theia release-app` ships ONLY the user's app FCs — the day-2 delivery
-    unit Mender installs as an OVERLAY into the running release (services + the
-    supervisor are NEVER touched). The app build is target-arch — the arch is
+    it). `theia release-swp` ships ONLY the user's FCs — the day-2 delivery unit
+    Mender installs as an OVERLAY into the running release (services + the
+    supervisor are NEVER touched). The SWP build is target-arch — the arch is
     DEFINED BY THE FLEET's board hardware.
 
     Usage:
-      theia release-app <app> [opts]
-        <app>            the apps/<app> composition (e.g. gateway)
-        --app-version V  the app semver (default 0.1.0) — the install dir + Mender
-                         artifact name (keyed <app>-<V>)
+      theia release-swp <app> [opts]    (<app> = the user's apps/<app> package)
+        <app>            the apps/<app> package (e.g. gateway, apps) — the SWP's
+                         compositions live under it (//apps/<app>/<Composition>)
+        --swp-version V  the SWP semver (default 0.1.0) — the install dir + Mender
+                         artifact name (keyed <app>-<V>-<abi>)
         --fleet F        the hardware-capability fleet / Mender device-group
-                         (default theia-rig) — the S3 app-plane key + Mender
+                         (default theia-rig) — the S3 package-plane key + Mender
                          --device-type
         --arch A         board target (host | rpi4 | jetson; default host) — picks
                          the cross-build platform AND the abi key (rpi4=bookworm-
                          arm64, jetson=focal-arm64, host=amd64). The abi is baked
                          into the artifact-name + S3 dir so per-role Distribution
-                         deploy resolves a machine to the matching-abi app build.
-        --machine M      the manifest machine whose app slice to pack (default:
+                         deploy resolves a machine to the matching-abi SWP build.
+        --machine M      the manifest machine whose SWP slice to pack (default:
                          the app's host_machine from application.json)
-        --s3 URL         publish to the app plane on this MinIO/S3 (e.g.
+        --s3 URL         publish to the package plane on this MinIO/S3 (e.g.
                          http://10.0.0.99:9000); omit to only build the .mender
         --mender-only    just write dist/apps/<app>/<app>-<V>.mender (no S3 push)
 
-    Output (ABI-keyed — <V> below is <app-version>-<abi> for cross-built boards):
-      dist/apps/<app>/<app>-<V>.mender   the Mender artifact (theia-app module)
+    Output (ABI-keyed — <V> below is <swp-version>-<abi> for cross-built boards):
+      dist/apps/<app>/<app>-<V>.mender   the Mender artifact (theia-swp module)
       → S3 user-software/<fleet>/<app>/<V>/  (when --s3 given)
 
-    The artifact payload (consumed by the on-device `theia-app` update module):
-      bin/<fc>          the app's FC binaries (the overlay)
-      app.json          {name, version, processes[], executor_subtree}
+    The artifact payload (consumed by the on-device `theia-swp` update module):
+      bin/<fc>          the SWP's FC executables (ALL compositions; the overlay)
+      swp.json          {name, version, abi, roles, arity, processes[], subtree}
       version.txt       <app>-<V>  (the module's artifact-name gate)
     """
     import json
     import shutil
 
     if "-h" in args or "--help" in args or not args:
-        print(cmd_release_app.__doc__, file=sys.stderr)
+        print(cmd_release_swp.__doc__, file=sys.stderr)
         return 0 if args else 2
 
     app = next((a for a in args if not a.startswith("-")), None)
     if not app:
-        print("theia release-app: needs an <app> name (apps/<app>).",
+        print("theia release-swp: needs an <app> name (apps/<app>).",
               file=sys.stderr)
         return 2
 
@@ -1720,7 +1726,8 @@ def cmd_release_app(args: list[str]) -> int:
                 return args[i + 1]
         return default
 
-    app_ver = _opt("--app-version", "0.1.0")
+    # --swp-version is canonical; --app-version kept as a back-compat alias.
+    app_ver = _opt("--swp-version") or _opt("--app-version", "0.1.0")
     fleet = _opt("--fleet", "theia-rig")
     # --arch is a BOARD TARGET (host | rpi4 | jetson), NOT a bare cpu — because the
     # app plane is ABI-keyed exactly like the runtime plane: rpi4=bookworm-arm64 and
@@ -1738,7 +1745,7 @@ def cmd_release_app(args: list[str]) -> int:
     mender_only = "--mender-only" in args or not s3_url
     tgt = _target(arch)
     if not tgt:
-        print(f"theia release-app: no board target for arch '{arch}' "
+        print(f"theia release-swp: no board target for arch '{arch}' "
               f"(want one of {sorted(_TARGETS)}).", file=sys.stderr)
         return 2
     platform = _platform_label(arch)
@@ -1767,50 +1774,55 @@ def cmd_release_app(args: list[str]) -> int:
             if app_procs:
                 break
     if not app_procs:
-        print(f"theia release-app: no application '{app}' in any "
+        print(f"theia release-swp: no application '{app}' in any "
               f"{mdir}/*/application.json — run `theia manifest` on the app rig "
               "first.", file=sys.stderr)
         return 1
-    print(f"theia release-app: {app} v{app_ver} abi={abi or 'host'} fleet={fleet} "
+    print(f"theia release-swp: {app} v{app_ver} abi={abi or 'host'} fleet={fleet} "
           f"arch={arch} machine={machine} procs={app_procs}", file=sys.stderr)
 
-    # ── Resolve the app's bazel package prefix. The canonical (per-composition)
-    #    layout is //apps/<app>/<Composition>/main:<cluster>; the executor records
-    #    the "<app>/<Composition>" subtree in each process's `modules`. Fall back
-    #    to the flat //apps/<app>/main for legacy single-composition apps. ────────
+    # ── Resolve each process's bazel package prefix. A Software Package is the
+    #    user's WHOLE multi-composition deliverable: an SWP spans as many
+    #    compositions as it has process groups (a composition == ONE executable;
+    #    the demo's Demo3WayP1..P4 are FOUR compositions in the one `apps` SWP).
+    #    The canonical layout is //apps/<app>/<Composition>/main:<proc>; the
+    #    executor records the "<app>/<Composition>" subtree in each process's
+    #    `modules`. We build EACH proc under its own composition and stage every
+    #    executable into one overlay bin/ — NOT one prefix for all (the old single-
+    #    composition assumption that wrongly rejected real multi-process SWPs). ───
     ej0 = (mdir / machine / "executor.json") if machine else None
-    app_prefix = f"apps/{app}"   # flat fallback
+    proc_pkg: dict[str, str] = {}        # proc -> bazel PACKAGE PATH (apps/<Comp>)
     if ej0 and ej0.is_file():
-        mods = _app_module_paths(json.loads(ej0.read_text()), app_procs)
-        # mods like {"gateway/GatewayBridge"} → prefix "apps/gateway/GatewayBridge"
-        if len(mods) == 1:
-            app_prefix = "apps/" + next(iter(mods))
-        elif len(mods) > 1:
-            print(f"theia release-app: {app} spans multiple compositions {mods} "
-                  "— build each separately (--machine / per-composition).",
-                  file=sys.stderr)
-            return 1
+        proc_pkg = _swp_proc_prefixes(json.loads(ej0.read_text()), app_procs)
+    # Any proc the executor didn't pin to a composition package falls back to the
+    # flat apps/<app> (legacy single-composition layout).
+    for p in app_procs:
+        proc_pkg.setdefault(p, f"apps/{app}")
 
-    # ── Build the app's FC binaries (target-arch), cross-compiled to the fleet
-    #    arch. The cluster target is the package's last segment. ─────────────────
-    fc_targets = [f"//{app_prefix}/main:{p}" for p in app_procs]
+    # ── Build every proc's FC binary (target-arch). Each composition's `main`
+    #    package holds ONE cc_binary named after the cluster — gen-app names it
+    #    `<app>` (e.g. //apps/Demo3WayP1/main:apps). The bazel target name is the
+    #    cluster, NOT the proc; start_cmd renames the output to bin/<proc>. ────────
+    cluster = app                        # gen-app's cc_binary name == the app/cluster
+    fc_targets = sorted({f"//{proc_pkg[p]}/main:{cluster}" for p in app_procs})
     if (rc := _run(["bazel", "build", *fc_targets,
                     f"--platforms={platform}"])) != 0:
-        print("theia release-app: app FC build failed.", file=sys.stderr)
+        print("theia release-swp: SWP FC build failed.", file=sys.stderr)
         return rc
 
-    # ── Stage the app release tree: bin/<fc> + app.json + version.txt. ─────────
+    # ── Stage the SWP overlay tree: bin/<fc> (ALL compositions) + swp.json +
+    #    version.txt. The bazel output is named <cluster>; stage it as bin/<proc>
+    #    (the executor's start_cmd points at bin/<proc>). ─────────────────────────
     out_dir = WORKSPACE / "dist" / "apps" / app
     out_dir.mkdir(parents=True, exist_ok=True)
     stage = out_dir / "_stage"
     if stage.exists():
         shutil.rmtree(stage)
     (stage / "bin").mkdir(parents=True)
-    bzbin = WORKSPACE / "bazel-bin" / Path(app_prefix) / "main"
     for p in app_procs:
-        src = bzbin / p
+        src = WORKSPACE / "bazel-bin" / Path(proc_pkg[p]) / "main" / cluster
         if not src.is_file():
-            print(f"theia release-app: built binary missing: {src}",
+            print(f"theia release-swp: built binary missing: {src}",
                   file=sys.stderr)
             return 1
         dst = stage / "bin" / p
@@ -1824,13 +1836,13 @@ def cmd_release_app(args: list[str]) -> int:
         if i == 0 or args[i - 1] != "--asset":
             continue
         if ":" not in a:
-            print(f"theia release-app: bad --asset '{a}' (want <src>:<destdir>).",
+            print(f"theia release-swp: bad --asset '{a}' (want <src>:<destdir>).",
                   file=sys.stderr)
             return 2
         asrc, adest = a.rsplit(":", 1)
         asrc_p = Path(asrc)
         if not asrc_p.exists():
-            print(f"theia release-app: --asset source missing: {asrc_p}",
+            print(f"theia release-swp: --asset source missing: {asrc_p}",
                   file=sys.stderr)
             return 1
         adest_dir = stage / adest
@@ -1839,15 +1851,15 @@ def cmd_release_app(args: list[str]) -> int:
             shutil.copytree(asrc_p, adest_dir / asrc_p.name, dirs_exist_ok=True)
         else:
             shutil.copy2(asrc_p, adest_dir / asrc_p.name)
-        print(f"theia release-app: staged asset {asrc_p} → {adest}/", file=sys.stderr)
+        print(f"theia release-swp: staged asset {asrc_p} → {adest}/", file=sys.stderr)
 
-    # The executor subtree for just this app (the supervisor merges it under its
-    # tree on install). Pull the app's slice from the machine's executor.json.
+    # The executor subtree for just this SWP (the supervisor merges it under its
+    # tree on install). Pull the SWP's slice from the machine's executor.json.
     exec_subtree = None
     ej = (mdir / machine / "executor.json") if machine else None
     if ej and ej.is_file():
         full = json.loads(ej.read_text())
-        exec_subtree = _extract_app_subtree(full, app, app_procs)
+        exec_subtree = _extract_swp_subtree(full, app, app_procs)
         # --env <proc>:<K>=<V> bakes per-process env into the shipped subtree (the
         # supervisor exports it to the child). The fleet's deploy knobs an FC reads
         # from the environment — e.g. gateway THEIA_GW_CAPTURE_IFACE=eth0 (the rig
@@ -1858,7 +1870,7 @@ def cmd_release_app(args: list[str]) -> int:
             by_proc: dict = {}
             for spec in env_specs:
                 if ":" not in spec or "=" not in spec.split(":", 1)[1]:
-                    print(f"theia release-app: bad --env '{spec}' "
+                    print(f"theia release-swp: bad --env '{spec}' "
                           "(want <proc>:<KEY>=<VAL>).", file=sys.stderr)
                     return 2
                 proc, kv = spec.split(":", 1)
@@ -1868,9 +1880,9 @@ def cmd_release_app(args: list[str]) -> int:
                 extra = by_proc.get(node.get("name"))
                 if extra:
                     node.setdefault("env", {}).update(extra)
-    # ── App ARITY + role names — the app's machine set (manifest machines.json).
-    #    arity = how many machines the app spans (single rig = 1; central+compute
-    #    split = 2). GS reads this on S3 scan to show app/N + role names and to
+    # ── SWP ARITY + role names — the SWP's machine set (manifest machines.json).
+    #    arity = how many machines the SWP spans (single rig = 1; central+compute
+    #    split = 2). GS reads this on S3 scan to show <app>/N + role names and to
     #    drive the per-role Distribution/deploy model. See
     #    project-distribution-deploy-model. (Machine = a manifest role NAME here;
     #    the physical rig + its abi are resolved at deploy.)
@@ -1881,70 +1893,76 @@ def cmd_release_app(args: list[str]) -> int:
             machines_roles = json.loads(mjson.read_text()).get("machines", []) or []
         except Exception:  # noqa: BLE001
             machines_roles = []
-    (stage / "app.json").write_text(json.dumps({
+    swp_manifest = {
         "name": app, "version": app_ver, "fleet": fleet, "arch": arch,
         # The ABI this build targets (bookworm-arm64 / focal-arm64 / "" for host).
-        # The Distribution model matches a role's abi to its app_build's abi; the
-        # app_build identifier is the artifact-name below (carries the abi).
+        # The Distribution model matches a role's abi to its swp_build's abi; the
+        # swp_build identifier is the artifact-name below (carries the abi).
         "abi": abi,
         # The pinned runtime dependency (no backward compat). Empty = unpinned
         # (legacy / arch-only compatibility); the GS deploy gate then only checks
         # arch. A real release SHOULD pass --requires-runtime <key>.
         "requires_runtime": requires_runtime,
-        # arity = len(roles); roles = the manifest machine names this app spans.
+        # arity = len(roles); roles = the manifest machine names this SWP spans.
         "roles": machines_roles, "arity": len(machines_roles) or 1,
         "processes": app_procs, "executor_subtree": exec_subtree,
-    }, indent=2))
-    # The Mender artifact-name == the Distribution app_build identifier == what the
+    }
+    swp_json = json.dumps(swp_manifest, indent=2)
+    (stage / "swp.json").write_text(swp_json)
+    # Back-compat: also emit app.json (same content) for any reader still on the
+    # old name (the on-device module + GS index reader during the rename window).
+    (stage / "app.json").write_text(swp_json)
+    # The Mender artifact-name == the Distribution swp_build identifier == what the
     # GS per-role deploy hands Mender. ABI-keyed so central (bookworm-arm64) and
-    # compute (focal-arm64) of the SAME app version are distinct, non-colliding
+    # compute (focal-arm64) of the SAME SWP version are distinct, non-colliding
     # artifacts (e.g. gateway-1.0-bookworm-arm64 vs gateway-1.0-focal-arm64).
     artifact_name = f"{app}-{ver_key}"
     (stage / "version.txt").write_text(artifact_name + "\n")
 
-    # ── Pack the Mender artifact (theia-app module). Reuse mender-artifact if
+    # ── Pack the Mender artifact (theia-swp module). Reuse mender-artifact if
     #    present; else leave the staged tree + a tarball for the GW to pack. ─────
     mender_out = out_dir / f"{artifact_name}.mender"
     tarball = out_dir / f"{artifact_name}.tar.gz"
     import tarfile
     with tarfile.open(tarball, "w:gz") as tf:
         tf.add(stage, arcname=".")
-    if shutil.which("mender-artifact"):
+    ma = _mender_artifact_bin()    # prefers the OpenSSL-1.1-shim wrapper on a host
+    if ma:                          # running OpenSSL 3 (mender-artifact links 1.1).
         rc = _run([
-            "mender-artifact", "write", "module-image",
-            "--type", "theia-app",
+            ma, "write", "module-image",
+            "--type", "theia-swp",
             "--artifact-name", artifact_name,
             "--device-type", fleet,
             "--file", str(tarball),
             "--file", str(stage / "version.txt"),
-            "--file", str(stage / "app.json"),
+            "--file", str(stage / "swp.json"),
             "--output-path", str(mender_out),
         ])
         if rc != 0:
-            print("theia release-app: mender-artifact pack failed.",
+            print("theia release-swp: mender-artifact pack failed.",
                   file=sys.stderr)
             return rc
-        print(f"theia release-app: wrote {mender_out}", file=sys.stderr)
+        print(f"theia release-swp: wrote {mender_out}", file=sys.stderr)
     else:
-        print("theia release-app: mender-artifact not installed — staged tree + "
+        print("theia release-swp: mender-artifact not installed — staged tree + "
               f"{tarball} written; pack on the GW.", file=sys.stderr)
 
-    # ── Publish to the app plane: user-software/<fleet>/<app>/<ver>/. ──────────
+    # ── Publish to the package plane: user-software/<fleet>/<app>/<ver>/. ───────
     if not mender_only and s3_url:
         # publish under the ABI-keyed version dir (user-software/<fleet>/<app>/
-        # <ver>-<abi>/) so per-abi builds of one app version don't overwrite each
-        # other and the GS catalog can offer each abi as a distinct app_build.
-        rc = _publish_app_plane(s3_url, fleet, app, ver_key,
+        # <ver>-<abi>/) so per-abi builds of one SWP version don't overwrite each
+        # other and the GS catalog can offer each abi as a distinct swp_build.
+        rc = _publish_swp_plane(s3_url, fleet, app, ver_key,
                                 mender_out if mender_out.exists() else None,
-                                tarball, stage / "app.json")
+                                tarball, stage / "swp.json")
         if rc != 0:
             return rc
     return 0
 
 
-def _extract_app_subtree(executor: dict, app: str, procs: list[str]):
+def _extract_swp_subtree(executor: dict, app: str, procs: list[str]):
     """Return the executor.json subtree (the supervisor child nodes) for just the
-    app's processes — what the on-device app module merges into the running tree.
+    SWP's processes — what the on-device SWP module merges into the running tree.
     Walks the tree, returns the matching process nodes (by name) verbatim."""
     procset = set(procs)
     found = []
@@ -1960,26 +1978,29 @@ def _extract_app_subtree(executor: dict, app: str, procs: list[str]):
     return {"app": app, "nodes": found}
 
 
-def _app_module_paths(executor: dict, procs: list[str]) -> set:
-    """The set of "<app>/<Composition>" bazel-package subtrees for the app's
-    processes, read from each process node's `modules` (the executor records the
-    composition path there, e.g. "gateway/GatewayBridge"). Used to derive the
-    //apps/<app>/<Composition>/main target for the canonical per-composition
-    layout (vs the flat //apps/<app>/main). Empty set → fall back to flat."""
+def _swp_proc_prefixes(executor: dict, procs: list[str]) -> dict:
+    """Map each Software-Package process to its bazel PACKAGE PATH (relative to
+    the workspace root), read VERBATIM from the process node's `modules` (the
+    executor records it as the package path, e.g. "apps/Demo3WayP1" or
+    "apps/gateway/GatewayBridge"). The bazel label is //<package>/main:<cluster>.
+    An SWP spans MANY compositions (one executable each), so different procs map
+    to different packages — the canonical per-composition layout. Procs the
+    executor didn't pin are absent (caller falls back to the flat apps/<app>)."""
     procset = set(procs)
-    mods: set = set()
+    out: dict = {}
 
     def walk(node):
         if isinstance(node, dict):
             if node.get("name") in procset and node.get("start_cmd"):
                 for m in node.get("modules", []) or []:
                     if isinstance(m, str) and "/" in m:
-                        mods.add(m)
+                        out[node["name"]] = m       # verbatim bazel package path
+                        break
             for k in ("children", "workers", "nodes"):
                 for c in node.get(k, []) or []:
                     walk(c)
     walk(executor)
-    return mods
+    return out
 
 
 # The mender-artifact CLI (the build host's .mender packer). Prefer the
@@ -2136,17 +2157,18 @@ def cmd_release_role(args: list[str]) -> int:
     return 0
 
 
-def _publish_app_plane(s3_url: str, fleet: str, app: str, ver: str,
+def _publish_swp_plane(s3_url: str, fleet: str, app: str, ver: str,
                        mender: "Path | None", tarball: "Path",
-                       app_json: "Path") -> int:
-    """Push the app bundle to the S3 app plane user-software/<fleet>/<app>/<ver>/.
-    Uses the aws cli (S3-compatible) against MinIO. Writes an index.json the GW /
-    ground-station reads to drive a Mender deployment."""
+                       swp_json: "Path") -> int:
+    """Push the Software Package to the S3 package plane
+    user-software/<fleet>/<app>/<ver>/. Uses the aws cli (S3-compatible) against
+    MinIO. Writes an index.json the GW / ground-station reads to drive a Mender
+    deployment."""
     import json
     import os
     import subprocess
     if not shutil.which("aws"):
-        print("theia release-app: aws cli not found — cannot push to S3 (build "
+        print("theia release-swp: aws cli not found — cannot push to S3 (build "
               "the artifact, push from a host that has it).", file=sys.stderr)
         return 1
     key = f"user-software/{fleet}/{app}/{ver}"
@@ -2154,7 +2176,9 @@ def _publish_app_plane(s3_url: str, fleet: str, app: str, ver: str,
            "AWS_ACCESS_KEY_ID": os.environ.get("MINIO_USER", "theia"),
            "AWS_SECRET_ACCESS_KEY": os.environ.get("MINIO_PASSWORD", "theiaminio"),
            "AWS_DEFAULT_REGION": "us-east-1"}
-    bucket = "theia-apps"
+    # The package plane bucket. (Renamed from theia-apps → theia-swp with the
+    # app→Software-Package rename; GS settings.s3_swp_bucket reads the same.)
+    bucket = os.environ.get("THEIA_SWP_BUCKET", "theia-swp")
     aws = ["aws", "--endpoint-url", s3_url, "s3"]
 
     def _aws(argv: list, check: bool = True) -> int:
@@ -2164,19 +2188,19 @@ def _publish_app_plane(s3_url: str, fleet: str, app: str, ver: str,
 
     subprocess.run([*aws, "mb", f"s3://{bucket}"], env=env)  # idempotent
     objs = []
-    for f in (mender, tarball, app_json):
+    for f in (mender, tarball, swp_json):
         if f and f.is_file():
             if _aws([*aws, "cp", str(f), f"s3://{bucket}/{key}/{f.name}"]) != 0:
                 return 1
             objs.append(f.name)
     # surface the runtime dependency in the index so the catalog reads it without
-    # fetching the full app.json (no backward compat — app pins ONE runtime).
+    # fetching the full swp.json (no backward compat — an SWP pins ONE runtime).
     requires_runtime = ""
     try:
-        requires_runtime = json.loads(app_json.read_text()).get("requires_runtime", "")
+        requires_runtime = json.loads(swp_json.read_text()).get("requires_runtime", "")
     except Exception:  # noqa: BLE001
         pass
-    idx = {"plane": "app", "fleet": fleet, "app": app, "version": ver,
+    idx = {"plane": "swp", "fleet": fleet, "app": app, "version": ver,
            "artifact": (mender.name if mender and mender.is_file() else None),
            "requires_runtime": requires_runtime,
            "files": objs}
@@ -2184,7 +2208,7 @@ def _publish_app_plane(s3_url: str, fleet: str, app: str, ver: str,
     idx_path.write_text(json.dumps(idx, indent=2))
     if _aws([*aws, "cp", str(idx_path), f"s3://{bucket}/{key}/index.json"]) != 0:
         return 1
-    print(f"theia release-app: published → s3://{bucket}/{key}/", file=sys.stderr)
+    print(f"theia release-swp: published → s3://{bucket}/{key}/", file=sys.stderr)
     return 0
 
 
@@ -2976,7 +3000,8 @@ COMMANDS = {
     "manifest":    (cmd_manifest,    "rig.py → dist/manifest/*.json (sole rig entry for deploy)"),
     "dist":        (cmd_dist,        "per-host .ipk from dist/manifest/ JSON (no rig.py)"),
     "release":     (cmd_release,     "build the installable package set (.deb+.ipk) → dist/debian + dist/ipkg"),
-    "release-app": (cmd_release_app, "build + publish a user-ws app bundle (day-2 Mender OTA, the app plane)"),
+    "release-swp": (cmd_release_swp, "build + publish a user-ws Software Package (day-2 Mender OTA, the package plane)"),
+    "release-app": (cmd_release_swp, "alias for release-swp (deprecated)"),
     "release-role": (cmd_release_role, "build + publish a per-board role .mender (L4-C vehicle campaign)"),
     "compdb":      (cmd_compdb,      "regen compile_commands.json from bazel (clangd)"),
     "observer":    (cmd_observer,    "launch the supervisor-GUI against the local cluster (always mTLS)"),

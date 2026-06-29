@@ -57,11 +57,20 @@ RUN mkdir -p /run/sshd && \
     sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config && \
     sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
 
-# colony-api's pubkey → root's authorized_keys (the provisioning key). This is
-# the same key colony serves at GET /pubkey and writes onto real preauthorized
-# rigs; baking it here makes the container colony-reachable from first boot.
+# The provisioning user. colony connects as `axadmin` (COLONY_SSH_USER default,
+# matching the real rigs) with passwordless sudo — so the container provisions
+# through the SAME path as a physical board. colony-api's pubkey (== GET /pubkey,
+# the key it writes onto real preauthorized rigs) goes into BOTH axadmin's and
+# root's authorized_keys, making the container colony-reachable from first boot.
+RUN useradd -m -s /bin/bash axadmin && \
+    echo "axadmin ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/axadmin && \
+    chmod 440 /etc/sudoers.d/axadmin && \
+    mkdir -p /home/axadmin/.ssh /root/.ssh
+COPY rig/colony_authorized_keys /home/axadmin/.ssh/authorized_keys
 COPY rig/colony_authorized_keys /root/.ssh/authorized_keys
-RUN chmod 700 /root/.ssh && chmod 600 /root/.ssh/authorized_keys
+RUN chown -R axadmin:axadmin /home/axadmin/.ssh && \
+    chmod 700 /home/axadmin/.ssh /root/.ssh && \
+    chmod 600 /home/axadmin/.ssh/authorized_keys /root/.ssh/authorized_keys
 
 # Theia layout the provisioning fills (colony stages release + config here).
 RUN mkdir -p /opt/theia/bin /opt/theia/config /var/log/theia/tombstones

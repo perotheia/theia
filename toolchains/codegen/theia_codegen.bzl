@@ -31,20 +31,35 @@ def _theia_codegen_impl(rctx):
     else:
         src = str(rctx.workspace_root) + "/third_party/codegen-bookworm-x86"
 
-    # Symlink the staged tree IN so bazel sees + hashes the binaries/libs.
-    rctx.symlink(src + "/bin", "bin")
-    rctx.symlink(src + "/lib", "lib")
+    # Symlink the staged x86 codegen tree IN (so bazel hashes the binaries/libs)
+    # — but ONLY if it exists. The rpi4 CROSS-build (on the x86 host) has it; a
+    # NATIVE arm64 build (the Jetson) does NOT (it uses its own /usr/local protoc
+    # off PATH and takes the genrule's default branch, never referencing :protoc).
+    # Symlinking a missing path leaves a DANGLING link that breaks the glob, so
+    # guard on existence.
+    if rctx.path(src + "/bin").exists:
+        rctx.symlink(src + "/bin", "bin")
+    if rctx.path(src + "/lib").exists:
+        rctx.symlink(src + "/lib", "lib")
 
     # Also content-hash the nanopb GENERATOR package (the .venv install). The
     # nanopb genrules still invoke `nanopb_generator` off PATH, but listing this
-    # filegroup in their `srcs`/`tools` puts the generator's CODE in the action
-    # cache key — so a generator/.venv upgrade correctly invalidates (the hole
-    # that shipped a stale descriptor). Override dir with THEIA_NANOPB_GEN_DIR.
+    # filegroup in their `srcs` puts the generator's CODE in the action cache key
+    # — so a generator/.venv upgrade correctly invalidates (the hole that shipped
+    # a stale descriptor). The venv python version varies by box (3.10 on the x86
+    # dev box, 3.8 on the focal Jetson), so probe a few. Override with
+    # THEIA_NANOPB_GEN_DIR. Missing → an empty filegroup (the generator runs off
+    # PATH regardless; only the cache-key hashing is skipped).
     nbsrc = rctx.os.environ.get("THEIA_NANOPB_GEN_DIR", "")
     if not nbsrc:
-        nbsrc = str(rctx.workspace_root) + \
-                "/.venv/lib/python3.10/site-packages/nanopb/generator"
-    rctx.symlink(nbsrc, "nanopb_generator")
+        ws = str(rctx.workspace_root)
+        for py in ["python3.10", "python3.8", "python3.9", "python3.11", "python3.12"]:
+            cand = ws + "/.venv/lib/" + py + "/site-packages/nanopb/generator"
+            if rctx.path(cand).exists:
+                nbsrc = cand
+                break
+    if nbsrc and rctx.path(nbsrc).exists:
+        rctx.symlink(nbsrc, "nanopb_generator")
 
     rctx.file("BUILD.bazel", _BUILD)
 
@@ -60,15 +75,18 @@ filegroup(
     srcs = glob(["lib/**"], allow_empty = True),
 )
 
+# glob (allow_empty) not a hard src: on a NATIVE arm64 build there is no staged
+# bin/ (the Jetson uses /usr/local protoc off PATH, never referencing these), so
+# the filegroup must resolve EMPTY rather than error on a missing bin/protoc.
 filegroup(
     name = "protoc",
-    srcs = ["bin/protoc"],
+    srcs = glob(["bin/protoc"], allow_empty = True),
     data = [":libs"],
 )
 
 filegroup(
     name = "grpc_cpp_plugin",
-    srcs = ["bin/grpc_cpp_plugin"],
+    srcs = glob(["bin/grpc_cpp_plugin"], allow_empty = True),
     data = [":libs"],
 )
 

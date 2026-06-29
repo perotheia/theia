@@ -21,21 +21,23 @@ package(default_visibility = ["//visibility:public"])
 
 # The proto codegen toolset (protoc + grpc_cpp_plugin) must match the protobuf
 # the .pb.{cc,h} are LINKED against, or the headers `#error ... newer protoc`.
-# The two targets link DIFFERENT libprotobuf, so codegen is per-target:
-#   - arm64 (the shipped .deb): rpi4 sysroot's libprotobuf 3.21.12 / grpc 1.51,
-#     so use the staged x86 protoc 3.21.12 — exposed CONTENT-HASHED via
-#     @theia_codegen (was off host PATH; that non-hermeticity once shipped a
-#     stale descriptor. see toolchains/codegen/theia_codegen.bzl). THIS is the
-#     path the stale-descriptor bug shipped on, so hashing it is the fix.
-#   - host x86 (dev/test box): host libprotobuf 3.12.4, so use host protoc off
-#     PATH. A protoc/runtime version drift here is SELF-DETECTING (the .pb.h
-#     #error guard fails the compile loudly), unlike the silent nanopb case.
-#
-# _PROTOC_SETUP picks the protoc binary per-target: arm64 resolves the
-# content-hashed staged protoc (+ its libs on LD_LIBRARY_PATH); host uses the
-# system protoc off PATH (matching the host libprotobuf it links).
+# Codegen is per-BUILD-MODE (each links a different libprotobuf):
+#   - rpi4 CROSS-build (arm64_cross): links the rpi4 sysroot's libprotobuf
+#     3.21.12, codegen runs on the x86 HOST — so use the staged x86 protoc
+#     3.21.12, exposed CONTENT-HASHED via @theia_codegen (was off host PATH; that
+#     non-hermeticity once shipped a stale descriptor — see toolchains/codegen/).
+#     THIS is the path the stale-descriptor bug shipped on, so hashing it is the
+#     fix. (arm64_cross = cpu:aarch64 + define theia_target=rpi4.)
+#   - jetson NATIVE arm64 build + host x86 (default): codegen runs on the BUILD
+#     box itself, so use that box's own protoc off PATH (jetson: /usr/local
+#     3.21.6; x86 host: /usr/bin 3.12.4 — each matches the libprotobuf it links).
+#     A protoc/runtime drift here is SELF-DETECTING (the .pb.h #error guard fails
+#     the compile loudly), unlike the silent nanopb case. The jetson has no
+#     staged x86 codegen dir (and an x86 protoc can't run on aarch64), so it MUST
+#     take this default branch — hence gating @theia_codegen on arm64_cross, not
+#     bare is_arm64.
 _PROTOC_SETUP = select({
-    "//rules/config:is_arm64": (
+    "//rules/config:arm64_cross": (
         " protoc=$(location @theia_codegen//:protoc);" +
         " grpc_plugin=$(location @theia_codegen//:grpc_cpp_plugin);" +
         " export LD_LIBRARY_PATH=\"$$(dirname $$(dirname $$protoc))/lib:$${LD_LIBRARY_PATH:-}\";"
@@ -89,7 +91,7 @@ genrule(
     # stale-descriptor hole on the shipped path); host ignores these and uses
     # system protoc (harmless to list them on host). See _PROTOC_SETUP above.
     tools = select({
-        "//rules/config:is_arm64": [
+        "//rules/config:arm64_cross": [
             "@theia_codegen//:protoc",
             "@theia_codegen//:grpc_cpp_plugin",
             "@theia_codegen//:libs",  # the staged .so's protoc/plugin dlopen

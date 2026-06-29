@@ -79,7 +79,10 @@ RUN mkdir -p /opt/theia/bin /opt/theia/config /var/log/theia/tombstones
 # via the command in docker-compose; default 22 if run standalone.
 EXPOSE 22
 
-# Run sshd in the foreground. -p lets compose pass a per-rig port (host net →
-# both rigs share the host's port space, so they must not both bind :22).
-ENTRYPOINT ["/usr/sbin/sshd", "-D", "-e"]
+# The entrypoint registers the container's hostname in /etc/hosts (so colony's
+# sudo provisioning resolves it) then exec's sshd. -p (from compose) passes a
+# per-rig port — host net → both rigs share the port space, can't both bind :22.
+COPY rig/entrypoint.sh /usr/local/bin/rig-entrypoint.sh
+RUN chmod +x /usr/local/bin/rig-entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/rig-entrypoint.sh"]
 CMD ["-p", "22"]

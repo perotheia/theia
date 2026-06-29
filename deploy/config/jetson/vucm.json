@@ -1,0 +1,11 @@
+{
+  "_comment": "STANDALONE Jetson V-UCM: single-board campaign — the roster is just this board (jetson:0), so CMP_CONFIRMING waits only on its own ucm_activation marker (read from the LOCAL etcd). Superseded the central roster (boards: compute, board_instances central:0,compute:1) which was the L4-B multi-board split.",
+  "nodes": {
+    "vucm_gate": {
+      "boards": "jetson",
+      "confirm_budget_ms": "120000",
+      "bundle_base": "http://10.0.0.99:9000/theia-roles/theia-rig/0.2.1",
+      "board_instances": "jetson:0"
+    }
+  }
+}

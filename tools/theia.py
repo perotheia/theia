@@ -1681,14 +1681,18 @@ def cmd_release_app(args: list[str]) -> int:
         --fleet F        the hardware-capability fleet / Mender device-group
                          (default theia-rig) — the S3 app-plane key + Mender
                          --device-type
-        --arch A         target arch (default x86_64) — the fleet board's arch
+        --arch A         board target (host | rpi4 | jetson; default host) — picks
+                         the cross-build platform AND the abi key (rpi4=bookworm-
+                         arm64, jetson=focal-arm64, host=amd64). The abi is baked
+                         into the artifact-name + S3 dir so per-role Distribution
+                         deploy resolves a machine to the matching-abi app build.
         --machine M      the manifest machine whose app slice to pack (default:
                          the app's host_machine from application.json)
         --s3 URL         publish to the app plane on this MinIO/S3 (e.g.
                          http://10.0.0.99:9000); omit to only build the .mender
         --mender-only    just write dist/apps/<app>/<app>-<V>.mender (no S3 push)
 
-    Output:
+    Output (ABI-keyed — <V> below is <app-version>-<abi> for cross-built boards):
       dist/apps/<app>/<app>-<V>.mender   the Mender artifact (theia-app module)
       → S3 user-software/<fleet>/<app>/<V>/  (when --s3 given)
 
@@ -1718,7 +1722,13 @@ def cmd_release_app(args: list[str]) -> int:
 
     app_ver = _opt("--app-version", "0.1.0")
     fleet = _opt("--fleet", "theia-rig")
-    arch = _opt("--arch", "x86_64")
+    # --arch is a BOARD TARGET (host | rpi4 | jetson), NOT a bare cpu — because the
+    # app plane is ABI-keyed exactly like the runtime plane: rpi4=bookworm-arm64 and
+    # jetson=focal-arm64 are different aarch64 ABIs (different sysroots, non-
+    # interchangeable binaries). The Distribution model resolves a role → the app
+    # build whose abi == the role's abi (see project-distribution-deploy-model), so
+    # the abi MUST land in the artifact-name + S3 key, not be collapsed to aarch64.
+    arch = _opt("--arch", "host")
     # The runtime release this app is built against. NO BACKWARD COMPAT — an app
     # depends on EXACTLY ONE runtime+services version (its ABI/proto/runtime are
     # pinned at build time). Recorded in app.json as `requires_runtime`; the GS
@@ -1726,11 +1736,19 @@ def cmd_release_app(args: list[str]) -> int:
     requires_runtime = _opt("--requires-runtime", "")
     s3_url = _opt("--s3")
     mender_only = "--mender-only" in args or not s3_url
-    platform = _ARCH_PLATFORM.get(arch)
-    if not platform:
-        print(f"theia release-app: no bazel platform for arch '{arch}'.",
-              file=sys.stderr)
+    tgt = _target(arch)
+    if not tgt:
+        print(f"theia release-app: no board target for arch '{arch}' "
+              f"(want one of {sorted(_TARGETS)}).", file=sys.stderr)
         return 2
+    platform = _platform_label(arch)
+    # The ABI suffix this app build is keyed by (bookworm-arm64 / focal-arm64; ""
+    # for host/amd64). It tags the artifact-name + S3 version dir so per-role deploy
+    # picks the right binary for a machine of that abi.
+    abi = tgt["abi_key"]
+    # The version key the artifact + S3 dir are stamped with — <ver>-<abi> when the
+    # board has an abi (the cross-built rigs), bare <ver> for host.
+    ver_key = f"{app_ver}-{abi}" if abi else app_ver
 
     # ── Resolve the app's process set + host machine from the manifest. The app's
     #    application.json (emitted by `theia manifest`) names the app + its FCs. ──
@@ -1753,8 +1771,8 @@ def cmd_release_app(args: list[str]) -> int:
               f"{mdir}/*/application.json — run `theia manifest` on the app rig "
               "first.", file=sys.stderr)
         return 1
-    print(f"theia release-app: {app} v{app_ver} fleet={fleet} arch={arch} "
-          f"machine={machine} procs={app_procs}", file=sys.stderr)
+    print(f"theia release-app: {app} v{app_ver} abi={abi or 'host'} fleet={fleet} "
+          f"arch={arch} machine={machine} procs={app_procs}", file=sys.stderr)
 
     # ── Resolve the app's bazel package prefix. The canonical (per-composition)
     #    layout is //apps/<app>/<Composition>/main:<cluster>; the executor records
@@ -1865,6 +1883,10 @@ def cmd_release_app(args: list[str]) -> int:
             machines_roles = []
     (stage / "app.json").write_text(json.dumps({
         "name": app, "version": app_ver, "fleet": fleet, "arch": arch,
+        # The ABI this build targets (bookworm-arm64 / focal-arm64 / "" for host).
+        # The Distribution model matches a role's abi to its app_build's abi; the
+        # app_build identifier is the artifact-name below (carries the abi).
+        "abi": abi,
         # The pinned runtime dependency (no backward compat). Empty = unpinned
         # (legacy / arch-only compatibility); the GS deploy gate then only checks
         # arch. A real release SHOULD pass --requires-runtime <key>.
@@ -1873,7 +1895,11 @@ def cmd_release_app(args: list[str]) -> int:
         "roles": machines_roles, "arity": len(machines_roles) or 1,
         "processes": app_procs, "executor_subtree": exec_subtree,
     }, indent=2))
-    artifact_name = f"{app}-{app_ver}"
+    # The Mender artifact-name == the Distribution app_build identifier == what the
+    # GS per-role deploy hands Mender. ABI-keyed so central (bookworm-arm64) and
+    # compute (focal-arm64) of the SAME app version are distinct, non-colliding
+    # artifacts (e.g. gateway-1.0-bookworm-arm64 vs gateway-1.0-focal-arm64).
+    artifact_name = f"{app}-{ver_key}"
     (stage / "version.txt").write_text(artifact_name + "\n")
 
     # ── Pack the Mender artifact (theia-app module). Reuse mender-artifact if
@@ -1905,7 +1931,10 @@ def cmd_release_app(args: list[str]) -> int:
 
     # ── Publish to the app plane: user-software/<fleet>/<app>/<ver>/. ──────────
     if not mender_only and s3_url:
-        rc = _publish_app_plane(s3_url, fleet, app, app_ver,
+        # publish under the ABI-keyed version dir (user-software/<fleet>/<app>/
+        # <ver>-<abi>/) so per-abi builds of one app version don't overwrite each
+        # other and the GS catalog can offer each abi as a distinct app_build.
+        rc = _publish_app_plane(s3_url, fleet, app, ver_key,
                                 mender_out if mender_out.exists() else None,
                                 tarball, stage / "app.json")
         if rc != 0:

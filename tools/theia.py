@@ -763,7 +763,7 @@ def cmd_install(args: list[str]) -> int:
     #    from it, not hand-listed. SAME command as `theia manifest`.
     if (rc := _run([
         "artheia", "serialize-manifest", module, "--attr", attr,
-        "--out", str(manifest_root),
+        "--rig-name", target, "--out", str(manifest_root),
     ])) != 0:
         return rc
 
@@ -1275,8 +1275,13 @@ def cmd_manifest(args: list[str]) -> int:
     out = Path(out_arg) if out_arg else WORKSPACE / _MANIFEST_DIR
     module = f"manifest.{target}.rig"
 
+    # The rig NAME (single / split / …) = the manifest target dir name. Passed so
+    # serialize-manifest writes it to machines.json `rig` and the user Software
+    # Package is named from it (two rigs of one app → distinct SWPs, not both
+    # "apps"). It's the robust source — survives the layer fold + arch/os rebuild
+    # that drop a model-level MachineSetLayer.name.
     cmd = ["artheia", "serialize-manifest", module, "--attr", attr,
-           "--out", str(out)]
+           "--rig-name", target, "--out", str(out)]
     if (rc := _run(cmd)) != 0:
         return rc
 
@@ -1894,6 +1899,11 @@ def cmd_release_swp(args: list[str]) -> int:
     roles = mjson.get("roles") or mjson.get("machines", []) or []
     arity = mjson.get("arity") or (len(roles) or 1)
     swp_on = mjson.get("on") or roles
+    # The SWP NAME = the RIG name from the manifest (single / split) — the
+    # deployment identity, so two rigs of the SAME app build are DISTINCT named
+    # SWPs (single-… / split-…) instead of both "apps". Falls back to the bazel
+    # package arg when a rig name isn't present (legacy / unnamed rig).
+    swp_name = mjson.get("rig") or mjson.get("app") or app
     # SHIP THE MANIFEST in the artifact (not swp.json): machines.json + the SWP's
     # per-machine slice (machine.json/executor.json) for the boards it runs on. The
     # on-device module + GS read arity/roles/abi straight from these.
@@ -1911,7 +1921,7 @@ def cmd_release_swp(args: list[str]) -> int:
     # GS per-role deploy hands Mender. ABI-keyed so central (bookworm-arm64) and
     # compute (focal-arm64) of the SAME SWP version are distinct, non-colliding
     # artifacts (e.g. gateway-1.0-bookworm-arm64 vs gateway-1.0-focal-arm64).
-    artifact_name = f"{app}-{ver_key}"
+    artifact_name = f"{swp_name}-{ver_key}"
     (stage / "version.txt").write_text(artifact_name + "\n")
     # The plane-index fields the GS catalog reads, all DERIVED from the manifest.
     swp_meta = {"abi": abi, "arity": arity, "roles": roles, "on": swp_on,
@@ -1950,7 +1960,7 @@ def cmd_release_swp(args: list[str]) -> int:
         # publish under the ABI-keyed version dir (user-software/<fleet>/<app>/
         # <ver>-<abi>/) so per-abi builds of one SWP version don't overwrite each
         # other and the GS catalog can offer each abi as a distinct swp_build.
-        rc = _publish_swp_plane(s3_url, fleet, app, ver_key,
+        rc = _publish_swp_plane(s3_url, fleet, swp_name, ver_key,
                                 mender_out if mender_out.exists() else None,
                                 tarball, swp_meta)
         if rc != 0:
@@ -2203,7 +2213,10 @@ def _publish_swp_plane(s3_url: str, fleet: str, app: str, ver: str,
            "arity": swp_meta.get("arity", len(roles) or 1),
            "roles": roles, "on": swp_meta.get("on", roles),
            "files": objs}
-    idx_path = WORKSPACE / "dist" / "apps" / app / f"index-{ver}.json"
+    # Write the index alongside the artifact (tarball.parent is the staged
+    # dist/apps/<pkg>/ dir) — `app` here is the SWP/rig name, which may differ from
+    # the on-disk package dir, so don't rebuild the path from it.
+    idx_path = (tarball.parent if tarball else WORKSPACE) / f"index-{ver}.json"
     idx_path.write_text(json.dumps(idx, indent=2))
     if _aws([*aws, "cp", str(idx_path), f"s3://{bucket}/{key}/index.json"]) != 0:
         return 1

@@ -40,7 +40,12 @@ _ON_CENTRAL = [n for n in PROCESS_NAMES if n not in _ON_COMPUTE and n not in _ON
 
 # arch-agnostic split: two machines + every process bound to one of them.
 SPLIT = BASE.combine(DeploymentLayer(
-    machines=MachineSetLayer(machines={
+    # name="split" → the rig identity (machines.json `rig`); the SWP is named from
+    # it. NOTE: DOCKER/HW combine onto SPLIT and the --arch/--os rebuild both drop
+    # this model name (a default "machine" wins the right-biased fold), so the
+    # AUTHORITATIVE source is `theia manifest split` passing --rig-name split; this
+    # is the model carrier + documentation.
+    machines=MachineSetLayer(name="split", machines={
         # etcd lives on central ONLY (one per cluster, the coordinator); compute
         # connects to it. Provisioning reads machine.json.etcd to place it.
         MachineLayer(name="central", etcd=Explicit(True),

@@ -23,7 +23,11 @@ from manifest.assemble import (
 )
 
 RIG = BASE.combine(DeploymentLayer(
-    machines=MachineSetLayer(machines={
+    # name="single" → the rig/deployment identity (machines.json `rig`); the user
+    # Software Package is named from it. `theia manifest single` also passes it via
+    # --rig-name (the robust source — survives the layer fold), so this is the model
+    # carrier + documentation; either alone suffices.
+    machines=MachineSetLayer(name="single", machines={
         # The sole rig hosts etcd (one per cluster).
         MachineLayer(name="central", arch=Explicit("x86_64"), etcd=Explicit(True),
                      cores={0, 1, 2, 3}, machine_states={"Startup", "Running"}),

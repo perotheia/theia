@@ -76,6 +76,9 @@ services:
       - NET_ADMIN
     volumes:
       - ./logs/central:/var/log/theia
+      # Persist the Mender device key + auth token across recreate, so the rig
+      # stays the SAME accepted device (a fresh key each boot would need re-accept).
+      - central-mender:/var/lib/mender
     environment:
       - TZ=UTC
     restart: unless-stopped
@@ -98,6 +101,11 @@ services:
       - NET_ADMIN
     volumes:
       - ./logs/compute:/var/log/theia
+      - compute-mender:/var/lib/mender   # persist the Mender key + token (see central)
     environment:
       - TZ=UTC
     restart: unless-stopped
+
+volumes:
+  central-mender:
+  compute-mender:

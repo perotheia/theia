@@ -45,9 +45,48 @@ RUN apt-get update && \
         libgrpc++1 \
         libgrpc10 \
         libprotobuf23 \
+        gnupg \
+        dbus \
         && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
+
+# ── Mender 4.x client (mender-update + mender-auth) — the ONE persistent OTA
+#    agent, the "Mender precedes Theia" model. The container checks into the
+#    dalek Mender server, so a preauthorized device auto-accepts + receives
+#    Distribution app deployments. Mirrors colony's install-mender.yml +
+#    ground-station/mender/server/enroll-rig.sh (the real-rig path). ───────────
+RUN curl -fsSL https://downloads.mender.io/repos/debian/gpg \
+        -o /etc/apt/trusted.gpg.d/mender.asc && \
+    echo "deb [arch=amd64] https://downloads.mender.io/repos/debian ubuntu/jammy/stable main" \
+        > /etc/apt/sources.list.d/mender.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends mender-update mender-auth && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Mender server config + CA. The cert CN is docker.mender.io (not the IP), so the
+# entrypoint maps docker.mender.io → the server IP in /etc/hosts. ServerURL points
+# at it; ServerCertificate trusts the dalek server CA.
+COPY rig/mender.conf /etc/mender/mender.conf
+COPY rig/mender-server-ca.crt /etc/mender/server.crt
+RUN cp /etc/mender/server.crt /usr/local/share/ca-certificates/mender-server.crt && \
+    update-ca-certificates >/dev/null 2>&1 || true
+
+# Device identity + inventory. The identity script reads /etc/mender/device-id (a
+# per-container override the entrypoint seeds from the hostname) — host-net
+# containers all see the host's NICs, so the MAC is identical; the board name
+# keeps central/compute DISTINCT (the enroll-rig.sh device-id mechanism). The
+# UUID written by colony set-identity also lands here as device-id.
+RUN install -d -m0755 /var/lib/mender /etc/mender /usr/share/mender/identity \
+        /usr/share/mender/inventory && \
+    printf 'device_type=theia-rig\n' > /var/lib/mender/device_type && \
+    printf 'artifact_name=unprovisioned\n' > /etc/mender/artifact_info && \
+    printf '#!/bin/sh\ndid="$(cat /etc/mender/device-id 2>/dev/null)"\n[ -n "$did" ] || did="$(cat /sys/class/net/*/address 2>/dev/null | head -1)"\necho "device_id=$did"\n' \
+        > /usr/share/mender/identity/mender-device-identity && \
+    chmod 0755 /usr/share/mender/identity/mender-device-identity && \
+    printf '#!/bin/sh\necho "device_type=theia-rig"\necho "hostname=$(hostname)"\necho "kernel=$(uname -r)"\n' \
+        > /usr/share/mender/inventory/mender-inventory-theia && \
+    chmod 0755 /usr/share/mender/inventory/mender-inventory-theia
 
 # sshd needs a runtime dir + host keys. Allow root login by key only (no
 # password); colony connects as root with its key (matches a real rig where

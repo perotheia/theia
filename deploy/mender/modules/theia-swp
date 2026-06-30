@@ -1,0 +1,207 @@
+#!/bin/sh
+# theia-swp — a Mender Update Module that installs a user SOFTWARE PACKAGE (SWP) as
+# an OVERLAY on the running release (the day-2 package plane). The runtime/SWP
+# dichotomy on-device:
+#
+#   theia-release  swaps the WHOLE release (current → releases/<ver>) — the
+#                  platform (supervisor + services), colony's factory job.
+#   theia-swp      overlays ONLY the SWP's FC executables into the live release +
+#                  merges the SWP's executor subtree into the supervised tree +
+#                  reloads the supervisor. Services + supervisor are NEVER touched.
+#
+# Artifact payload (produced by `theia release-swp`) — manifest-driven, NO app.json:
+#   <app>-<ver>.tar.gz   tar of { bin/<fc> (all compositions),
+#                                 manifest/machines.json,
+#                                 manifest/<machine>/{machine,executor,application}.json,
+#                                 version.txt }
+#   version.txt          <app>-<ver>-<abi>  (the artifact-name gate)
+#   machines.json        {app, roles, arity, on, machines}  (the SWP identity)
+#
+# Install model (overlay, reversible):
+#   - copy bin/<fc> → $CURRENT/bin/<fc>   (the SWP FCs join the running release)
+#   - merge the SWP's executor subtree (manifest/<machine>/executor.json worker
+#     nodes) → $THEIA_ROOT/config/executor.json under the root, keyed by the SWP
+#     name so a re-install replaces the SAME SWP's nodes (idempotent).
+#   - back up the prior {bin copies, executor} so ArtifactRollback restores them.
+#   - reload the supervisor (tdb reload if present) so it (re)spawns the SWP FCs.
+#
+# Mender invokes:  theia-swp <STATE> <payload-files-dir>
+set -eu
+
+STATE="$1"
+FILES="${2:-}"
+
+THEIA_ROOT="${THEIA_ROOT:-/opt/theia}"
+CURRENT="$THEIA_ROOT/current"
+EXEC="$THEIA_ROOT/config/executor.json"
+SWP_STATE="$THEIA_ROOT/swp"              # per-SWP install records (for rollback)
+
+_payload() {   # echo the path to a payload file, files/ or bare
+    if [ -f "$FILES/files/$1" ]; then echo "$FILES/files/$1";
+    elif [ -f "$FILES/$1" ]; then echo "$FILES/$1"; fi
+}
+
+_artifact_name() {
+    vt="$(_payload version.txt)"
+    [ -n "$vt" ] && cat "$vt" || echo "unknown"
+}
+
+# Merge the SWP's executor worker nodes into the running executor.json under the
+# root, REPLACING any nodes previously installed for the same SWP (idempotent).
+# Source = manifest/<machine>/executor.json (the per-machine supervised tree); we
+# graft its app worker leaves. Python is on every Theia rig (the framework wheel).
+_merge_executor() {
+    swp_name="$1"; src_exec="$2"; procs="$3"
+    python3 - "$EXEC" "$src_exec" "$swp_name" "$procs" <<'PY'
+import json, sys, os
+exec_path, src_path, name, procs = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4].split()
+procset = set(procs)
+src = json.load(open(src_path))
+# collect the SWP's process worker nodes from the shipped per-machine executor
+found = []
+def walk(n):
+    if isinstance(n, dict):
+        if n.get("name") in procset and n.get("start_cmd"):
+            found.append(n)
+        for k in ("children", "workers", "nodes"):
+            for c in n.get(k, []) or []:
+                walk(c)
+walk(src)
+tree = json.load(open(exec_path)) if os.path.exists(exec_path) else {"name": "root", "nodes": []}
+key = "nodes" if "nodes" in tree else ("children" if "children" in tree else "nodes")
+kids = tree.setdefault(key, [])
+kids[:] = [n for n in kids if n.get("_swp") != name]   # drop prior install of this SWP
+for n in found:
+    n = dict(n); n["_swp"] = name
+    kids.append(n)
+tmp = exec_path + ".tmp"
+json.dump(tree, open(tmp, "w"), indent=2)
+os.replace(tmp, exec_path)
+print(f"theia-swp: merged {len(found)} node(s) for SWP '{name}' into {exec_path}")
+PY
+}
+
+# Read {app, on[0]} from machines.json: the SWP name + the machine whose slice
+# carries the SWP's processes (the overlay target board).
+_swp_name() { python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("app","unknown"))' "$1"; }
+_swp_machine() { python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));o=d.get("on") or d.get("roles") or [];print(o[0] if o else "")' "$1"; }
+_swp_procs() {
+    # the SWP's process names = the application.json processes for the SWP app,
+    # OR every bin/<fc> we shipped (fallback). Echo space-separated.
+    mj="$1"; appj="$2"
+    if [ -n "$appj" ] && [ -f "$appj" ]; then
+        python3 - "$appj" <<'PY'
+import json,sys
+d=json.load(open(sys.argv[1]))
+ps=[]
+for a in d.get("applications",[]):
+    ps += a.get("processes",[])
+print(" ".join(ps))
+PY
+    fi
+}
+
+_reload_supervisor() {
+    if [ -x "$THEIA_ROOT/bin/tdb" ]; then
+        "$THEIA_ROOT/bin/tdb" reload 2>/dev/null \
+            && echo "theia-swp: supervisor reloaded (tdb)" \
+            || echo "theia-swp: tdb reload failed (supervisor may pick up on next scan)" >&2
+    else
+        echo "theia-swp: no tdb — supervisor must be reloaded out of band" >&2
+    fi
+}
+
+case "$STATE" in
+  Download)
+    : ;;   # let Mender auto-save the payload to files/
+
+  ArtifactInstall)
+    art="$(_artifact_name)"
+    [ "$art" != "unknown" ] || { echo "theia-swp: no version.txt" >&2; exit 1; }
+
+    # unpack the bundle tar to a temp dir
+    tarball="$(ls "$FILES"/files/*.tar.* 2>/dev/null | head -1 || true)"
+    [ -n "$tarball" ] || tarball="$(ls "$FILES"/*.tar.* 2>/dev/null | head -1 || true)"
+    [ -n "$tarball" ] || { echo "theia-swp: no SWP tarball in payload" >&2; exit 1; }
+    work="$(mktemp -d)"
+    case "$tarball" in
+      *.zst) zstd -dc "$tarball" | tar -x -C "$work" ;;
+      *.gz)  tar -xzf "$tarball" -C "$work" ;;
+      *)     tar -xf "$tarball"  -C "$work" ;;
+    esac
+
+    mj="$work/manifest/machines.json"
+    [ -f "$mj" ] || { echo "theia-swp: no manifest/machines.json in payload" >&2; exit 1; }
+    swp="$(_swp_name "$mj")"
+    machine="$(_swp_machine "$mj")"
+    appj="$work/manifest/$machine/application.json"
+    srcexec="$work/manifest/$machine/executor.json"
+    procs="$(_swp_procs "$mj" "$appj")"
+
+    # The overlay target. If the runtime isn't provisioned yet ($CURRENT absent),
+    # create a minimal layout so the SWP binaries still land (they run once the
+    # runtime/base is installed under the same $CURRENT).
+    [ -d "$CURRENT/bin" ] || { mkdir -p "$CURRENT/bin"; echo "theia-swp: $CURRENT/bin created (runtime not yet provisioned)"; }
+
+    # back up the prior install of THIS SWP (bin copies + the executor) for rollback
+    rec="$SWP_STATE/$swp"
+    mkdir -p "$rec/prev-bin"
+    cp -f "$EXEC" "$rec/executor.prev.json" 2>/dev/null || true
+    # overlay the SWP FC executables into the live release, saving any displaced file
+    for b in "$work"/bin/*; do
+        [ -f "$b" ] || continue
+        bn="$(basename "$b")"
+        if [ -f "$CURRENT/bin/$bn" ]; then cp -f "$CURRENT/bin/$bn" "$rec/prev-bin/$bn"; fi
+        install -m 0755 "$b" "$CURRENT/bin/$bn"
+        echo "theia-swp: overlaid $CURRENT/bin/$bn"
+    done
+    # overlay any support-asset subtrees (e.g. a gateway PSP plugin: psp/libpsp.so)
+    for d in psp lib; do
+        [ -d "$work/$d" ] || continue
+        if [ -d "$CURRENT/$d" ]; then cp -a "$CURRENT/$d" "$rec/prev-$d"; fi
+        mkdir -p "$CURRENT/$d"
+        cp -a "$work/$d/." "$CURRENT/$d/"
+        echo "theia-swp: overlaid $CURRENT/$d/ (SWP asset dir)"
+    done
+    # merge the SWP's executor subtree + record the install (ship the manifest so a
+    # later runtime install / debug can read what landed).
+    mkdir -p "$rec/manifest"
+    cp -af "$work/manifest/." "$rec/manifest/" 2>/dev/null || true
+    echo "$art" > "$rec/.artifact"
+    if [ -f "$srcexec" ] && [ -n "$procs" ]; then
+        _merge_executor "$swp" "$srcexec" "$procs"
+    else
+        echo "theia-swp: no executor subtree to merge (procs='$procs')" >&2
+    fi
+    rm -rf "$work"
+    echo "theia-swp: installed SWP '$swp' ($art) → procs: $procs"
+    ;;
+
+  ArtifactCommit)
+    echo "theia-swp: committed" ;;
+
+  ArtifactRollback)
+    last="$(ls -t "$SWP_STATE"/*/.artifact 2>/dev/null | head -1 || true)"
+    if [ -n "$last" ]; then
+        rec="$(dirname "$last")"; swp="$(basename "$rec")"
+        [ -f "$rec/executor.prev.json" ] && cp -f "$rec/executor.prev.json" "$EXEC"
+        for b in "$rec"/prev-bin/*; do
+            [ -f "$b" ] && install -m 0755 "$b" "$CURRENT/bin/$(basename "$b")"
+        done
+        for d in psp lib; do
+            [ -d "$rec/prev-$d" ] && { rm -rf "$CURRENT/$d"; cp -a "$rec/prev-$d" "$CURRENT/$d"; }
+        done
+        echo "theia-swp: ROLLBACK SWP '$swp' (executor + binaries + assets restored)"
+        _reload_supervisor
+    else
+        echo "theia-swp: nothing to roll back" >&2
+    fi
+    ;;
+
+  ArtifactCommit_Leave|ArtifactInstall_Leave)
+    _reload_supervisor ;;
+
+  SupportsRollback)   echo "Yes" ;;
+  NeedsArtifactReboot) echo "No" ;;
+  *)                  exit 0 ;;
+esac

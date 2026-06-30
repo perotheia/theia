@@ -45,6 +45,9 @@ RUN apt-get update && \
         libgrpc++1 \
         libgrpc10 \
         libprotobuf23 \
+        libboost-system1.74.0 \
+        libboost-random1.74.0 \
+        libnftables1 \
         gnupg \
         dbus \
         && \

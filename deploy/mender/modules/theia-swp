@@ -46,38 +46,74 @@ _artifact_name() {
     [ -n "$vt" ] && cat "$vt" || echo "unknown"
 }
 
-# Merge the SWP's executor worker nodes into the running executor.json under the
-# root, REPLACING any nodes previously installed for the same SWP (idempotent).
-# Source = manifest/<machine>/executor.json (the per-machine supervised tree); we
-# graft its app worker leaves. Python is on every Theia rig (the framework wheel).
+# Merge the SWP's executor subtree into the running executor.json under the root,
+# REPLACING any nodes previously installed for the same SWP (idempotent).
+# Source = manifest/<machine>/executor.json (the per-machine supervised tree).
+#
+# The SWP's contribution is the `applications_sup` supervisor GROUP (the app
+# processes), a sibling of the runtime's `services_sup`. We graft THAT group as a
+# single child of the live root — preserving its one_for_one supervisor semantics
+# — NOT a flat name-match of every shipped proc (the SWP tar ships ALL bins of
+# every composition, so a name-match would duplicate the runtime services). If the
+# source has no applications_sup (legacy/hand-written), fall back to grafting only
+# the app worker leaves whose names are NOT already supervised by the live tree.
+# Python is on every Theia rig (the framework wheel).
 _merge_executor() {
     swp_name="$1"; src_exec="$2"; procs="$3"
     python3 - "$EXEC" "$src_exec" "$swp_name" "$procs" <<'PY'
 import json, sys, os
 exec_path, src_path, name, procs = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4].split()
-procset = set(procs)
 src = json.load(open(src_path))
-# collect the SWP's process worker nodes from the shipped per-machine executor
-found = []
-def walk(n):
-    if isinstance(n, dict):
-        if n.get("name") in procset and n.get("start_cmd"):
-            found.append(n)
-        for k in ("children", "workers", "nodes"):
-            for c in n.get(k, []) or []:
-                walk(c)
-walk(src)
-tree = json.load(open(exec_path)) if os.path.exists(exec_path) else {"name": "root", "nodes": []}
-key = "nodes" if "nodes" in tree else ("children" if "children" in tree else "nodes")
+tree = json.load(open(exec_path)) if os.path.exists(exec_path) else {"name": "root", "children": []}
+key = "children" if "children" in tree else ("workers" if "workers" in tree else "nodes")
 kids = tree.setdefault(key, [])
+
+# names already supervised by the LIVE tree (so a fallback graft never re-adds the
+# runtime services that the SWP tar also carries).
+live = set()
+def collect_live(n):
+    if isinstance(n, dict):
+        if n.get("start_cmd"): live.add(n.get("name"))
+        for k in ("children", "workers", "nodes"):
+            for c in n.get(k, []) or []: collect_live(c)
+# only walk the EXISTING (non-_swp) tree for liveness
+for n in kids:
+    if not n.get("_swp"): collect_live(n)
+
+# 1) preferred: lift the applications_sup group out of the source and graft it whole.
+app_groups = []
+def find_groups(n):
+    if isinstance(n, dict):
+        if n.get("name") == "applications_sup":
+            app_groups.append(n)
+        for k in ("children", "workers", "nodes"):
+            for c in n.get(k, []) or []: find_groups(c)
+find_groups(src)
+
+found = []
+if app_groups:
+    for g in app_groups:
+        g = dict(g); g["_swp"] = name
+        found.append(g)
+    n_procs = sum(len(g.get("children", g.get("workers", g.get("nodes", []))) or []) for g in app_groups)
+else:
+    # 2) fallback: graft app worker leaves not already supervised live.
+    procset = set(procs)
+    def walk(n):
+        if isinstance(n, dict):
+            if n.get("name") in procset and n.get("start_cmd") and n.get("name") not in live:
+                found.append({**n, "_swp": name})
+            for k in ("children", "workers", "nodes"):
+                for c in n.get(k, []) or []: walk(c)
+    walk(src)
+    n_procs = len(found)
+
 kids[:] = [n for n in kids if n.get("_swp") != name]   # drop prior install of this SWP
-for n in found:
-    n = dict(n); n["_swp"] = name
-    kids.append(n)
+kids.extend(found)
 tmp = exec_path + ".tmp"
 json.dump(tree, open(tmp, "w"), indent=2)
 os.replace(tmp, exec_path)
-print(f"theia-swp: merged {len(found)} node(s) for SWP '{name}' into {exec_path}")
+print(f"theia-swp: merged SWP '{name}' ({n_procs} app proc(s)) into {exec_path}")
 PY
 }
 
@@ -101,13 +137,57 @@ PY
     fi
 }
 
+# Make the running supervisor adopt the merged tree. The supervisor reads
+# executor.json ONCE at startup and runs a static tree (no SIGHUP/inotify reload),
+# so "reload" = RESTART it: it re-reads the now-merged executor.json and spawns the
+# SWP's app processes alongside the services. Order of preference:
+#   1. tdb reload          — if a future supervisor grows a dynamic-reload control.
+#   2. systemctl restart   — a systemd rig (the unit re-execs the supervisor).
+#   3. signal + relaunch    — a container/no-systemd rig: TERM the supervisor (it
+#      reaps its children) then relaunch it detached the same way provision does.
+# A restart is brief (services re-fork) but is the ONLY mechanism a static-tree
+# supervisor has to adopt new children. Idempotent: a re-install just restarts again.
 _reload_supervisor() {
-    if [ -x "$THEIA_ROOT/bin/tdb" ]; then
-        "$THEIA_ROOT/bin/tdb" reload 2>/dev/null \
-            && echo "theia-swp: supervisor reloaded (tdb)" \
-            || echo "theia-swp: tdb reload failed (supervisor may pick up on next scan)" >&2
+    if [ -x "$THEIA_ROOT/bin/tdb" ] && "$THEIA_ROOT/bin/tdb" reload 2>/dev/null; then
+        echo "theia-swp: supervisor reloaded (tdb)"
+        return 0
+    fi
+    if command -v systemctl >/dev/null 2>&1 && systemctl cat theia-supervisor >/dev/null 2>&1; then
+        systemctl restart theia-supervisor 2>/dev/null \
+            && { echo "theia-swp: supervisor restarted (systemd) — adopting merged tree"; return 0; }
+    fi
+    # container / no-systemd: kill the supervisor (skip self/ssh), relaunch detached.
+    # CRUCIAL: relaunch via the theia-run LAUNCHER, not the bare supervisor binary —
+    # the supervisor is STRICT and refuses to start without THEIA_ROOT_DIR +
+    # THEIA_SUPERVISOR_MANIFEST + LD_LIBRARY_PATH, which theia-run is the one place
+    # that exports (the same script orchestrate/systemd use). A bare `setsid
+    # supervisor` dies with "THEIA_ROOT_DIR is not set".
+    launcher="$THEIA_ROOT/bin/theia-run"
+    me=$$
+    for pid in $(pgrep -x supervisor 2>/dev/null); do
+        [ "$pid" = "$me" ] && continue
+        kill -TERM "$pid" 2>/dev/null || true
+    done
+    # wait for it to exit + reap children (up to ~8s)
+    i=0; while [ $i -lt 16 ] && pgrep -x supervisor >/dev/null 2>&1; do sleep 0.5; i=$((i+1)); done
+    if [ -x "$launcher" ]; then
+        ( THEIA_ROOT_DIR="$THEIA_ROOT" setsid "$launcher" >/var/log/theia-supervisor.log 2>&1 < /dev/null & )
+        sleep 3
+        pgrep -x supervisor >/dev/null 2>&1 \
+            && echo "theia-swp: supervisor relaunched via theia-run (no systemd) — adopting merged tree" \
+            || echo "theia-swp: supervisor relaunch did not come up — check /var/log/theia-supervisor.log" >&2
+    elif [ -x "$THEIA_ROOT/bin/supervisor" ]; then
+        # no launcher script (older release) — export the strict env ourselves.
+        ( cd "$THEIA_ROOT" && THEIA_ROOT_DIR="$THEIA_ROOT" \
+            THEIA_SUPERVISOR_MANIFEST="$THEIA_ROOT/config/executor.json" \
+            LD_LIBRARY_PATH="$THEIA_ROOT/current/lib:${LD_LIBRARY_PATH:-}" \
+            setsid "$THEIA_ROOT/bin/supervisor" >/var/log/theia-supervisor.log 2>&1 < /dev/null & )
+        sleep 3
+        pgrep -x supervisor >/dev/null 2>&1 \
+            && echo "theia-swp: supervisor relaunched (no systemd, no launcher) — adopting merged tree" \
+            || echo "theia-swp: supervisor relaunch did not come up — check /var/log/theia-supervisor.log" >&2
     else
-        echo "theia-swp: no tdb — supervisor must be reloaded out of band" >&2
+        echo "theia-swp: no launcher/supervisor to relaunch (runtime not provisioned?) — adopts on next start" >&2
     fi
 }
 
@@ -178,6 +258,10 @@ case "$STATE" in
     ;;
 
   ArtifactCommit)
+    # the overlay + executor merge happened in ArtifactInstall; now make the running
+    # supervisor adopt the merged tree (restart — the static-tree supervisor has no
+    # hot-reload) so the SWP's app processes actually spawn.
+    _reload_supervisor
     echo "theia-swp: committed" ;;
 
   ArtifactRollback)

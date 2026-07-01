@@ -40,6 +40,8 @@ from manifest.services.manifest import DEPLOYMENT as BASE
 # worker leaves. Without this the supervisor registry has no reporting
 # nodes and rtdb trace/loglevel cannot resolve a node by name.
 from manifest.services.manifest import PROCESS_NODES  # noqa: F401
+from manifest.services.manifest import PROCESS_PARAMS  # noqa: F401  (re-export → config/<fc>.json)
+from manifest.services.manifest import PROCESS_CONFIG_DEFAULTS  # noqa: F401  (re-export → config-defaults.json)
 
 # The services the GPS path + production rig need; everything else is dropped.
 KEEP = {"com", "crypto", "log", "nm", "per", "tsync"}

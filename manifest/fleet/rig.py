@@ -34,6 +34,8 @@ from manifest.services.manifest import DEPLOYMENT as BASE
 # it the supervisor registry has no reporting nodes (rtdb trace/loglevel can't
 # resolve a node by name). The twin of SUPERVISORS below.
 from manifest.services.manifest import PROCESS_NODES  # noqa: F401
+from manifest.services.manifest import PROCESS_PARAMS  # noqa: F401  (re-export → config/<fc>.json)
+from manifest.services.manifest import PROCESS_CONFIG_DEFAULTS  # noqa: F401  (re-export → config-defaults.json)
 
 # FULL set — keep every service; bind them all to central. (rds is Orin-gated at
 # build time via its backend select; it stays in the tree but is a no-op without

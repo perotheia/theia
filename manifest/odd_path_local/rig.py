@@ -29,6 +29,8 @@ from manifest.services.manifest import DEPLOYMENT as BASE
 # worker leaves. Without this the supervisor registry has no reporting
 # nodes and rtdb trace/loglevel cannot resolve a node by name.
 from manifest.services.manifest import PROCESS_NODES  # noqa: F401
+from manifest.services.manifest import PROCESS_PARAMS  # noqa: F401  (re-export → config/<fc>.json)
+from manifest.services.manifest import PROCESS_CONFIG_DEFAULTS  # noqa: F401  (re-export → config-defaults.json)
 
 KEEP = {"com", "crypto", "log", "nm", "tsync"}
 _ALL = {p.name for p in _members(BASE.execution.processes)}

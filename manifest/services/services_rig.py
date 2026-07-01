@@ -23,6 +23,8 @@ from artheia.manifest.deployment import (
 )
 from manifest.services.manifest import DEPLOYMENT as BASE
 from manifest.services.manifest import PROCESS_NODES  # noqa: F401  (re-export → executor.json nodes)
+from manifest.services.manifest import PROCESS_PARAMS  # noqa: F401  (re-export → config/<fc>.json)
+from manifest.services.manifest import PROCESS_CONFIG_DEFAULTS  # noqa: F401  (re-export → config-defaults.json)
 
 # Every framework service (no apps). The full platform the factory installs.
 ALL = {p.name for p in _members(BASE.execution.processes)}

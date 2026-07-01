@@ -182,12 +182,40 @@ def _bazel_bin(target: str) -> Path:
     return root / "bazel-bin" / pkg / name
 
 
+def _pero_theia_root() -> "Path | None":
+    """Resolve the local path for the `pero_theia` bazel module from the
+    workspace MODULE.bazel's `local_path_override`. Returns None when the
+    workspace has no MODULE.bazel or no such override (registry dep)."""
+    mod = WORKSPACE / "MODULE.bazel"
+    if not mod.is_file():
+        return None
+    import re as _re
+    text = mod.read_text()
+    m = _re.search(
+        r'local_path_override\s*\(\s*module_name\s*=\s*"pero_theia"\s*,\s*'
+        r'path\s*=\s*"([^"]+)"', text)
+    if not m:
+        return None
+    p = Path(m.group(1))
+    return p if p.is_absolute() else (WORKSPACE / p).resolve()
+
+
 def _deb_mode() -> bool:
-    """True when THEIA_ROOT is an INSTALLED prefix (the debs), not a source
-    checkout — detected by the prebuilt supervisor under THEIA_ROOT/bin. In deb
-    mode the framework binaries are already built (no bazel for //platform,
-    //services); only the workspace's OWN app C++ is bazel-built."""
-    return (THEIA_ROOT / "bin" / "supervisor").is_file()
+    """True when the pero_theia bazel module (or THEIA_ROOT) is an INSTALLED
+    prefix (the debs), not a full source checkout.
+
+    Two cases:
+    - THEIA_ROOT has a prebuilt supervisor under bin/ → installed deb, no source.
+    - The workspace MODULE.bazel has a local_path_override for pero_theia that
+      points to an installed prefix (lacks platform/supervisor/main/BUILD.bazel).
+      This is the consuming-workspace-alongside-source-checkout case: THEIA_ROOT
+      points to the source tree but @pero_theia is the deb at /opt/theia."""
+    if (THEIA_ROOT / "bin" / "supervisor").is_file():
+        return True
+    proot = _pero_theia_root()
+    if proot and not (proot / "platform" / "supervisor" / "main").is_dir():
+        return True
+    return False
 
 
 def _prebuilt_bin(name: str) -> "Path | None":
@@ -1362,7 +1390,12 @@ def _emit_manifest_build_files(mdir: Path, machines: list[str]) -> None:
         # executor.json tree + is the PG allocator. It is NOT a process in
         # execution.json (it's the implicit root), so add it explicitly or the
         # .deb has the services but nothing to fork/supervise them.
-        labels.add(_qualify(_SUPERVISOR_TARGET))
+        # In deb mode the supervisor is pre-installed (/opt/theia/bin/supervisor)
+        # and is NOT a buildable target in the consuming workspace — omit it.
+        # In source mode (THEIA_ROOT is the checkout) include it so `theia dist`
+        # builds everything in one go.
+        if not _deb_mode():
+            labels.add(_qualify(_SUPERVISOR_TARGET))
         bins = "".join(f'\n        "{lbl}",' for lbl in sorted(labels))
         lines.append(f'dist_pkg(\n    name = "{h}",\n    binaries = [{bins}\n    ],\n)')
     (mdir / "BUILD.bazel").write_text("\n".join(lines) + "\n")
@@ -1440,21 +1473,33 @@ def cmd_manifest(args: list[str]) -> int:
 
 
 def cmd_dist(args: list[str]) -> int:
-    """Build the per-host .deb deploy bundles from the JSON manifests — NO rig.py.
+    """Build the per-host .deb deploy bundles from the serialized manifest.
 
-    Arg: the machines.json path (default dist/manifest/machines.json). Reads it
-    for the host list, then for each `target` host reads <host>/machine.json for
-    the arch → bazel platform and builds //dist/manifest:<host>_pkg (rules/
-    dist_ipk.bzl packs from <host>/application.json, .deb by default). One bazel
-    invocation per host so each cross-compiles to its own arch.
+        theia dist <target> [--attr ATTR]
 
-    Run `theia manifest` first — if the JSON is missing this fails loudly."""
+    <target>  rig target name — same as `theia manifest <target>`. Mandatory:
+              run `theia manifest <target>` first to emit dist/manifest/.
+    --attr    optional rig attribute (e.g. DOCKER); passed to `theia manifest`
+              if the manifest is stale (not used yet — re-run theia manifest first).
+
+    Reads dist/manifest/machines.json for the host list; for each host reads
+    <host>/machine.json for the arch → bazel platform and builds
+    //dist/manifest:<host>_pkg (rules/dist_ipk.bzl). One bazel invocation per
+    host so each cross-compiles to its own arch. Stages the .deb next to the
+    host's manifest JSON for `theia orchestrate`."""
     import json
-    arg = next((a for a in args if not a.startswith("-")), None)
-    machines_json = Path(arg) if arg else WORKSPACE / _MANIFEST_DIR / "machines.json"
+    if "-h" in args or "--help" in args:
+        print(cmd_dist.__doc__, file=sys.stderr)
+        return 0
+    target = next((a for a in args if not a.startswith("-")), None)
+    if not target:
+        print("theia dist: <target> is required — e.g. `theia dist single`",
+              file=sys.stderr)
+        return 1
+    machines_json = WORKSPACE / _MANIFEST_DIR / "machines.json"
     if not machines_json.is_file():
         print(f"theia dist: no manifest at {machines_json} — run `theia "
-              "manifest` first to emit the JSON deploy manifests.", file=sys.stderr)
+              f"manifest {target}` first.", file=sys.stderr)
         return 1
     mdir = machines_json.parent
     # machines.json is a NAME LIST ({"machines":["central",...]}) in the
@@ -3172,7 +3217,7 @@ COMMANDS = {
     "start":       (cmd_start,       "run the staged supervisor from install/<machine>/ (detached + pidfile)"),
     "stop":        (cmd_stop,        "stop the supervisor started by `theia start` (graceful)"),
     "manifest":    (cmd_manifest,    "rig.py → dist/manifest/*.json (sole rig entry for deploy)"),
-    "dist":        (cmd_dist,        "per-host .ipk from dist/manifest/ JSON (no rig.py)"),
+    "dist":        (cmd_dist,        "<target> — per-host .deb from dist/manifest/ (Ansible path)"),
     "release":     (cmd_release,     "build the installable package set (.deb+.ipk) → dist/debian + dist/ipkg"),
     "release-swp": (cmd_release_swp, "build + publish a user-ws Software Package (day-2 Mender OTA, the package plane)"),
     "release-app": (cmd_release_swp, "alias for release-swp (deprecated)"),

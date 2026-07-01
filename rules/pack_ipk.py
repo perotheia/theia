@@ -89,15 +89,18 @@ def _wanted(exec_json: str) -> dict[str, tuple[str, str]]:
             "/opt/theia/bin/" + p["name"],
             _target_pkg_path(p["executable"]),
         )
-    # The supervisor is ALWAYS staged at bin/supervisor — it's the runtime that
-    # boots the executor.json tree (the PG allocator + watchdog), not a process
-    # row in execution.json. theia dist adds its label to the binaries filegroup;
-    # stage it here so the .deb is actually bootable (`theia start` runs it).
+    # The supervisor boots the executor.json tree. In source-mode `theia dist` the
+    # supervisor is built and added to the binaries filegroup — stage it here.
+    # In deb-mode the supervisor is pre-installed by theia-runtime.deb and is NOT
+    # in the filegroup; _supervisor_optional=True lets the matcher skip it.
     out["supervisor"] = (
         "/opt/theia/bin/supervisor",
         _target_pkg_path("//platform/supervisor/main:supervisor"),
     )
     return out
+
+
+_SUPERVISOR_OPTIONAL = True  # pre-installed by theia-runtime.deb when not built
 
 
 def main(argv: list[str]) -> int:
@@ -128,7 +131,10 @@ def main(argv: list[str]) -> int:
         hit = next((p for p in args.bin if p.endswith("/" + pkg_path)), None)
         if hit:
             resolved[name] = hit
-    missing = [n for n in wanted if n not in resolved]
+    # The supervisor is optional: in deb mode it is pre-installed by
+    # theia-runtime.deb and not present in the binaries filegroup.
+    missing = [n for n in wanted if n not in resolved
+               and not (n == "supervisor" and _SUPERVISOR_OPTIONAL)]
     if missing:
         sys.stderr.write(
             f"pack_ipk: {args.package}: processes in execution.json have no "
@@ -142,8 +148,11 @@ def main(argv: list[str]) -> int:
         os.makedirs(ctrl)
 
         # data tree: copy each wanted binary to its dest, mode 0755 (executable;
-        # bazel-out is read-only 0555).
+        # bazel-out is read-only 0555). Skip any that were not resolved (e.g.
+        # supervisor absent in deb mode — it is pre-installed on the target).
         for name in sorted(wanted):
+            if name not in resolved:
+                continue
             dest = wanted[name][0]     # /opt/theia/bin/<name>
             dst = data + dest          # → data/opt/theia/bin/<name>
             os.makedirs(os.path.dirname(dst), exist_ok=True)

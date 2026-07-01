@@ -292,18 +292,61 @@ def _load_install_components(manifest_root: Path, machine: str):
 
 
 def _fc_art_path(fc: str, target: str):
-    """The .art the gen-params emitter reads for an FC, derived from the bazel
-    target. Services FCs (``//services/<fc>/...``) live at the canonical symlink
-    path system/services/<fc>/package.art; app compositions (``//apps/...``) at
-    system/apps/package.art. Returns a Path or None if absent (an FC with no
-    .art simply gets no params file)."""
+    """The .art the gen-params emitter reads for an FC.
+
+    Services FCs (``//services/<fc>/...``) live at the canonical symlink path
+    system/services/<fc>/package.art — the FC name IS the dir segment.
+
+    App compositions are resolved from ``system/system.art`` imports: we walk
+    each imported package dir, look for a ``package.art``, and check whether
+    that package's cluster members include *fc* as an ident. This is
+    layout-independent — the user can name their app dir anything; artheia's
+    ``_import_dir`` follows the package FQN to the right dir regardless.
+
+    Returns a Path or None if no art is found (platform FCs carry their own)."""
     if target.startswith("//services/"):
         cand = WORKSPACE / "system" / "services" / fc / "package.art"
-    elif target.startswith("//apps/"):
-        cand = WORKSPACE / "system" / "apps" / "package.art"
-    else:
-        return None      # platform FCs (gateway) carry their own params path
-    return cand if cand.exists() else None
+        return cand if cand.exists() else None
+
+    if not target.startswith("//apps/"):
+        return None   # platform FCs (gateway) carry their own params path
+
+    # Resolve via system/system.art imports — layout-independent. The user
+    # can name their app dir anything; artheia's _import_dir follows the
+    # package FQN declared in system.art to the right dir regardless.
+    system_art = WORKSPACE / "system" / "system.art"
+    if not system_art.exists():
+        return None
+    try:
+        from artheia.generators._art_clusters import (
+            _extract_package, _extract_imports, _import_dir,
+            _PKG_FILE_PRIORITY,
+        )
+        from artheia.model.loader import parse_file
+    except ImportError:
+        return None
+    entry_pkg = _extract_package(str(system_art))
+    for imp_pkg in _extract_imports(str(system_art)):
+        pkg_dir = _import_dir(system_art, entry_pkg, imp_pkg)
+        if pkg_dir is None or not pkg_dir.is_dir():
+            continue
+        for fname in _PKG_FILE_PRIORITY:
+            cand = pkg_dir / fname
+            if not cand.is_file():
+                continue
+            # Parse package (merges package.art + component.art) and scan
+            # ClusterDecl.elements for a ClusterMember whose ident == fc.
+            try:
+                m = parse_file(str(cand))
+                for el in getattr(m, "elements", []):
+                    if type(el).__name__ == "ClusterDecl":
+                        for member in getattr(el, "elements", []):
+                            if getattr(member, "name", None) == fc:
+                                return cand
+            except Exception:
+                pass
+            break  # one file per pkg dir; move on to next import
+    return None
 
 
 def _install_dir(args: list[str]) -> Path:

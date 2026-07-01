@@ -300,7 +300,7 @@ def _fc_art_path(fc: str, target: str):
     if target.startswith("//services/"):
         cand = WORKSPACE / "system" / "services" / fc / "package.art"
     elif target.startswith("//apps/"):
-        cand = WORKSPACE / "system" / "demo" / "package.art"
+        cand = WORKSPACE / "system" / "apps" / "package.art"
     else:
         return None      # platform FCs (gateway) carry their own params path
     return cand if cand.exists() else None
@@ -395,7 +395,7 @@ def cmd_start(args: list[str]) -> int:
         _install_dirs = str(THEIA_ROOT.resolve()) + ":" + _install_dirs
     env = {
         **os.environ,
-        "THEIA_SUPERVISOR_MANIFEST": "executor.json",
+        "THEIA_SUPERVISOR_MANIFEST": "config/executor.json",
         "THEIA_INSTALL_DIR": _install_dirs,
         "THEIA_SUPERVISOR_INSTANCE": instance,
         # The cluster machine index — a supervisor BOOT knob (not a node address):
@@ -873,9 +873,10 @@ def cmd_install(args: list[str]) -> int:
                        cwd=ws_build_root)) != 0:
             return rc
 
-    # 3. executor.json — the supervisor tree for this machine. serialize-manifest
-    #    ALREADY wrote install/manifest/<machine>/executor.json (step 1); copy it
-    #    into install/<machine>/ where `theia start` reads it.
+    # 3. executor.json → config/executor.json. serialize-manifest already wrote
+    #    install/manifest/<machine>/executor.json; copy it into config/ so all
+    #    supervisor config lives in one place. theia start sets
+    #    THEIA_SUPERVISOR_MANIFEST=config/executor.json.
     dest.mkdir(parents=True, exist_ok=True)
     src_executor = manifest_root / machine / "executor.json"
     if not src_executor.is_file():
@@ -883,13 +884,17 @@ def cmd_install(args: list[str]) -> int:
               "serialize-manifest did not emit the supervisor tree.",
               file=sys.stderr)
         return 1
-    shutil.copy2(src_executor, dest / "executor.json")
-    print(f"staged {dest / 'executor.json'}", file=sys.stderr)
+    cfg_dir = dest / "config"
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src_executor, cfg_dir / "executor.json")
+    print(f"staged {cfg_dir / 'executor.json'}", file=sys.stderr)
 
-    # 3b. Per-FC static params JSON — config/<fc>.json. Shared with the
-    #     deploy-manifest path (theia manifest) so install/<machine>/config/ and
-    #     dist/manifest/<machine>/config/ are produced by the SAME emitter.
-    if (rc := _emit_fc_config(machine, binaries, dest / "config")) != 0:
+    # 3b. Per-FC static params JSON — config/<fc>.json. Every FC (including
+    #     params-less app compositions) gets a config/<fc>.json so the runtime
+    #     config singleton always finds a file. Shared with the deploy-manifest
+    #     path (theia manifest) → install/<machine>/config/ and
+    #     dist/manifest/<machine>/config/ are byte-identical.
+    if (rc := _emit_fc_config(machine, binaries, cfg_dir)) != 0:
         return rc
 
     # 4. Stage binaries + setcap. A binary's source is its prebuilt path (deb

@@ -215,6 +215,7 @@ while true; do
         log "starting supervisor (machine=$MACHINE, manifest=$EXECUTOR_JSON, instance=$THEIA_MACHINE_INSTANCE)"
         export THEIA_SUPERVISOR_MANIFEST="$EXECUTOR_JSON"
         export THEIA_ROOT_DIR="/opt/theia"
+        export THEIA_INSTALL_DIR="/opt/theia/current"
         # The supervisor's own SupervisorCtl binds at this machine's instance via
         # --tipc (instance-only ":N" keeps the compiled type 0x80020001). central
         # (:0) omits it (compiled default); compute (:1) passes it.

@@ -3,12 +3,11 @@
 #   /opt/theia/bin/supervisor      the UPDATER — fixed, never OTA-swapped
 #   /opt/theia/current → releases/<ver>   the SERVICES + APPS the supervisor forks
 #   /opt/theia/config/executor.json       the supervised tree
-# The supervisor binary is STRICT — it requires THEIA_ROOT_DIR + THEIA_SUPERVISOR_
-# MANIFEST and resolves each child's ./bin/<svc> from $THEIA_ROOT_DIR/current (it
-# REFUSES to start if `current` is absent — no flat-bin fallback). OTA (Mender
-# theia-release / UCM) flips current→releases/<ver> + restarts the FCs; the
-# supervisor binary is untouched. This launcher is the ONE place that exports the
-# env, so the operator / systemd / `theia start` just runs this script.
+#
+# THEIA_INSTALL_DIR: colon-separated list of dirs the supervisor searches to
+# resolve each child's relative start_cmd (e.g. "bin/crypto"). OTA flips
+# current→releases/<ver>; the supervisor binary is untouched. This launcher is
+# the ONE place that exports the env.
 set -euo pipefail
 
 # Install root (where the supervisor binary + config live). Default to the .deb
@@ -21,7 +20,7 @@ export THEIA_ROOT_DIR="${THEIA_ROOT_DIR:-/opt/theia}"
 }
 [[ -d "$THEIA_ROOT_DIR/current" ]] || {
     echo "theia-run: no release at $THEIA_ROOT_DIR/current — provision must lay the" \
-         "releases/<ver> + current symlink (the children run from it)" >&2
+         "releases/<ver> + current symlink" >&2
     exit 1
 }
 [[ -f "$THEIA_ROOT_DIR/config/executor.json" ]] || {
@@ -29,13 +28,12 @@ export THEIA_ROOT_DIR="${THEIA_ROOT_DIR:-/opt/theia}"
     exit 1
 }
 
-# The rest of the strict env, derived from the one root. The CHILDREN's libs come
-# from the current release (current/lib); OTA swaps them with current. The
-# supervisor passes LD_LIBRARY_PATH down to each FC it forks.
+# THEIA_INSTALL_DIR: the release-dir the supervisor scans to resolve child bins.
+# For OTA this is always $THEIA_ROOT_DIR/current (UCM flips this symlink).
+export THEIA_INSTALL_DIR="${THEIA_INSTALL_DIR:-$THEIA_ROOT_DIR/current}"
 export THEIA_SUPERVISOR_MANIFEST="$THEIA_ROOT_DIR/config/executor.json"
 export THEIA_LOG_LEVEL="${THEIA_LOG_LEVEL:-info}"
+# The CHILDREN's libs come from the current release; OTA swaps them with current.
 export LD_LIBRARY_PATH="$THEIA_ROOT_DIR/current/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
-# cd to the root so the supervisor resolves current/bin/<svc> relative to it.
-cd "$THEIA_ROOT_DIR"
 exec "$THEIA_ROOT_DIR/bin/supervisor" "$@"

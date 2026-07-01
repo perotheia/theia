@@ -916,10 +916,12 @@ def cmd_install(args: list[str]) -> int:
                        cwd=ws_build_root)) != 0:
             return rc
 
-    # 3. executor.json → config/executor.json. serialize-manifest already wrote
-    #    install/manifest/<machine>/executor.json; copy it into config/ so all
-    #    supervisor config lives in one place. theia start sets
-    #    THEIA_SUPERVISOR_MANIFEST=config/executor.json.
+    # 3. config/ — copy the entire config/ dir that serialize-manifest emitted
+    #    (executor.json + config/<fc>.json + config-defaults.json). This is the
+    #    authoritative source: PROCESS_PARAMS / PROCESS_CONFIG_DEFAULTS were
+    #    captured at gen-manifest time and baked into the manifest module, so no
+    #    .art backtrack is needed here. install/<machine>/config/ is a verbatim
+    #    copy of dist/manifest/<machine>/config/ — byte-identical.
     dest.mkdir(parents=True, exist_ok=True)
     src_executor = manifest_root / machine / "executor.json"
     if not src_executor.is_file():
@@ -929,16 +931,21 @@ def cmd_install(args: list[str]) -> int:
         return 1
     cfg_dir = dest / "config"
     cfg_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(src_executor, cfg_dir / "executor.json")
-    print(f"staged {cfg_dir / 'executor.json'}", file=sys.stderr)
-
-    # 3b. Per-FC static params JSON — config/<fc>.json. Every FC (including
-    #     params-less app compositions) gets a config/<fc>.json so the runtime
-    #     config singleton always finds a file. Shared with the deploy-manifest
-    #     path (theia manifest) → install/<machine>/config/ and
-    #     dist/manifest/<machine>/config/ are byte-identical.
-    if (rc := _emit_fc_config(machine, binaries, cfg_dir)) != 0:
-        return rc
+    # Copy all JSON files from the manifest config/ dir (includes executor.json,
+    # per-FC params, config-defaults). Fall back to copying executor.json alone
+    # if the manifest was produced by an older serialize-manifest that didn't emit
+    # a config/ dir (graceful degradation for partially-upgraded workspaces).
+    src_cfg = manifest_root / machine / "config"
+    if src_cfg.is_dir():
+        for src_f in src_cfg.iterdir():
+            if src_f.suffix == ".json":
+                shutil.copy2(src_f, cfg_dir / src_f.name)
+                print(f"staged {cfg_dir / src_f.name}", file=sys.stderr)
+    else:
+        # Older manifest layout — no config/ dir yet. Copy just executor.json.
+        shutil.copy2(src_executor, cfg_dir / "executor.json")
+        print(f"staged {cfg_dir / 'executor.json'} (legacy — re-run theia manifest)",
+              file=sys.stderr)
 
     # 4. Stage binaries + setcap. A binary's source is its prebuilt path (deb
     #    mode) when we have one, else its bazel-bin output.
@@ -1362,20 +1369,17 @@ def cmd_manifest(args: list[str]) -> int:
 
     machines = json.loads((out / "machines.json").read_text())["machines"]
 
-    # Per-FC static params JSON — config/<fc>.json per machine, the SAME emitter
-    # `theia install` uses. Without this the deploy tree had no config/ dir, so
-    # `theia orchestrate` (seed-config.yml) skipped per-FC config entirely (e.g.
-    # the tsync GPS-backend profile never reached the rig). Derive each machine's
-    # fc→target map from its execution.json (serialize-manifest just wrote it).
+    # config/<fc>.json and config/config-defaults.json are emitted by
+    # serialize-manifest directly (from PROCESS_PARAMS / PROCESS_CONFIG_DEFAULTS
+    # on the rig module — captured at gen-manifest time, no .art backtrack).
+    # Log what landed so the operator can verify.
     for m in machines:
-        exec_json = out / m / "execution.json"
-        if not exec_json.is_file():
-            continue
-        procs = json.loads(exec_json.read_text()).get("processes", [])
-        binaries = {p["name"]: p["executable"] for p in procs
-                    if p.get("executable")}
-        if (rc := _emit_fc_config(m, binaries, out / m / "config")) != 0:
-            return rc
+        cfg_dir = out / m / "config"
+        if cfg_dir.is_dir():
+            cfg_files = sorted(p.name for p in cfg_dir.iterdir()
+                               if p.suffix == ".json")
+            if cfg_files:
+                print(f"  config/{m}: {', '.join(cfg_files)}", file=sys.stderr)
 
     # Drop the dist BUILD glue alongside the JSON so `theia dist` (RULE 2 —
     # rules/dist_ipk.bzl) can build //dist/manifest:<host>_pkg without re-running
@@ -2794,6 +2798,18 @@ try:
     from manifest.apps.manifest import PROCESS_NODES
 except Exception:
     PROCESS_NODES = {}
+
+# Static params defaults (params{} declared in .art) for config/<fc>.json.
+try:
+    from manifest.apps.manifest import PROCESS_PARAMS
+except Exception:
+    PROCESS_PARAMS = {}
+
+# Etcd config-defaults (config{} declared values + digest) for first-boot seed.
+try:
+    from manifest.apps.manifest import PROCESS_CONFIG_DEFAULTS
+except Exception:
+    PROCESS_CONFIG_DEFAULTS = {}
 '''
 
 # --- --with-services variants ---------------------------------------------
@@ -2916,6 +2932,28 @@ try:
     PROCESS_NODES = {**_SVC_NODES, **_APP_NODES}
 except Exception:
     PROCESS_NODES = {}
+
+# Static params defaults (services ⊕ apps) for config/<fc>.json.
+try:
+    from manifest.services.manifest import PROCESS_PARAMS as _SVC_PARAMS
+    try:
+        from manifest.apps.manifest import PROCESS_PARAMS as _APP_PARAMS
+    except Exception:
+        _APP_PARAMS = {}
+    PROCESS_PARAMS = {**_SVC_PARAMS, **_APP_PARAMS}
+except Exception:
+    PROCESS_PARAMS = {}
+
+# Etcd config-defaults (services ⊕ apps) for first-boot seed.
+try:
+    from manifest.services.manifest import PROCESS_CONFIG_DEFAULTS as _SVC_CD
+    try:
+        from manifest.apps.manifest import PROCESS_CONFIG_DEFAULTS as _APP_CD
+    except Exception:
+        _APP_CD = {}
+    PROCESS_CONFIG_DEFAULTS = {**_SVC_CD, **_APP_CD}
+except Exception:
+    PROCESS_CONFIG_DEFAULTS = {}
 '''
 
 # setup_local.sh — the per-workspace activation shim (theia init writes it).

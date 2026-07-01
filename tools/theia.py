@@ -2597,7 +2597,7 @@ def cmd_init(args: list[str]) -> int:
     print("\nVerify the toolchain before adding apps (the bootstrap rig):\n"
           "  artheia gen-manifest system/apps/component.art "
           "manifest/apps/manifest.py\n"
-          f"  theia manifest bootstrap && theia install && theia start{extra}\n"
+          f"  theia manifest bootstrap && theia install bootstrap && theia start{extra}\n"
           "\nThen add a composition to system/apps/component.art and "
           "generate + build its C++:\n"
           "  artheia gen-app --kind fc system/apps/component.art "

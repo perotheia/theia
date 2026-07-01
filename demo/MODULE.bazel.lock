@@ -274,6 +274,19 @@
         }
       }
     },
+    "@@pero_theia+//toolchains/codegen:extension.bzl%theia_codegen_ext": {
+      "general": {
+        "bzlTransitiveDigest": "XIe3J/kdyBl8qcaVFpu6R0ulrnILFD1LjpZK0tJmZW4=",
+        "usagesDigest": "9ha4nHZh9VdDc037EtrPdZUlx7boMr+jK5uu1MOXJJA=",
+        "recordedInputs": [],
+        "generatedRepoSpecs": {
+          "theia_codegen": {
+            "repoRuleId": "@@pero_theia+//toolchains/codegen:theia_codegen.bzl%theia_codegen",
+            "attributes": {}
+          }
+        }
+      }
+    },
     "@@rules_foreign_cc+//foreign_cc:extensions.bzl%tools": {
       "general": {
         "bzlTransitiveDigest": "bTLENWEOzsR+6g/mQ/Ni27xVnSYd1Ziscsy+nQwfAqk=",

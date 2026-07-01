@@ -328,8 +328,8 @@ public:
     // Defaults to gethostname() if empty. (etcd dropped — all-internal-TIPC;
     // tdb is the client.)
     Supervisor(std::unique_ptr<Node> root,
-                std::string root_dir,
-                std::string machine_name   = "");
+                std::string install_dirs,     // colon-separated list of binary search dirs
+                std::string machine_name = "");
     ~Supervisor();
 
     Supervisor(const Supervisor&)            = delete;
@@ -499,7 +499,7 @@ private:
     // ctor. Read-only thereafter; resolve() is lock-free and safe from any
     // thread (the manifest topology never changes). See registry.h.
     Registry                         registry_;
-    std::string                      root_dir_;
+    std::vector<std::string>         install_dirs_;  // THEIA_INSTALL_DIR colon-split
     std::string                      machine_name_;   // this board (GetSystemInfo)
     std::atomic<bool>                shutdown_requested_{false};
     bool                             escalated_{false};

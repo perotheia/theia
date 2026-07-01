@@ -111,6 +111,7 @@ class TraceCrashInvestigationLib:
             raise AssertionError(f"stage_local.sh failed:\n{r.stdout}\n{r.stderr}")
 
         self._sup_log = Path(f"/tmp/rf_crashtr_sup_{os.getpid()}.log")
+        env["THEIA_INSTALL_DIR"] = str(CENTRAL_DIR / "current")
         self._sup = subprocess.Popen(
             ["./supervisor", "run", "executor.json",
              "--root-dir", ".", "--machine-name", "central_host"],

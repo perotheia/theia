@@ -100,6 +100,16 @@ cc_library(
 )
 
 cc_library(
+    name = "supervisor_env_check",
+    srcs = ["supervisor_env_check.cc"],
+    copts = ["-std=c++17", "-fPIC"],
+    # alwayslink forces the .o into the final binary even though the constructor
+    # has no exported symbol that main.cc references. Without it the linker
+    # silently drops the TU and the pre-main check never runs.
+    alwayslink = True,
+)
+
+cc_library(
     name = "supervisor_impl",
     srcs = [
         "SupervisorCtl_handlers.cc",
@@ -113,6 +123,7 @@ cc_library(
     ],
     deps = [
         ":supervisor_engine",
+        ":supervisor_env_check",
         "//platform/supervisor/lib:supervisor_lib",
     ],
 )

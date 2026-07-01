@@ -383,10 +383,20 @@ def cmd_start(args: list[str]) -> int:
                 continue
 
     log = dest / "supervisor.log"
+    # THEIA_INSTALL_DIR: colon-separated list of dirs the supervisor scans to
+    # resolve each child's relative start_cmd (e.g. "bin/crypto"). First match
+    # wins. In deb mode the framework FCs (com/per/etc.) are under /opt/theia/bin,
+    # and the local user app bins are under <dest>/current/bin — list both so a
+    # mixed rig (deb framework + local app) works without a `current` flip.
+    # In source mode everything was staged to <dest>/current/bin by theia install.
+    _dest_abs = str(dest.resolve())
+    _install_dirs = _dest_abs + "/current"
+    if _deb_mode():
+        _install_dirs = str(THEIA_ROOT.resolve()) + ":" + _install_dirs
     env = {
         **os.environ,
         "THEIA_SUPERVISOR_MANIFEST": "executor.json",
-        "THEIA_ROOT_DIR": ".",
+        "THEIA_INSTALL_DIR": _install_dirs,
         "THEIA_SUPERVISOR_INSTANCE": instance,
         # The cluster machine index — a supervisor BOOT knob (not a node address):
         # the supervisor reads it to shift each CHILD's --tipc instance by N when
@@ -719,11 +729,13 @@ def cmd_observer(args: list[str]) -> int:
 def cmd_install(args: list[str]) -> int:
     """LOCAL install: build + populate $WORKSPACE/install/<machine>/.
 
-        theia install [<target>] [--attr ATTR] [--machine M]
+        theia install <target> [--attr ATTR] [--machine M]
 
     The dev inner-loop counterpart of the remote .ipk deploy. <target> names a
-    rig under manifest/<target>/rig.py (single / split / local; default
-    ``single``) — the SAME target model as `theia manifest`. The deploy MANIFEST
+    rig under manifest/<target>/rig.py (e.g. ``bootstrap``, or your workspace's
+    own single / split / local targets) — the SAME target model as `theia
+    manifest`. No default: a workspace's manifest/ targets vary, so <target>
+    is mandatory. The deploy MANIFEST
     is the single source of truth: `artheia serialize-manifest manifest.<target>
     .rig --attr ATTR` first emits the AUTOSAR manifests, then the buildable
     binary set is READ BACK from the machine's execution.json (no hardcoded
@@ -742,8 +754,17 @@ def cmd_install(args: list[str]) -> int:
     # Target-based, mirroring cmd_manifest. The first positional is the TARGET;
     # the machine comes from --machine / $THEIA_MACHINE / machines.json (a 2nd
     # positional after the target is accepted as the machine for convenience).
+    # No default — manifest/<target>/rig.py varies per workspace (theia init
+    # scaffolds manifest/bootstrap/; "single" only exists in the in-repo demo/
+    # test workspace), so guessing wrong used to surface as a bare
+    # ModuleNotFoundError deep in artheia's import machinery.
     positionals = [a for a in args if not a.startswith("-")]
-    target = positionals[0] if positionals else _DEFAULT_TARGET
+    if not positionals:
+        print("theia install: missing <target> — pass the manifest target "
+              "(the manifest/<target>/rig.py dir name, e.g. "
+              "`theia install bootstrap`).", file=sys.stderr)
+        return 2
+    target = positionals[0]
     attr = next((args[i + 1] for i, a in enumerate(args) if a == "--attr"), "RIG")
     machine = next((args[i + 1] for i, a in enumerate(args) if a == "--machine"),
                    None)
@@ -1065,12 +1086,11 @@ def _stage_local(dest: Path, supervisor_src: str,
                        bind does NOT need it; cluster/topology admin does.)"""
     import shutil as _sh
     dest.mkdir(parents=True, exist_ok=True)
-    # Release-dir layout (the ONLY layout — same shape a deployed rig + Mender use):
-    # the supervisor binary sits at <dest>/supervisor (the updater, never swapped);
-    # the CHILDREN live under a versioned release the `current` symlink points at,
-    # so the supervisor launches each child's ./bin/<svc> from <dest>/current/bin/.
-    # OTA flips current→releases/<v>; locally there's one release ("local"). The
-    # supervisor's root_dir() REQUIRES <root>/current — no flat-bin fallback.
+    # Release-dir layout: supervisor binary at <dest>/supervisor (the updater,
+    # never swapped); children at <dest>/releases/local/bin/, pointed at via the
+    # <dest>/current symlink. theia start exports THEIA_INSTALL_DIR=<dest>/current,
+    # so the supervisor resolves each child's "bin/<svc>" there. OTA flips
+    # current→releases/<ver>; locally there's one release ("local").
     rel = dest / "releases" / "local"
     (rel / "bin").mkdir(parents=True, exist_ok=True)
     cur = dest / "current"
@@ -1131,7 +1151,6 @@ def _stage_local(dest: Path, supervisor_src: str,
 # works purely from that committed JSON (RULE 2 — rules/dist_ipk.bzl, no rig.py
 # eval at build time). Dev iteration uses `bazel build @rig_single//<host>:image`
 # directly (RULE 1 — rules/rig.bzl, serialize-at-eval).
-_DEFAULT_TARGET = "single"          # default test target (one-machine dev rig)
 _MANIFEST_DIR = "dist/manifest"
 
 # ── Cross-compile TARGET REGISTRY ────────────────────────────────────────────
@@ -1250,10 +1269,12 @@ def _emit_manifest_build_files(mdir: Path, machines: list[str]) -> None:
 def cmd_manifest(args: list[str]) -> int:
     """Serialize a TEST TARGET's rig to the per-machine JSON manifest set.
 
-        theia manifest [<target>] [--attr ATTR] [--out DIR]
+        theia manifest <target> [--attr ATTR] [--out DIR]
 
-    <target> names a rig under manifest/<target>/rig.py (single / split / local;
-    default ``single``); the rig assembles the services + apps manifests on the
+    <target> names a rig under manifest/<target>/rig.py (e.g. ``bootstrap``, or
+    your workspace's own single / split / local targets). No default: a
+    workspace's manifest/ targets vary, so <target> is mandatory. The rig
+    assembles the services + apps manifests on the
     orthogonal engine and applies that target's deploy transform. This runs
     `artheia serialize-manifest manifest.<target>.rig --attr ATTR`, which
     validate()s the unmaterialized deployment FIRST (refusing on any
@@ -1269,7 +1290,13 @@ def cmd_manifest(args: list[str]) -> int:
     if (rc := _check_tipc_addresses()) != 0:
         return rc
 
-    target = next((a for a in args if not a.startswith("-")), _DEFAULT_TARGET)
+    # No default target — see cmd_install for why ("single" is demo/-only).
+    target = next((a for a in args if not a.startswith("-")), None)
+    if target is None:
+        print("theia manifest: missing <target> — pass the manifest target "
+              "(the manifest/<target>/rig.py dir name, e.g. "
+              "`theia manifest bootstrap`).", file=sys.stderr)
+        return 2
     attr = next((args[i + 1] for i, a in enumerate(args) if a == "--attr"), "RIG")
     out_arg = next((args[i + 1] for i, a in enumerate(args) if a == "--out"), None)
     out = Path(out_arg) if out_arg else WORKSPACE / _MANIFEST_DIR
@@ -1395,10 +1422,11 @@ _RELEASE_BAZEL_PKGS = [
     ("//packaging/theia:theia-runtime-dev_deb",  None),
     ("//packaging/theia:theia-services_deb",     "//packaging/theia:theia-services_ipk"),
     ("//packaging/theia:theia-services-dev_deb",  None),
+    ("//packaging/theia:theia-system-dev_deb",   None),
 ]
 
 
-def _build_framework_deb(out_dir: Path, version: str = "0.1.0") -> int:
+def _build_framework_deb(out_dir: Path, version: str = "0.2.1") -> int:
     """Build theia-framework as a real .deb — WHEELS-AS-DATA, no system Python.
 
     Theia does NOT own the user's Python. The deb ships only:

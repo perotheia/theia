@@ -134,6 +134,7 @@ class TwoSupervisorLib:
              "--root-dir", ".", "--machine-name", f"{machine}_host"],
             cwd=str(mdir),
             stdout=log_f, stderr=subprocess.STDOUT,
+            env=dict(os.environ, THEIA_INSTALL_DIR=str(mdir / "current")),
             preexec_fn=os.setsid,   # own process group → clean group kill
         )
         self._supervisors[machine] = {

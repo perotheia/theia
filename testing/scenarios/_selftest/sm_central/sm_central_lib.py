@@ -80,7 +80,8 @@ class SmCentralLib:
             raise AssertionError(f"AF_TIPC unavailable ({e}); modprobe tipc")
 
         self._log_path = f"/tmp/rf_sm_central_{os.getpid()}.log"
-        env = dict(os.environ, THEIA_TRACE="1", THEIA_LOG_LEVEL="debug")
+        env = dict(os.environ, THEIA_TRACE="1", THEIA_LOG_LEVEL="debug",
+                   THEIA_INSTALL_DIR=str(CENTRAL_DIR / "current"))
         log = open(self._log_path, "w")
         self._proc = subprocess.Popen(
             ["./supervisor", "run", "executor.json",

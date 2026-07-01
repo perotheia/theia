@@ -148,15 +148,23 @@ void Supervisor::set_logger(::theia::runtime::Logger* lg) noexcept {
 }
 
 Supervisor::Supervisor(std::unique_ptr<Node> root,
-                        std::string root_dir,
+                        std::string install_dirs,
                         std::string machine_name)
     // require_supervisor_root() runs first (its arg `root` is evaluated before
     // the move into root_node_), validating + yielding the tree the Registry is
     // built from. Member-init order is declaration order: root_node_, then
     // registry_ — both see the same valid tree.
     : root_node_((require_supervisor_root(root), std::move(root))),
-      registry_(*root_node_),
-      root_dir_(std::move(root_dir)) {
+      registry_(*root_node_) {
+    // Split the colon-separated install_dirs into the search list.
+    {
+        std::string::size_type start = 0, end;
+        while ((end = install_dirs.find(':', start)) != std::string::npos) {
+            if (end > start) install_dirs_.push_back(install_dirs.substr(start, end - start));
+            start = end + 1;
+        }
+        if (start < install_dirs.size()) install_dirs_.push_back(install_dirs.substr(start));
+    }
     root_ = &root_node_->sup;
 
     start_time_      = std::chrono::steady_clock::now();
@@ -785,7 +793,24 @@ void Supervisor::start_worker(WorkerNode& w) {
         return;
     }
     if (!path_is_absolute(argv[0])) {
-        argv[0] = root_dir_ + "/" + argv[0];
+        // Search install_dirs in order — first existing file wins. This lets the
+        // caller express a priority list (e.g. framework bins before app bins, or
+        // multiple install paths for a local dev rig alongside /opt/theia).
+        bool resolved = false;
+        for (const auto& dir : install_dirs_) {
+            const std::string candidate = dir + "/" + argv[0];
+            struct stat st;
+            if (::stat(candidate.c_str(), &st) == 0 && S_ISREG(st.st_mode)) {
+                argv[0] = candidate;
+                resolved = true;
+                break;
+            }
+        }
+        if (!resolved && !install_dirs_.empty()) {
+            // No match found — fall back to the first dir so the exec failure
+            // below surfaces a meaningful "no such file" error for the operator.
+            argv[0] = install_dirs_[0] + "/" + argv[0];
+        }
     }
 
     // --tipc=<node>=<type>:<inst>|... — the per-NODE TIPC address the child binds,
@@ -865,7 +890,9 @@ void Supervisor::start_worker(WorkerNode& w) {
         if (::getppid() != parent_pid) _exit(128);
 
         // Working dir.
-        const std::string cwd = w.working_dir.empty() ? root_dir_ : w.working_dir;
+        const std::string cwd = w.working_dir.empty()
+            ? (install_dirs_.empty() ? std::string(".") : install_dirs_[0])
+            : w.working_dir;
         if (chdir(cwd.c_str()) < 0) {
             std::fprintf(stderr, "chdir(%s): %s\n", cwd.c_str(), std::strerror(errno));
             _exit(127);

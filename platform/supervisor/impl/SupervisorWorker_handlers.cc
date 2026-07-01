@@ -26,7 +26,6 @@
 #include <memory>
 #include <string>
 
-#include <sys/stat.h>   // stat / S_ISDIR — child-launch root = $prefix/current?
 
 namespace ara::exec {
 
@@ -36,57 +35,41 @@ namespace {
 
 namespace {
 
-// The supervision tree (JSON, emitted by `artheia executor emit`) and the
-// child working-dir root come from the environment — the rig sets these when
-// it launches the supervisor binary. THEIA_SUPERVISOR_MANIFEST is REQUIRED:
-// there is no fallback. A missing env var means the launcher is wrong (e.g. a
-// stale run-supervisor.sh, or a bare `./supervisor` with no environment), and
-// the supervisor must NOT start with a guessed cwd-relative default — that
-// silently masks the real misconfiguration. Fail loudly instead (do_start
-// catches the throw and aborts with the message below).
+// Resolve the executor manifest path. Primary source: THEIA_SUPERVISOR_MANIFEST
+// env var (set by the launcher — theia start / theia-run.sh). Future: accept
+// as a positional CLI arg (do_start receives argv via the node context). A
+// guessed cwd-relative default is intentionally absent — that would silently
+// mask a launcher misconfiguration.
 std::string manifest_path() {
     const char* p = std::getenv("THEIA_SUPERVISOR_MANIFEST");
     if (p && *p) {
         return p;
     }
     throw std::runtime_error(
-        "THEIA_SUPERVISOR_MANIFEST is not set — the supervisor needs an "
-        "explicit executor manifest path in the environment (the launcher, "
-        "e.g. run-supervisor.sh, exports it). Refusing to start.");
+        "THEIA_SUPERVISOR_MANIFEST is not set — pass the executor.json path "
+        "via the env var (e.g. export THEIA_SUPERVISOR_MANIFEST=executor.json) "
+        "or as a positional arg once arg parsing is wired. Refusing to start.");
 }
 
-// The PREFIX the launcher exports: where the supervisor binary + manifest live.
-// THEIA_ROOT_DIR is REQUIRED — the launcher (run-supervisor.sh / systemd /
-// `theia start`) must export it. No cwd fallback, no self-locate: a deployed
-// embedded supervisor that guesses its root is a latent bug. Missing → refuse
-// to start, exactly like THEIA_SUPERVISOR_MANIFEST below.
-std::string prefix_dir() {
-    const char* d = std::getenv("THEIA_ROOT_DIR");
+// Colon-separated list of directories the supervisor searches (in order) when
+// resolving a child's relative start_cmd (e.g. "bin/crypto").  First existing
+// file wins.  THEIA_INSTALL_DIR is REQUIRED — the launcher exports it.
+//
+// For a deb-installed deploy:
+//   THEIA_INSTALL_DIR=/opt/theia/current          (OTA: current → releases/<ver>)
+// For a local dev rig:
+//   THEIA_INSTALL_DIR=/opt/theia:$PWD/install/central
+//   (framework bins from deb, workspace app bins from local install)
+//
+// Missing → refuse to start.
+std::string install_dirs() {
+    const char* d = std::getenv("THEIA_INSTALL_DIR");
     if (d && *d) return d;
     throw std::runtime_error(
-        "THEIA_ROOT_DIR is not set — the launcher must export it (e.g. "
-        "THEIA_ROOT_DIR=/opt/theia). Refusing to start.");
-}
-
-// The directory children's relative start_cmd (`./bin/<svc>`) resolves against.
-// SPLIT FROM the supervisor's own prefix (OTA design): the supervisor binary is
-// the UPDATER — it lives at $THEIA_ROOT_DIR/bin and must NOT swap under itself —
-// but the SERVICES + APPS it forks run from the `current` release symlink, which
-// OTA (Mender theia-release / UCM) flips + rolls back. The child-launch root is
-// ALWAYS $THEIA_ROOT_DIR/current — the release-dir layout is the ONLY layout (the
-// launcher, incl. `theia start` + tests, lays a `current` symlink; there is no
-// flat-bin fallback). A Mender `current`→releases/<ver> flip + the UCM-driven FC
-// restart brings children up on the new version while the supervisor is untouched.
-// REQUIRE the symlink — a missing `current` means a broken provision, refuse to
-// start (same posture as a missing THEIA_ROOT_DIR / manifest).
-std::string root_dir() {
-    const std::string cur = prefix_dir() + "/current";
-    struct stat st;
-    if (::stat(cur.c_str(), &st) == 0 && S_ISDIR(st.st_mode)) return cur;
-    throw std::runtime_error(
-        "no release at " + cur + " — the supervisor launches each child's "
-        "./bin/<svc> from $THEIA_ROOT_DIR/current; the launcher (provision / "
-        "theia start) must lay that symlink. Refusing to start.");
+        "THEIA_INSTALL_DIR is not set — the launcher must export it "
+        "(e.g. THEIA_INSTALL_DIR=/opt/theia/current for a release deploy, "
+        "or THEIA_INSTALL_DIR=/opt/theia:/path/to/install/central for a "
+        "local dev rig). Refusing to start.");
 }
 
 // The engine the worker thread owns for the lifetime of do_loop(). Stored as a
@@ -154,7 +137,7 @@ std::unique_ptr<::supervisor::Supervisor> g_engine;
 void SupervisorWorker::do_start() {
     this->log().info("runnable starting");
 
-    const std::string root = root_dir();
+    const std::string root = install_dirs();
     try {
         // manifest_path() THROWS if THEIA_SUPERVISOR_MANIFEST is unset (no
         // fallback — a guessed default would mask a launcher misconfig). The

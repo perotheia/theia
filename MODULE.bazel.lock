@@ -246,7 +246,7 @@
     },
     "//toolchains/codegen:extension.bzl%theia_codegen_ext": {
       "general": {
-        "bzlTransitiveDigest": "h2R5HSYhskBW9+VohjJZZ0hgoB9HJEroU8JmqacWAGg=",
+        "bzlTransitiveDigest": "XIe3J/kdyBl8qcaVFpu6R0ulrnILFD1LjpZK0tJmZW4=",
         "usagesDigest": "BCWXl7elxYaynM91SUp42CmL0HHOBxechJx/7jTJxeM=",
         "recordedInputs": [],
         "generatedRepoSpecs": {

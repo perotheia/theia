@@ -115,7 +115,8 @@ class TraceEgressLib:
             raise AssertionError(f"stage_local.sh failed:\n{r.stdout}\n{r.stderr}")
 
         self._sup_log = Path(f"/tmp/rf_trace_sup_{os.getpid()}.log")
-        senv = dict(env, THEIA_TRACE="1", THEIA_LOG_LEVEL="debug")
+        senv = dict(env, THEIA_TRACE="1", THEIA_LOG_LEVEL="debug",
+                    THEIA_INSTALL_DIR=str(CENTRAL_DIR / "current"))
         self._sup = subprocess.Popen(
             ["./supervisor", "run", "executor.json",
              "--root-dir", ".", "--machine-name", "central_host"],

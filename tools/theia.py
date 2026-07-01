@@ -659,6 +659,53 @@ def cmd_stop(args: list[str]) -> int:
     return 0
 
 
+def cmd_clean(args: list[str]) -> int:
+    """Remove install artifacts and optionally run bazel clean.
+
+        theia clean [--bazel] [--all]
+
+    Symmetric counterpart to `theia install`:
+
+      install/             — remove the entire staged tree (all machines)
+      install/manifest/    — remove the serialized per-machine manifests
+      dist/manifest/       — remove the dist manifest output (theia manifest)
+
+    Flags:
+      --bazel   also run `bazel clean` in both THEIA_ROOT and WORKSPACE
+      --all     same as --bazel (convenience alias)
+      -h/--help show this message
+
+    Does NOT stop a running supervisor — run `theia stop` first if needed.
+    Safe to run on a workspace with no install/ dir (no-op, exit 0)."""
+    if "-h" in args or "--help" in args:
+        print(cmd_clean.__doc__, file=sys.stderr)
+        return 0
+
+    run_bazel = "--bazel" in args or "--all" in args
+
+    removed = []
+    for rel in ("install", "dist/manifest"):
+        p = WORKSPACE / rel
+        if p.exists():
+            shutil.rmtree(p)
+            removed.append(str(p))
+
+    if removed:
+        print(f"theia clean: removed {', '.join(removed)}", file=sys.stderr)
+    else:
+        print("theia clean: nothing to remove.", file=sys.stderr)
+
+    if run_bazel:
+        roots = [THEIA_ROOT]
+        if WORKSPACE != THEIA_ROOT and (WORKSPACE / "MODULE.bazel").is_file():
+            roots.append(WORKSPACE)
+        for root in roots:
+            if (rc := _run(["bazel", "clean"], cwd=root)) != 0:
+                return rc
+
+    return 0
+
+
 # The wx supervisor-GUI binary. Bazel lays it out under a per-target bin/ dir.
 _OBSERVER_TARGET = "//tools/supervisor-gui:supervisor-gui"
 
@@ -3120,6 +3167,7 @@ COMMANDS = {
     # provision/orchestrate/cleanup MOVED to the `colony` repo (deploy adapter).
     # theia emits the per-rig bundle via `manifest`/`dist`; colony deploys it.
     "install":     (cmd_install,     "build + populate install/<machine>/ (local host)"),
+    "clean":       (cmd_clean,       "remove install/ + dist/manifest/; --bazel also runs bazel clean"),
     "stage-local": (cmd_install,     "alias for `install` (back-compat)"),
     "start":       (cmd_start,       "run the staged supervisor from install/<machine>/ (detached + pidfile)"),
     "stop":        (cmd_stop,        "stop the supervisor started by `theia start` (graceful)"),

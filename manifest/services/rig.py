@@ -5,24 +5,25 @@ It declares the deployment ROLES — there is no longer a single/split rig pair;
 ONE rig names the roles and the GS Distribution picks which materialize onto
 which boards ($name).
 
-Two roles:
-  central (role="central") — the MASTER: the full platform services + supervisor
-    (com, crypto, log, nm, per, tsync, sm, phm, ucm, vucm, osi, fw, idsm, shwa,
-    diag) + etcd + the deployment-wide singletons (per/sm/phm/com/vucm) + the
-    mender gateway/proxy. colony provisions etcd + wifi utils + mender-gw here.
-  zonal  (role="zonal")   — a ZONE-OF-RESPONSIBILITY worker: the minimal set
-    (ucm + shwa) + a mender agent reaching the server via central's proxy. It
-    runs NO per/log/com/sm/phm/vucm — it reaches central's singletons over TIPC
-    (cluster scope) and central's shared etcd. colony provisions ucm + agent.
+Two roles (the machine NAME is the role — colony pulls manifest/<role>/):
+  master (role="master") — the coordinator: the full platform services +
+    supervisor (com, crypto, log, nm, per, tsync, sm, phm, ucm, vucm, osi, fw,
+    idsm, shwa, diag) + etcd + the deployment-wide singletons (per/sm/phm/com/
+    vucm) + the mender gateway/proxy. colony provisions etcd + wifi + mender-gw.
+  zonal  (role="zonal")  — a ZONE-OF-RESPONSIBILITY worker: the minimal set
+    (ucm + shwa) + a mender agent reaching the server via the master's proxy. It
+    runs NO per/log/com/sm/phm/vucm — it reaches the master's singletons over TIPC
+    (cluster scope) and the shared etcd. ONE zonal slice serves N workers; the
+    day-2 app deploy names each (compute/frontal/…).
 
 No user apps (apps are the day-2 Mender plane, not the factory runtime). colony
-provisions a board from the role slice (runtime+services from S3); the user's
+provisions a board from the ROLE slice (runtime+services from S3); the user's
 gateway/monitor app is installed later via Mender.
 
 Two exports:
-  RIG   — central only (the arity-1 single-master runtime; the common case).
-  MULTI — central + zonal (arity-2; a multi-board Distribution serializes this
-          and binds each role to a board).
+  RIG   — master only (the arity-1 single-master runtime; the common case).
+  MULTI — master + zonal (arity ≥2; a multi-board Distribution serializes this,
+          one master + N zonal workers, each role bound to a board day-2).
 `theia manifest services` serializes RIG; `--attr MULTI` serializes the
 2-role variant. Addressed as `services` (manifest/services/rig.py →
 manifest.<target>.rig), symmetric with the user-app side (`theia manifest
@@ -55,59 +56,65 @@ ALL = {p.name for p in _members(BASE.execution.processes)}
 ZONAL = {"ucm", "shwa"} & ALL
 
 
-def _central_machine():
-    # role="central" + etcd → the master. arch is a placeholder overridden by
+# The runtime manifest is keyed by ROLE, not board name: colony pulls the
+# manifest/<role>/ slice at orchestrate time (master or zonal), and a worker board
+# is role-generic until the day-2 app deploy names it (compute/frontal/…). So the
+# MACHINE NAME here IS the role — master (the coordinator) and zonal (a worker).
+def _master_machine():
+    # role="master" + etcd → the coordinator. arch is a placeholder overridden by
     # `serialize-manifest --arch`.
-    return MachineLayer(name="central", role=Explicit("central"),
+    return MachineLayer(name="master", role=Explicit("master"),
                         arch=Explicit("x86_64"), etcd=Explicit(True),
                         cores={0, 1, 2, 3},
                         machine_states={"Startup", "Running"})
 
 
 def _zonal_machine():
-    # role="zonal" — a worker board. No etcd (reaches central's shared etcd).
+    # role="zonal" — a worker board (zone of responsibility). No etcd (reaches the
+    # master's shared etcd). ONE zonal slice serves every worker; the day-2 app
+    # deploy binds a specific board name to it.
     return MachineLayer(name="zonal", role=Explicit("zonal"),
                         arch=Explicit("x86_64"),
                         cores={0, 1}, machine_states={"Startup", "Running"})
 
 
-# ── RIG — central only (arity 1: the single-master runtime, the common case). ──
+# ── RIG — master only (arity 1: the single-master runtime, the common case). ──
 RIG = BASE.combine(DeploymentLayer(
-    machines=MachineSetLayer(machines={_central_machine()}),
+    machines=MachineSetLayer(machines={_master_machine()}),
     execution=ExecutionLayer(processes={
-        *(Append(ProcessLayer(name=n, machine=Explicit("central"))) for n in ALL),
+        *(Append(ProcessLayer(name=n, machine=Explicit("master"))) for n in ALL),
     }),
     applications=ApplicationSetLayer(applications={
-        Append(ApplicationLayer(name="services", host_machine=Explicit("central"))),
+        Append(ApplicationLayer(name="services", host_machine=Explicit("master"))),
     }),
 ))
 
-# ── MULTI — central + zonal (arity 2: a multi-board Distribution). ────────────
-# Central runs every singleton + control-plane FC; the zone board runs only its
+# ── MULTI — master + zonal (arity ≥2: a multi-board Distribution). ────────────
+# The master runs every singleton + control-plane FC; a zonal worker runs only its
 # per-board installer (ucm). shwa is PER-BOARD HW telemetry, so it runs on BOTH
-# via a set-valued `machines` (the serializer fans it onto each board — see
-# _proc_machines). Everything not shwa/ucm is central-only (the singletons
-# com/per/sm/phm land there by construction).
+# roles via a set-valued `machines` (the serializer fans it onto each — see
+# _proc_machines). Everything not shwa/ucm is master-only (the singletons
+# com/per/sm/phm land there by construction). ONE zonal slice serves N workers.
 _PER_BOARD = {"shwa"} & ALL          # runs on every board (HW telemetry)
 _ZONE_ONLY = (ZONAL - _PER_BOARD)    # the zone board's exclusive FCs (ucm)
-_CENTRAL_ONLY = ALL - ZONAL          # everything but ucm/shwa → central only
+_MASTER_ONLY = ALL - ZONAL           # everything but ucm/shwa → master only
 MULTI = BASE.combine(DeploymentLayer(
-    machines=MachineSetLayer(machines={_central_machine(), _zonal_machine()}),
+    machines=MachineSetLayer(machines={_master_machine(), _zonal_machine()}),
     execution=ExecutionLayer(processes={
-        *(Append(ProcessLayer(name=n, machine=Explicit("central")))
-          for n in _CENTRAL_ONLY),
+        *(Append(ProcessLayer(name=n, machine=Explicit("master")))
+          for n in _MASTER_ONLY),
         *(Append(ProcessLayer(name=n, machine=Explicit("zonal")))
           for n in _ZONE_ONLY),
-        # shwa on BOTH boards — set-valued machines fans it out per board.
-        *(Append(ProcessLayer(name=n, machines={"central", "zonal"}))
+        # shwa on BOTH roles — set-valued machines fans it out per board.
+        *(Append(ProcessLayer(name=n, machines={"master", "zonal"}))
           for n in _PER_BOARD),
     }),
     applications=ApplicationSetLayer(applications={
-        Append(ApplicationLayer(name="services", host_machine=Explicit("central"))),
+        Append(ApplicationLayer(name="services", host_machine=Explicit("master"))),
     }),
 ))
 
-# Supervisor tree — the per-role trees (central = all FCs; zonal = ucm + shwa)
+# Supervisor tree — the per-role trees (master = all FCs; zonal = ucm + shwa)
 # live in executor.py. serialize-manifest slices SUPERVISORS per machine by the
 # processes placed there, so one tree covers both roles.
 from manifest.services.executor import SUPERVISORS  # noqa: F401,E402

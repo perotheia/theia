@@ -4,8 +4,10 @@
 # the SPLIT manifest's compute slice (dist/manifest/compute/ — ucm + shwa, the
 # per-board AUTOSAR installer + HW telemetry). The deployment-wide singletons
 # (com/sm/phm/vucm/per) run on `central`; this board reaches them over TIPC
-# (cluster scope) + the shared etcd. ONE manifest (manifest.services.split_rig)
-# serializes BOTH boards' slices, so the singleton placement is consistent.
+# (cluster scope) + the shared etcd. ONE split rig (a 2-machine deploy delta on
+# manifest.services.manifest) serializes BOTH boards' slices, so the singleton
+# placement is consistent. (The in-framework split_rig.py was removed in the
+# fwk/runtime/app split — a split rig now lives in the consuming workspace.)
 #
 # Pulls the focal-arm64 runtime from S3 (0.2.1-focal-arm64 — the abi-qualified
 # key; a DIFFERENT glibc than the rpi4 central's bookworm-arm64).

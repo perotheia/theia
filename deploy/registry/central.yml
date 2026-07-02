@@ -1,7 +1,7 @@
 # Deploy-target registry entry — `central` (the L4-B GATEWAY board).
 #
 # The rpi4 ('raspberrypi' @ 10.0.0.22) — the robot's Gateway ECU + the ONE Mender
-# device-of-record. It runs the full services_rig slice (dist/manifest/central/)
+# device-of-record. It runs the full services rig slice (dist/manifest/central/)
 # and is the cluster's etcd singleton: L4-B SHARED ETCD lives here, bound on
 # 0.0.0.0:2379 so the compute board's per (deploy/config/jetson/per.json →
 # etcd_endpoint 10.0.0.22:2379) reaches it. V-UCM (central) aggregates every

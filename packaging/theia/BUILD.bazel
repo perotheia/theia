@@ -125,9 +125,9 @@ pkg_deb(
             "theia-runtime, libgrpc++1, libprotobuf23",
     }),
     # The FULL ARA service set — every FC the factory full-services rig
-    # (manifest.services.services_rig) supervises, so the executor.json tree and
+    # (manifest.services.rig) supervises, so the executor.json tree and
     # the shipped binaries match (a child in the tree with no binary fails to exec
-    # → 127 → takes services_sup down). Keep this in lockstep with services_rig.
+    # → 127 → takes services_sup down). Keep this in lockstep with manifest.services.rig.
     files = {
         "//services/com/main:com": "/opt/theia/bin/com",
         "//services/per/main:per": "/opt/theia/bin/per",
@@ -249,7 +249,7 @@ pkg_opkg(
     arch = "x86_64",
     description = "Theia ARA platform services (binaries) — embedded/opkg",
     depends = "theia-runtime",
-    # Full service set — keep in lockstep with theia-services_deb + services_rig.
+    # Full service set — keep in lockstep with theia-services_deb + manifest.services.rig.
     files = {
         "//services/com/main:com": "/opt/theia/bin/com",
         "//services/per/main:per": "/opt/theia/bin/per",

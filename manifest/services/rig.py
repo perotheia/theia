@@ -1,15 +1,20 @@
-"""services_rig — the framework SERVICES factory rig (arch-agnostic).
+"""services rig — the framework SERVICES factory rig (arch-agnostic).
 
-The factory-provision rig: the full platform services + supervisor (com, crypto,
-log, nm, per, tsync, sm, phm, ucm, vucm, osi, fw, idsm, shwa, diag), bound to one
-machine `central`, NO user apps (apps are the day-2 Mender plane, not the factory
-runtime). colony provisions a rig from this (runtime+services from S3); the user's
-gateway/monitor app is installed later via Mender.
+The deploy delta for the generated services base (manifest.services.manifest):
+the full platform services + supervisor (com, crypto, log, nm, per, tsync, sm,
+phm, ucm, vucm, osi, fw, idsm, shwa, diag), bound to one machine `central`, NO
+user apps (apps are the day-2 Mender plane, not the factory runtime). colony
+provisions a rig from this (runtime+services from S3); the user's gateway/monitor
+app is installed later via Mender.
+
+Addressed as `services` — it lives at manifest/services/rig.py, so
+`theia manifest services` (manifest.<target>.rig) resolves it, symmetric with the
+user-app side (`theia manifest single` → manifest/single/rig.py).
 
 ARCH-AGNOSTIC by design: the machine arch is injected at serialize time —
-  artheia serialize-manifest manifest.services.services_rig --attr RIG \
+  artheia serialize-manifest manifest.services.rig --attr RIG \
     --arch x86_64  --out dist/services-rig-x86
-  artheia serialize-manifest manifest.services.services_rig --attr RIG \
+  artheia serialize-manifest manifest.services.rig --attr RIG \
     --arch aarch64 --out dist/services-rig-aarch
 ONE rig → per-arch outputs (no duplicate per-arch rig files — the --arch flag
 removes that duplication). Default arch is a placeholder overridden by --arch.

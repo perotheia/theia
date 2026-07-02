@@ -1473,51 +1473,88 @@ def cmd_manifest(args: list[str]) -> int:
 
 
 def cmd_dist(args: list[str]) -> int:
-    """Build the per-host .deb deploy bundles from the serialized manifest.
+    """Build the per-machine .deb deploy artifacts from the serialized manifest.
 
-        theia dist <target> [--attr ATTR]
+        theia dist <target> [--arch A[,A…]]
 
     <target>  rig target name — same as `theia manifest <target>`. Mandatory:
               run `theia manifest <target>` first to emit dist/manifest/.
-    --attr    optional rig attribute (e.g. DOCKER); passed to `theia manifest`
-              if the manifest is stale (not used yet — re-run theia manifest first).
+    --arch    OVERRIDE every machine's arch (comma-separated for several builds),
+              e.g. `--arch host,rpi4`. The runtime plane ships per (arch, os), so
+              one manifest → several arch builds. Omit → each machine's own arch
+              from its machine.json.
 
-    Reads dist/manifest/machines.json for the host list; for each host reads
-    <host>/machine.json for the arch → bazel platform and builds
-    //dist/manifest:<host>_pkg (rules/dist_ipk.bzl). One bazel invocation per
-    host so each cross-compiles to its own arch. Stages the .deb next to the
-    host's manifest JSON for `theia orchestrate`."""
+    ONE build verb, keyed on whether the manifest is a RUNTIME or an APP manifest
+    (the machines.json `apps` list — empty ⇒ runtime, non-empty ⇒ app):
+
+      RUNTIME manifest (apps: [] — e.g. `theia dist services`): the manifest is
+        ASSOCIATED with the framework runtime Deb set. Builds the versioned
+        theia-runtime + theia-services .debs (packaging/theia) per arch — the
+        artifacts colony installs on a fresh board (mirrors the old
+        `theia release --arch`, which was a build-only misnomer).
+
+      APP manifest (apps: [...] — e.g. `theia dist single`): NO Deb-set
+        association, so pack EVERYTHING for the machine into ONE .deb per machine
+        (//dist/manifest:<host>_pkg, rules/dist_ipk.bzl) — the self-contained app
+        bundle Ansible copies + dpkg -i's. Staged next to the machine's manifest.
+
+    `theia release <target>` builds via this verb then pushes to S3."""
     import json
     if "-h" in args or "--help" in args:
         print(cmd_dist.__doc__, file=sys.stderr)
         return 0
     target = next((a for a in args if not a.startswith("-")), None)
     if not target:
-        print("theia dist: <target> is required — e.g. `theia dist single`",
-              file=sys.stderr)
+        print("theia dist: <target> is required — e.g. `theia dist services` "
+              "(runtime) or `theia dist single` (app).", file=sys.stderr)
         return 1
+    # --arch overrides every machine's arch (release the runtime for another
+    # arch/os from the same manifest). None → per-machine arch from machine.json.
+    arch_override = None
+    for i, a in enumerate(args):
+        if a == "--arch" and i + 1 < len(args):
+            arch_override = [x.strip() for x in args[i + 1].split(",") if x.strip()]
     machines_json = WORKSPACE / _MANIFEST_DIR / "machines.json"
     if not machines_json.is_file():
         print(f"theia dist: no manifest at {machines_json} — run `theia "
               f"manifest {target}` first.", file=sys.stderr)
         return 1
     mdir = machines_json.parent
-    # machines.json is a NAME LIST ({"machines":["central",...]}) in the
-    # serialize-manifest shape; every machine is a deploy target.
-    machines = json.loads(machines_json.read_text())["machines"]
+    mdoc = json.loads(machines_json.read_text())
+    # machines.json is a NAME LIST ({"machines":["central",...]}); every machine
+    # is a deploy target. `apps` empty ⇒ this is the RUNTIME manifest (associated
+    # with the theia-runtime/theia-services Deb set); non-empty ⇒ an APP manifest
+    # (pack one self-contained .deb per machine).
+    machines = mdoc["machines"]
+    is_runtime = not mdoc.get("apps")
+
+    if is_runtime:
+        return _dist_runtime(mdir, machines, arch_override)
+    return _dist_app(mdir, machines, arch_override)
+
+
+def _dist_app(mdir: Path, machines: list, arch_override) -> int:
+    """APP manifest → ONE self-contained .deb per machine (the Ansible bundle).
+
+    //dist/manifest:<host>_pkg (rules/dist_ipk.bzl), cross-compiled per machine.
+    Staged next to the machine's manifest JSON where orchestrate.yml reads it."""
+    import json
+    import shutil
     rc_final = 0
     for host in machines:
         mj = mdir / host / "machine.json"
         if not mj.is_file():
             print(f"theia dist: missing {mj}", file=sys.stderr)
             return 1
-        arch = json.loads(mj.read_text())["arch"]
+        # --arch overrides the machine's own arch (one build here — the app bundle
+        # deploys to a known board, so a single override arch applies to all).
+        arch = (arch_override[0] if arch_override
+                else json.loads(mj.read_text())["arch"])
         platform = _ARCH_PLATFORM.get(arch)
         if not platform:
             print(f"theia dist: {host}: no bazel platform for arch '{arch}'",
                   file=sys.stderr)
             return 1
-        # //dist/manifest:<host>_pkg (.deb), cross-compiled for the host's arch.
         if (rc := _run([
             "bazel", "build",
             f"//{_MANIFEST_DIR}:{host}_pkg",
@@ -1532,7 +1569,6 @@ def cmd_dist(args: list[str]) -> int:
         # (and scp) follow a regular file, not a dangling symlink across hosts,
         # so we copy the resolved bytes. This closes the dist→orchestrate chain
         # so a deploy needs NO hand-copy of the artifact.
-        import shutil
         built = WORKSPACE / "bazel-bin" / _MANIFEST_DIR / f"{host}.deb"
         if not built.is_file():
             print(f"theia dist: {host}: built target ok but {built} missing "
@@ -1543,6 +1579,60 @@ def cmd_dist(args: list[str]) -> int:
         staged.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(built, staged)   # resolves the bazel symlink → real file
         print(f"theia dist: staged {staged} ({staged.stat().st_size} bytes)")
+    return rc_final
+
+
+def _dist_runtime(mdir: Path, machines: list, arch_override) -> int:
+    """RUNTIME manifest → the framework theia-runtime + theia-services Deb set.
+
+    The manifest is ASSOCIATED with the runtime plane's prebuilt package targets
+    (packaging/theia:theia-{runtime,services}_deb) rather than a per-machine
+    pack — colony installs these on a fresh board. Builds per DISTINCT arch (each
+    machine's own arch, or the --arch override list), collects the .debs into
+    dist/debian/<pkg>/ (the same layout `theia release` reads to push to S3)."""
+    import json
+    import shutil
+    # The set of arches to build. --arch overrides; else the union of the
+    # machines' own arches (a mixed-arch runtime manifest builds each once).
+    if arch_override:
+        arches = arch_override
+    else:
+        arches = sorted({json.loads((mdir / h / "machine.json").read_text())["arch"]
+                         for h in machines})
+    deb_dir = WORKSPACE / _DIST_DEBIAN
+    deb_dir.mkdir(parents=True, exist_ok=True)
+    # The two on-device runtime debs (supervisor + services) — the association.
+    runtime_targets = ["//packaging/theia:theia-runtime_deb",
+                       "//packaging/theia:theia-services_deb"]
+    rc_final = 0
+    for arch in arches:
+        # --arch takes registry tokens (host/rpi4/jetson); a machine.json arch is
+        # a bazel arch (x86_64/aarch64). Accept either → a bazel platform label.
+        platform = _RELEASE_ARCH.get(arch) or _ARCH_PLATFORM.get(arch)
+        if not platform:
+            print(f"theia dist: no bazel platform for arch '{arch}' "
+                  f"(known: {', '.join(sorted(set(_RELEASE_ARCH) | set(_ARCH_PLATFORM)))})",
+                  file=sys.stderr)
+            return 1
+        if (rc := _run(["bazel", "build", *runtime_targets,
+                        f"--platforms={platform}"])) != 0:
+            rc_final = rc
+            continue
+        # Collect the built .debs into dist/debian/<pkg>/ (bazel outputs are
+        # read-only; unlink any stale dest before copy2). `theia release` reads
+        # this same layout to push the runtime plane to S3.
+        bin_root = WORKSPACE / "bazel-bin" / "packaging" / "theia"
+        for f in bin_root.glob("*.deb"):
+            pkg = f.name.split("_")[0]      # theia-runtime_0.2.2_amd64.deb → theia-runtime
+            if pkg not in ("theia-runtime", "theia-services"):
+                continue
+            dst = deb_dir / pkg
+            dst.mkdir(parents=True, exist_ok=True)
+            dst_f = dst / f.name
+            if dst_f.exists():
+                dst_f.unlink()
+            shutil.copy2(f, dst_f)
+            print(f"theia dist: {arch}: staged {dst_f.name} → {dst}/")
     return rc_final
 
 
@@ -1704,8 +1794,97 @@ def _du_kb(path: Path) -> int:
         return 0
 
 
+def _release_runtime_plane(target: str, args: list[str]) -> int:
+    """Build (via `theia dist <target>`) + push the RUNTIME plane to S3.
+
+    The runtime-plane counterpart to `theia release-swp` (the app/SWP plane):
+      theia release <target> [--arch A] [--version V] [--s3 URL] [--bucket B]
+
+    Builds the theia-runtime + theia-services .debs from the manifest (theia dist
+    associates a runtime manifest with that Deb set), then `aws s3 cp`s them to
+    s3://<bucket>/<ver>-<abi>/ — the versioned runtime plane colony provisions a
+    fresh board from (the `runtime_build` a Distribution role references). Omit
+    --s3 to build + stage locally only (dist/debian/)."""
+    import json
+    import os
+    import shutil
+    import subprocess
+
+    def _opt(name, default=None):
+        for i, a in enumerate(args):
+            if a == name and i + 1 < len(args):
+                return args[i + 1]
+        return default
+
+    ver = _opt("--version", "0.2.2")
+    s3_url = _opt("--s3")
+    bucket = _opt("--bucket") or os.environ.get("THEIA_RUNTIME_BUCKET", "theia-runtime")
+    arch_opt = _opt("--arch")
+
+    # Build the runtime debs into dist/debian/ via the shared dist path (passes
+    # --arch through so the runtime is released for the requested arch/os).
+    dist_args = [target] + (["--arch", arch_opt] if arch_opt else [])
+    if (rc := cmd_dist(dist_args)) != 0:
+        print("theia release: dist build failed — nothing to push.",
+              file=sys.stderr)
+        return rc
+
+    deb_dir = WORKSPACE / _DIST_DEBIAN
+    debs = sorted(deb_dir.glob("theia-runtime/*.deb")) \
+        + sorted(deb_dir.glob("theia-services/*.deb"))
+    if not debs:
+        print(f"theia release: no runtime debs under {deb_dir} after dist — is "
+              f"'{target}' a runtime manifest (machines.json apps: [])?",
+              file=sys.stderr)
+        return 1
+
+    if not s3_url:
+        print(f"theia release: built {len(debs)} runtime .deb(s) → {deb_dir}/ "
+              "(no --s3 → local only).", file=sys.stderr)
+        for d in debs:
+            print(f"  {d.relative_to(WORKSPACE)}", file=sys.stderr)
+        return 0
+
+    if not shutil.which("aws"):
+        print("theia release: aws cli not found — built the debs; push from a "
+              "host that has it.", file=sys.stderr)
+        return 1
+    env = {**os.environ,
+           "AWS_ACCESS_KEY_ID": os.environ.get("MINIO_USER", "theia"),
+           "AWS_SECRET_ACCESS_KEY": os.environ.get("MINIO_PASSWORD", "theiaminio"),
+           "AWS_DEFAULT_REGION": "us-east-1"}
+    aws = ["aws", "--endpoint-url", s3_url, "s3"]
+    subprocess.run([*aws, "mb", f"s3://{bucket}"], env=env)  # idempotent
+    rc_final = 0
+    pushed = []
+    for d in debs:
+        # abi keyed from the deb's own arch suffix (…_amd64.deb / …_arm64.deb) so
+        # a mixed-arch runtime manifest lands each board's slice under its own key.
+        abi = d.stem.rsplit("_", 1)[-1]      # theia-runtime_0.2.2_amd64 → amd64
+        key = f"{ver}-{abi}"
+        dst = f"s3://{bucket}/{key}/{d.name}"
+        print(f"$ aws cp {d.name} {dst}", file=sys.stderr)
+        if subprocess.run([*aws, "cp", str(d), dst], env=env).returncode != 0:
+            rc_final = 1
+        else:
+            pushed.append(f"{key}/{d.name}")
+    if pushed:
+        print(f"theia release: pushed {len(pushed)} runtime .deb(s) → "
+              f"s3://{bucket}/", file=sys.stderr)
+    return rc_final
+
+
 def cmd_release(args: list[str]) -> int:
-    """Build the installable Theia package set → dist/debian/ + dist/ipkg/.
+    """Release the runtime plane to S3, or build the full package set.
+
+    TWO modes:
+      theia release <target> [--s3 URL]   MANIFEST-DRIVEN — build the runtime
+        debs via `theia dist <target>` and push them to the S3 runtime plane
+        (s3://theia-runtime/<ver>-<abi>/). The counterpart to `theia release-swp`
+        (app plane). See _release_runtime_plane. This is the S3-push verb your
+        deploy chain uses.
+      theia release [--arch A] [--ipk]    FULL PACKAGE BUILD (no target) — the
+        legacy 4-step build below.
 
     The 4-step build (framework → runtime → services → package) that produces the
     ROS2-style independent packages:
@@ -1727,6 +1906,16 @@ def cmd_release(args: list[str]) -> int:
     if "-h" in args or "--help" in args:
         print(cmd_release.__doc__, file=sys.stderr)
         return 0
+
+    # MANIFEST-DRIVEN RELEASE: `theia release <target> [--s3 URL]` builds the
+    # runtime plane via `theia dist <target>` (which associates a runtime manifest
+    # with the theia-runtime/theia-services Deb set) and pushes it to S3. This is
+    # the S3-push counterpart to the build-only `theia dist` — symmetric with
+    # `theia release-swp` (the app/SWP plane). No positional target → the legacy
+    # full-package build below (framework + rf wheels + runtime + dev debs).
+    target = next((a for a in args if not a.startswith("-")), None)
+    if target is not None:
+        return _release_runtime_plane(target, args)
 
     archs = ["host"]
     # The build-distro ABI tag for the x86 services .deb Depends (com/per link
@@ -3217,8 +3406,8 @@ COMMANDS = {
     "start":       (cmd_start,       "run the staged supervisor from install/<machine>/ (detached + pidfile)"),
     "stop":        (cmd_stop,        "stop the supervisor started by `theia start` (graceful)"),
     "manifest":    (cmd_manifest,    "rig.py → dist/manifest/*.json (sole rig entry for deploy)"),
-    "dist":        (cmd_dist,        "<target> — per-host .deb from dist/manifest/ (Ansible path)"),
-    "release":     (cmd_release,     "build the installable package set (.deb+.ipk) → dist/debian + dist/ipkg"),
+    "dist":        (cmd_dist,        "<target> [--arch A] — build debs from manifest (runtime deb-set or per-machine app bundle)"),
+    "release":     (cmd_release,     "<target> [--s3 URL] — push runtime plane to S3; or (no target) build the full package set"),
     "release-swp": (cmd_release_swp, "build + publish a user-ws Software Package (day-2 Mender OTA, the package plane)"),
     "release-app": (cmd_release_swp, "alias for release-swp (deprecated)"),
     "release-role": (cmd_release_role, "build + publish a per-board role .mender (L4-C vehicle campaign)"),

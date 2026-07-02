@@ -36,9 +36,12 @@ Usage (one target per host, the macro form — `theia manifest` writes this glue
 # _abs_label applies: this .bzl is a FRAMEWORK file (loaded as @pero_theia//rules:
 # from a consuming workspace), so a bare `//…` would resolve against @pero_theia.
 #   - framework services → @pero_theia//services/… (the framework module)
-#   - the demo apps       → @@//apps/…             (the ROOT/consuming module)
-# A consuming workspace with DIFFERENT apps passes its own `binaries=[…]` to
-# dist_pkg (the apps below are theia.git's own demo binaries).
+# This default is SERVICES-ONLY — the framework runtime plane. It carries NO
+# user/app binaries: a consuming workspace (incl. theia.git's own demo/) passes
+# its own `binaries=[…]` to dist_pkg, and every `theia manifest`-generated
+# dist_pkg DERIVES `binaries` from the host's execution.json, so this default is
+# only the services fallback. Leaking demo app labels here dragged @@//apps/…
+# into every consumer's cross-build; it is intentionally absent now.
 ALL_BINARIES = [
     "@pero_theia//services/com/main:com",
     "@pero_theia//services/crypto/main:crypto",
@@ -60,10 +63,8 @@ ALL_BINARIES = [
     # drags pcap/expat-dependent libs (cmpdecoder) that aren't in the rpi4 sysroot,
     # breaking the cross-build. No zonal/test machine's execution.json references
     # it; a consuming workspace adds its own gateway binary to this list.
-    "@@//apps/Demo3WayP1/main:apps",
-    "@@//apps/Demo3WayP2/main:apps",
-    "@@//apps/Demo3WayP3/main:apps",
-    "@@//apps/Demo3WayP4/main:apps",
+    # NOTE: NO app binaries here — apps are a consuming-workspace concern
+    # (theia.git's demo/ passes its own binaries=[…]; see demo/dist/manifest).
 ]
 
 # Shared libs bundled at /opt/theia/lib/<basename> for every host (harmless if a

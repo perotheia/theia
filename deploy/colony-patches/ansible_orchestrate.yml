@@ -1,0 +1,170 @@
+# theia orchestrate — Phase 2: install the binaries + the REAL config. Pushed
+# over SSH; the frequent work. GENERIC: the target rig is resolved by NAME from
+# the registry (deploy/registry/<target>.yml), which carries the host + the
+# artheia `machine` slice to push. Config is applied entirely at DEPLOY time
+# (the built artifact is machine-generic — a pure function of (arch, os,
+# version), no override baked in):
+#
+#   seed-config       — binaries (.deb) + executor.json + the machine-generic
+#                       per-FC config (dist/manifest/<machine>/config/, the pure
+#                       `gen-params` default — NO override).
+#   config-override   — deep-merge the overrides ON TOP, on the CONTROLLER, then
+#                       push: the machine-shared layer (deploy/config/<machine>/,
+#                       resolved from this target's slice) then the per-rig layer
+#                       (deploy/config/<target>/) — e.g. the rpi4 RTK-GPS box
+#                       disables ptp4l/phc2sys/gpsd. See tasks/config-override.yml.
+#
+# Phases:
+#   1. copy the per-machine <machine>.deb to the rig + dpkg --install
+#   2. setcap the binaries (caps clear on a fresh copy — runs AFTER install)
+#   3. copy the REAL executor.json + the per-FC config/<fc>.json profiles
+#   3b. apply the per-TARGET config override (deploy/config/<target>/), merged
+#       on the controller, pushed over the just-copied profiles
+#   4. notify the supervisor to reload (tdb reload) — handler, fires on change
+#
+# Run:  theia orchestrate --target rpi4         (resolves registry/rpi4.yml)
+#   or:  ansible-playbook orchestrate.yml -e target=rpi4
+- name: "Resolve the deploy target from the registry"
+  hosts: localhost
+  gather_facts: false
+  vars:
+    target: "{{ target | mandatory }}"
+    registry_file: "{{ registry_dir }}/{{ target }}.yml"
+  tasks:
+    # registry-free: _rig defaults to {} and every field coalesces from the
+    # -e vars (host/machine/role the GS deploy passes) + inventory constants
+    # (s3_endpoint/tipc_scope/etcd_*). A legacy registry file, when present, still
+    # wins via _rig.<field>.
+    - name: "Seed an empty registry dict (registry-free default)"
+      ansible.builtin.set_fact:
+        _rig: {}
+    - name: "Load the target's registry entry if one exists (legacy/CLI path)"
+      ansible.builtin.include_vars:
+        file: "{{ registry_dir }}/{{ target }}.yml"
+        name: _rig
+      when:
+        - registry_dir is defined
+        - (registry_dir + '/' + target + '.yml') is exists
+    # Pull the per-machine manifest+config from the S3 runtime plane (if the
+    # registry sets s3_endpoint + runtime_version) -> repoints manifest_dir at a
+    # controller-local cache. NO-OP when S3 isn't configured (local dist/ stands).
+    - name: "Resolve S3 vars from the registry for the manifest fetch"
+      ansible.builtin.set_fact:
+        s3_endpoint: "{{ _rig.s3_endpoint | default(s3_endpoint | default('')) }}"
+        s3_runtime_bucket: "{{ _rig.s3_runtime_bucket | default(s3_runtime_bucket | default('theia-runtime')) }}"
+        runtime_version: "{{ _rig.runtime_version | default(runtime_version | default('')) }}"
+        machine: "{{ _rig.machine | default(role | default(machine | default(''))) }}"
+    - name: "Fetch the deploy manifest from S3 (repoints manifest_dir)"
+      ansible.builtin.include_tasks: tasks/fetch-manifest-s3.yml
+
+    - name: "Add the resolved target as an in-memory host"
+      ansible.builtin.add_host:
+        name: "{{ target }}"
+        groups: _orchestrate_targets
+        ansible_host: "{{ _rig.ansible_host | default(ansible_host) }}"
+        ansible_user: "{{ _rig.ansible_user | default(ansible_user | default('root')) }}"
+        # Optional transport overrides (non-standard SSH port / non-SSH connection)
+        # — see provision.yml. Default SSH:22.
+        ansible_port: "{{ _rig.ansible_port | default(ansible_port | default(omit)) }}"
+        ansible_connection: "{{ _rig.ansible_connection | default(omit) }}"
+        machine: "{{ _rig.machine | default(role | default(machine)) }}"
+        deploy_target: "{{ target }}"
+        manifest_dir: "{{ manifest_dir }}"
+        theia_run_src: "{{ theia_run_src | default('') }}"
+        # S3 runtime plane — propagate so the orchestrate play picks the S3-pull
+        # path (install-runtime-s3.yml) instead of the local bundle. Empty/unset
+        # runtime_version falls back to the local dist/<rig>/<rig>.deb.
+        runtime_version: "{{ _rig.runtime_version | default(runtime_version | default('')) }}"
+        s3_endpoint: "{{ _rig.s3_endpoint | default(s3_endpoint | default('')) }}"
+        s3_runtime_bucket: "{{ _rig.s3_runtime_bucket | default(s3_runtime_bucket | default('theia-runtime')) }}"
+        deb_arch: "{{ _rig.deb_arch | default('amd64') }}"
+        # L4-B: TIPC publication scope. 'cluster' makes a board's node services
+        # reachable across the eth TIPC bearer (multi-board: compute↔central).
+        # Default node-scope for single-board rigs (registry omits tipc_scope).
+        tipc_scope: "{{ _rig.tipc_scope | default(tipc_scope | default('')) }}"
+        # L4-C: per-machine TIPC instance index (central=0, compute=1, …). The
+        # supervisor shifts each child node's --tipc instance by this, so the same
+        # FC binary binds a distinct cluster address per board — V-UCM reaches a
+        # SPECIFIC board's UCM via connect_instance(idx). Default 0 (single-board).
+        machine_instance: "{{ _rig.machine_instance | default(machine_instance | default('0')) }}"
+
+- name: "Theia orchestrate (Phase 2 — binaries + real config)"
+  hosts: _orchestrate_targets
+  become: true
+  vars:
+    theia_root: /opt/theia
+    # `machine` (the manifest slice) is set per-host by the resolve play above;
+    # `deploy_target` keys the per-target config override.
+    deb_src: "{{ manifest_dir }}/{{ machine }}/{{ machine }}.deb"
+    executor_src: "{{ manifest_dir }}/{{ machine }}/executor.json"
+    config_src_dir: "{{ manifest_dir }}/{{ machine }}/config"
+    # Config overrides are applied at DEPLOY time (the artifact is machine-
+    # generic): the machine-shared layer (deploy/config/<machine>/, resolved from
+    # this target's machine slice) then the per-rig layer (deploy/config/
+    # <target>/) ON TOP — see tasks/config-override.yml.
+    machine_override_dir: "{{ config_override_dir }}/{{ machine }}"
+    target_override_dir: "{{ config_override_dir }}/{{ deploy_target }}"
+  handlers:
+    # Reload the supervisor (no blanket restart). Fires only when config changed
+    # AND tdb is present (the no-downtime path); a missing tdb is tolerated.
+    - name: Reload supervisor
+      ansible.builtin.command: "{{ theia_root }}/bin/tdb reload"
+      args:
+        removes: "{{ theia_root }}/bin/tdb"   # only run if tdb exists
+      listen: "reload supervisor"
+  tasks:
+    - name: "Base dirs"
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ theia_root }}"
+        - "{{ theia_root }}/config"
+        - "{{ theia_root }}/ipk"
+
+    # Runtime+services source: PULL FROM S3 (theia-runtime/<runtime_version>) when
+    # runtime_version is set (the fleet flow — official tag or dev rc, no local deb
+    # needed); else the legacy local-bundle path (dist/manifest/<rig>/<rig>.deb).
+    - name: "Install runtime+services FROM S3 (runtime_version pinned)"
+      ansible.builtin.include_tasks: tasks/install-runtime-s3.yml
+      when: runtime_version is defined and runtime_version | length > 0
+
+    - name: "Install runtime+services from the local bundle (.deb → /opt/theia/bin)"
+      ansible.builtin.include_tasks: tasks/install-bundle.yml
+      when: runtime_version is not defined or runtime_version | length == 0
+
+    # Lay the OTA-correct release-dir layout (releases/<ver>/bin + current symlink)
+    # the strict supervisor requires (theia-run.sh REFUSES to start without
+    # /opt/theia/current). Both install paths land the binaries FLAT in bin/, so
+    # both need this relocation — the local-bundle path used to skip it and the
+    # supervisor crash-looped "no release at /opt/theia/current". Run it always,
+    # versioning the release by runtime_version when pinned, else a 'local' baseline
+    # (an OTA deploy then lays releases/<artifact> + flips current on top).
+    - name: "Include release-dir staging (current -> releases/<ver>)"
+      ansible.builtin.include_tasks: tasks/stage-release.yml
+      vars:
+        # The release version stage-release names the dir after: the pinned
+        # runtime_version (S3 path) or a 'local' baseline (local-bundle path). A
+        # DISTINCT name — `runtime_version: {{ runtime_version }}` would self-
+        # reference and recurse. stage-release.yml reads `release_version`.
+        release_version: "{{ (runtime_version | default('')) or 'local' }}"
+
+    - name: "Include setcap (the capability contract)"
+      ansible.builtin.include_tasks: tasks/setcap.yml
+
+    - name: "Include real config (executor.json + per-FC profiles)"
+      ansible.builtin.include_tasks: tasks/seed-config.yml
+
+    - name: "Include per-target config override pass"
+      ansible.builtin.include_tasks: tasks/config-override.yml
+
+    # Boot-time autostart unit. ON by default so a fresh orchestrate (or one
+    # after `theia cleanup`, which removes the unit) leaves a RUNNING, enabled
+    # supervisor — not just staged files. The handler-based `tdb reload` only
+    # fires when something's already up, so without this a cleaned box would
+    # stay dead. Opt out with -e autostart=false (e.g. the docker-compose path
+    # where run-supervisor.sh is the container entrypoint, not a systemd unit).
+    - name: "Include supervisor autostart unit (systemd)"
+      ansible.builtin.include_tasks: tasks/install-supervisor-unit.yml
+      when: autostart | default(true) | bool

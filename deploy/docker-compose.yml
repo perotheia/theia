@@ -106,6 +106,28 @@ services:
       - TZ=UTC
     restart: unless-stopped
 
+  frontal:
+    image: theia-rig:latest
+    build:
+      context: .
+      dockerfile: rig/Dockerfile
+    container_name: theia-frontal
+    hostname: frontal
+    network_mode: host
+    command: ["-p", "2203"]
+    cap_add:
+      - SYS_NICE
+      - NET_RAW
+      - NET_ADMIN
+    volumes:
+      - ./logs/frontal:/var/log/theia
+      - frontal-mender:/var/lib/mender
+    environment:
+      - TZ=UTC
+    restart: unless-stopped
+
+
 volumes:
   central-mender:
   compute-mender:
+  frontal-mender:

@@ -1,0 +1,131 @@
+#!/usr/bin/env python3
+"""colony — Theia device fleet & deployment (provision · orchestrate · cleanup).
+
+Split out of theia: the deploy/orchestration ADAPTER. theia's responsibility ends
+at producing a per-rig bundle at a KNOWN PLACE; colony picks it up and drives the
+rig. A different shop swaps colony for Puppet/Salt/Flux behind the SAME contract.
+
+THE CONTRACT (what theia emits, what colony consumes), rooted at $THEIA_WORKSPACE:
+    dist/manifest/<machine>/         the per-rig bundle (theia `dist` delivers it)
+      ├── executor.json + *.json     supervisor tree + manifest slices
+      ├── config/<fc>.json           per-FC config (already merged)
+      ├── <machine>.deb              the theia-release runtime/services .deb(s)
+      └── certs/                     mTLS material
+    deploy/registry/<target>.yml     WHICH host (ansible_host + machine slice) — operator data
+    deploy/config/<target>/          per-target config overrides (deep-merged on top)
+
+colony is agentless (Ansible SSH-push). The verbs (relocated verbatim from theia.py
+cmd_provision/orchestrate/cleanup):
+    colony provision  <target> [ansible-args]   OS pkgs + etcd + mender client
+    colony orchestrate <target> [ansible-args]   push the bundle: .deb + executor + config
+    colony cleanup    <target> [ansible-args]    uninstall (inverse); -e wipe_etcd/wipe_mender
+
+<target> names a rig in deploy/registry/<target>.yml. $THEIA_WORKSPACE roots the
+bundle + registry (defaults to the CWD); $COLONY_ANSIBLE overrides the playbook dir
+(defaults to this repo's ansible/).
+"""
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+ANSIBLE = Path(os.environ.get("COLONY_ANSIBLE") or (HERE.parent / "ansible"))
+# The workspace that holds the bundle (dist/manifest) + registry + config overrides.
+# theia's `dist` emits there; colony reads it. Defaults to the CWD (run from the ws).
+WORKSPACE = Path(os.environ.get("THEIA_WORKSPACE") or os.getcwd())
+
+
+def _run(cmd: list[str], cwd: Path) -> int:
+    print("+ " + " ".join(cmd), file=sys.stderr)
+    return subprocess.call(cmd, cwd=str(cwd))
+
+
+def _ansible(playbook: str, args: list[str]) -> int:
+    """Run a playbook from colony/ansible/ (agentless SSH-push). THEIA_WORKSPACE in
+    the env roots the inventory's manifest_dir/registry_dir/config_override_dir."""
+    cmd = ["ansible-playbook", "-i", str(ANSIBLE / "inventory" / "hosts"),
+           str(ANSIBLE / playbook), *args]
+    env_ws = {**os.environ, "THEIA_WORKSPACE": str(WORKSPACE)}
+    print(f"+ THEIA_WORKSPACE={WORKSPACE}", file=sys.stderr)
+    os.environ.update(env_ws)
+    return _run(cmd, cwd=ANSIBLE)
+
+
+def _split(args: list[str]) -> tuple[str | None, str | None, str | None, list[str]]:
+    """Parse: <rig> [--host IP[:PORT]] [--role master|zonal]. `rig` is the first
+    bare token (the deploy identity / instance name). --host + --role enable the
+    REGISTRY-FREE path (host from Mender via the GS, role picks the S3 manifest
+    slice). Everything else passes through to ansible."""
+    rig = host = role = None
+    rest: list[str] = []
+    it = iter(range(len(args)))
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--host" and i + 1 < len(args):
+            host = args[i + 1]; i += 2; continue
+        if a == "--role" and i + 1 < len(args):
+            role = args[i + 1]; i += 2; continue
+        if rig is None and not a.startswith("-"):
+            rig = a; i += 1; continue
+        rest.append(a); i += 1
+    return rig, host, role, rest
+
+
+def _verb(playbook: str, verb: str, args: list[str]) -> int:
+    rig, host, role, rest = _split(args)
+    if not rig:
+        print(f"colony {verb}: needs a rig/instance name, e.g. "
+              f"`colony {verb} board-A --host 10.0.0.23:2201 --role zonal`",
+              file=sys.stderr)
+        return 2
+
+    # REGISTRY-FREE path: --host + --role given. Host resolution comes from Mender
+    # (the GS deploy passes the device's reachable_ip); `role` (master|zonal) is the
+    # S3 manifest slice + the machine_index/etcd/mender-gw derivation. No registry
+    # file, no local $THEIA_WORKSPACE. Extra knobs (machine_instance, etc.) ride in
+    # `rest` as `-e k=v`. `machine` = the role so orchestrate reads manifest/<role>/.
+    if host or role:
+        if not (host and role):
+            print(f"colony {verb}: registry-free deploy needs BOTH --host and "
+                  f"--role (got host={host!r} role={role!r}).", file=sys.stderr)
+            return 2
+        a_host, _, a_port = host.partition(":")
+        ev = [f"target={rig}", f"machine={role}", f"role={role}",
+              f"ansible_host={a_host}"]
+        if a_port.isdigit():
+            ev.append(f"ansible_port={a_port}")
+        extra = []
+        for kv in ev:
+            extra += ["-e", kv]
+        return _ansible(playbook, [*extra, *rest])
+
+    # LEGACY path: resolve from a registry file (back-compat for CLI/dev use).
+    reg_dir = Path(os.environ.get("COLONY_REGISTRY")
+                   or (WORKSPACE / "deploy" / "registry"))
+    reg = reg_dir / f"{rig}.yml"
+    if not reg.is_file():
+        print(f"colony {verb}: no registry entry {reg} and no --host/--role — pass "
+              f"`--host IP[:PORT] --role master|zonal` for a registry-free deploy.",
+              file=sys.stderr)
+        return 1
+    return _ansible(playbook, ["-e", f"target={rig}",
+                               "-e", f"registry_dir={reg_dir}", *rest])
+
+
+def main(argv: list[str]) -> int:
+    if not argv or argv[0] in ("-h", "--help"):
+        print(__doc__, file=sys.stderr)
+        return 0
+    verb, rest = argv[0], argv[1:]
+    return {
+        "provision":   lambda: _verb("provision.yml",   "provision",   rest),
+        "orchestrate": lambda: _verb("orchestrate.yml", "orchestrate", rest),
+        "cleanup":     lambda: _verb("cleanup.yml",     "cleanup",     rest),
+    }.get(verb, lambda: (print(f"colony: unknown verb '{verb}' "
+                               f"(provision|orchestrate|cleanup)", file=sys.stderr) or 2))()
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

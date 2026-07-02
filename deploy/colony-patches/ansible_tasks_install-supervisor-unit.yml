@@ -1,0 +1,67 @@
+# install-supervisor-unit.yml — boot-time autostart for a baremetal rig. Ships
+# theia-run.sh to /opt/theia/bin + installs the theia-supervisor.service unit that
+# exec's it. Use for a headless outdoor Pi (reached only over VPN) that must come
+# up on power-on.
+#
+# theia-run.sh is the OTA-CORRECT launcher: it REQUIRES $THEIA_ROOT_DIR/current
+# (the release symlink the supervisor launches children from) and does NOT
+# re-provision/clobber it — so a Mender/UCM `current → releases/<ver>` flip + FC
+# restart sticks. (run-supervisor.sh, the docker-compose container entrypoint,
+# OWNS + re-asserts `current` on every boot — fatal for OTA; NOT used here.)
+#
+# Run via a deploy play, or:
+#   ansible-playbook orchestrate.yml -l <host> -e machine=<m> -e autostart=true
+- name: "Ship theia-run.sh (the OTA-correct launcher) to the rig"
+  # theia-run.sh is an on-device launcher that lives in theia (deploy/theia-run.sh),
+  # NOT a colony asset. Default to the theia checkout relative to manifest_dir
+  # (<ws>/dist/manifest → ../../deploy/theia-run.sh), mirroring mender_artifacts_dir.
+  # Override -e theia_run_src=<abs> if the controller vendors its own copy.
+  ansible.builtin.copy:
+    src: "{{ theia_run_src if (theia_run_src | default('') | length > 0) else (manifest_dir + '/../../deploy/theia-run.sh') }}"
+    dest: /opt/theia/bin/theia-run
+    mode: "0755"
+
+- name: "Render the theia-supervisor.service unit (systemd hosts only)"
+  ansible.builtin.template:
+    src: templates/theia-supervisor.service.j2
+    dest: /etc/systemd/system/theia-supervisor.service
+    mode: "0644"
+  register: _unit
+  when: ansible_service_mgr == "systemd"
+
+- name: "Reload systemd + enable the unit (systemd hosts only)"
+  ansible.builtin.systemd:
+    name: theia-supervisor.service
+    daemon_reload: true
+    enabled: true
+  when: ansible_service_mgr == "systemd"
+
+- name: "Start (or restart on unit OR binary change) the supervisor"
+  # Restart when the unit file changed OR the .deb was (re)installed (_dpkg from
+  # install-bundle.yml) — a new binary on disk does nothing until the supervisor
+  # re-execs it. `started` alone is a no-op on an already-running supervisor, so
+  # a binary-only redeploy would silently keep running the OLD binary. The tdb-
+  # reload handler only re-reads the manifest, not the binaries.
+  ansible.builtin.systemd:
+    name: theia-supervisor.service
+    state: "{{ 'restarted' if (_unit.changed or (_dpkg is defined and _dpkg.changed)) else 'started' }}"
+  when: ansible_service_mgr == "systemd"
+
+- name: "Start the supervisor directly (NO systemd — e.g. a container rig)"
+  # A systemd-less rig (Docker container running sshd as PID 1) can't use the
+  # unit; launch the supervisor via theia-run in the background instead. Kill
+  # any prior one first so a redeploy picks up the new binary. setsid detaches
+  # it from the SSH session so it survives the play.
+  ansible.builtin.shell: |
+    set +e
+    for pid in $(pgrep -f '{{ theia_root | default('/opt/theia') }}/bin/supervisor'); do
+      [ "$pid" = "$$" ] || [ "$pid" = "$PPID" ] || kill -TERM "$pid" 2>/dev/null
+    done
+    sleep 1
+    setsid env THEIA_MACHINE={{ machine }} THEIA_MACHINE_INSTANCE={{ machine_instance | default(0) }} /opt/theia/bin/theia-run >/var/log/theia-supervisor.log 2>&1 < /dev/null &
+    true
+  args:
+    executable: /bin/bash
+  when: ansible_service_mgr != "systemd"
+  changed_when: true
+

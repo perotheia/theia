@@ -1505,7 +1505,13 @@ def cmd_dist(args: list[str]) -> int:
     if "-h" in args or "--help" in args:
         print(cmd_dist.__doc__, file=sys.stderr)
         return 0
-    target = next((a for a in args if not a.startswith("-")), None)
+    # The bare positional is the target — but SKIP option VALUES (`--arch host`'s
+    # "host" is not a target). Track tokens consumed by a value-taking option.
+    _VALUE_OPTS = {"--arch", "--attr", "--distro", "--version"}
+    _skip = {i + 1 for i, a in enumerate(args)
+             if a in _VALUE_OPTS and i + 1 < len(args)}
+    target = next((a for i, a in enumerate(args)
+                   if not a.startswith("-") and i not in _skip), None)
     if not target:
         print("theia dist: <target> is required — e.g. `theia dist services` "
               "(runtime) or `theia dist single` (app).", file=sys.stderr)
@@ -1989,7 +1995,17 @@ def cmd_release(args: list[str]) -> int:
     # the S3-push counterpart to the build-only `theia dist` — symmetric with
     # `theia release-swp` (the app/SWP plane). No positional target → the legacy
     # full-package build below (framework + rf wheels + runtime + dev debs).
-    target = next((a for a in args if not a.startswith("-")), None)
+    #
+    # A bare positional is the target — but SKIP option VALUES: `release --arch
+    # host` has "host" as --arch's value, NOT a target (that's the legacy full
+    # build). Track which tokens are consumed by a value-taking option.
+    _VALUE_OPTS = {"--arch", "--distro", "--version", "--s3", "--bucket"}
+    _skip = set()
+    for i, a in enumerate(args):
+        if a in _VALUE_OPTS and i + 1 < len(args):
+            _skip.add(i + 1)
+    target = next((a for i, a in enumerate(args)
+                   if not a.startswith("-") and i not in _skip), None)
     if target is not None:
         return _release_runtime_plane(target, args)
 

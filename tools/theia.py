@@ -1889,9 +1889,53 @@ def _release_runtime_plane(target: str, args: list[str]) -> int:
         else:
             print(f"$ aws cp index.json s3://{bucket}/{key}/index.json",
                   file=sys.stderr)
+        # ── The per-machine MANIFEST + CONFIG (executor.json + config/<fc>.json).
+        # colony no longer reads these from a local $THEIA_WORKSPACE — it pulls
+        # <key>/manifest/<machine>/ from S3 (fetch-manifest-s3.yml). Ship the whole
+        # serialized tree under the runtime key so a fresh board is self-serving
+        # from S3: `theia manifest <target>` wrote it to dist/manifest/ (cmd_dist
+        # ran it), so sync that dir. `aws s3 sync` uploads machines.json +
+        # <machine>/{machine,execution,executor,application}.json + config/.
+        man_dir = WORKSPACE / _MANIFEST_DIR
+        if man_dir.is_dir():
+            if subprocess.run([*aws, "sync", str(man_dir),
+                               f"s3://{bucket}/{key}/manifest",
+                               "--exclude", "*.deb", "--exclude", "BUILD.bazel"],
+                              env=env).returncode != 0:
+                rc_final = 1
+            else:
+                print(f"$ aws sync {man_dir} → s3://{bucket}/{key}/manifest/",
+                      file=sys.stderr)
+            # ALSO ship the manifest as ONE tarball so colony can pull it with a
+            # single HTTP GET + unpack (MinIO buckets are anon-readable over HTTP
+            # but not S3-LIST'able without the aws cli, and per-file get_url is
+            # fragile). manifest.tar.gz = the whole tree minus debs/BUILD.
+            import tarfile
+            man_tgz = deb_dir / f"manifest-{key}.tar.gz"
+            with tarfile.open(man_tgz, "w:gz") as tf:
+                for p in sorted(man_dir.rglob("*")):
+                    if p.is_file() and p.suffix != ".deb" and p.name != "BUILD.bazel":
+                        tf.add(p, arcname=str(p.relative_to(man_dir)))
+                # theia-run.sh — the OTA-correct on-device launcher colony ships to
+                # the rig. It's a per-release deploy asset, so travel it WITH the
+                # manifest (colony resolves theia_run_src from the S3 cache) — this
+                # is what lets colony read EVERYTHING from S3, no local workspace.
+                run_sh = THEIA_ROOT / "deploy" / "theia-run.sh"
+                if run_sh.is_file():
+                    tf.add(run_sh, arcname="theia-run.sh")
+            if subprocess.run([*aws, "cp", str(man_tgz),
+                               f"s3://{bucket}/{key}/manifest.tar.gz"],
+                              env=env).returncode != 0:
+                rc_final = 1
+            else:
+                print(f"$ aws cp manifest.tar.gz → s3://{bucket}/{key}/manifest.tar.gz",
+                      file=sys.stderr)
+        else:
+            print(f"theia release: no manifest at {man_dir} to ship — colony's "
+                  "S3-pull will have nothing to seed.", file=sys.stderr)
     if pushed:
-        print(f"theia release: pushed {len(pushed)} runtime .deb(s) + index → "
-              f"s3://{bucket}/", file=sys.stderr)
+        print(f"theia release: pushed {len(pushed)} runtime .deb(s) + index "
+              f"+ manifest → s3://{bucket}/", file=sys.stderr)
     return rc_final
 
 
@@ -2602,7 +2646,20 @@ def _publish_swp_plane(s3_url: str, fleet: str, app: str, ver: str,
     idx_path.write_text(json.dumps(idx, indent=2))
     if _aws([*aws, "cp", str(idx_path), f"s3://{bucket}/{key}/index.json"]) != 0:
         return 1
-    print(f"theia release-swp: published → s3://{bucket}/{key}/", file=sys.stderr)
+    # ── The per-machine MANIFEST as SEPARATE S3 objects (not only inside the
+    # tarball). colony pulls <key>/manifest/<machine>/ directly from S3 to seed a
+    # board's executor + config, symmetric with the runtime plane — so an operator
+    # (or colony) can read the deploy shape without unpacking the .mender. The
+    # tarball's sibling _stage/manifest holds machines.json + per-machine slices.
+    stage_manifest = (tarball.parent / "_stage" / "manifest") if tarball else None
+    if stage_manifest and stage_manifest.is_dir():
+        if _aws([*aws, "sync", str(stage_manifest),
+                 f"s3://{bucket}/{key}/manifest"]) != 0:
+            return 1
+        print(f"$ aws sync {stage_manifest} → s3://{bucket}/{key}/manifest/",
+              file=sys.stderr)
+    print(f"theia release-swp: published → s3://{bucket}/{key}/ "
+          "(artifact + index + manifest)", file=sys.stderr)
     return 0
 
 

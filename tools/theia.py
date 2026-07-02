@@ -1857,19 +1857,40 @@ def _release_runtime_plane(target: str, args: list[str]) -> int:
     subprocess.run([*aws, "mb", f"s3://{bucket}"], env=env)  # idempotent
     rc_final = 0
     pushed = []
+    # Group debs by KEY (<ver>-<abi>) — a mixed-arch runtime manifest lands each
+    # board's slice under its own key. abi from the deb's arch suffix.
+    import hashlib
+    by_key: dict = {}
     for d in debs:
-        # abi keyed from the deb's own arch suffix (…_amd64.deb / …_arm64.deb) so
-        # a mixed-arch runtime manifest lands each board's slice under its own key.
         abi = d.stem.rsplit("_", 1)[-1]      # theia-runtime_0.2.2_amd64 → amd64
-        key = f"{ver}-{abi}"
-        dst = f"s3://{bucket}/{key}/{d.name}"
-        print(f"$ aws cp {d.name} {dst}", file=sys.stderr)
-        if subprocess.run([*aws, "cp", str(d), dst], env=env).returncode != 0:
+        by_key.setdefault(f"{ver}-{abi}", []).append((d, abi))
+    for key, entries in by_key.items():
+        deb_meta = []
+        for d, abi in entries:
+            dst = f"s3://{bucket}/{key}/{d.name}"
+            print(f"$ aws cp {d.name} {dst}", file=sys.stderr)
+            if subprocess.run([*aws, "cp", str(d), dst], env=env).returncode != 0:
+                rc_final = 1
+                continue
+            pushed.append(f"{key}/{d.name}")
+            deb_meta.append({"file": f"{key}/{d.name}",
+                             "sha256": hashlib.sha256(d.read_bytes()).hexdigest()})
+        # The runtime-plane index the GS catalog reads (GET /api/planes/runtime →
+        # <key>/index.json). WITHOUT it the debs upload but the GS never lists the
+        # runtime — a Distribution can't reference it. Schema mirrors release-swp's.
+        _ver, _abi = key.rsplit("-", 1)
+        idx = {"plane": "runtime", "version": _ver, "distro": _abi,
+               "key": key, "debs": deb_meta}
+        idx_path = deb_dir / f"index-{key}.json"
+        idx_path.write_text(json.dumps(idx, indent=2))
+        if subprocess.run([*aws, "cp", str(idx_path),
+                           f"s3://{bucket}/{key}/index.json"], env=env).returncode != 0:
             rc_final = 1
         else:
-            pushed.append(f"{key}/{d.name}")
+            print(f"$ aws cp index.json s3://{bucket}/{key}/index.json",
+                  file=sys.stderr)
     if pushed:
-        print(f"theia release: pushed {len(pushed)} runtime .deb(s) → "
+        print(f"theia release: pushed {len(pushed)} runtime .deb(s) + index → "
               f"s3://{bucket}/", file=sys.stderr)
     return rc_final
 

@@ -71,6 +71,7 @@
         deploy_target: "{{ target }}"
         manifest_dir: "{{ manifest_dir }}"
         theia_run_src: "{{ theia_run_src | default('') }}"
+        mender_artifacts_dir: "{{ mender_artifacts_dir | default('') }}"
         # S3 runtime plane — propagate so the orchestrate play picks the S3-pull
         # path (install-runtime-s3.yml) instead of the local bundle. Empty/unset
         # runtime_version falls back to the local dist/<rig>/<rig>.deb.

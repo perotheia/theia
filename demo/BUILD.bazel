@@ -48,7 +48,7 @@ pkg_files(
 # theia/bin — the supervisor entrypoint script.
 pkg_files(
     name = "install_bin_scripts",
-    srcs = ["@pero_theia//deploy:run-supervisor.sh"],
+    srcs = ["@pero_theia//platform/runtime/ota:theia-run.sh"],
     attributes = pkg_attributes(mode = "0755"),
     prefix = "theia/bin",
 )

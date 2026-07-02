@@ -1,0 +1,9 @@
+# platform/runtime/ota — the on-device OTA assets theia AUTHORS (not the deb):
+# the launcher (theia-run.sh) + the Mender update-modules (theia-swp/theia-app/
+# theia-release) + Mender→UCM state-scripts. `theia release --s3` ships these in
+# the S3 runtime manifest; colony pushes them to every rig (container + board).
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "theia-run.sh",
+])

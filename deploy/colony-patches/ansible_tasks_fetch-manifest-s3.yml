@@ -42,3 +42,10 @@
   ansible.builtin.set_fact:
     theia_run_src: "{{ _s3_manifest_tmp.path }}/theia-run.sh"
   when: _s3_manifest | bool
+
+- name: "S3 manifest: point mender_artifacts_dir at the S3 cache OTA assets"
+  ansible.builtin.set_fact:
+    # <cache>/ota holds modules/{theia-swp,theia-app,theia-release} + state-scripts/
+    # — colony pushes them to the rig (install-mender.yml) for container + board.
+    mender_artifacts_dir: "{{ _s3_manifest_tmp.path }}/ota"
+  when: _s3_manifest | bool

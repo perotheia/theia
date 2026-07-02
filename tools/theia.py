@@ -61,9 +61,11 @@ if not (WORKSPACE / "manifest").is_dir() and not (WORKSPACE / ".theia").is_file(
 
 COMPOSE = THEIA_ROOT / "deploy" / "docker-compose.yml"
 # provision/orchestrate/cleanup moved OUT to the `colony` repo (the deploy adapter):
-# theia's deploy surface is now `manifest`/`dist` (emit the per-rig bundle to
-# dist/manifest/<rig>); colony consumes that bundle + the deploy/registry. See
-# docs/tasks/BACKLOG/repo-separation.md. (COMPOSE stays — the dev container stack.)
+# theia's deploy surface is now `manifest`/`dist`/`release` (emit the per-rig
+# bundle to S3 — theia release <svc> --s3 ships the runtime debs + manifest+config;
+# release-swp ships the app SWP). colony pulls the manifest FROM S3 (no local
+# workspace) and resolves the host from Mender — the deploy/registry is GONE
+# (registry-free). See docs/tasks/BACKLOG/repo-separation.md. (COMPOSE stays.)
 
 
 def _run(argv: list[str], cwd: "Path | None" = None) -> int:
@@ -484,7 +486,7 @@ def cmd_start(args: list[str]) -> int:
         if (_mroot / "machines.json").is_file():
             env["THEIA_MACHINE_MANIFEST"] = str(_mroot)
             break
-    # mTLS opt-in (mirrors deploy/run-supervisor.sh): when this machine's certs
+    # mTLS opt-in (mirrors platform/runtime/ota/theia-run.sh): when this machine's certs
     # are staged (install/<machine>/certs or dist/manifest/<machine>/certs),
     # export THEIA_COM_TLS_* so the forked com children SERVE mutual TLS. The
     # supervisor inherits + passes it down. No certs → com stays plaintext (the
@@ -1916,13 +1918,22 @@ def _release_runtime_plane(target: str, args: list[str]) -> int:
                 for p in sorted(man_dir.rglob("*")):
                     if p.is_file() and p.suffix != ".deb" and p.name != "BUILD.bazel":
                         tf.add(p, arcname=str(p.relative_to(man_dir)))
-                # theia-run.sh — the OTA-correct on-device launcher colony ships to
-                # the rig. It's a per-release deploy asset, so travel it WITH the
-                # manifest (colony resolves theia_run_src from the S3 cache) — this
-                # is what lets colony read EVERYTHING from S3, no local workspace.
-                run_sh = THEIA_ROOT / "deploy" / "theia-run.sh"
-                if run_sh.is_file():
-                    tf.add(run_sh, arcname="theia-run.sh")
+                # The on-device OTA assets theia authors (platform/runtime/ota/):
+                # the launcher (theia-run.sh) + the Mender update-modules
+                # (theia-swp/theia-app/theia-release) + state-scripts. Travel them
+                # WITH the S3 manifest so colony pushes them to EVERY rig — container
+                # and physical board alike — with no theia checkout on the
+                # controller. colony reads them from the S3 cache (ota/…).
+                ota_dir = THEIA_ROOT / "platform" / "runtime" / "ota"
+                if ota_dir.is_dir():
+                    # theia-run.sh at the tarball root (colony's theia_run_src
+                    # default is <cache>/theia-run.sh) + ota/ for modules+scripts.
+                    run_sh = ota_dir / "theia-run.sh"
+                    if run_sh.is_file():
+                        tf.add(run_sh, arcname="theia-run.sh")
+                    for p in sorted(ota_dir.rglob("*")):
+                        if p.is_file():
+                            tf.add(p, arcname="ota/" + str(p.relative_to(ota_dir)))
             if subprocess.run([*aws, "cp", str(man_tgz),
                                f"s3://{bucket}/{key}/manifest.tar.gz"],
                               env=env).returncode != 0:

@@ -69,7 +69,12 @@
         # through add_host or the etcd task sees the default (false) and collides.
         etcd_external: "{{ _rig.etcd_external | default((role | default('')) == 'zonal') }}"
         etcd_listen_host: "{{ _rig.etcd_listen_host | default(etcd_listen_host | default('127.0.0.1')) }}"
-        etcd_advertise_host: "{{ _rig.etcd_advertise_host | default(_rig.ansible_host) }}"
+        etcd_advertise_host: "{{ _rig.etcd_advertise_host | default(etcd_advertise_host | default(ansible_host | default('127.0.0.1'))) }}"
+        # Post-fetch S3 vars: the manifest cache + OTA asset paths the fetch task
+        # repointed on localhost — thread them so the play host reads from S3.
+        manifest_dir: "{{ manifest_dir }}"
+        theia_run_src: "{{ theia_run_src | default('') }}"
+        mender_artifacts_dir: "{{ mender_artifacts_dir | default('') }}"
 
 - name: "Theia provision (Phase 1 — base + Mender client)"
   hosts: _provision_targets
@@ -78,16 +83,13 @@
     theia_root: /opt/theia
     # the per-host machine.json on the CONTROLLER (read with the from_json filter)
     machine_json_path: "{{ manifest_dir }}/{{ machine }}/machine.json"
-    # The on-device Mender artifacts (theia-release update module + Mender→UCM
-    # state scripts) live in the framework's deploy/mender/ — they are NOT in the
-    # runtime .deb. Default to the framework checkout (manifest_dir is
-    # <ws>/dist/manifest, so deploy/mender is three dirs up + deploy/mender), so
-    # `mender install` finds the theia-release module on every board. Override with
-    # -e mender_artifacts_dir=<abs> if the controller's layout differs (an extra-var
-    # wins over this play var, so we must NOT self-reference mender_artifacts_dir
-    # here — `{{ mender_artifacts_dir | default(...) }}` is a recursive-loop template
-    # the moment the var is read. Compute the default into a distinct name.)
-    mender_artifacts_dir: "{{ manifest_dir }}/../../deploy/mender"
+    # The on-device Mender artifacts (theia-swp/theia-app/theia-release modules +
+    # Mender→UCM state scripts) ride in the S3 runtime manifest (platform/runtime/
+    # ota/) — the fetch task set mender_artifacts_dir to <cache>/ota and threaded
+    # it through add_host. Don't re-derive it here (that shadowed the S3 value).
+    # A fallback via _mender_artifacts_default only when the hostvar is empty (a
+    # local-checkout run with no S3).
+    _mender_artifacts_default: "{{ manifest_dir }}/../../platform/runtime/ota"
   tasks:
     - name: "Base dirs"
       ansible.builtin.file:

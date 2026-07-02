@@ -1,11 +1,7 @@
-# deploy/ — host bringup scripts + docker compose pipeline.
-#
-# Exposes run-supervisor.sh so the top-level //:install bundle can lay
-# it into theia/bin/. The actual docker images stage these via
-# deploy/stage.sh (not Bazel); this export is only for the install rule.
-
+# deploy/ — the docker-rig dev stack ONLY (docker-compose + the rig image build
+# under rig/). Everything else (colony ansible, mender modules, the on-device
+# launcher, systemd units) moved OUT: the OTA launcher + mender modules live in
+# //platform/runtime/ota (shipped via S3); provision/orchestrate live in the
+# colony repo. Nothing here is a Bazel target — the compose builds the rig image
+# directly. This package marker keeps deploy/ addressable.
 package(default_visibility = ["//visibility:public"])
-
-exports_files([
-    "run-supervisor.sh",
-])

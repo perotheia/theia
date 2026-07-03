@@ -28,6 +28,29 @@ load("//rules:opkg.bzl", "pkg_opkg")
 
 package(default_visibility = ["//visibility:public"])
 
+# ── theia-runtime postinst: setcap the supervisor ONCE, at install ───────────
+# The supervisor needs cap_sys_nice (RT sched + CPU affinity on FC node threads)
+# and cap_net_admin (TIPC `node set clusterid` + topology presence). Setting the
+# caps HERE — on /opt/theia/bin/supervisor, as root, at dpkg install — means a
+# local `theia install` can SYMLINK the capped binary instead of copying it and
+# running `sudo setcap` on every install. Result: the user never needs sudo
+# while working with a local theia install. Non-fatal if setcap/libcap2-bin is
+# absent (the supervisor still runs, just without RT priority / cluster isolation).
+_RUNTIME_POSTINST = """#!/bin/sh
+set -e
+SUP=/opt/theia/bin/supervisor
+SETCAP=$(command -v setcap || echo /usr/sbin/setcap)
+if [ -x "$SETCAP" ] && [ -f "$SUP" ]; then
+    if "$SETCAP" cap_sys_nice,cap_net_admin+eip "$SUP" 2>/dev/null; then
+        echo "theia-runtime: setcap cap_sys_nice,cap_net_admin on $SUP"
+    else
+        echo "theia-runtime: setcap on $SUP failed (libcap2-bin?) — supervisor"\\
+             "runs without RT priority / TIPC cluster isolation." >&2
+    fi
+fi
+exit 0
+"""
+
 _VERSION = "0.2.2"
 
 # Debian runtime/-dev split: a RUNTIME-ONLY machine gets just the binaries (+ the
@@ -56,6 +79,7 @@ pkg_deb(
     description = "Theia runtime: the supervisor binary (run-time fabric)",
     section = "misc",
     arch = _DEB_ARCH,
+    postinst = _RUNTIME_POSTINST,
     files = {
         "//platform/supervisor/main:supervisor": "/opt/theia/bin/supervisor",
     },

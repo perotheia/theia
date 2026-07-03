@@ -1205,17 +1205,22 @@ def cmd_install(args: list[str]) -> int:
         print(f"theia: {e}", file=sys.stderr)
         return 1
 
-    # 1c. Host/admin machine guard: a machine with NO processes (none in
-    #     execution.json) is a host/admin node (console, no supervisor tree). For
-    #     now stage just machines.json — no supervisor, no bin/, no executor.
-    if not binaries:
-        import json as _json
+    # 1c. Host/admin machine guard: a machine with NO processes AND no supervisor
+    #     tree (no executor.json) is a genuine host/admin node (console only) —
+    #     stage just machines.json. But a BARE workspace (theia init, no services
+    #     / apps yet) has an empty-but-present executor.json: it still runs the
+    #     supervisor as a toolchain smoke test (tutorial ch2 §2.4 — "prove the
+    #     toolchain works … even before you've written any app code"). So skip
+    #     only when there's truly no supervisor tree to stage.
+    _has_tree = (manifest_root / machine / "executor.json").is_file()
+    if not binaries and not _has_tree:
         dest.mkdir(parents=True, exist_ok=True)
         src_machines = manifest_root / "machines.json"
         if src_machines.is_file():
             shutil.copy2(src_machines, dest / "machines.json")
-        print(f"theia install: '{machine}' has no processes (host/admin) — "
-              f"staged {dest / 'machines.json'} only.", file=sys.stderr)
+        print(f"theia install: '{machine}' has no processes and no supervisor "
+              f"tree (host/admin) — staged {dest / 'machines.json'} only.",
+              file=sys.stderr)
         return 0
 
     # 2. bazel build — the supervisor + every child binary, partitioned by owner:
@@ -1279,12 +1284,15 @@ def cmd_install(args: list[str]) -> int:
             if src_f.suffix == ".json":
                 shutil.copy2(src_f, cfg_dir / src_f.name)
                 print(f"staged {cfg_dir / src_f.name}", file=sys.stderr)
-    elif (role_cfg := _installed_role_config(manifest_root, machine)) is not None:
-        # Deb-mode fallback: the workspace didn't regenerate config (no
-        # dist/manifest/<machine>/config/), but the theia-services deb ships the
-        # per-ROLE defaults at /opt/theia/config/<role>/. Copy that slice —
-        # selected by this machine's role — so a deb-only install still gets its
-        # config (symmetric with the source-tree / S3 paths).
+    elif binaries and (role_cfg := _installed_role_config(
+            manifest_root, machine)) is not None:
+        # Deb-mode fallback: a workspace WITH services (binaries non-empty) that
+        # didn't regenerate config (no dist/manifest/<machine>/config/) — the
+        # theia-services deb ships the per-ROLE defaults at /opt/theia/config/
+        # <role>/. Copy that slice, selected by this machine's role, so a deb-only
+        # install still gets its config (symmetric with source-tree / S3 paths).
+        # Guarded on `binaries`: a BARE workspace (no FCs) must NOT pull the
+        # master role config — it runs zero FCs, so only its empty executor.json.
         for src_f in role_cfg.glob("*.json"):
             shutil.copy2(src_f, cfg_dir / src_f.name)
             print(f"staged {cfg_dir / src_f.name} (from {role_cfg})", file=sys.stderr)
@@ -1302,11 +1310,14 @@ def cmd_install(args: list[str]) -> int:
     bins = {n: _src(n, t) for n, t in binaries.items()}
     sup_src = _src("supervisor", supervisor_target)
 
-    # Copy the binaries into install/<machine>/ + apply the setcap contract. This
-    # is the SAME copy+caps a real deploy does — but a real deploy runs it over
-    # SSH via Ansible (deploy/ansible/tasks/setcap.yml). Puppet is GONE; the
-    # local stage is a plain Python copy + setcap (no engine to install).
-    return _stage_local(dest, sup_src, bins)
+    # Stage the binaries into install/<machine>/. In DEB mode the sources are the
+    # prebuilt /opt/theia/bin/* (the supervisor already capped by the deb's
+    # postinst), so SYMLINK them — no copy, no `sudo setcap` per install (the
+    # user never needs sudo locally). In source mode they're bazel-out artifacts
+    # that need a writable copy + setcap. `link` selects.
+    link = _deb_mode() and all(
+        str(p).startswith(str(THEIA_ROOT / "bin")) for p in [sup_src, *bins.values()])
+    return _stage_local(dest, sup_src, bins, link=link)
 
 
 _warned_legacy_machine_cfg: set = set()
@@ -1471,13 +1482,19 @@ def _emit_machine_config(machine: str, mdir: Path) -> int:
 
 
 def _stage_local(dest: Path, supervisor_src: str,
-                 binaries: dict[str, str]) -> int:
-    """Copy the supervisor + child binaries into install/<machine>/ and apply
-    the setcap contract. The local equivalent of the deploy's Ansible
-    install-bundle + setcap (deploy/ansible/tasks/setcap.yml) — a plain Python
-    copy + setcap, no orchestration engine. supervisor at <dest>/supervisor,
-    children at <dest>/bin/<name>, all 0755; then setcap (bazel-out copies are
-    read-only and a fresh copy clears caps, so setcap runs AFTER).
+                 binaries: dict[str, str], link: bool = False) -> int:
+    """Stage the supervisor + child binaries into install/<machine>/.
+
+    Two modes:
+      link=True  (DEB): SYMLINK each binary to its prebuilt /opt/theia/bin/*
+                 source. The supervisor is already capped by theia-runtime's
+                 postinst, so there's NO copy and NO `sudo setcap` — a local
+                 install needs no root at all.
+      link=False (SOURCE): COPY the bazel-out artifacts (they're read-only and a
+                 fresh copy clears caps) then `sudo setcap` the supervisor. The
+                 local equivalent of the deploy's Ansible install-bundle+setcap.
+
+    supervisor at <dest>/supervisor, children at <dest>/releases/local/bin/<name>.
 
     Supervisor caps:
       cap_sys_nice   — realtime sched (SCHED_FIFO/RR) + CPU affinity on FC
@@ -1512,31 +1529,43 @@ def _stage_local(dest: Path, supervisor_src: str,
         _run(["sudo", "chown", "-R", f"{getpass.getuser()}:{getpass.getuser()}",
               str(dest)])
 
-    def _copy(src: str, dst: Path) -> None:
-        if dst.exists():
-            # A prior copy may be read-only (bazel-out) or root-owned (a legacy
-            # Puppet/sudo install). chmod+unlink as the user; on EPERM (root-
-            # owned leftover), sudo rm it so the fresh user-owned copy lands.
+    def _clear(dst: Path) -> None:
+        if dst.exists() or dst.is_symlink():
             try:
-                dst.chmod(0o755)
+                if not dst.is_symlink():
+                    dst.chmod(0o755)
                 dst.unlink()
             except PermissionError:
                 _run(["sudo", "rm", "-f", str(dst)])
-        _sh.copy2(src, dst)
-        dst.chmod(0o755)
-        print(f"  staged {dst}", file=sys.stderr)
+
+    def _place(src: str, dst: Path) -> None:
+        _clear(dst)
+        if link:
+            dst.symlink_to(src)               # → prebuilt /opt/theia/bin/* (capped)
+            print(f"  linked {dst} → {src}", file=sys.stderr)
+        else:
+            _sh.copy2(src, dst)
+            dst.chmod(0o755)
+            print(f"  staged {dst}", file=sys.stderr)
 
     try:
-        _copy(supervisor_src, dest / "supervisor")
+        _place(supervisor_src, dest / "supervisor")
         for name, src in binaries.items():
-            _copy(src, rel / "bin" / name)   # children → releases/local/bin (via current/)
+            _place(src, rel / "bin" / name)   # children → releases/local/bin (via current/)
     except OSError as e:
         print(f"theia install: staging failed — {e}", file=sys.stderr)
         return 1
 
-    # Supervisor caps (see docstring). Needs root; skip gracefully if
-    # setcap/sudo unavailable (start still works, just without RT priority /
-    # TIPC cluster isolation).
+    if link:
+        # DEB mode: the supervisor symlink points at the already-capped
+        # /opt/theia/bin/supervisor (theia-runtime postinst). No copy cleared the
+        # caps, so nothing to re-apply — and no sudo needed.
+        print(f"theia install: staged {dest} (symlinked prebuilt binaries; "
+              "supervisor already capped by the deb)", file=sys.stderr)
+        return 0
+
+    # SOURCE mode: bazel-out copies are fresh (caps cleared), so setcap the
+    # supervisor. Needs root; skip gracefully if setcap/sudo unavailable.
     setcap = shutil.which("setcap") or "/usr/sbin/setcap"
     sup = dest / "supervisor"
     rc = _run(["sudo", setcap, "cap_sys_nice,cap_net_admin+eip", str(sup)])

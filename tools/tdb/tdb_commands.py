@@ -140,15 +140,30 @@ def _find_child(reply, name: str):
 
 
 def _machine_names(sup) -> "list[str]":
-    """The cluster's machine names, via the client's ListMachines (rtdb → com's
-    scan registry). Returns [] when the transport has no enumeration (tdb over
-    TIPC talks to one supervisor; it uses `-i <instance>` instead)."""
+    """Every accepted MACHINE SELECTOR, via the client's ListMachines (rtdb →
+    com's scan registry). Includes each machine's name, its HOSTNAME, and its
+    INSTANCE number — because the name alone is NOT unique in a /N deploy (two
+    zonal workers both report name "zonal"); the hostname (compute/frontal) and
+    the instance (1/2) disambiguate a specific board. com resolves any of the
+    three back to the instance. Returns [] when the transport has no enumeration
+    (tdb over TIPC talks to one supervisor; it uses `-i <instance>` instead)."""
     lm = getattr(sup, "list_machines", None)
     if lm is None:
         return []
     try:
         reply = lm()
-        return [_g(m, "name", "") for m in (_g(reply, "machines", []) or [])]
+        out: list[str] = []
+        for m in (_g(reply, "machines", []) or []):
+            nm = _g(m, "name", "")
+            if nm:
+                out.append(nm)
+            host = _g(_g(m, "info", {}) or {}, "hostname", "")
+            if host:
+                out.append(host)
+            inst = _g(m, "instance", None)
+            if inst is not None:
+                out.append(str(inst))
+        return out
     except Exception:
         return []
 

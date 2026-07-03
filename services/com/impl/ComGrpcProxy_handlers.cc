@@ -174,9 +174,14 @@ std::atomic<bool>            g_topology_up{false};
 // Forward decl — defined just below the registry (it reads g_machines first,
 // then falls back to the manifest).
 std::string machine_name_of(uint32_t inst);
+std::string machine_label(uint32_t inst);
 
+// The aggregate-tree prefix MUST be UNIQUE per board — two zonal workers both
+// report name "zonal", so a name-only prefix would merge their trees under one
+// "zonal/" and lose a machine. machine_label prefers the hostname (unique), so
+// the merged forest keeps compute/ and frontal/ as distinct subtrees.
 std::string machine_prefix(uint32_t inst) {
-    return machine_name_of(inst) + "/";
+    return machine_label(inst) + "/";
 }
 
 // ---- Machine registry — the cluster scan's per-instance identity cache -------
@@ -195,6 +200,11 @@ struct MachineEntry {
     std::string name;          // machine name REPORTED BY the supervisor (SystemInfo
                                // .machine_name from executor.json); authoritative
                                // over the manifest/"mN" fallback. "" until fetched.
+                               // NOT unique in a /N deploy (two zonal workers both
+                               // report "zonal") — use `host`/instance to address one.
+    std::string host;          // the machine's HOSTNAME (SystemInfo.hostname) — UNIQUE
+                               // per board (compute/frontal), so it disambiguates two
+                               // same-named roles as a selector. "" until fetched.
     std::string system_info;   // raw system_supervisor::SystemInfo bytes ("" until fetched)
 };
 std::mutex                                   g_machines_mtx;
@@ -212,6 +222,19 @@ std::string machine_name_of(uint32_t inst) {
             return it->second.name;
     }
     return services_com::MachineManifest::instance().name(inst);
+}
+
+// The UNIQUE label for an instance — prefer the HOSTNAME (compute/frontal, unique
+// per board), fall back to the machine name, then "mN". Used for the aggregate
+// tree prefix so two same-named roles ("zonal") don't collide into one subtree.
+std::string machine_label(uint32_t inst) {
+    {
+        std::lock_guard<std::mutex> lk(g_machines_mtx);
+        auto it = g_machines.find(inst);
+        if (it != g_machines.end() && !it->second.host.empty())
+            return it->second.host;
+    }
+    return machine_name_of(inst);
 }
 
 // Mark an instance present/absent (called from the topology callback). The
@@ -234,16 +257,19 @@ void cache_machine_sysinfo(uint32_t inst) {
     // The supervisor reports its OWN machine name (executor.json root "machine")
     // in SystemInfo.machine_name — the authoritative source. Extract it so the
     // registry names the machine even with no THEIA_MACHINE_MANIFEST.
-    std::string reported;
+    std::string reported, host;
     {
         system_supervisor::SystemInfo si;
-        if (si.ParseFromString(r.system_info) && !si.machine_name().empty())
-            reported = si.machine_name();
+        if (si.ParseFromString(r.system_info)) {
+            if (!si.machine_name().empty()) reported = si.machine_name();
+            host = si.hostname();   // UNIQUE per board — the disambiguating selector
+        }
     }
     {
         std::lock_guard<std::mutex> lk(g_machines_mtx);
         g_machines[inst].system_info = r.system_info;
         if (!reported.empty()) g_machines[inst].name = reported;
+        if (!host.empty())     g_machines[inst].host = host;
     }
     std::fprintf(stderr, "[com] cached host identity for machine %u (%s)\n",
                  inst, machine_name_of(inst).c_str());
@@ -253,13 +279,29 @@ void cache_machine_sysinfo(uint32_t inst) {
 // Checks the supervisor-reported registry names FIRST (so "central" resolves
 // even without a manifest), then the manifest's name→index (incl. the "mN"
 // synthetic form). Returns false for an unknown name.
-bool machine_name_to_instance(const std::string& name, uint32_t& inst) {
+bool machine_name_to_instance(const std::string& sel, uint32_t& inst) {
+    if (sel.empty()) return false;
+    // An all-digits selector is the INSTANCE number (central=0, compute=1, …) —
+    // the always-unique key, and what `rtdb machines` prints in the INST column.
+    if (sel.find_first_not_of("0123456789") == std::string::npos) {
+        inst = static_cast<uint32_t>(std::strtoul(sel.c_str(), nullptr, 10));
+        return true;
+    }
     {
         std::lock_guard<std::mutex> lk(g_machines_mtx);
+        // HOSTNAME first — it's UNIQUE per board (compute/frontal), so it
+        // disambiguates two same-named roles ("zonal") that a name match can't.
         for (const auto& kv : g_machines)
-            if (kv.second.name == name) { inst = kv.first; return true; }
+            if (!kv.second.host.empty() && kv.second.host == sel) {
+                inst = kv.first; return true;
+            }
+        // Then the machine NAME. Fine for a unique name (central/master); for a
+        // duplicated role name (two "zonal") this returns the FIRST match — the
+        // operator should use the hostname or instance to pick a specific board.
+        for (const auto& kv : g_machines)
+            if (kv.second.name == sel) { inst = kv.first; return true; }
     }
-    return services_com::MachineManifest::instance().index_of(name, inst);
+    return services_com::MachineManifest::instance().index_of(sel, inst);
 }
 
 // One present supervisor's children, machine-tagged, appended to `merged`.

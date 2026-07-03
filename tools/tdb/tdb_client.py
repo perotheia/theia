@@ -71,10 +71,15 @@ class SupervisorClient:
         return cls(_ctx(repo), instance=instance)
 
     # ---- control ops (each a single nanopb CALL over TIPC) ----------------
-    def get_tree(self, timeout: float = 2.0) -> dict[str, Any]:
+    # `machine` is accepted-but-IGNORED: tdb over TIPC targets ONE supervisor
+    # (picked by `-i <instance>`), so a machine selector is meaningless here —
+    # but the shared command layer (tdb_commands.py) passes machine= for the rtdb
+    # path, so accept it to keep one call signature across both clients.
+    def get_tree(self, timeout: float = 2.0, machine: str = "") -> dict[str, Any]:
         return self.probe.call(self._target, "GetTree", timeout=timeout)
 
-    def get_system_info(self, timeout: float = 2.0) -> dict[str, Any]:
+    def get_system_info(self, timeout: float = 2.0,
+                        machine: str = "") -> dict[str, Any]:
         return self.probe.call(self._target, "GetSystemInfo", timeout=timeout)
 
     def configure_trace(self, *, target_node: str, msg_type: str = "",

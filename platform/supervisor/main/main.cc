@@ -129,6 +129,25 @@ int main(int argc, char** argv) {
     ::theia::runtime::resolve_node_tipc(SupervisorCtl::kNodeName,
         SupervisorCtl::kTipcType, SupervisorCtl::kTipcInstance,
         supervisor_ctl_type, supervisor_ctl_inst);
+    // MACHINE-SHIFT the supervisor's OWN control node. The supervisor shifts every
+    // CHILD's --tipc instance by THEIA_MACHINE_INSTANCE, but its own SupervisorCtl
+    // address was only shifted when the LAUNCHER passed --tipc=supervisor_ctl=:N
+    // (which `theia start` does, but theia-run.sh / the colony unit / OTA do NOT —
+    // they set THEIA_MACHINE_INSTANCE in the env only, and resolve_node_tipc is
+    // ARG-only). Without the shift, EVERY machine's supervisor binds instance 0 on
+    // a shared host TIPC namespace → they collide, TIPC load-balances the co-bound
+    // port, and com's topology scan discovers only ONE machine (the whole /3
+    // multi-machine view collapses). So when --tipc did NOT override the instance
+    // (it's still the compiled default) AND THEIA_MACHINE_INSTANCE is set, apply the
+    // same per-machine shift here — making the supervisor self-address correctly
+    // under ANY launcher. An explicit --tipc still wins (it changes the resolved
+    // instance off the compiled default, so this fallback is skipped).
+    if (supervisor_ctl_inst == SupervisorCtl::kTipcInstance) {
+        if (const char* mi = std::getenv("THEIA_MACHINE_INSTANCE"); mi && *mi) {
+            const auto shift = static_cast<uint32_t>(std::strtoul(mi, nullptr, 10));
+            supervisor_ctl_inst += shift;
+        }
+    }
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",

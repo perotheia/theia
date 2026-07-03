@@ -2502,6 +2502,14 @@ def cmd_release(args: list[str]) -> int:
         if dst_f.exists():
             dst_f.unlink()
         shutil.copy2(f, dst_f)
+        # The on-device services deb carries its own per-role config defaults at
+        # /opt/theia/config/<role>/ — inject them here too (the bazel pkg_deb is
+        # config-free; serialize-manifest runs at release time). Same as the
+        # `theia dist` path (_dist_runtime); done here so the full `theia release`
+        # deb set is self-sufficient.
+        if pkg == "theia-services":
+            if (rc := _inject_services_config(dst_f)) != 0:
+                return rc
         n_deb += 1
     if want_ipk:
         ipk_dir.mkdir(parents=True, exist_ok=True)

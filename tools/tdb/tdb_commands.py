@@ -687,9 +687,25 @@ def cmd_tracecat(args, _sup, trace_factory) -> int:
     # --json: one JSON object per line (NDJSON) — full header + decoded inner
     # proto — for piping into jq / a log pipeline. No human banner on stdout.
     as_json = "--json" in args
+    # --count N: stop after N records (bounded follow). Default 0 = follow live
+    # until Ctrl-C. Bounded mode is what non-interactive callers (the MCP
+    # bridge, scripts) use so the firehose returns instead of tailing forever.
+    limit = 0
+    if "--count" in args:
+        i = args.index("--count")
+        if i + 1 >= len(args):
+            print("tracecat: --count needs a number", file=sys.stderr)
+            return 2
+        try:
+            limit = int(args[i + 1])
+        except ValueError:
+            print(f"tracecat: bad --count {args[i + 1]!r}", file=sys.stderr)
+            return 2
     trace = trace_factory()
     if not as_json:
-        print("tracecat: following trace firehose (Ctrl-C to stop) ...")
+        tail = f"first {limit} records" if limit else "Ctrl-C to stop"
+        print(f"tracecat: following trace firehose ({tail}) ...")
+    seen = 0
     try:
         for rec in trace.records(timeout=600.0):
             if as_json:
@@ -699,6 +715,9 @@ def cmd_tracecat(args, _sup, trace_factory) -> int:
                 ts = _fmt_epoch_ns(rec.ts_ns)
                 print(json.dumps(rec.to_dict(ts=ts), separators=(",", ":")),
                       flush=True)
+                seen += 1
+                if limit and seen >= limit:
+                    break
                 continue
             # Prefer the DECODED inner message ({value: 860}) over the raw
             # base64 payload in the envelope JSON. content is None when the
@@ -727,6 +746,9 @@ def cmd_tracecat(args, _sup, trace_factory) -> int:
             print(f"{ts} {rec.src} {kind} {rec.msg_type} "
                   f"corr={rec.corr_id}{(' ' + body) if body else ''}",
                   flush=True)
+            seen += 1
+            if limit and seen >= limit:
+                break
     except KeyboardInterrupt:
         pass
     finally:

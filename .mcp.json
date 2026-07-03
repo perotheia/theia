@@ -10,6 +10,11 @@
       "args": [],
       "type": "stdio"
     },
+    "theia": {
+      "command": "tools/run_mcp.sh",
+      "args": [],
+      "type": "stdio"
+    },
     "work-with-me": {
       "command": ".venv/bin/python",
       "args": ["contrib/skills/work-with-me/server.py"],

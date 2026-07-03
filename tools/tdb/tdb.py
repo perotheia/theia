@@ -23,6 +23,7 @@ adb-shaped verbs:
   loglevel [<node> [lvl]]  show all/one node's log level; with lvl, SET it live
   tracecat [--json|-c|-g]  follow the trace firehose (subscribe to log[trace]);
                            --json = NDJSON (header + decoded inner proto) per line
+                           --count N = stop after N records (bounded follow)
                            (alias: logcat — the firehose carries TRACES, not logs)
   restart <name>           RestartChild
   terminate <name>         TerminateChild (stop-and-hold: no_restart=true)

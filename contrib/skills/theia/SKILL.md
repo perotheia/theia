@@ -250,6 +250,38 @@ robot rf_theia/scenarios/_selftest/fc_regen_stability/fc_regen_stability.robot
 ```
 Do **not** commit `MODULE.bazel.lock`.
 
+## MCP tools (dev-loop as an API)
+
+The repo's `.mcp.json` wires four MCP servers (each `run_mcp.sh` sources the
+workspace venv). Prefer these over shelling out when a tool fits — they run the
+same code in-process:
+
+- **`artheia`** — the generators + validators as tools: `parse`,
+  `check_addresses`, `gen_app`, `gen_manifest`, `gen_proto`, `gen_schema`,
+  `gen_netgraph`, `list_generators`, `describe`. Paths resolve against the
+  workspace root.
+- **`theia`** — the dev loop + live inspect: `theia_init`, `theia_manifest`,
+  `theia_install`, `theia_start`/`theia_stop`, `theia_call`/`theia_cast`;
+  `tdb_apps`/`tdb_ps`/`tdb_trace` (local supervisor over the probe),
+  `rtdb_machines`/`rtdb_ps` (remote board over com), `colony_*` (fleet deploy).
+  Release/publish verbs are intentionally NOT exposed (human-gated).
+- **`rf-theia`** — the Robot Framework harness: `list_scenarios`,
+  `run_scenario`, `list_keywords`, `get_test_results`, `analyze_trace`,
+  `tail_supervisor_log`.
+- **`work-with-me`** — the review/checkpoint helpers (`check_me`, `compare_me`,
+  …).
+
+**Workspace binding gotcha.** The `theia`/`artheia`/`rf-theia` servers fix their
+workspace at startup to `THEIA_INVOCATION_CWD` (the dir Claude Code launched
+from, = the `.mcp.json` dir) — there's NO per-call workspace argument. So the
+tools operate on THAT workspace only. `theia init` does NOT scaffold a
+workspace-local `.mcp.json`, so a session in a *consuming* workspace has no
+theia MCP server unless one is added there. When the session root isn't the
+workspace you mean to act on, fall back to the shell CLI (`theia …` / `artheia
+…`) with the right cwd. The `tdb_*` inspect tools additionally need a LIVE
+supervisor — they return a clean `ConnectionError` / `(empty tree)` when none
+is running.
+
 ## Conventions worth knowing
 
 - **Generated files are not hand-edited.** `lib/`, `main/`, and `BUILD`

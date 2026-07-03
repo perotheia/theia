@@ -120,17 +120,38 @@ ResolvedAddr resolve_subscriber(const std::string& name) {
     return {true, it->second.first, it->second.second};
 }
 
+// Parse the INSTANCE out of a per-instance config key "<component>/<instance>"
+// (e.g. "counter/3" → 3). Returns {true, N} when the key ends with "/<digits>",
+// else {false, 0} (a plain single-instance key like "nm_daemon"). The instance is
+// AUTHORITATIVELY in the key — per stores each clone's config as component/instance
+// (//counter/0, //counter/1, …) and is notified per key, so it knows exactly which
+// clone changed with no arity loop / multicast / guessing.
+struct KeyInstance { bool has; uint32_t instance; };
+KeyInstance key_instance(const std::string& target_node) {
+    auto slash = target_node.rfind('/');
+    if (slash == std::string::npos || slash + 1 >= target_node.size())
+        return {false, 0};
+    const std::string tail = target_node.substr(slash + 1);
+    for (char c : tail) if (c < '0' || c > '9') return {false, 0};
+    return {true, static_cast<uint32_t>(std::strtoul(tail.c_str(), nullptr, 10))};
+}
+
 // Cast one config snapshot to one subscriber. Runs ON THE NODE THREAD (only
 // ever invoked from the deferred mailbox lambda in schedule_push, never inline
-// from a handler) — see schedule_push for why.
+// from a handler) — see schedule_push for why. `inst_override` (>=0) forces the
+// TIPC instance (the per-instance key's parsed instance, or a watcher's declared
+// subscriber_instance) instead of the netgraph's base instance — so a change to
+// counter/3 notifies the CLONE at instance 3, not instance 0.
 void push_config_now(PerClient& self, const std::string& subscriber,
-                     const StoreValue& snap) {
+                     const StoreValue& snap, long inst_override = -1) {
     auto addr = resolve_subscriber(subscriber);
     if (!addr.ok) {
         self.log().info(std::string("push: subscriber '") + subscriber +
                         "' UNRESOLVED — not pushed");
         return;
     }
+    if (inst_override >= 0)
+        addr.instance = static_cast<uint32_t>(inst_override);
     char abuf[96];
     std::snprintf(abuf, sizeof(abuf),
                   "push: ConfigUpdated -> %s @ 0x%08x:%u (%zuB)",
@@ -168,13 +189,13 @@ void push_config_now(PerClient& self, const std::string& subscriber,
 // the lambda outlives the handler frame and `s.store` may change before it
 // runs.
 void schedule_push(PerClient& self,
-                   std::vector<std::string> subscribers,
+                   std::vector<std::pair<std::string, long>> subscribers,
                    StoreValue snap) {
     if (subscribers.empty()) return;
     self.enqueue([&self, subs = std::move(subscribers),
                   snap = std::move(snap)](::theia::runtime::GenServerBase*) {
         for (const auto& sub : subs) {
-            push_config_now(self, sub, snap);
+            push_config_now(self, sub.first, snap, sub.second);
         }
     });
 }
@@ -207,17 +228,28 @@ void PerClient::init(PerClientState& s) {
             // thread (the re-entrancy/blocking rule), capturing copies.
             PerClient* self = this;
             s.store->watch_prefix([self, &s](const WatchEvent& ev) {
-                std::vector<std::string> subs;
+                // (subscriber_node, instance) pairs to notify. The INSTANCE is the
+                // one parsed from the CHANGED KEY (<component>/<instance>) — per is
+                // notified per key, so it targets exactly that clone. A watcher's
+                // declared subscriber_instance (0/unset legacy) is the fallback for
+                // a plain (non-per-instance) key.
+                const KeyInstance ki = key_instance(ev.target_node);
+                std::vector<std::pair<std::string, long>> subs;
                 auto wit = s.watches.find(ev.target_node);
                 if (wit != s.watches.end())
                     for (const auto& sub : wit->second)
-                        subs.push_back(sub.subscriber_node);
+                        subs.emplace_back(sub.subscriber_node,
+                            ki.has ? static_cast<long>(ki.instance)
+                                   : (sub.subscriber_instance
+                                          ? static_cast<long>(sub.subscriber_instance)
+                                          : -1L));
                 if (subs.empty()) return;
                 StoreValue snap = ev.cur;
                 self->enqueue([self, subs = std::move(subs),
                                snap = std::move(snap)]
                               (::theia::runtime::GenServerBase*) {
-                    for (const auto& sub : subs) push_config_now(*self, sub, snap);
+                    for (const auto& sub : subs)
+                        push_config_now(*self, sub.first, snap, sub.second);
                 });
             });
         } else {
@@ -314,10 +346,18 @@ PerReply PerClient::handle_call(
     if (!s.store->is_watched()) {
         auto wit = s.watches.find(req.target_node);
         if (wit != s.watches.end()) {
-            std::vector<std::string> subs;
+            // Same instance resolution as the etcd watch path: the changed KEY's
+            // instance (<component>/<instance>) wins, else the watcher's declared
+            // subscriber_instance, else -1 (netgraph base).
+            const KeyInstance ki = key_instance(req.target_node);
+            std::vector<std::pair<std::string, long>> subs;
             subs.reserve(wit->second.size());
             for (const auto& sub : wit->second)
-                subs.push_back(sub.subscriber_node);
+                subs.emplace_back(sub.subscriber_node,
+                    ki.has ? static_cast<long>(ki.instance)
+                           : (sub.subscriber_instance
+                                  ? static_cast<long>(sub.subscriber_instance)
+                                  : -1L));
             StoreValue snap;
             snap.config = config; snap.digest = req.digest; snap.mod_rev = new_rev;
             schedule_push(*this, std::move(subs), std::move(snap));
@@ -334,14 +374,19 @@ PerReply PerClient::handle_call(
     auto& subs = s.watches[req.target_node];
     bool exists = false;
     for (auto& sub : subs) {
-        if (sub.subscriber_node == req.subscriber_node) {
+        // A subscription is keyed by (subscriber_node, instance): the SAME node at
+        // a DIFFERENT instance (a clone) is a distinct subscriber, so 10 Counter
+        // clones each register their own watch on their own key.
+        if (sub.subscriber_node == req.subscriber_node &&
+            sub.subscriber_instance == req.subscriber_instance) {
             sub.want_digest = req.want_digest;   // refresh
             exists = true;
             break;
         }
     }
     if (!exists) {
-        subs.push_back(Subscription{req.subscriber_node, req.want_digest});
+        subs.push_back(Subscription{req.subscriber_node, req.want_digest,
+                                    req.subscriber_instance});
     }
     rep.status = 0;
     set_str(rep.message, exists ? "watch refreshed" : "watch armed");
@@ -356,7 +401,16 @@ PerReply PerClient::handle_call(
     // store backends.
     StoreValue cur = s.store->get(req.target_node);
     if (cur.found) {
-        schedule_push(*this, {req.subscriber_node}, std::move(cur));
+        // Initial sync to THIS subscriber's instance: the key's instance
+        // (<component>/<instance>) wins, else the declared subscriber_instance.
+        const KeyInstance ki = key_instance(req.target_node);
+        const long inst = ki.has ? static_cast<long>(ki.instance)
+                                 : (req.subscriber_instance
+                                        ? static_cast<long>(req.subscriber_instance)
+                                        : -1L);
+        std::vector<std::pair<std::string, long>> one{
+            {std::string(req.subscriber_node), inst}};
+        schedule_push(*this, std::move(one), std::move(cur));
     }
     return rep;
 }

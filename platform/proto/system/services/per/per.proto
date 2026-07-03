@@ -26,6 +26,7 @@ message WatchConfigReq {
     string target_node = 1;
     string subscriber_node = 2;
     string want_digest = 3;
+    uint32 subscriber_instance = 4;
 }
 
 message PerReply {

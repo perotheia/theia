@@ -85,6 +85,13 @@ message WatchConfigReq {
     string target_node
     string subscriber_node
     string want_digest
+    // The subscriber's own TIPC INSTANCE (the node knows it — resolve_node_tipc).
+    // per casts ConfigUpdated back to (subscriber_type, this_instance) so a change
+    // to a per-INSTANCE key (<component>/<instance>, e.g. counter/3) notifies the
+    // EXACT clone, not instance 0. The instance is authoritatively in the KEY; this
+    // just tells per which watcher to match. OPTIONAL — 0/unset keeps the legacy
+    // single-instance behaviour (the common case: one node, instance 0).
+    uint32 subscriber_instance
 }
 
 // Generic ack/error for the write + control ops.

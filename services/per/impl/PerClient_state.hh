@@ -22,6 +22,12 @@ namespace ara::per {
 struct Subscription {
     std::string subscriber_node;
     std::string want_digest;
+    // The subscriber's TIPC INSTANCE (from WatchConfigReq.subscriber_instance).
+    // per casts ConfigUpdated to (resolved_type, subscriber_instance) so a
+    // per-INSTANCE key (<component>/<instance>) notifies the EXACT clone. Also the
+    // instance is authoritatively parsed from the changed KEY at push time — this
+    // records what the watcher declared so a later fan-out can match it.
+    uint32_t    subscriber_instance = 0;
 };
 
 struct PerClientState {

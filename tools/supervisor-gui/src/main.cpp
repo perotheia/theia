@@ -13,7 +13,9 @@
 #include <wx/cmdline.h>
 #include <wx/wx.h>
 
+#include <clocale>
 #include <cstdio>
+#include <cstring>
 #include <utility>
 
 namespace {
@@ -21,6 +23,19 @@ namespace {
 class SupervisorGuiApp : public wxApp {
 public:
     bool OnInit() override {
+        // A UTF-8 locale MUST be active before any wxString::Format with a
+        // non-ASCII narrow literal (the panels use glyphs like ↻ ✗ ⚠ ●). wx
+        // converts a narrow format string to wide through the C locale; under a
+        // non-UTF-8 locale (e.g. the "C"/POSIX default when launched from a bare
+        // shell) that conversion FAILS, AsWChar() returns null, and Format()
+        // SIGSEGVs (health_panel repaint crashed exactly here). Force a UTF-8
+        // locale: try the environment's first, then common UTF-8 fallbacks.
+        if (!std::setlocale(LC_ALL, "")
+            || !std::strstr(std::setlocale(LC_ALL, nullptr), "UTF-8")) {
+            for (const char* loc : {"C.UTF-8", "en_US.UTF-8", "POSIX.UTF-8"}) {
+                if (std::setlocale(LC_ALL, loc)) break;
+            }
+        }
         if (!wxApp::OnInit()) return false;
         GOOGLE_PROTOBUF_VERIFY_VERSION;
         SetAppName("supervisor-gui");

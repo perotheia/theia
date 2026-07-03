@@ -116,8 +116,12 @@ struct HealthPanelImpl {
             if (f.flags & kFlagCoreDumped) st += " ✗";
             else if (f.flags & kFlagDegraded) st += " ⚠";
             list->SetItem(row, 1, st);
-            list->SetItem(row, 2, f.restart_count ? wxString::Format("↻%u", f.restart_count)
-                                                  : wxString("-"));
+            // Build the glyph + count as UTF-8 so a non-UTF-8 locale can't crash the
+            // narrow→wide format conversion (wxString::Format("↻%u", …) SIGSEGV'd in
+            // AsWChar() under the C locale). Format the ASCII part, prepend the glyph.
+            list->SetItem(row, 2, f.restart_count
+                ? wxString::FromUTF8("↻") + wxString::Format("%u", f.restart_count)
+                : wxString("-"));
             // uptime in a friendly unit
             uint64_t s = f.uptime_ms / 1000;
             wxString up = s >= 3600 ? wxString::Format("%lluh%llum", s/3600, (s%3600)/60)

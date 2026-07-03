@@ -143,15 +143,119 @@ def _check_tipc_addresses() -> int:
 # --- commands: each takes pass-through args, returns an exit code -----------
 
 def cmd_rig(args: list[str]) -> int:
-    """docker compose up/down the deploy stack."""
-    if not args or args[0] not in ("up", "down"):
-        print("usage: theia rig {up|down} [compose-args...]", file=sys.stderr)
+    """docker compose {up|down|status} the deploy stack.
+
+      theia rig up [args…]     docker compose up -d the stack
+      theia rig down [args…]   docker compose down the stack
+      theia rig status         the stack's containers + the LIVE cluster (rtdb)
+    """
+    if not args or args[0] not in ("up", "down", "status"):
+        print("usage: theia rig {up|down|status} [compose-args...]",
+              file=sys.stderr)
         return 2
+    if args[0] == "status":
+        return _rig_status(args[1:])
     action, extra = args[0], list(args[1:])
     # `up` detaches by default so the shell returns; pass -d/--detach to keep.
     if action == "up" and not any(a in ("-d", "--detach") for a in extra):
         extra = ["-d", *extra]
     return _run(["docker", "compose", "-f", str(COMPOSE), action, *extra])
+
+
+def _rig_status(args: list[str]) -> int:
+    """`theia rig status` — the deploy stack's containers + the LIVE cluster.
+
+    Two views:
+      1. DOCKER: the compose stack's containers (name / state / uptime), from
+         `docker compose ps` — so you see which theia-<machine> boards are up.
+      2. CLUSTER: the running system pulled from rtdb over com's gRPC (:7700):
+         the machines (instance/name/host/present) and a per-machine FC count.
+    Best-effort: a view that can't be reached (no docker / com not up yet) is
+    reported, not fatal. `--target host:port` overrides com's endpoint for rtdb.
+    """
+    import json as _json
+
+    target = None
+    for i, a in enumerate(args):
+        if a == "--target" and i + 1 < len(args):
+            target = args[i + 1]
+
+    # ── 1. DOCKER: the compose stack ──────────────────────────────────────────
+    print("── docker stack ──────────────────────────────────────────────")
+    if not shutil.which("docker"):
+        print("  docker not found — skipping the container view")
+    else:
+        # JSON so we render a stable table regardless of the docker CLI version.
+        r = subprocess.run(
+            ["docker", "compose", "-f", str(COMPOSE), "ps", "--all",
+             "--format", "json"],
+            capture_output=True, text=True)
+        rows = []
+        if r.returncode == 0 and r.stdout.strip():
+            # `compose ps --format json` emits either a JSON array or NDJSON
+            # (one object per line) depending on the version — handle both.
+            txt = r.stdout.strip()
+            try:
+                rows = _json.loads(txt)
+                if isinstance(rows, dict):
+                    rows = [rows]
+            except _json.JSONDecodeError:
+                rows = [_json.loads(ln) for ln in txt.splitlines() if ln.strip()]
+        if not rows:
+            print("  (no stack containers — `theia rig up` to start them)")
+        else:
+            print(f"  {'CONTAINER':<20} {'STATE':<10} {'STATUS'}")
+            for c in rows:
+                name = c.get("Name") or c.get("name") or "?"
+                state = c.get("State") or c.get("state") or "?"
+                status = c.get("Status") or c.get("status") or ""
+                print(f"  {name:<20} {state:<10} {status}")
+
+    # ── 2. CLUSTER: the live system via rtdb (com gRPC :7700) ─────────────────
+    print("\n── live cluster (rtdb → com :7700) ───────────────────────────")
+    rtdb = shutil.which("rtdb") or str(WORKSPACE / ".venv" / "bin" / "rtdb")
+    if not Path(rtdb).exists():
+        print("  rtdb not on PATH / .venv — skipping the cluster view")
+        return 0
+
+    def _rtdb(sub: list[str]) -> "tuple[int, str]":
+        cmd = [rtdb, *(["--target", target] if target else []), *sub]
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+        return p.returncode, (p.stdout or p.stderr)
+
+    try:
+        rc, out = _rtdb(["machines"])
+    except Exception as e:  # noqa: BLE001 — com not up / no route
+        print(f"  com not reachable ({e}) — is the stack up + com listening?")
+        return 0
+    if rc != 0 or "INST" not in out:
+        print("  com not reachable — is the stack up + com listening on :7700?")
+        if out.strip():
+            print("  " + out.strip().splitlines()[-1])
+        return 0
+    # Echo the machines table (rtdb already formats INST/MACHINE/PRESENT/HOST).
+    for ln in out.strip().splitlines():
+        print("  " + ln)
+
+    # Per-machine FC count. Pull the AGGREGATE `ps` ONCE and bucket the rows by
+    # their machine-name prefix (com name-prefixes every node in the merged tree:
+    # "master/com", "compute/shwa", …). This is robust regardless of whether a
+    # per-machine selector resolves on this stack — one call, correct counts.
+    try:
+        _rc, pout = _rtdb(["ps"])
+    except Exception:  # noqa: BLE001
+        return 0
+    counts: "dict[str, int]" = {}
+    for ln in pout.strip().splitlines()[1:]:          # skip the header row
+        # the NAME column carries "<machine>/<fc>"; find it (the token with a '/').
+        tok = next((t for t in ln.split() if "/" in t), None)
+        if tok:
+            counts[tok.split("/", 1)[0]] = counts.get(tok.split("/", 1)[0], 0) + 1
+    if counts:
+        print("\n  FCs per machine:")
+        for name in sorted(counts):
+            print(f"    {name:<12} {counts[name]} FC(s)")
+    return 0
 
 
 
@@ -3734,7 +3838,7 @@ filegroup(name = "apps_proto", srcs = ["apps.proto"])
 
 COMMANDS = {
     "init":        (cmd_init,        "scaffold the CWD as a Theia consuming workspace (source or /opt/theia)"),
-    "rig":         (cmd_rig,         "docker compose {up|down} the deploy stack"),
+    "rig":         (cmd_rig,         "docker compose {up|down|status} the deploy stack (status: containers + live rtdb cluster)"),
     # provision/orchestrate/cleanup MOVED to the `colony` repo (deploy adapter).
     # theia emits the per-rig bundle via `manifest`/`dist`; colony deploys it.
     "install":     (cmd_install,     "build + populate install/<machine>/ (local host)"),

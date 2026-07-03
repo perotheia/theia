@@ -185,6 +185,19 @@ public:
                                   : std::thread::native_handle_type{};
     }
 
+    // ---- this node's OWN resolved TIPC instance -----------------------------
+    // The instance main() resolved for THIS node (resolve_node_tipc → the
+    // machine-shifted or clone instance). Handler code reads it so a node whose
+    // node type is CLONED (N instances at the same TIPC type, round-robined) can
+    // key its OWN per-instance config as "<component>/<instance>" and pass its
+    // instance to per (WatchConfigReq.subscriber_instance) — so per notifies THIS
+    // clone, not instance 0. 0 (the default) for the single-instance common case.
+    // set_tipc_instance() is called ONCE by the generated main after
+    // resolve_node_tipc + before start(); it's a plain store (no concurrency —
+    // the node thread isn't running yet).
+    void     set_tipc_instance(uint32_t inst) { tipc_instance_ = inst; }
+    uint32_t tipc_instance() const { return tipc_instance_; }
+
 protected:
     // Override in Derived (via GenServer<Derived, State>) to forward
     // a const-char* "info" message to the typed handle_info(...) on
@@ -246,6 +259,8 @@ private:
     // and the stop-sentinel lambda) — no synchronization needed.
     std::string                          terminate_reason_{"normal"};
     std::shared_ptr<std::promise<void>>  pending_stop_done_;
+    // This node's own resolved TIPC instance (set once by main pre-start).
+    uint32_t                             tipc_instance_ = 0;
 };
 
 // ---- GenServer<Derived, State> ------------------------------------------

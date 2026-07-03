@@ -37,7 +37,7 @@ _THEIA_ROOT="$(cd "$(dirname "$_THEIA_ENV_SRC")" && pwd)"
 # dev-cert dir to $THEIA_ROOT/dist/manifest/<machine>/certs; theia/tdb use it).
 # Sourcing env.sh is a deliberate "activate THIS checkout" action, so it always
 # wins — but warn when it silently overrides a DIFFERENT prior THEIA_ROOT (e.g.
-# a deb's setup.zsh sourced earlier in the same shell), so the switch is seen,
+# a deb's setup.sh sourced earlier in the same shell), so the switch is seen,
 # not just inherited by the next command that reads $THEIA_ROOT.
 if [ -n "${THEIA_ROOT:-}" ] && [ "$THEIA_ROOT" != "$_THEIA_ROOT" ]; then
     echo "env.sh: overriding THEIA_ROOT ($THEIA_ROOT -> $_THEIA_ROOT)" >&2

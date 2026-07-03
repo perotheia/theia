@@ -2132,6 +2132,18 @@ def _build_framework_deb(out_dir: Path, version: str = "0.2.2") -> int:
     shutil.copy2(THEIA_ROOT / "tools" / "theia.py", opt / "tools" / "theia.py")
     for s in ("setup.sh",):
         shutil.copy2(pkg_root / s, opt / s)
+    # tdb / rtdb — the Python live-inspect CLIs. They're NOT bazel artifacts and
+    # NOT in the artheia wheel: their code lives under tools/{tdb,rtdb}/. Ship it
+    # so `tdb`/`rtdb` work from a deb install (tutorial ch2 §2.4). tdb.py derives
+    # REPO = parents[2] of its own path → /opt/theia (has system/tools/tdb/tdb.art
+    # + platform/proto), and imports artheia.probe from the user's venv (on PATH).
+    for probe_cli in ("tdb", "rtdb"):
+        src = THEIA_ROOT / "tools" / probe_cli
+        if not src.is_dir():
+            continue
+        shutil.copytree(
+            src, opt / "tools" / probe_cli, dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
 
     # `theia` launcher — PURE STDLIB (theia.py imports nothing from artheia), so
     # `theia init/manifest/install/start` work before the user has a venv.
@@ -2160,6 +2172,24 @@ def _build_framework_deb(out_dir: Path, version: str = "0.2.2") -> int:
             f'[ -n "$real" ] && exec "$real" "$@"\n'
             f'python3 -c "import {mod}" 2>/dev/null && '
             f'exec python3 -m {mod} "$@"\n'
+            f'printf "%b\\n" "{_PIP_HINT}" >&2\nexit 127\n')
+        shim.chmod(0o755)
+
+    # tdb / rtdb shims — run the shipped tools/{tdb,rtdb}/<cli>.py directly. They
+    # import artheia.probe from the user's ACTIVE venv (on PATH), so guard on
+    # artheia being importable and print the pip hint otherwise, same as above.
+    for cli in ("tdb", "rtdb"):
+        if not (opt / "tools" / cli / f"{cli}.py").is_file():
+            continue
+        shim = opt / "bin" / cli
+        shim.write_text(
+            "#!/bin/sh\n"
+            'D="$(cd "$(dirname "$0")" && pwd)"\n'
+            # Guard on the ACTUAL submodule the CLI needs (a bare `import artheia`
+            # can succeed on an empty namespace-package stub whose __file__ is
+            # None, then crash deeper) — check artheia.gen_server.probe.
+            'python3 -c "import artheia.gen_server.probe" 2>/dev/null && '
+            f'exec python3 "$D/../tools/{cli}/{cli}.py" "$@"\n'
             f'printf "%b\\n" "{_PIP_HINT}" >&2\nexit 127\n')
         shim.chmod(0o755)
 

@@ -134,8 +134,12 @@ def _pkg_deb_impl(ctx):
         _script_block("postinst", ctx.attr.postinst) +
         _script_block("prerm", ctx.attr.prerm) +
         _script_block("conffiles", ctx.attr.conffiles) +
-        "( cd \"$STAGE\" && tar czf \"$TMP/data.tar.gz\" . )\n" +
-        "( cd \"$CTRL\"  && tar czf \"$TMP/control.tar.gz\" . )\n" +
+        # Own all packaged files as root:root — a .deb records the archive uid/
+        # gid and dpkg restores them on install. Without this, files land owned
+        # by whoever ran bazel (the build user), not root. (--numeric-owner so
+        # the build host's /etc/passwd can't leak a name for uid 0.)
+        "( cd \"$STAGE\" && tar --owner=0 --group=0 --numeric-owner -czf \"$TMP/data.tar.gz\" . )\n" +
+        "( cd \"$CTRL\"  && tar --owner=0 --group=0 --numeric-owner -czf \"$TMP/control.tar.gz\" . )\n" +
         "printf '2.0\\n' > \"$TMP/debian-binary\"\n" +
         "ar cr '" + out_deb.path + "' \"$TMP/debian-binary\" " +
         "\"$TMP/control.tar.gz\" \"$TMP/data.tar.gz\"\n" +

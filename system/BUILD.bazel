@@ -37,3 +37,23 @@ filegroup(
     ],
     visibility = ["//visibility:public"],
 )
+
+# The art_sources tree MINUS the services .art subtree — used by
+# theia-system-dev packaging. The services .art (/opt/theia/system/services) is
+# owned by theia-services-dev (a hard Depends of theia-system-dev), so shipping
+# it here too would duplicate it. system.art itself IS included (it imports
+# system.services.*, which resolves because services-dev is always co-present).
+filegroup(
+    name = "art_sources_no_services",
+    srcs = [
+        "system.art",
+        "tools/tdb/tdb.art",
+        "//system/supervisor:supervisor_art_srcs",
+        "//system/platform/runtime:package.art",
+        "//system/platform/msgs/std:package.art",
+        "//system/platform/msgs/sensor:package.art",
+        "//system/platform/msgs/geometry:package.art",
+        "//system/platform/msgs/nav:package.art",
+    ],
+    visibility = ["//visibility:public"],
+)

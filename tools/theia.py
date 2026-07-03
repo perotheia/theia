@@ -91,11 +91,13 @@ def _run(argv: list[str], cwd: "Path | None" = None) -> int:
     # real parent (THEIA_ROOT/artheia) so the installed package wins. Absent in a
     # pip-installed consuming workspace (no source tree) → harmless no-op.
     prefix = [ws]
-    # THEIA_ROOT itself on the path too: the manifest layer is a PEP-420
-    # namespace package split across the framework (manifest/services) and the
-    # workspace (manifest/apps) — a rig that imports both needs BOTH roots
-    # visible so `manifest.services` (framework) and `manifest.apps` (workspace)
-    # resolve into the one `manifest` namespace. Skipped when ws IS the framework.
+    # THEIA_ROOT on the path too, for the source-tree standalone services rig
+    # (manifest/services/rig.py) which imports `manifest.services.*` relative to
+    # the framework checkout. The generated consuming-workspace rig no longer
+    # relies on this — it loads the framework's services manifest BY PATH from
+    # $THEIA_ROOT/manifest/ (theia.py `_load_services_manifest` in the rig
+    # template), so no generic top-level `manifest` package leaks onto the user's
+    # PYTHONPATH via the deb. Skipped when ws IS the framework (already on cwd).
     if str(THEIA_ROOT) != ws:
         prefix.append(str(THEIA_ROOT))
     artheia_parent = THEIA_ROOT / "artheia"
@@ -1076,6 +1078,35 @@ def cmd_observer(args: list[str]) -> int:
     os.execve(str(gui), gui_argv, env)
 
 
+def _installed_role_config(manifest_root: Path, machine: str) -> "Path | None":
+    """The framework's shipped per-ROLE config slice for this machine, if the
+    theia-services deb provided one — else None.
+
+    The services deb stages /opt/theia/config/<role>/{<fc>.json,executor.json,
+    config-defaults.json} (see `_inject_services_config`). This is the deb-mode
+    fallback for `theia install` when the workspace didn't regenerate config
+    (no dist/manifest/<machine>/config/). Resolve the machine → role via
+    machines.json's role_map (a machine named after its role maps to itself),
+    then return $THEIA_ROOT/config/<role> if it exists on disk."""
+    import json as _json
+    role = machine                                     # default: name IS the role
+    try:
+        mj = _json.loads((manifest_root / "machines.json").read_text())
+        role = mj.get("role_map", {}).get(machine, machine)
+    except (FileNotFoundError, KeyError, ValueError):
+        pass
+    cand = THEIA_ROOT / "config" / role
+    if cand.is_dir():
+        return cand
+    # A single full-service box (the `central` bootstrap machine, or any host
+    # with no explicit role) IS the `master` role — it runs the whole platform.
+    # Fall back to the master slice so a bare deb-mode `theia install` still gets
+    # its config. (A worker that named itself for the `zonal` role resolves above
+    # via role_map; only the un-mapped/central case lands here.)
+    master = THEIA_ROOT / "config" / "master"
+    return master if master.is_dir() else None
+
+
 def cmd_install(args: list[str]) -> int:
     """LOCAL install: build + populate $WORKSPACE/install/<machine>/.
 
@@ -1248,6 +1279,15 @@ def cmd_install(args: list[str]) -> int:
             if src_f.suffix == ".json":
                 shutil.copy2(src_f, cfg_dir / src_f.name)
                 print(f"staged {cfg_dir / src_f.name}", file=sys.stderr)
+    elif (role_cfg := _installed_role_config(manifest_root, machine)) is not None:
+        # Deb-mode fallback: the workspace didn't regenerate config (no
+        # dist/manifest/<machine>/config/), but the theia-services deb ships the
+        # per-ROLE defaults at /opt/theia/config/<role>/. Copy that slice —
+        # selected by this machine's role — so a deb-only install still gets its
+        # config (symmetric with the source-tree / S3 paths).
+        for src_f in role_cfg.glob("*.json"):
+            shutil.copy2(src_f, cfg_dir / src_f.name)
+            print(f"staged {cfg_dir / src_f.name} (from {role_cfg})", file=sys.stderr)
     else:
         # Older manifest layout — no config/ dir yet. Copy just executor.json.
         shutil.copy2(src_executor, cfg_dir / "executor.json")
@@ -1820,6 +1860,121 @@ def _dist_app(mdir: Path, machines: list, arch_override) -> int:
     return rc_final
 
 
+# The two runtime service ROLES the services deb carries config for. `master` is
+# the full-platform coordinator (all FCs); `zonal` is the per-board worker slice
+# (ucm + shwa). serialize-manifest emits master under `--attr RIG` and the zonal
+# worker slice under `--attr MULTI` (its named workers share role="zonal").
+_SERVICES_ROLES = ("master", "zonal")
+
+
+def _generate_role_configs(dest_root: Path) -> int:
+    """Serialize the framework services rig for each ROLE and lay the per-FC
+    config JSON (+ executor.json + config-defaults.json) under
+    dest_root/<role>/. This is the SAME config `theia manifest` emits per
+    machine — but keyed by ROLE so the theia-services deb can ship it at
+    /opt/theia/config/<role>/ and `theia install` can select by the machine's
+    role (closing the deb-path gap vs the local-install / S3-manifest paths,
+    which already carry config). Returns 0 on success.
+
+    master → `--attr RIG` (one machine `master`, every FC).
+    zonal  → `--attr MULTI` (master + named zonal workers); we take the maximal
+             zonal slice (the union across worker boards = {ucm, shwa}).
+    """
+    import json
+    import shutil
+    import tempfile
+    # serialize-manifest must import manifest.services.rig — resolvable from
+    # THEIA_ROOT (the framework's manifest/ package lives there).
+    env = {**os.environ, "PYTHONPATH": f"{THEIA_ROOT}{os.pathsep}"
+           + os.environ.get("PYTHONPATH", "")}
+    with tempfile.TemporaryDirectory() as td:
+        tdp = Path(td)
+        specs = (("master", "RIG"), ("zonal", "MULTI"))
+        for role, attr in specs:
+            out = tdp / attr
+            if (rc := _run(["artheia", "serialize-manifest",
+                            "manifest.services.rig", "--attr", attr,
+                            "--arch", "x86_64", "--out", str(out)],
+                           cwd=THEIA_ROOT)) != 0:
+                # Fall back to the env-injected import path if cwd alone didn't
+                # put manifest.* on sys.path.
+                proc = subprocess.run(
+                    ["artheia", "serialize-manifest", "manifest.services.rig",
+                     "--attr", attr, "--arch", "x86_64", "--out", str(out)],
+                    cwd=THEIA_ROOT, env=env)
+                if proc.returncode != 0:
+                    print(f"theia release: role config gen failed ({role}/{attr})",
+                          file=sys.stderr)
+                    return proc.returncode
+            # Pick the machine whose role matches: master → machine "master";
+            # zonal → the worker with the RICHEST config (the maximal slice).
+            machines_json = json.loads((out / "machines.json").read_text())
+            role_map = machines_json.get("role_map", {})
+            candidates = [m for m in machines_json["machines"]
+                          if role_map.get(m, m) == role]
+            if not candidates:
+                candidates = [role]                       # single-machine RIG
+            # The role slice is the MAXIMAL config across matching machines: a
+            # zonal worker may run a subset (e.g. shwa-only), but the ROLE ships
+            # its full set. UNION every matching machine's config/*.json by
+            # filename (a later machine's file wins ties — they're role-identical
+            # defaults), so the shipped slice is complete regardless of how the
+            # rig distributed FCs across named workers. Deterministic: iterate
+            # candidates sorted, union into one dir.
+            dst = dest_root / role
+            dst.mkdir(parents=True, exist_ok=True)
+            seen: set = set()
+            for m in sorted(candidates):
+                mcfg = out / m / "config"
+                if not mcfg.is_dir():
+                    continue
+                for f in mcfg.glob("*.json"):
+                    shutil.copy2(f, dst / f.name)
+                    seen.add(f.name)
+            if not seen:
+                print(f"theia release: no config/ for role {role} "
+                      f"(candidates {candidates})", file=sys.stderr)
+                return 1
+            print(f"theia release: role config {role} → {dst} "
+                  f"({len(seen)} files, union of {sorted(candidates)})")
+    return 0
+
+
+def _inject_services_config(services_deb: Path) -> int:
+    """Repack a built theia-services .deb with per-role config under
+    /opt/theia/config/<role>/. The bazel pkg_deb stays config-free (it can't run
+    serialize-manifest); `theia release` injects the generated role slices here
+    so the on-device services deb carries its own defaults — symmetric with the
+    local `theia install` and S3-manifest paths. Root-owns the added files."""
+    import shutil
+    import tempfile
+    if not services_deb.is_file():
+        return 0
+    with tempfile.TemporaryDirectory() as td:
+        tdp = Path(td)
+        root = tdp / "root"
+        ctrl = tdp / "ctrl"
+        root.mkdir(); ctrl.mkdir()
+        # Unpack data + control.
+        if (rc := _run(["dpkg-deb", "-R", str(services_deb), str(root)])) != 0:
+            return rc
+        cfg_root = root / "opt" / "theia" / "config"
+        if (rc := _generate_role_configs(cfg_root)) != 0:
+            return rc
+        # Repack root-owned (dpkg-deb -b honors --root-owner-group).
+        rebuilt = tdp / services_deb.name
+        if (rc := _run(["dpkg-deb", "--build", "--root-owner-group",
+                        str(root), str(rebuilt)])) != 0:
+            return rc
+        # The staged deb was copied from a read-only bazel output (copy2 preserves
+        # mode), so make it writable before overwriting in place.
+        services_deb.chmod(0o644)
+        shutil.copyfile(rebuilt, services_deb)
+        print(f"theia release: injected /opt/theia/config/{{{','.join(_SERVICES_ROLES)}}} "
+              f"into {services_deb.name}")
+    return 0
+
+
 def _dist_runtime(mdir: Path, machines: list, arch_override) -> int:
     """RUNTIME manifest → the framework theia-runtime + theia-services Deb set.
 
@@ -1871,6 +2026,14 @@ def _dist_runtime(mdir: Path, machines: list, arch_override) -> int:
                 dst_f.unlink()
             shutil.copy2(f, dst_f)
             print(f"theia dist: {arch}: staged {dst_f.name} → {dst}/")
+            # The on-device services deb carries its own per-role config defaults
+            # at /opt/theia/config/<role>/ — inject them here (the bazel pkg_deb
+            # is config-free; serialize-manifest runs at release time). Arch-
+            # independent (config JSON is params, not binaries), so injecting per
+            # built services deb is fine.
+            if pkg == "theia-services":
+                if (rc := _inject_services_config(dst_f)) != 0:
+                    rc_final = rc
     return rc_final
 
 
@@ -1967,7 +2130,7 @@ def _build_framework_deb(out_dir: Path, version: str = "0.2.1") -> int:
     # `theia` shim and the deb bin shim resolve it the same way.
     (opt / "tools").mkdir(parents=True, exist_ok=True)
     shutil.copy2(THEIA_ROOT / "tools" / "theia.py", opt / "tools" / "theia.py")
-    for s in ("setup.bash", "setup.zsh"):
+    for s in ("setup.sh",):
         shutil.copy2(pkg_root / s, opt / s)
 
     # `theia` launcher — PURE STDLIB (theia.py imports nothing from artheia), so
@@ -2200,7 +2363,7 @@ def cmd_release(args: list[str]) -> int:
 
     The 4-step build (framework → runtime → services → package) that produces the
     ROS2-style independent packages:
-      theia-framework  artheia + deps + rules → .deb (/opt/theia, setup.bash)
+      theia-framework  artheia + deps + rules → .deb (/opt/theia, setup.sh)
       theia-runtime    runtime sources + supervisor + tombstone + tdb + protos
       theia-services   com/per/sm/ucm/log/shwa binaries + services protos
       theia-rf         rf_theia harness wheel (minus scenarios/_selftest)
@@ -2281,7 +2444,7 @@ def cmd_release(args: list[str]) -> int:
     rf_out = deb_dir / "theia-rf"
     if not runtime_only:
         # ── Step 1: framework — artheia + deps + rules → a real .deb (/opt/theia,
-        #    ROS2-style setup.bash). Arch-independent (Architecture: all). ──────
+        #    ROS2-style setup.sh). Arch-independent (Architecture: all). ──────
         fw_out.mkdir(parents=True, exist_ok=True)
         if (rc := _build_framework_deb(fw_out)) != 0:
             print("theia release: framework .deb build failed.", file=sys.stderr)
@@ -3315,31 +3478,18 @@ def cmd_init(args: list[str]) -> int:
               file=sys.stderr)
         return 2
     theia_root = Path(theia_root).resolve()
-    # THEIA_ROOT is either a SOURCE checkout (system/system.art present) or an
-    # INSTALLED prefix (/opt/theia from the debs, a different on-disk layout).
-    # Resolve each framework .art root for whichever this is, so the symlinks we
-    # plant in the workspace point at real files the artheia resolver can reach.
-    src = (theia_root / "system" / "system.art").is_file()
-    if src:
-        # Source checkout: the whole .art tree is real files under system/, with
-        # the on-disk layout mirroring each package FQN 1:1 (the runtime is
-        # `package system.platform.runtime`, hence system/platform/runtime/).
-        runtime_pkg = theia_root / "system" / "platform" / "runtime"
-        runtime_art = runtime_pkg / "package.art"
-        supervisor_pkg = theia_root / "system" / "supervisor"
-        services_pkg = theia_root / "system" / "services"
-        msgs_pkg = theia_root / "system" / "platform" / "msgs"
-    else:
-        # Installed deb layout (theia-runtime-dev + theia-services-dev):
-        #   runtime spec  → system/platform/runtime/package.art
-        #   supervisor    → system/supervisor/
-        #   services tree → services/{cluster.art, <fc>/...}  (deb strips the
-        #                   system/services prefix → /opt/theia/services)
-        runtime_pkg = theia_root / "system" / "platform" / "runtime"
-        runtime_art = runtime_pkg / "package.art"
-        supervisor_pkg = theia_root / "system" / "supervisor"
-        services_pkg = theia_root / "services"
-        msgs_pkg = theia_root / "system" / "platform" / "msgs"
+    # THEIA_ROOT is either a SOURCE checkout or an INSTALLED prefix (/opt/theia
+    # from the debs) — but both now share ONE FQN-mirrored on-disk layout under
+    # system/ (the deb ships the services .art at /opt/theia/system/services via
+    # theia-services-dev, matching the source tree), so there's a single set of
+    # paths. Each mirrors its package FQN 1:1 (the runtime is `package
+    # system.platform.runtime` → system/platform/runtime/). We plant workspace
+    # symlinks at these so the artheia resolver reaches the real files.
+    runtime_pkg = theia_root / "system" / "platform" / "runtime"
+    runtime_art = runtime_pkg / "package.art"
+    supervisor_pkg = theia_root / "system" / "supervisor"
+    services_pkg = theia_root / "system" / "services"
+    msgs_pkg = theia_root / "system" / "platform" / "msgs"
     if not runtime_art.is_file():
         print(f"theia init: THEIA_ROOT={theia_root} doesn't look like a Theia "
               "source checkout OR an installed /opt/theia prefix "
@@ -3397,7 +3547,8 @@ def cmd_init(args: list[str]) -> int:
     if supervisor_pkg.exists():
         _link("system/supervisor", supervisor_pkg)
     # --with-services: link the framework's ARA service FCs so `cluster Services`
-    # resolves + the rig can import manifest.services.{manifest,executor}. The
+    # resolves in the .art tree. (The rig gets the framework's services MANIFEST
+    # by path-load from $THEIA_ROOT/manifest/, not from this .art link.) The
     # service .art's import `system.platform.msgs.{std,geometry,sensor,nav}.*` (e.g.
     # tsync uses nav.GnssSolution), so link the msgs namespace dir too — one link
     # covers all four subpackages (FQN system.platform.msgs.<x> → msgs/<x>/). Without
@@ -3416,11 +3567,11 @@ def cmd_init(args: list[str]) -> int:
     # writes the Python sidecar to manifest/ — all SEPARATE from this source dir.
     _write("system/apps/package.art", _INIT_APPS_PACKAGE_ART)
     _write("system/apps/component.art", _INIT_APPS_COMPONENT_ART)
-    # Python package marker for the generated C++ tree. NOTE: `manifest/` is
-    # deliberately a PEP-420 NAMESPACE package (NO manifest/__init__.py) so the
-    # `manifest` namespace spans BOTH this workspace (manifest.apps / manifest.rig)
-    # AND the framework root (manifest.services) — a regular __init__.py here would
-    # shadow manifest.services and break --with-services.
+    # Python package marker for the generated C++ tree. NOTE: `manifest/` here is
+    # the WORKSPACE's own manifest package (manifest.apps / manifest.rig), local
+    # to this dir. The framework's services manifest is NOT part of this package —
+    # the rig loads it by path from $THEIA_ROOT/manifest/ — so there's no
+    # cross-root namespace-package coupling to preserve.
     _write("apps/__init__.py", "")
 
     sys_art = (_INIT_SYSTEM_ART_SERVICES if with_services else _INIT_SYSTEM_ART)
@@ -3708,6 +3859,10 @@ See $THEIA_ROOT/docs/skills/theia/references/deployment.md.
 """
 from __future__ import annotations
 
+import importlib.util as _ilu
+import os as _os
+import sys as _sys
+
 from artheia.manifest.algebra import Append, Explicit
 from artheia.manifest.deployment import (
     ApplicationLayer,
@@ -3720,11 +3875,38 @@ from artheia.manifest.deployment import (
     _members as _set_members,
 )
 
+
+def _load_services_manifest(mod):
+    """Load the framework's services manifest module (``manifest.py`` /
+    ``executor.py``) by PATH from $THEIA_ROOT/manifest/services/ — NOT via a
+    generic top-level ``manifest`` package on PYTHONPATH. The framework ships
+    this tree at /opt/theia/manifest (or the source checkout's manifest/), so
+    nothing pollutes the user's global import namespace. Returns the module, or
+    None if the framework has no services manifest (a bare, no-services rig)."""
+    root = _os.environ.get("THEIA_ROOT")
+    if not root:
+        return None
+    path = _os.path.join(root, "manifest", "services", mod + ".py")
+    if not _os.path.isfile(path):
+        return None
+    name = "_theia_services_" + mod
+    spec = _ilu.spec_from_file_location(name, path)
+    m = _ilu.module_from_spec(spec)
+    _sys.modules[name] = m
+    spec.loader.exec_module(m)
+    return m
+
+
+_svc_manifest = _load_services_manifest("manifest")
+_svc_executor = _load_services_manifest("executor")
+
 # The framework's ARA services manifest (a base DeploymentLayer, machines open).
-from manifest.services.manifest import DEPLOYMENT as _SERVICES
+_SERVICES = _svc_manifest.DEPLOYMENT if _svc_manifest else DeploymentLayer()
 
 # This workspace's generated apps manifest (empty until you add apps). Guarded:
 # a fresh workspace has no manifest/apps/manifest.py yet → services-only.
+# manifest.apps is the WORKSPACE's own package (this dir is on sys.path when the
+# rig runs), so a plain import is correct — no global-namespace concern.
 try:
     from manifest.apps.manifest import DEPLOYMENT as _APPS
 except Exception:               # not generated yet → services-only
@@ -3755,7 +3937,7 @@ RIG = _BASE.combine(DeploymentLayer(
 # Read by serialize-manifest off this module if present.
 try:
     from artheia.manifest.supervisor import RestartStrategy, SupervisorNode
-    from manifest.services.executor import SUPERVISORS as _SVC_SUP
+    _SVC_SUP = _svc_executor.SUPERVISORS if _svc_executor else []
     try:
         from manifest.apps.executor import SUPERVISORS as _APP_SUP
     except Exception:
@@ -3772,7 +3954,7 @@ except Exception:
 # Merged per-process node/module metadata (services ⊕ apps) for the
 # executor.json worker leaves.
 try:
-    from manifest.services.manifest import PROCESS_NODES as _SVC_NODES
+    _SVC_NODES = _svc_manifest.PROCESS_NODES if _svc_manifest else {}
     try:
         from manifest.apps.manifest import PROCESS_NODES as _APP_NODES
     except Exception:
@@ -3783,7 +3965,7 @@ except Exception:
 
 # Static params defaults (services ⊕ apps) for config/<fc>.json.
 try:
-    from manifest.services.manifest import PROCESS_PARAMS as _SVC_PARAMS
+    _SVC_PARAMS = _svc_manifest.PROCESS_PARAMS if _svc_manifest else {}
     try:
         from manifest.apps.manifest import PROCESS_PARAMS as _APP_PARAMS
     except Exception:
@@ -3794,7 +3976,7 @@ except Exception:
 
 # Etcd config-defaults (services ⊕ apps) for first-boot seed.
 try:
-    from manifest.services.manifest import PROCESS_CONFIG_DEFAULTS as _SVC_CD
+    _SVC_CD = _svc_manifest.PROCESS_CONFIG_DEFAULTS if _svc_manifest else {}
     try:
         from manifest.apps.manifest import PROCESS_CONFIG_DEFAULTS as _APP_CD
     except Exception:

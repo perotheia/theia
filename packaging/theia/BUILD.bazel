@@ -150,26 +150,35 @@ pkg_deb(
 
 # ── theia-services-dev (build) ───────────────────────────────────────────────
 # Everything a WORKSPACE needs from services to build/deploy against them: the
-# generated service protos, the consolidated .art manifest tree (relink
-# system/services → /opt/theia/services), and the Python manifest
-# (manifest.services.{manifest,executor} — the orthogonal-ARA DeploymentLayer
-# base + its supervisor sidecar). Folds in the former theia-services-manifest.
+# service .art tree at its FQN-mirrored path /opt/theia/system/services (so it
+# lines up with theia-system-dev's system/ tree — ONE services .art location,
+# not a duplicate flat /opt/theia/services), the generated service protos, and
+# the Python services manifest. Folds in the former theia-services-manifest.
+#
+# LAYERING: this package OWNS the services .art tree. theia-system-dev (which
+# ships system.art with `import system.services.*`) Depends on THIS package, so
+# system/services is guaranteed present whenever system.art is — no postinst
+# toggle needed; the import always resolves.
 pkg_deb(
     name = "theia-services-dev_deb",
     package = "theia-services-dev",
     version = _VERSION,
-    description = "Theia services development files: protos, .art manifest tree, Python manifest (manifest.py + executor.py sidecar)",
+    description = "Theia services development files: .art tree (system/services), protos, Python manifest (manifest.py + executor.py sidecar)",
     section = "devel",
     depends = "theia-services, theia-framework",
-    # The .art manifest tree → /opt/theia/services (relink system/services here).
+    # The service .art tree → /opt/theia/system/services (FQN-mirrored: the
+    # services_manifest short_paths are `system/services/...`, so prefix
+    # /opt/theia + no strip lands them at /opt/theia/system/services/...).
     data = ["//system/services:services_manifest"],
-    prefix = "/opt/theia/services",
-    strip_prefix = "system/services",
-    # protos → /opt/theia/proto/... ; the Python manifest → site-packages as the
-    # PEP-420 namespace package `manifest.services` (importable once setup.bash
-    # puts site-packages on PYTHONPATH — NO manifest/__init__.py so the namespace
-    # spans the workspace's manifest.apps too). Explicit dests because they live
-    # under different source roots than the .art `data` tree above.
+    prefix = "/opt/theia",
+    strip_prefix = "",
+    # protos → /opt/theia/proto/... ; the Python manifest → /opt/theia/manifest/
+    # services/ as a PLAIN DATA dir (NOT site-packages). The generated rig loads
+    # manifest.py / executor.py by PATH from $THEIA_ROOT/manifest/services/
+    # (theia.py `_load_services_manifest`), so nothing puts a generic top-level
+    # `manifest` package on the user's PYTHONPATH and there's no hardcoded python
+    # version in the path. Explicit dests because they live under different source
+    # roots than the .art `data` tree above.
     files = {
         "//platform/proto/system/services/com:com.proto": "/opt/theia/proto/system/services/com/com.proto",
         "//platform/proto/system/services/per:per.proto": "/opt/theia/proto/system/services/per/per.proto",
@@ -177,9 +186,8 @@ pkg_deb(
         "//platform/proto/system/services/ucm:ucm.proto": "/opt/theia/proto/system/services/ucm/ucm.proto",
         "//platform/proto/system/services/log:log.proto": "/opt/theia/proto/system/services/log/log.proto",
         "//platform/proto/system/services/shwa:shwa.proto": "/opt/theia/proto/system/services/shwa/shwa.proto",
-        "//manifest/services:__init__.py": "/opt/theia/lib/python3.10/site-packages/manifest/services/__init__.py",
-        "//manifest/services:manifest.py": "/opt/theia/lib/python3.10/site-packages/manifest/services/manifest.py",
-        "//manifest/services:executor.py": "/opt/theia/lib/python3.10/site-packages/manifest/services/executor.py",
+        "//manifest/services:manifest.py": "/opt/theia/manifest/services/manifest.py",
+        "//manifest/services:executor.py": "/opt/theia/manifest/services/executor.py",
     },
 )
 
@@ -209,10 +217,12 @@ pkg_deb(
     section = "devel",
     depends = "theia-services-dev, theia-framework",
     data = [
-        # The entire system/ .art tree → /opt/theia/system/... (short_path
-        # `system/...` mirrors the package FQN: system.services.<fc>,
-        # system.supervisor, system.tools.tdb, system.platform.runtime).
-        "//system:art_sources",
+        # The system/ .art tree MINUS the services tree → /opt/theia/system/...
+        # (short_path `system/...` mirrors the package FQN: system.supervisor,
+        # system.tools.tdb, system.platform.runtime/msgs, and system.art itself
+        # which imports system.services.*). The services .art comes from
+        # theia-services-dev (a hard Depends), so that import always resolves.
+        "//system:art_sources_no_services",
         # All service + supervisor .proto SOURCES → /opt/theia/platform/proto/...
         # (short_path `platform/proto/system/...`), the probe codec's proto_root.
         "//platform/proto:proto_sources",

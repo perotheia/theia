@@ -23,20 +23,21 @@ one. Four audiences:
 | Audience | Installs | Gets |
 | --- | --- | --- |
 | **Run-only target** (deploy machine, docker, Pi) | `theia-runtime` [`+ theia-services`] | `supervisor` + service binaries + bundled libs. **Zero build files.** |
-| **App developer** (builds apps on Theia) | + `theia-framework` + `theia-runtime-dev` [`+ theia-services-dev`] | the above + the `artheia` CLI, runtime sources/headers, protos, `.art` tree, Python manifest |
+| **App developer** (builds apps on Theia) | + `theia-framework` + `theia-runtime-dev` [`+ theia-services-dev` `+ theia-system-dev`] | the above + the `artheia` **wheel**, runtime sources/headers, protos, `.art` tree, Python manifest, the full `system/` contract tree |
 | **Test author** | + `theia-rf` | the `rf_theia` harness (minus `scenarios/_selftest`) |
 | **Operator** (GUI / live debug) | + `theia-tools` (Ubuntu 24.04) | supervisor-GUI + rtdb (speak com's gRPC) |
 
 The packages and their `Depends:` DAG (clean, acyclic):
 
 ```
-theia-framework  (artheia wheel + bazel rules + setup.sh; Architecture: all)
+theia-framework  (artheia + rf wheels + bazel rules + setup.sh; Architecture: all)
       │
       ├─► theia-runtime         supervisor binary                 ← run
       │        └─► theia-runtime-dev    runtime src/hdrs + proto + .art   ← build
       │
       ├─► theia-services        com/per/sm/ucm/log/shwa + libetcd  ← run
       │        └─► theia-services-dev   service protos + .art tree + py manifest ← build
+      │                └─► theia-system-dev  full system/ .art tree + .proto (probe clients: tdb/rtdb/rf) ← build
       │
       ├─► theia-tools           GUI + rtdb (need com gRPC; 24.04)  ← operate
       └─► theia-rf              rf_theia harness (Architecture: all) ← test
@@ -58,22 +59,37 @@ theia-framework  (artheia wheel + bazel rules + setup.sh; Architecture: all)
   postinst `ldconfig`'s it). `Depends: theia-runtime, libgrpc++1,
   libprotobuf23, libcpprest2.10`.
 - **theia-services-dev** — service protos (`/opt/theia/proto/...`), the
-  consolidated `.art` manifest tree (`/opt/theia/services`, the relink
-  target for `system/services`), and the Python manifest
-  (`services.manifest.{service,executor}` for `gen-rig-combine`). Folds in
-  the former `theia-services-manifest`. `Depends: theia-services,
-  theia-framework`.
-- **theia-framework** — the `artheia` wheel (+ its PyPI deps as wheels for
-  the postinst pip-install), the bazel `rules/`, `REPO.bazel`, and
-  `setup.sh`. `Architecture: all`. Assembled by `theia release`
-  (`_build_framework_deb` in `theia.py`), not a bazel target.
+  services `.art` tree at its FQN-mirrored path **`/opt/theia/system/services`**
+  (the workspace's `system/services` symlink target — the SOLE services `.art`
+  location; theia-system-dev no longer duplicates it), and the Python services
+  manifest as **plain data** at `/opt/theia/manifest/services/{manifest,
+  executor}.py` (loaded BY PATH by the generated rig — NOT installed into
+  site-packages, NOT on PYTHONPATH). Folds in the former
+  `theia-services-manifest`. `Depends: theia-services, theia-framework`.
+- **theia-framework** — **wheels-as-data, NO postinst, no system Python.**
+  Ships the `artheia` + `rf-theia` wheels (+ all their deps as wheels) under
+  `/opt/theia/wheels`, the bazel `rules/`, `toolchains/`, `MODULE.bazel`, the
+  `theia`/`artheia*` bin shims, and the POSIX `setup.sh`. The user drops the
+  wheels into THEIR OWN venv (`pip install --find-links /opt/theia/wheels
+  artheia rf-theia`) — Theia never writes system site-packages. `Architecture:
+  all`. Assembled by `theia release` (`_build_framework_deb` in `theia.py`),
+  not a bazel target.
+- **theia-system-dev** — the `system/` `.art` contract tree **minus the services
+  subtree** (`system.art` + supervisor + `tools/tdb` + platform msgs; the
+  `//system:art_sources_no_services` filegroup) + the `.proto` sources, for
+  probe-backed clients (`tdb`/`rtdb`/`rf-theia`). Its `system.art` imports
+  `system.services.*`; the services `.art` those imports resolve against comes
+  from **theia-services-dev** (a hard `Depends`), so it's never duplicated here.
+  `Depends: theia-services-dev, theia-framework`.
 - **theia-rf** — the `rf_theia` harness wheel, MINUS `scenarios/_selftest`
   (excluded by `testing/pyproject.toml` `find.exclude`). `Architecture: all`.
 
-> **services-dev two-root gotcha**: protos live under `platform/proto/`, the
-> `.art` tree under `services/system/services/`. `pkg_deb` has a single
-> `strip_prefix`, so the `.art` tree goes in `data` (with `strip_prefix`) and
-> the protos + Python files go in `files` with explicit dest paths.
+> **Single services `.art` location**: the services tree lives ONLY at
+> `/opt/theia/system/services` (owned by theia-services-dev). Earlier builds
+> also shipped a flat `/opt/theia/services` copy from services-dev AND the same
+> tree inside system-dev's whole-`system/` unit — three copies that could
+> diverge. Now services-dev owns the one FQN-mirrored copy and system-dev's
+> `art_sources_no_services` excludes it.
 
 ## Building the packages — `theia release`
 
@@ -91,14 +107,15 @@ theia release --python-only                          # just framework + rf wheel
 
 What it does (`cmd_release` / `_RELEASE_BAZEL_PKGS` in `theia.py`):
 
-1. **framework** — `_build_framework_deb`: pip-installs artheia + deps into
-   `/opt/theia/lib`, ships `rules/` + `setup.sh`. `Architecture: all`.
+1. **framework** — `_build_framework_deb`: `pip wheel`s artheia + rf-theia and
+   `pip download`s their deps into `/opt/theia/wheels` (no install), ships
+   `rules/` + `toolchains/` + `setup.sh`. `Architecture: all`.
 2. **rf** — `pip wheel testing/` (the harness, sans `_selftest`).
-3. **runtime + services** — `bazel build //packaging/theia:theia-runtime_deb
-   theia-runtime-dev_deb theia-services_deb theia-services-dev_deb` per
-   `--platforms`. With `--ipk`, also builds the `*_ipk` machine targets (the
-   `-dev` packages have **no** `.ipk` — `.ipk` is machine-only, the embedded
-   hatch).
+3. **runtime + services + system** — `bazel build //packaging/theia:theia-runtime_deb
+   theia-runtime-dev_deb theia-services_deb theia-services-dev_deb
+   theia-system-dev_deb` per `--platforms` (`_RELEASE_BAZEL_PKGS`). With `--ipk`,
+   also builds the `*_ipk` machine targets (the `-dev`/`system-dev` packages have
+   **no** `.ipk` — `.ipk` is machine-only, the embedded hatch).
 4. **collect** — copies `bazel-bin/packaging/theia/*.deb` into
    `dist/debian/<pkg>/` (+ `*.ipk` → `dist/ipkg/`).
 
@@ -117,10 +134,11 @@ follows the DAG.
 # Run-only machine (no build files land):
 sudo apt install ./theia-runtime_*.deb ./theia-services_*.deb
 
-# App-developer workspace (adds the -dev + framework packages):
+# App-developer workspace (adds the -dev + framework + system-dev packages):
 sudo apt install ./theia-framework_*.deb \
                  ./theia-runtime_*.deb  ./theia-runtime-dev_*.deb \
-                 ./theia-services_*.deb ./theia-services-dev_*.deb
+                 ./theia-services_*.deb ./theia-services-dev_*.deb \
+                 ./theia-system-dev_*.deb
 ```
 
 Via Puppet (`deploy/puppet/modules/theia/manifests/pkg_install.pp`): a pure
@@ -129,11 +147,17 @@ deploy target installs the machine set; pass `dev => true` to also pull the
 [provision-orchestrate.md](provision-orchestrate.md) for the remote-install
 flow.
 
-After install, `source /opt/theia/setup.sh` — the same `setup.sh` the source
-tree ships (bash + zsh; exports `THEIA_ROOT`, prepends the bin/venv to PATH
-and artheia to PYTHONPATH), mirroring `/opt/ros/<distro>/setup.bash`. A
-consuming workspace then runs `theia init` against it (see the theia skill's
-"Consuming workspaces" section).
+After install, `source /opt/theia/setup.sh` — a single POSIX file (works from
+bash/zsh/sh), mirroring `/opt/ros/<distro>/setup.bash`. It exports **only**
+`THEIA_ROOT` and prepends `/opt/theia/bin` to PATH — it deliberately does NOT
+touch PYTHONPATH. `artheia` isn't installed by the deb (it's a wheel; the user
+does `python3 -m venv .venv && pip install --find-links /opt/theia/wheels artheia
+rf-theia` into their own venv), and the framework's services manifest ships as
+plain data at `/opt/theia/manifest/services/` — the generated rig loads it BY
+PATH (`_load_services_manifest` in theia.py), so no generic top-level `manifest`
+package ever lands on the user's global import namespace. A consuming workspace
+then runs `theia init` against it (see the theia skill's "Consuming workspaces"
+section).
 
 ## The downstream workspace
 
@@ -196,8 +220,9 @@ So Theia doesn't hardcode `apps`/`demo`:
   target never carries sources/protos.
 - **`.deb` is primary, `.ipk` is the embedded hatch** (`--ipk`). Same `ar`
   archive; `dpkg` installs either.
-- **The workspace consumes Theia, never vendors it** — gen-app labels
-  resolve to `/opt/theia/src` via thin BUILD wrappers.
+- **The workspace consumes Theia, never vendors it** — gen-app emits
+  `@pero_theia//…` labels directly (no alias shims), resolving against the
+  sibling framework module via `local_path_override`.
 - **artheia changes ⇒ rebuild + reinstall `theia-framework`** on the target;
   a stale framework deb breaks `gen-manifest` (e.g. the `_cluster_members`
   tuple-arity drift).

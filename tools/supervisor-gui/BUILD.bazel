@@ -25,6 +25,7 @@ filegroup(
             "CMakeLists.txt",
             "include/**",
             "src/**",
+            "proto/**",   # sw_state.proto (the GUI's own decode-only UcmSwState)
         ],
         allow_empty = False,
     ) + [

@@ -25,6 +25,7 @@ constexpr uint16_t kTagTraceRecord = 0x0005;   // TraceStream egress (:7710)
 constexpr uint16_t kTagAccel       = 0x0006;   // SHWA AccelSample (GPU / host monitor)
 constexpr uint16_t kTagLogRecord   = 0x0007;   // LogStream egress (:7711) — log lines
 constexpr uint16_t kTagMachineInfo = 0x0008;   // ListMachines row (cluster enumeration)
+constexpr uint16_t kTagSwState     = 0x0010;   // UcmSwState (per /theia/config/<m>/SW)
 
 std::string read_file_(const char* env) {
     const char* path = std::getenv(env);
@@ -465,6 +466,30 @@ void GrpcClient::run() {
                     if (mi.has_info())
                         callback_(mi.name(), kTagSystemInfo,
                                   mi.info().SerializeAsString());
+                }
+            }
+        }
+
+        // Per-machine SW state (the APP version + campaign) from per's config
+        // store via PerView.GetSnapshot — the /theia/config/<machine>/SW rows UCM
+        // writes on deploy. Emit each as a SwState frame keyed on the machine name
+        // so the System panel's Deployment box shows app/campaign. Best-effort: no
+        // per / no rows just leaves the panel showing "(none)".
+        {
+            auto pv_stub = ::services::com::PerView::NewStub(ci);
+            ::services::com::GetSnapshotCall gs_req;
+            gs_req.set_config_type("");            // all rows; we filter */SW
+            ::services::com::PerStoreSnapshot gs;
+            grpc::ClientContext gs_ctx;
+            gs_ctx.set_deadline(std::chrono::system_clock::now() +
+                                std::chrono::seconds(3));
+            if (pv_stub->GetSnapshot(&gs_ctx, gs_req, &gs).ok() && callback_) {
+                for (const auto& row : gs.rows()) {
+                    const std::string& ct = row.config_type();
+                    if (ct.size() < 3 || ct.compare(ct.size() - 3, 3, "/SW") != 0)
+                        continue;
+                    // key on the machine name (the "<machine>" prefix of the key)
+                    callback_(ct.substr(0, ct.size() - 3), kTagSwState, row.config());
                 }
             }
         }

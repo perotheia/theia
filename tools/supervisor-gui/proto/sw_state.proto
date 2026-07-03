@@ -1,0 +1,18 @@
+// Minimal decode-only copy of system_services_ucm.UcmSwState (theia's
+// platform/proto/system/services/ucm/ucm.proto). The supervisor-GUI reads the
+// per-machine SW state (app version + campaign) that UCM writes to per/etcd at
+// /theia/config/<machine>/SW, delivered as the `config` bytes of a PerStoreRow
+// via com PerView.GetSnapshot. Field tags MUST match ucm.proto; the GUI only
+// needs to decode, so this lives standalone (no ucm.proto import chain).
+syntax = "proto3";
+
+package sup_gui;
+
+message UcmSwState {
+    string machine         = 1;
+    string current_version = 2;   // installed + running APP version
+    string target_version  = 3;   // what an in-flight deploy moves TO
+    string campaign_id     = 4;   // the deployment that set target
+    uint32 state           = 5;   // UcmState ordinal
+    uint64 updated_ns      = 6;
+}

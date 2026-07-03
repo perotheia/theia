@@ -97,11 +97,27 @@ add_custom_command(
     VERBATIM
 )
 
+# sw_state.proto (package sup_gui) — decode-only UcmSwState the GUI reads from
+# per's config store rows (the app version + campaign in the Deployment box).
+set(SW_PB_CC ${PROTO_GEN_DIR}/sw_state.pb.cc)
+set(SW_PB_H  ${PROTO_GEN_DIR}/sw_state.pb.h)
+add_custom_command(
+    OUTPUT ${SW_PB_CC} ${SW_PB_H}
+    COMMAND ${PROTOC_EXECUTABLE}
+            --proto_path=${CMAKE_CURRENT_SOURCE_DIR}/proto
+            --cpp_out=${PROTO_GEN_DIR}
+            ${CMAKE_CURRENT_SOURCE_DIR}/proto/sw_state.proto
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/proto/sw_state.proto
+    COMMENT "protoc sw_state.proto"
+    VERBATIM
+)
+
 add_library(supervisor_gui_proto OBJECT
     ${RT_PB_CC}
     ${SUP_PB_CC}
     ${BRIDGE_PB_CC}
     ${BRIDGE_GRPC_CC}
+    ${SW_PB_CC}
 )
 target_include_directories(supervisor_gui_proto PUBLIC ${PROTO_GEN_DIR})
 target_compile_options(supervisor_gui_proto PRIVATE

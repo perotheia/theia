@@ -13,6 +13,7 @@
 
 #include "supervisor.pb.h"
 #include "supervisor_bridge.pb.h"   // services::com::AccelSample (SHWA telemetry)
+#include "sw_state.pb.h"            // sup_gui::UcmSwState (per app-version / campaign)
 
 #include <wx/wx.h>
 #include <wx/sizer.h>
@@ -106,6 +107,9 @@ const char* const kHealthKeys[] = {
 const char* const kGpuKeys[]    = {
     "board", "GPU util", "GPU freq", "temp", "power", "fan",
 };
+const char* const kDeployKeys[] = {
+    "runtime (base)", "app", "campaign",
+};
 
 }  // namespace
 
@@ -132,12 +136,17 @@ SystemPanel::MachineRows& SystemPanel::ensure_box(const std::string& machine_nam
     MachineRows mr;
     mr.box = box; mr.sizer = bsz;
 
-    // 2×2 grid of sub-boxes (observer System-tab layout). Both columns grow so
-    // the boxes share width evenly.
-    auto* grid = new wxFlexGridSizer(/*rows*/ 2, /*cols*/ 2, /*vgap*/ 6, /*hgap*/ 8);
+    // 2-col grid of sub-boxes (observer System-tab layout), rows grow as boxes
+    // are added. Both columns grow so the boxes share width evenly.
+    auto* grid = new wxFlexGridSizer(/*rows*/ 0, /*cols*/ 2, /*vgap*/ 6, /*hgap*/ 8);
     grid->AddGrowableCol(0, 1);
     grid->AddGrowableCol(1, 1);
 
+    // Deployment — the software VERSIONS on this board (runtime/base + app +
+    // campaign), first so the operator sees "what's running" up top.
+    grid->Add(make_subbox(box, "Deployment",
+                          kDeployKeys, mr.deploy_vals, kDeployRows),
+              1, wxEXPAND);
     grid->Add(make_subbox(box, "System & Architecture",
                           kArchKeys, mr.arch_vals, kArchRows),
               1, wxEXPAND);
@@ -196,6 +205,13 @@ void SystemPanel::on_frame(const std::string& machine_name,
             ? "(unstamped)" : wxString::FromUTF8(si.theia_git_sha().c_str()));
         mr.arch_vals[5]->SetLabel(si.build_timestamp().empty()
             ? "(unstamped)" : wxString::FromUTF8(si.build_timestamp().c_str()));
+
+        // Deployment — RUNTIME/base version (the installed release, current →
+        // releases/<ver>; OTA flips it). The app + campaign come from per's
+        // UcmSwState (tag 0x0010 below).
+        mr.deploy_vals[0]->SetLabel(si.release_version().empty()
+            ? "(dev / unprovisioned)"
+            : wxString::FromUTF8(si.release_version().c_str()));
 
         // Resources — only "supervisor started" comes from SystemInfo now; RAM /
         // disk / uptime are filled from the SHWA AccelSample arm (tag 0x0006).
@@ -258,6 +274,25 @@ void SystemPanel::on_frame(const std::string& machine_name,
                                               a.disk_install_avail_kb()));
         if (a.uptime_sec())
             mr.res_vals[3]->SetLabel(fmt_uptime(a.uptime_sec()));
+        mr.sizer->Layout();
+        return;
+    }
+
+    if (tag == 0x0010) {            // UcmSwState (per app version + campaign)
+        sup_gui::UcmSwState sw;
+        if (!sw.ParseFromString(payload)) return;
+        auto& mr = ensure_box(machine_name);
+        // app: current version, and if an upgrade is in flight, show → target.
+        wxString app = sw.current_version().empty()
+            ? wxString("(none)")
+            : wxString::FromUTF8(sw.current_version().c_str());
+        if (!sw.target_version().empty()
+            && sw.target_version() != sw.current_version())
+            app += wxString::FromUTF8(" → ") +
+                   wxString::FromUTF8(sw.target_version().c_str());
+        mr.deploy_vals[1]->SetLabel(app);
+        mr.deploy_vals[2]->SetLabel(sw.campaign_id().empty()
+            ? "(none)" : wxString::FromUTF8(sw.campaign_id().c_str()));
         mr.sizer->Layout();
         return;
     }

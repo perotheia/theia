@@ -91,6 +91,10 @@ private:
     // GPU / Accelerators — SHWA AccelSample (tag 0x0006): board, gpu util,
     // gpu freq, temp, power, fan.
     static constexpr int kGpuRows    = 6;  // board,gpu%,gpu freq,temp,power,fan
+    // Deployment — the on-device software versions: RUNTIME/base (from
+    // SystemInfo.release_version) + APP + campaign (from UcmSwState in per,
+    // /theia/config/<machine>/SW, read via com PerView.GetSnapshot).
+    static constexpr int kDeployRows = 3;  // runtime, app, campaign
     struct MachineRows {
         wxStaticBox*       box{nullptr};   // outer per-machine box
         wxStaticBoxSizer*  sizer{nullptr};
@@ -98,6 +102,7 @@ private:
         wxStaticText*      res_vals   [kResRows]{};
         wxStaticText*      health_vals[kHealthRows]{};
         wxStaticText*      gpu_vals   [kGpuRows]{};
+        wxStaticText*      deploy_vals[kDeployRows]{};
     };
 
     MachineRows& ensure_box(const std::string& machine_name);

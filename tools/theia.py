@@ -862,6 +862,132 @@ def _client_certs_dir() -> "Path | None":
     return None
 
 
+def _probe_send(args: list[str], *, is_call: bool) -> int:
+    """Shared impl for `theia cast` / `theia call` — send a message to a node from
+    a JSON payload, over TIPC via artheia.probe. Addressing:
+      theia {cast|call} <node> <msg_or_op> [--data '{...}'] [--instance N]
+                                           [--machine M] [--timeout S]
+    <node>/<msg_or_op> resolve against the workspace's system/system.art (which
+    imports the app's nodes). --data is a JSON object of the message fields.
+    --instance targets a specific CLONE (same TIPC type, that instance) — e.g. one
+    of the 10 Counters. --machine shifts the instance by the machine index (the
+    per-board clone). A cast with NO --instance is TIPC round-robined across the
+    node type's bound ports (the multiplicity demo).
+    """
+    import json
+
+    def _opt(name, default=None):
+        for i, a in enumerate(args):
+            if a == name and i + 1 < len(args):
+                return args[i + 1]
+        return default
+
+    pos = [a for a in args if not a.startswith("-")]
+    # skip the values consumed by value-opts so they aren't mistaken for positionals
+    _vals = {_opt("--data"), _opt("--instance"), _opt("--machine"), _opt("--timeout")}
+    pos = [a for a in pos if a not in _vals]
+    if len(pos) < 2:
+        verb = "call" if is_call else "cast"
+        print(f"usage: theia {verb} <node> <{'op' if is_call else 'msg_type'}> "
+              "[--data '{json}'] [--instance N] [--machine M]", file=sys.stderr)
+        return 2
+    node, msg = pos[0], pos[1]
+    data_raw = _opt("--data", "{}")
+    try:
+        fields = json.loads(data_raw)
+        if not isinstance(fields, dict):
+            raise ValueError("must be a JSON object")
+    except (json.JSONDecodeError, ValueError) as e:
+        print(f"theia {'call' if is_call else 'cast'}: bad --data JSON: {e}",
+              file=sys.stderr)
+        return 2
+    instance = _opt("--instance")
+    machine = _opt("--machine")
+    timeout = float(_opt("--timeout", "2.0"))
+
+    proto_dir = WORKSPACE / "proto"
+    try:
+        sys.path.insert(0, str(THEIA_ROOT / "artheia"))
+        from artheia.gen_server.probe import ArtheiaContext  # noqa: PLC0415
+    except Exception as e:  # noqa: BLE001
+        print(f"theia: artheia.probe unavailable ({e})", file=sys.stderr)
+        return 1
+    # Find an .art that DEFINES <node> (carries its tipc address). The probe
+    # context resolves nodes from the .art it's given; system.art only IMPORTS the
+    # app packages (its own elements are clusters, not nodes), so a node lives in
+    # its package's component.art / package.art. Try system.art first (single-node
+    # apps whose node is inline), then every component.art / package.art under
+    # system/ until one resolves <node>.
+    candidates = [WORKSPACE / "system" / "system.art"]
+    candidates += sorted(WORKSPACE.glob("system/**/component.art"))
+    candidates += sorted(WORKSPACE.glob("system/**/package.art"))
+    ctx = None
+    for art in candidates:
+        if not art.exists():
+            continue
+        try:
+            c = ArtheiaContext(str(art), proto_root=str(proto_dir))
+            c.ref(node)          # raises if this .art doesn't define <node>
+            ctx = c
+            break
+        except Exception:  # noqa: BLE001
+            continue
+    if ctx is None:
+        print(f"theia {'call' if is_call else 'cast'}: no .art under "
+              f"{WORKSPACE}/system defines node '{node}'.", file=sys.stderr)
+        return 1
+    import dataclasses
+    import os as _os
+    # A generic sender probe at a scratch EXTERNAL address (not a .art node). Unique
+    # per invocation (pid-derived) so concurrent `theia cast`es don't collide on the
+    # reply address.
+    probe = ctx.probe_external(0x800100FE, (_os.getpid() & 0x3FFF) + 0x100,
+                               name="theia_cli").start()
+    try:
+        # Resolve the target node ref; apply --instance / --machine as an instance
+        # override (the machine shift == machine index added to the base instance).
+        tref = ctx.ref(node)
+        inst = None
+        if instance is not None:
+            inst = int(instance)
+        if machine is not None:
+            base = tref.tipc_instance if inst is None else inst
+            inst = base + int(machine)
+        target = (dataclasses.replace(tref, tipc_instance=inst)
+                  if inst is not None else node)
+        where = f" @instance {inst}" if inst is not None else " (round-robin)"
+        if is_call:
+            print(f"theia call: {node}.{msg}({fields}){where}", file=sys.stderr)
+            reply = probe.call(target, msg, timeout=timeout, **fields)
+            print(json.dumps(reply, default=str, indent=2))
+        else:
+            print(f"theia cast: {node} <- {msg}({fields}){where}", file=sys.stderr)
+            probe.cast(target, msg, **fields)
+            print("cast sent.")
+        return 0
+    except Exception as e:  # noqa: BLE001
+        print(f"theia {'call' if is_call else 'cast'}: {e}", file=sys.stderr)
+        return 1
+    finally:
+        probe.stop()
+
+
+def cmd_cast(args: list[str]) -> int:
+    """cast a message to a node from JSON (test/demo). See _probe_send."""
+    if "-h" in args or "--help" in args:
+        print(_probe_send.__doc__, file=sys.stderr)
+        return 0
+    return _probe_send(args, is_call=False)
+
+
+def cmd_call(args: list[str]) -> int:
+    """call a node operation from JSON, print the reply (test/demo)."""
+    if "-h" in args or "--help" in args:
+        print(_probe_send.__doc__, file=sys.stderr)
+        return 0
+    return _probe_send(args, is_call=True)
+
+
 def cmd_observer(args: list[str]) -> int:
     """Launch the supervisor-GUI against the local cluster — ALWAYS over mTLS.
 
@@ -3846,6 +3972,8 @@ COMMANDS = {
     "stage-local": (cmd_install,     "alias for `install` (back-compat)"),
     "start":       (cmd_start,       "run the staged supervisor from install/<machine>/ (detached + pidfile)"),
     "stop":        (cmd_stop,        "stop the supervisor started by `theia start` (graceful)"),
+    "cast":        (cmd_cast,        "cast <node> <msg> --data '{json}' [--instance N|--machine M] (test/demo)"),
+    "call":        (cmd_call,        "call <node> <op> --data '{json}' [--instance N|--machine M] — prints reply (test/demo)"),
     "manifest":    (cmd_manifest,    "rig.py → dist/manifest/*.json (sole rig entry for deploy)"),
     "dist":        (cmd_dist,        "<target> [--arch A] — build debs from manifest (runtime deb-set or per-machine app bundle)"),
     "release":     (cmd_release,     "<target> [--s3 URL] — push runtime plane to S3; or (no target) build the full package set"),

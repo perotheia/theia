@@ -24,6 +24,11 @@ struct UcmGateState {
     // manifest on EvStartUpdate so a later RequestUpdate can't mutate it
     // mid-flight. `verifying` guards the one-shot VERIFYING timer.
     std::string version;        // target version of the update in flight
+    // The version installed + RUNNING now (the standing SW state, persisted to
+    // /theia/config/<machine>/SW). Distinct from `version` (the in-flight TARGET):
+    // it advances to `version` only once the update reaches ACTIVE (committed). ""
+    // until the first install completes.
+    std::string current_version;
     uint32_t    kind  = 0;      // UpdateKind (0=SOFTWARE, 1=CONFIG)
     uint32_t    scope = 0;      // UpdateScope (0=FULL, 1=PARTIAL)
     bool        verifying = false;

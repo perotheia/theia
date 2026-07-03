@@ -21,4 +21,8 @@ system_services_ucm.UcmProgress.version   max_size:32
 system_services_ucm.UcmProgress.detail   max_size:128
 system_services_ucm.UcmActivation.version   max_size:32
 system_services_ucm.UcmActivation.campaign_id   max_size:64
+system_services_ucm.UcmSwState.machine   max_size:32
+system_services_ucm.UcmSwState.current_version   max_size:32
+system_services_ucm.UcmSwState.target_version   max_size:32
+system_services_ucm.UcmSwState.campaign_id   max_size:64
 system_services_ucm.UcmConfig.releases_root   max_size:128

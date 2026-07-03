@@ -148,6 +148,25 @@ message UcmActivation {
     UpdateScope scope
 }
 
+// The per-MACHINE SW state persisted to per/etcd at /theia/config/<machine>/SW —
+// the durable record of what SOFTWARE version this board runs. Config is
+// per-component-INSTANCE: the same UCM node is cloned across machine instances
+// (prototype nodes, same identity + TIPC type, different instance = machine_index),
+// so its state is namespaced by the machine NAME (the instance's runtime identity).
+// Unlike UcmActivation (a transient two-phase-commit marker), this is the STANDING
+// answer to "which SW is on <machine>": current (installed + running), target (what
+// a deployment is moving it to), and the campaign that requested the move. rtdb/GUI
+// read it via com→per GetSnapshot to compare a board's patch level against a
+// Rollout's to_version.
+message UcmSwState {
+    string  machine         [max_size:32]   // the board's unique name (THEIA_MACHINE)
+    string  current_version [max_size:32]   // installed + running now
+    string  target_version  [max_size:32]   // what an in-flight deployment moves TO
+    string  campaign_id     [max_size:64]   // the deployment that set target (or "")
+    UcmState state                          // the UCM FSM phase (idle/installing/…)
+    uint64  updated_ns                      // last write (wall-clock epoch ns)
+}
+
 // The gate's in-process FSM ingress (the probe/UcmDaemon post these; the FSM is
 // never driven directly off the wire — the statem-takes-no-external rule).
 interface senderReceiver UcmLifecycleIn {

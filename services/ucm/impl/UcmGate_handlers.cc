@@ -203,6 +203,64 @@ void clear_marker(const std::string& root) {
     write_marker(root, none);
 }
 
+// The per/etcd node for THIS board's standing SW state: "<machine>/SW" →
+// /theia/config/<machine>/SW. Config is per-component-INSTANCE — the same UCM node
+// is cloned across machine instances, so its state is namespaced by the machine
+// NAME (the instance's runtime identity). Distinct from the transient activation
+// marker: this is the durable answer to "which SW is on <machine>". A standalone
+// dev run (no THEIA_MACHINE) falls back to a bare "SW".
+inline const std::string& sw_state_node() {
+    static const std::string node = [] {
+        const char* m = std::getenv("THEIA_MACHINE");
+        return (m && *m) ? std::string(m) + "/SW" : std::string("SW");
+    }();
+    return node;
+}
+
+inline const char* sw_machine_name() {
+    const char* m = std::getenv("THEIA_MACHINE");
+    return (m && *m) ? m : "";
+}
+
+// PutConfig a UcmSwState to per (the same retry-on-fresh-connect path as the
+// activation marker — a cross-board write to central's per can drop a reply).
+void write_sw_state(const std::string& current, const std::string& target,
+                    const std::string& campaign_id, int ucm_state) {
+    system_services_ucm_UcmSwState s = system_services_ucm_UcmSwState_init_zero;
+    std::snprintf(s.machine, sizeof(s.machine), "%s", sw_machine_name());
+    std::snprintf(s.current_version, sizeof(s.current_version), "%s", current.c_str());
+    std::snprintf(s.target_version, sizeof(s.target_version), "%s", target.c_str());
+    std::snprintf(s.campaign_id, sizeof(s.campaign_id), "%s", campaign_id.c_str());
+    s.state = static_cast<system_services_ucm_UcmState>(ucm_state);
+    s.updated_ns = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+
+    system_services_per_PutConfigReq req = system_services_per_PutConfigReq_init_zero;
+    std::snprintf(req.target_node, sizeof(req.target_node), "%s", sw_state_node().c_str());
+    pb_ostream_t os = pb_ostream_from_buffer(req.config.bytes, sizeof(req.config.bytes));
+    if (!pb_encode(&os, system_services_ucm_UcmSwState_fields, &s)) return;
+    req.config.size = static_cast<pb_size_t>(os.bytes_written);
+    req.expect_rev = 0;
+
+    auto& link = PerLink::instance();
+    std::lock_guard<std::mutex> lk(link.mu);
+    if (!link.ensure_started()) {
+        std::fprintf(stderr, "[ucm_gate] SW state: per unreachable\n");
+        return;
+    }
+    bool acked = false;
+    for (int attempt = 0; attempt < 4 && !acked; ++attempt) {
+        auto r = ::theia::runtime::call<system_services_per_PerReply>(
+            link.ref, req, 0, 3000);
+        if (r.tag == ::theia::runtime::CallTag::Reply) { acked = true; break; }
+        if (!link.ref.connect(/*timeout_ms=*/2000)) break;
+    }
+    std::fprintf(stderr, "[ucm_gate] SW state %s ← cur=%s tgt=%s%s\n",
+                 sw_state_node().c_str(), current.c_str(), target.c_str(),
+                 acked ? "" : " (per write FAILED)");
+}
+
 // GetConfig the marker from per (the boot-resume read).
 Marker read_marker(const std::string& /*root*/) {
     Marker m;
@@ -229,6 +287,25 @@ Marker read_marker(const std::string& /*root*/) {
     m.scope = static_cast<uint32_t>(a.scope);
     m.valid = true;
     return m;
+}
+
+// GetConfig the persisted SW state's current_version (the boot seed). "" when
+// absent (fresh board) or per unreachable.
+std::string read_sw_current() {
+    system_services_per_GetConfigReq req = system_services_per_GetConfigReq_init_zero;
+    std::snprintf(req.target_node, sizeof(req.target_node), "%s", sw_state_node().c_str());
+    auto& link = PerLink::instance();
+    std::lock_guard<std::mutex> lk(link.mu);
+    if (!link.ensure_started()) return "";
+    auto result = ::theia::runtime::call<system_services_per_ConfigSnapshot>(
+        link.ref, req, 0, 3000);
+    if (result.tag != ::theia::runtime::CallTag::Reply) return "";
+    if (result.reply.config.size == 0) return "";
+    system_services_ucm_UcmSwState s = system_services_ucm_UcmSwState_init_zero;
+    pb_istream_t is = pb_istream_from_buffer(result.reply.config.bytes,
+                                             result.reply.config.size);
+    if (!pb_decode(&is, system_services_ucm_UcmSwState_fields, &s)) return "";
+    return std::string(s.current_version);
 }
 // WALL-CLOCK (system_clock), NOT steady_clock: the deadline is persisted to etcd
 // and compared after a REBOOT (a different process), so it must be an absolute
@@ -298,6 +375,13 @@ void UcmGate::init(UcmGateState& s) {
             to_fsm("EvProvisional", EvProvisional{});
         }
     }
+
+    // Seed current_version from the persisted SW state so a reboot preserves what
+    // this board is RUNNING (the standing answer, independent of the two-phase
+    // marker above). "" on a fresh board that has never completed an install.
+    s.current_version = read_sw_current();
+    if (!s.current_version.empty())
+        this->log().info(std::string("SW state: running v") + s.current_version);
 }
 
 // ---- string handle_info — the verify-window timer lands here. If PHM hasn't
@@ -310,6 +394,10 @@ void UcmGate::handle_info(const char* info, UcmGateState& s) {
         if (s.confirm_window_ms == 0) {
             // legacy / no confirm required → commit straight to ACTIVE.
             this->log().info("verify window clean — committing");
+            // The target is now running — advance current_version + record it.
+            s.current_version = s.version;
+            write_sw_state(s.current_version, /*target=*/"", /*campaign=*/"",
+                           /*ucm_state=*/system_services_ucm_UcmState_UcmState_ACTIVE);
             to_fsm("EvVerified", EvVerified{});   // VERIFYING → ACTIVE
         } else {
             // TWO-PHASE: hold PROVISIONAL, persist the marker, arm the confirm
@@ -369,6 +457,10 @@ void UcmGate::handle_cast(const EvConfirmed& /*msg*/, UcmGateState& s) {
     prune_releases(l, s.retain_releases ? s.retain_releases : 3);
     this->log().info(std::string("CONFIRMED v") + s.version +
         " → ACTIVE (committed; previous retained)");
+    // The target is now the RUNNING version — advance current_version + record it.
+    s.current_version = s.version;
+    write_sw_state(s.current_version, /*target=*/"", /*campaign=*/"",
+                   /*ucm_state=*/system_services_ucm_UcmState_UcmState_ACTIVE);
     to_fsm("EvConfirmed", EvConfirmed{});   // PROVISIONAL → ACTIVE
 }
 
@@ -426,6 +518,12 @@ void UcmGate::handle_cast(const EvStartUpdate& /*msg*/, UcmGateState& s) {
         " v" + m.version + " role=" + board_role() +
         (s.confirm_window_ms ? (" (two-phase, confirm window " +
                                 std::to_string(s.confirm_window_ms) + "ms)") : ""));
+    // Record the standing SW state: this board is moving FROM current_version TO
+    // m.version under this campaign. rtdb/GUI read /theia/config/<machine>/SW to
+    // compare the board's level against a Rollout's to_version. current is
+    // unchanged (still running); it advances to the target only on ACTIVE below.
+    write_sw_state(s.current_version, m.version, s.campaign_id,
+                   /*ucm_state=*/system_services_ucm_UcmState_UcmState_INSTALLING);
 
     // Delegate the fetch+write to Mender (standalone install of the role slice).
     const std::string url = role_artifact(m.artifact_path, m.version);

@@ -203,6 +203,46 @@ def cmd_vpn(args, sup, _tf) -> int:
         nc.stop()
 
 
+def cmd_sw(args, sup, _tf) -> int:
+    """sw — per-machine SW state (current/target/campaign) from per/etcd.
+
+    Reads the /theia/config/<machine>/SW rows via com PerView GetSnapshot and
+    decodes each as UcmSwState — the durable record UCM writes on deploy. Lets an
+    operator see each board's installed vs in-flight version (compare a board's
+    patch level against a Rollout's to_version). One row per machine.
+    """
+    import ucm_pb2 as _ucm                    # noqa: E402  (in _gen, on sys.path)
+    _UCM_STATE = {0: "IDLE", 1: "DOWNLOADED", 2: "VALIDATED", 3: "STAGED",
+                  4: "INSTALLING", 5: "RESTARTING", 6: "VERIFYING", 7: "ACTIVE",
+                  8: "ROLLBACK"}
+    target = getattr(sup, "_target", _DEFAULT_TARGET)
+    pc = PerClient(target)
+    try:
+        rows = pc.get_store_snapshot("", timeout=5.0)
+    except Exception as e:  # noqa: BLE001
+        print(f"sw: com/per not reachable ({e})")
+        return 1
+    finally:
+        pc.stop()
+    # keep only the <machine>/SW rows (config_type is the etcd key suffix).
+    sw_rows = [(ct, blob) for (ct, _digest, blob) in rows if ct.endswith("/SW")]
+    if not sw_rows:
+        print("(no per-machine SW state recorded — no deployment through UCM yet)")
+        return 0
+    print(f"{'MACHINE':<12} {'CURRENT':<12} {'TARGET':<12} {'STATE':<11} CAMPAIGN")
+    for ct, blob in sorted(sw_rows):
+        s = _ucm.UcmSwState()
+        try:
+            s.ParseFromString(blob)
+        except Exception:  # noqa: BLE001
+            continue
+        machine = s.machine or ct[:-3]        # fall back to the key prefix
+        state = _UCM_STATE.get(s.state, str(s.state))
+        print(f"{machine:<12} {s.current_version or '—':<12} "
+              f"{s.target_version or '—':<12} {state:<11} {s.campaign_id or '—'}")
+    return 0
+
+
 # rtdb's command map = the shared verbs + the PerView-only schemas/snapshot +
 # the NmView `wifi` verb (tdb has wifi over TIPC; rtdb reaches it through com).
 _COMMANDS = dict(_SHARED_COMMANDS)
@@ -210,6 +250,7 @@ _COMMANDS["schemas"]  = cmd_schemas
 _COMMANDS["snapshot"] = cmd_snapshot
 _COMMANDS["wifi"]     = cmd_wifi
 _COMMANDS["vpn"]      = cmd_vpn
+_COMMANDS["sw"]       = cmd_sw
 
 # rtdb's help is the shared one with the tdb-specific intro line swapped + the
 # transport note. We just print the shared body (verb list is identical).

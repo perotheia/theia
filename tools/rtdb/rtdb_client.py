@@ -223,6 +223,15 @@ class PerClient:
         rep = self._stub.Snapshot(_br.SnapshotCall(label=label), timeout=timeout)
         return rep.status, rep.message, rep.mod_rev
 
+    def get_store_snapshot(self, config_type: str = "", timeout: float = 5.0):
+        """per's CURRENT config store rows (config_type, digest, config bytes) —
+        config_type is the etcd key suffix (the target_node). "" = ALL rows. The
+        caller decodes `config` per its schema. Backs `rtdb sw` (filters the
+        <machine>/SW rows)."""
+        rep = self._stub.GetSnapshot(
+            _br.GetSnapshotCall(config_type=config_type), timeout=timeout)
+        return [(r.config_type, r.digest, r.config) for r in rep.rows]
+
     def stop(self) -> None:
         self._channel.close()
 

@@ -123,6 +123,15 @@ message UcmActivation {
     UpdateScope scope = 5;
 }
 
+message UcmSwState {
+    string machine = 1;
+    string current_version = 2;
+    string target_version = 3;
+    string campaign_id = 4;
+    UcmState state = 5;
+    uint64 updated_ns = 6;
+}
+
 message UcmConfig {
     string releases_root = 1;
     uint32 verify_budget_ms = 2;

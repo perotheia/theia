@@ -29,6 +29,7 @@ PROTO_COM="$WORKSPACE/services/com/proto"
 PROTO_SUP="$WORKSPACE/platform/proto/system/supervisor"
 PROTO_RT="$WORKSPACE/platform/runtime/proto"          # platform_runtime/runtime.proto
 PROTO_LOG="$WORKSPACE/services/log/proto"
+PROTO_UCM="$WORKSPACE/platform/proto/system/services/ucm"  # UcmSwState (rtdb sw)
 OUT_DIR="$SCRIPT_DIR/_gen"
 
 rm -rf "$OUT_DIR"
@@ -45,6 +46,7 @@ PROTOS=(
     "$PROTO_COM"/supervisor_bridge.proto
     "$PROTO_SUP"/supervisor.proto
     "$PROTO_RT"/platform_runtime/runtime.proto
+    "$PROTO_UCM"/ucm.proto
 )
 # trace_stream.proto is optional (the trace EGRESS gRPC; moves into com in a
 # later phase). Include it when present so `rtdb logcat` has its stubs.
@@ -57,6 +59,7 @@ fi
     --proto_path="$PROTO_SUP" \
     --proto_path="$PROTO_RT" \
     --proto_path="$PROTO_LOG" \
+    --proto_path="$PROTO_UCM" \
     --python_out="$OUT_DIR" \
     --grpc_python_out="$OUT_DIR" \
     "${PROTOS[@]}"

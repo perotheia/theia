@@ -1554,14 +1554,18 @@ def _stage_local(dest: Path, supervisor_src: str,
                  binaries: dict[str, str], link: bool = False) -> int:
     """Stage the supervisor + child binaries into install/<machine>/.
 
-    Two modes:
-      link=True  (DEB): SYMLINK each binary to its prebuilt /opt/theia/bin/*
-                 source. The supervisor is already capped by theia-runtime's
-                 postinst, so there's NO copy and NO `sudo setcap` — a local
-                 install needs no root at all.
-      link=False (SOURCE): COPY the bazel-out artifacts (they're read-only and a
-                 fresh copy clears caps) then `sudo setcap` the supervisor. The
-                 local equivalent of the deploy's Ansible install-bundle+setcap.
+    The symlink-vs-copy decision is PER BINARY: a source already under
+    $THEIA_ROOT/bin (a prebuilt, deb-installed binary) is SYMLINKED — no copy,
+    and no setcap (the supervisor there is already capped by theia-runtime's
+    postinst). A bazel-out source (the workspace's OWN app FCs, or a
+    source-checkout framework build) is COPIED, and if the SUPERVISOR itself was
+    copied it gets a `sudo setcap`.
+
+    So the common deb case — prebuilt supervisor + workspace app bins — needs NO
+    sudo: the supervisor is a capped symlink and the app bins are plain user-
+    owned copies (FC children need no caps; the supervisor sets their thread
+    scheduling). `link` (all-prebuilt) is kept as a fast-path hint but the
+    per-binary check is authoritative.
 
     supervisor at <dest>/supervisor, children at <dest>/releases/local/bin/<name>.
 
@@ -1607,9 +1611,15 @@ def _stage_local(dest: Path, supervisor_src: str,
             except PermissionError:
                 _run(["sudo", "rm", "-f", str(dst)])
 
+    _prebuilt_root = str(THEIA_ROOT / "bin")
+
+    def _is_prebuilt(src: str) -> bool:
+        # A source under $THEIA_ROOT/bin is a deb-installed binary → symlink it.
+        return link or str(src).startswith(_prebuilt_root)
+
     def _place(src: str, dst: Path) -> None:
         _clear(dst)
-        if link:
+        if _is_prebuilt(src):
             dst.symlink_to(src)               # → prebuilt /opt/theia/bin/* (capped)
             print(f"  linked {dst} → {src}", file=sys.stderr)
         else:
@@ -1617,6 +1627,7 @@ def _stage_local(dest: Path, supervisor_src: str,
             dst.chmod(0o755)
             print(f"  staged {dst}", file=sys.stderr)
 
+    sup_copied = not _is_prebuilt(supervisor_src)
     try:
         _place(supervisor_src, dest / "supervisor")
         for name, src in binaries.items():
@@ -1625,16 +1636,17 @@ def _stage_local(dest: Path, supervisor_src: str,
         print(f"theia install: staging failed — {e}", file=sys.stderr)
         return 1
 
-    if link:
-        # DEB mode: the supervisor symlink points at the already-capped
-        # /opt/theia/bin/supervisor (theia-runtime postinst). No copy cleared the
-        # caps, so nothing to re-apply — and no sudo needed.
-        print(f"theia install: staged {dest} (symlinked prebuilt binaries; "
-              "supervisor already capped by the deb)", file=sys.stderr)
+    if not sup_copied:
+        # The supervisor is a symlink to the already-capped /opt/theia/bin/
+        # supervisor (theia-runtime postinst) — no copy cleared its caps, no
+        # setcap needed, no sudo. App bins (if any were copied) are plain
+        # user-owned FC executables that need no caps.
+        print(f"theia install: staged {dest} (supervisor symlinked + capped by "
+              "the deb; no sudo needed)", file=sys.stderr)
         return 0
 
-    # SOURCE mode: bazel-out copies are fresh (caps cleared), so setcap the
-    # supervisor. Needs root; skip gracefully if setcap/sudo unavailable.
+    # The supervisor was COPIED (source build) — its caps were cleared, so setcap
+    # it. Needs root; skip gracefully if setcap/sudo unavailable.
     setcap = shutil.which("setcap") or "/usr/sbin/setcap"
     sup = dest / "supervisor"
     rc = _run(["sudo", setcap, "cap_sys_nice,cap_net_admin+eip", str(sup)])

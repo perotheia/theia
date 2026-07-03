@@ -2061,7 +2061,7 @@ _RELEASE_BAZEL_PKGS = [
 ]
 
 
-def _build_framework_deb(out_dir: Path, version: str = "0.2.1") -> int:
+def _build_framework_deb(out_dir: Path, version: str = "0.2.2") -> int:
     """Build theia-framework as a real .deb — WHEELS-AS-DATA, no system Python.
 
     Theia does NOT own the user's Python. The deb ships only:
@@ -3110,7 +3110,7 @@ def cmd_release_role(args: list[str]) -> int:
                          the artifact base name <role>.mender + the install slice
         --arch A         the board's target arch (rpi4 | jetson | host) — picks
                          the abi-keyed deb (bookworm-arm64 / focal-arm64)
-        --version V      the release version (default 0.2.1)
+        --version V      the release version (default 0.2.2)
         --fleet F        the Mender device-group / S3 key (default theia-rig)
         --deb PATH       the prebuilt theia-services .deb to slice (default: build
                          it for --arch). A focal-arm64 deb must be built ON the
@@ -3142,7 +3142,7 @@ def cmd_release_role(args: list[str]) -> int:
 
     role = _opt("--role")
     arch = _opt("--arch", "rpi4")
-    ver = _opt("--version", "0.2.1")
+    ver = _opt("--version", "0.2.2")
     fleet = _opt("--fleet", "theia-rig")
     s3_url = _opt("--s3")
     services_deb = _opt("--deb")

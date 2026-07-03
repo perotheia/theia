@@ -28,7 +28,7 @@ load("//rules:opkg.bzl", "pkg_opkg")
 
 package(default_visibility = ["//visibility:public"])
 
-_VERSION = "0.2.1"
+_VERSION = "0.2.2"
 
 # Debian runtime/-dev split: a RUNTIME-ONLY machine gets just the binaries (+ the
 # shared libs they link); everything build-time — sources, headers, protos, the

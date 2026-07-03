@@ -46,14 +46,32 @@ struct MachineManifest::Impl {
         if (!f) return;
         try {
             json j; f >> j;
+            // PREFERRED: the inline name → machine_index map (serialize-manifest
+            // emits it into machines.json — the ONE file com references). This is
+            // the authoritative correlation: com discovers a supervisor at TIPC
+            // instance N and maps N → the UNIQUE machine NAME (the runtime identity;
+            // role and hostname are NOT unique). No per-machine machine.json read.
+            if (j.contains("machine_index") && j.at("machine_index").is_object()) {
+                for (const auto& kv : j.at("machine_index").items()) {
+                    if (!kv.value().is_number()) continue;
+                    const auto idx = kv.value().get<long>();
+                    if (idx < 0) continue;
+                    by_instance[static_cast<uint32_t>(idx)] = kv.key();  // idx → name
+                    loaded = true;
+                }
+            }
+            if (loaded) return;   // inline map is complete — done.
+
+            // LEGACY fallback: older machines.json without the inline index —
+            // "machines" is a NAME array; recover each name's index from its
+            // per-machine machine.json (needs the sibling <name>/machine.json).
             if (!j.contains("machines") || !j.at("machines").is_array()) return;
             for (const auto& m : j.at("machines")) {
-                const std::string name =
-                    m.value("name", std::string());
-                const std::string subdir =
-                    m.value("manifests_dir", name);   // dir defaults to name
-                if (name.empty() || subdir.empty()) continue;
-                long idx = read_machine_index(std::string(root) + "/" + subdir);
+                std::string name;
+                if (m.is_string())      name = m.get<std::string>();
+                else if (m.is_object()) name = m.value("name", std::string());
+                if (name.empty()) continue;
+                long idx = read_machine_index(std::string(root) + "/" + name);
                 if (idx < 0) continue;                // host/admin w/o index — skip
                 by_instance[static_cast<uint32_t>(idx)] = name;
                 loaded = true;

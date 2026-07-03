@@ -141,12 +141,11 @@ def _find_child(reply, name: str):
 
 def _machine_names(sup) -> "list[str]":
     """Every accepted MACHINE SELECTOR, via the client's ListMachines (rtdb →
-    com's scan registry). Includes each machine's name, its HOSTNAME, and its
-    INSTANCE number — because the name alone is NOT unique in a /N deploy (two
-    zonal workers both report name "zonal"); the hostname (compute/frontal) and
-    the instance (1/2) disambiguate a specific board. com resolves any of the
-    three back to the instance. Returns [] when the transport has no enumeration
-    (tdb over TIPC talks to one supervisor; it uses `-i <instance>` instead)."""
+    com's scan registry). Each machine's NAME (the unique runtime identity — com
+    resolves it from the manifest's machine_index; serialize-manifest enforces
+    unique names) plus its INSTANCE number as a convenience. Returns [] when the
+    transport has no enumeration (tdb over TIPC talks to one supervisor; it uses
+    `-i <instance>` instead)."""
     lm = getattr(sup, "list_machines", None)
     if lm is None:
         return []
@@ -157,9 +156,6 @@ def _machine_names(sup) -> "list[str]":
             nm = _g(m, "name", "")
             if nm:
                 out.append(nm)
-            host = _g(_g(m, "info", {}) or {}, "hostname", "")
-            if host:
-                out.append(host)
             inst = _g(m, "instance", None)
             if inst is not None:
                 out.append(str(inst))

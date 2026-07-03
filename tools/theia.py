@@ -1078,6 +1078,70 @@ def cmd_observer(args: list[str]) -> int:
     os.execve(str(gui), gui_argv, env)
 
 
+def _deep_merge(base, over):
+    """Recursively merge `over` INTO `base`, returning the merged value. Dicts
+    merge key-by-key; a list of dicts each carrying a "name" merges BY NAME (so
+    an executor.json `children` override patches a specific child, e.g. sets
+    `run_on_start: false` on `per`, without rewriting the whole array); any
+    other scalar/list in `over` REPLACES base. `over` wins on type conflict."""
+    if isinstance(base, dict) and isinstance(over, dict):
+        out = dict(base)
+        for k, v in over.items():
+            out[k] = _deep_merge(base[k], v) if k in base else v
+        return out
+    # Name-keyed list merge: both sides are lists whose elements are dicts with a
+    # "name" — merge element-wise by name, keep base order, append new names.
+    def _named(lst):
+        return (isinstance(lst, list) and lst
+                and all(isinstance(e, dict) and "name" in e for e in lst))
+    if _named(base) and _named(over):
+        out = []
+        seen = set()
+        for e in base:
+            o = next((x for x in over if x["name"] == e["name"]), None)
+            out.append(_deep_merge(e, o) if o else e)
+            seen.add(e["name"])
+        for x in over:                        # new children not in base
+            if x["name"] not in seen:
+                out.append(x)
+        return out
+    return over                               # scalar / plain list → replace
+
+
+def _apply_config_overrides(machine: str, cfg_dir: Path) -> None:
+    """Deep-merge deploy/config/<machine>/<name>.json ON TOP of the staged
+    install/<machine>/config/<name>.json (INCLUDING executor.json). This is the
+    LOCAL equivalent of colony's deploy-time config-override pass — it lets a
+    per-machine override change any config without editing the .art, e.g.:
+
+        deploy/config/central/executor.json
+          {"children":[{"name":"services_sup","children":[
+             {"name":"per","run_on_start":false},
+             {"name":"nm", "run_on_start":false}]}]}
+
+    blocks per (needs etcd) and nm (needs CAP_NET_ADMIN) from booting on a box
+    that lacks those, while keeping them DEFINED in the tree. The build artifact
+    stays a pure function of (arch, os, version); the override is the rig layer."""
+    import json as _json
+    override_dir = WORKSPACE / "deploy" / "config" / machine
+    if not override_dir.is_dir():
+        return
+    for ov in sorted(override_dir.glob("*.json")):
+        target = cfg_dir / ov.name
+        if not target.is_file():
+            continue                          # override for a config we didn't stage
+        try:
+            merged = _deep_merge(_json.loads(target.read_text()),
+                                 _json.loads(ov.read_text()))
+        except ValueError as e:
+            print(f"theia install: skipping malformed override {ov} ({e})",
+                  file=sys.stderr)
+            continue
+        target.write_text(_json.dumps(merged, indent=2))
+        print(f"theia install: applied override {ov.name} → {target}",
+              file=sys.stderr)
+
+
 def _installed_role_config(manifest_root: Path, machine: str) -> "Path | None":
     """The framework's shipped per-ROLE config slice for this machine, if the
     theia-services deb provided one — else None.
@@ -1301,6 +1365,11 @@ def cmd_install(args: list[str]) -> int:
         shutil.copy2(src_executor, cfg_dir / "executor.json")
         print(f"staged {cfg_dir / 'executor.json'} (legacy — re-run theia manifest)",
               file=sys.stderr)
+
+    # 3b. Apply per-machine config overrides (deploy/config/<machine>/*.json),
+    #     deep-merged onto the staged config — incl. executor.json (e.g.
+    #     run_on_start:false to keep per/nm DOWN on a box without etcd/netadmin).
+    _apply_config_overrides(machine, cfg_dir)
 
     # 4. Stage binaries + setcap. A binary's source is its prebuilt path (deb
     #    mode) when we have one, else its bazel-bin output.

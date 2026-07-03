@@ -31,6 +31,14 @@ TipcMux::TipcMux() {
 }
 
 TipcMux::~TipcMux() {
+    // UNPUBLISH first: a FC's main() calls set_process_mux(&config_mux) with a
+    // stack-local mux, so on process exit this dtor runs while the slot still
+    // points HERE. Any ~RemoteRef that destructs AFTER us (a static/global ref, or
+    // one torn down later in the exit sequence) calls the free unwatch_reply_fd(),
+    // which would then deref this now-dead object → reply_sinks_.find() on freed
+    // memory → SIGSEGV on shutdown (com crashed with code=-11 on every TERM/
+    // restart). Clearing the slot makes those late hooks see nullptr and no-op.
+    if (process_mux() == this) set_process_mux(nullptr);
     stop();
     if (epoll_fd_ >= 0) ::close(epoll_fd_);
     for (auto& b : bindings_) {

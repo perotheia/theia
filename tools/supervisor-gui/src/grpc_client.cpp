@@ -456,10 +456,20 @@ void GrpcClient::run() {
                                 std::chrono::seconds(3));
             if (stub->ListMachines(&lm_ctx, lm_req, &lm).ok() && callback_) {
                 for (const auto& mi : lm.machines()) {
-                    if (mi.name().empty()) continue;
-                    callback_(mi.name(), kTagMachineInfo, mi.SerializeAsString());
+                    // KEY the machine on a UNIQUE label — the hostname (unique per
+                    // board: compute/frontal) when known, else the machine name.
+                    // The name is NOT unique in a /N deploy (two zonal workers both
+                    // report "zonal"), so keying on it collapses them to one row in
+                    // the Machines list. This matches com's aggregate tree prefix
+                    // (machine_label → hostname), so ListMachines rows and the
+                    // tree-derived machines agree on the same key.
+                    std::string label = mi.name();
+                    if (mi.has_info() && !mi.info().hostname().empty())
+                        label = mi.info().hostname();
+                    if (label.empty()) continue;
+                    callback_(label, kTagMachineInfo, mi.SerializeAsString());
                     if (mi.has_info())
-                        callback_(mi.name(), kTagSystemInfo,
+                        callback_(label, kTagSystemInfo,
                                   mi.info().SerializeAsString());
                 }
             }

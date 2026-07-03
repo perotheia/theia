@@ -32,6 +32,15 @@ export THEIA_ROOT_DIR="${THEIA_ROOT_DIR:-/opt/theia}"
 # For OTA this is always $THEIA_ROOT_DIR/current (UCM flips this symlink).
 export THEIA_INSTALL_DIR="${THEIA_INSTALL_DIR:-$THEIA_ROOT_DIR/current}"
 export THEIA_SUPERVISOR_MANIFEST="$THEIA_ROOT_DIR/config/executor.json"
+# THEIA_MACHINE_MANIFEST: the dir holding machines.json, which com reads for the
+# AUTHORITATIVE instance→machine_index→name map (the unique runtime identity com
+# and the GUI key on). Point it at config/ when machines.json is staged there
+# (provision copies it alongside executor.json). Without it com falls back to the
+# per-supervisor SystemInfo.machine_name — correct once the rig uses unique names,
+# but the manifest map resolves a machine even before its supervisor answers.
+if [[ -f "$THEIA_ROOT_DIR/config/machines.json" ]]; then
+    export THEIA_MACHINE_MANIFEST="${THEIA_MACHINE_MANIFEST:-$THEIA_ROOT_DIR/config}"
+fi
 export THEIA_LOG_LEVEL="${THEIA_LOG_LEVEL:-info}"
 # The CHILDREN's libs come from the current release; OTA swaps them with current.
 export LD_LIBRARY_PATH="$THEIA_ROOT_DIR/current/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"

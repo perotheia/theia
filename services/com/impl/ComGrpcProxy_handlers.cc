@@ -206,18 +206,29 @@ struct MachineEntry {
 std::mutex                                   g_machines_mtx;
 std::unordered_map<uint32_t, MachineEntry>   g_machines;     // instance → entry
 
-// The machine NAME for an instance: prefer the supervisor-REPORTED name (cached
-// off GetSystemInfo, sourced from executor.json), else the manifest, else "mN".
-// This is why a single-machine dev stack with no THEIA_MACHINE_MANIFEST still
-// shows "central": the supervisor tells com its own name.
+// The machine NAME for an instance. Priority:
+//   1. the MANIFEST map (machines.json machine_index) when loaded — the
+//      AUTHORITATIVE deployment identity (instance→unique name). It wins over the
+//      supervisor-reported name so a board whose deployed executor.json still
+//      carries a stale/role name (e.g. "zonal") is still shown by its real unique
+//      name from the manifest.
+//   2. the supervisor-REPORTED name (cached off GetSystemInfo) — the fallback when
+//      no manifest is published (a single-machine dev stack with no
+//      THEIA_MACHINE_MANIFEST still shows "central": the supervisor tells com).
+//   3. "mN".
 std::string machine_name_of(uint32_t inst) {
+    const auto& mm = services_com::MachineManifest::instance();
+    // 1. AUTHORITATIVE: the manifest map, when it knows this instance.
+    if (mm.has(inst)) return mm.name(inst);
+    // 2. the supervisor-reported name (no manifest, or an instance it doesn't list).
     {
         std::lock_guard<std::mutex> lk(g_machines_mtx);
         auto it = g_machines.find(inst);
         if (it != g_machines.end() && !it->second.name.empty())
             return it->second.name;
     }
-    return services_com::MachineManifest::instance().name(inst);
+    // 3. synthetic "mN".
+    return mm.name(inst);
 }
 
 // Mark an instance present/absent (called from the topology callback). The
@@ -641,11 +652,12 @@ public:
         for (const auto& kv : snap) {
             auto* mi = out->add_machines();
             mi->set_instance(kv.first);
-            // Prefer the supervisor-reported name (kv.second.name), else manifest.
-            mi->set_name(!kv.second.name.empty()
-                             ? kv.second.name
-                             : services_com::MachineManifest::instance()
-                                   .name(kv.first));
+            // machine_name_of() gives the AUTHORITATIVE name: the manifest map when
+            // it knows this instance (the unique runtime identity), else the
+            // supervisor-reported name, else "mN". So a board whose deployed
+            // executor.json still carries a stale role name ("zonal") is listed by
+            // its real unique name from machines.json.
+            mi->set_name(machine_name_of(kv.first));
             mi->set_present(kv.second.present);
             if (!kv.second.system_info.empty())
                 mi->mutable_info()->ParseFromString(kv.second.system_info);

@@ -37,6 +37,11 @@ public:
     // Was a manifest actually loaded (vs the env-unset fallback)? For logging.
     bool loaded() const;
 
+    // Does the manifest KNOW this instance (a real name→index entry, not the
+    // synthetic "mN" fallback)? Lets a caller prefer the authoritative manifest
+    // name over a supervisor-reported one only when the manifest actually has it.
+    bool has(uint32_t instance) const;
+
 private:
     MachineManifest();
     MachineManifest(const MachineManifest&)            = delete;

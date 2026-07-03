@@ -125,4 +125,8 @@ bool MachineManifest::index_of(const std::string& nm, uint32_t& out) const {
 
 bool MachineManifest::loaded() const { return impl_->loaded; }
 
+bool MachineManifest::has(uint32_t inst) const {
+    return impl_->by_instance.find(inst) != impl_->by_instance.end();
+}
+
 }  // namespace services_com

@@ -184,6 +184,7 @@ message DeleteChildRequest {
 message TraceConfig {
     string target_node = 1;
     platform_runtime.TraceControlPush trace_ctrl = 2;
+    repeated uint32 instances = 3;
 }
 
 message ConfigureTraceRequest {
@@ -201,6 +202,7 @@ message TraceConfigList {
 message LogLevelConfig {
     string target_node = 1;
     platform_runtime.LogLevelPush log_level = 2;
+    repeated uint32 instances = 3;
 }
 
 message ConfigureLogLevelRequest {

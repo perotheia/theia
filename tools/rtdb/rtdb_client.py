@@ -170,7 +170,12 @@ class SupervisorClient:
     # ---- trace ------------------------------------------------------------
     def configure_trace(self, *, target_node: str, msg_type: str = "",
                         enabled: bool, kind: int = 0,
+                        instances: "list[int] | None" = None,
                         timeout: float = 2.0) -> Any:
+        # `instances` (per-clone targeting) is a TIPC-direct (tdb) feature — the com
+        # gRPC edge doesn't carry it yet (it would need the instances[] field on
+        # com's TraceConfigRequest + sup_link fan-out). Accepted-but-ignored here so
+        # the shared cmd_trace works over rtdb; use `tdb trace --instance` for now.
         return self._stub.ConfigureTrace(
             _br.TraceConfigRequest(target_node=target_node, msg_type=msg_type,
                                    enabled=enabled, kind=kind),
@@ -181,9 +186,11 @@ class SupervisorClient:
 
     # ---- log level --------------------------------------------------------
     def configure_log_level(self, *, target_node: str, level: str,
+                            instances: "list[int] | None" = None,
                             timeout: float = 2.0) -> Any:
         # com's LogLevelCall carries the level by NAME (the gRPC edge maps it to
         # the LogLevelValue ordinal in sup_link). Pass the name straight through.
+        # `instances` is a TIPC-direct (tdb) feature — not carried over gRPC yet.
         return self._stub.ConfigureLogLevel(
             _br.LogLevelCall(target_node=target_node, level=level.lower()),
             timeout=timeout)

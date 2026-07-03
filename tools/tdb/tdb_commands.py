@@ -164,6 +164,28 @@ def _machine_names(sup) -> "list[str]":
         return []
 
 
+def _pull_instances(args):
+    """Extract `--instance N[,M,…]` (per-clone targeting) from args. Returns
+    (instances_list_or_None, remaining_args). Accepts a comma list or a repeated
+    flag. Non-numeric tokens are ignored. Empty → None (the node's single address).
+    Used by `tdb trace`/`loglevel` for a node cloned across N TIPC instances."""
+    out: list[int] = []
+    rest: list[str] = []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a in ("--instance", "-i") and i + 1 < len(args):
+            for tok in args[i + 1].split(","):
+                tok = tok.strip()
+                if tok.isdigit():
+                    out.append(int(tok))
+            i += 2
+            continue
+        rest.append(a)
+        i += 1
+    return (out or None), rest
+
+
 def _split_machine(args, sup):
     """Pull a MACHINE selector out of the positionals: if a non-flag positional
     matches a known machine name, return (machine, remaining_args); else
@@ -465,7 +487,15 @@ def cmd_trace(args, sup, _tf) -> int:
        trace <node> off          — stop <node>'s trace entirely
        trace <node> OTHER        — catch-all: trace EVERY kind
     KIND ∈ CAST_OUT|CAST_IN|CALL_OUT|CALL_IN|STATEM|OTHER (case-insensitive).
-    Kinds accumulate — a node can trace several at once."""
+    Kinds accumulate — a node can trace several at once.
+       --instance N[,M,…]        target specific CLONES of a cloned node (same TIPC
+                                 type, N instances) — e.g. `--instance 2,3,4`; omit
+                                 for the node's single address (direct to supervisor)."""
+    # --instance N[,M,…] — per-CLONE targeting (a node cloned across N TIPC
+    # instances). Pull it out of args before positional parsing; empty = the node's
+    # single address (the common case).
+    instances, args = _pull_instances(args)
+
     # `trace off` (no node) — stop everything.
     if len(args) == 1 and args[0].lower() == "off":
         return _trace_off_all(sup)
@@ -485,7 +515,7 @@ def cmd_trace(args, sup, _tf) -> int:
                   f"(use {'/'.join(_KIND_ORD)} or off)", file=sys.stderr)
             return 2
         rep = sup.configure_trace(target_node=node, enabled=enabled,
-                                  kind=kind, timeout=3.0)
+                                  kind=kind, instances=instances, timeout=3.0)
         status = _g(rep, "status")
         msg = _g(rep, "message", "")
         if status == 0:
@@ -563,7 +593,9 @@ def cmd_loglevel(args, sup, _tf) -> int:
     """loglevel                — every reporting node's effective level
        loglevel <node>         — that node's level
        loglevel <node> <level> — SET <node> to <level> (live, no restart)
-    level ∈ trace|debug|info|warn|error."""
+    level ∈ trace|debug|info|warn|error.
+       (--instance N[,M] targets specific CLONES of a cloned node.)"""
+    instances, args = _pull_instances(args)
     # SET: <node> <level>
     if len(args) >= 2:
         node, level = args[0], args[1].lower()
@@ -571,7 +603,8 @@ def cmd_loglevel(args, sup, _tf) -> int:
             print(f"bad level {args[1]!r} (use {'/'.join(sorted(_LEVEL_SET))})",
                   file=sys.stderr)
             return 2
-        rep = sup.configure_log_level(target_node=node, level=level, timeout=3.0)
+        rep = sup.configure_log_level(target_node=node, level=level,
+                                      instances=instances, timeout=3.0)
         status = _g(rep, "status")
         msg = _g(rep, "message", "")
         if status == 0:

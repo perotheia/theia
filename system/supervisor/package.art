@@ -376,6 +376,13 @@ message DeleteChildRequest {
 message TraceConfig {
     string           target_node
     TraceControlPush trace_ctrl     // from platform.runtime — forwarded as-is
+    // OPTIONAL per-INSTANCE targeting: the specific instances of target_node's type
+    // to push to (a cloned node — same TIPC type, N instances). EMPTY = the node's
+    // resolved (single) address, the common case. When set, the supervisor casts the
+    // TraceControlPush to (node_type, each instance) — so `tdb trace --instance 2,3,4
+    // counter CAST_IN` traces only clones 2,3,4. Direct-to-supervisor (no log[trace]
+    // proxy) — local + testable.
+    repeated uint32  instances [max_count:32]
 }
 
 message ConfigureTraceRequest {
@@ -401,6 +408,10 @@ message TraceConfigList {
 message LogLevelConfig {
     string       target_node
     LogLevelPush log_level
+    // OPTIONAL per-INSTANCE targeting (see TraceConfig.instances). EMPTY = the
+    // node's resolved address; when set, push the LogLevelPush to each named
+    // instance of target_node's type.
+    repeated uint32 instances [max_count:32]
 }
 
 message ConfigureLogLevelRequest {

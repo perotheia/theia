@@ -84,14 +84,18 @@ class SupervisorClient:
 
     def configure_trace(self, *, target_node: str, msg_type: str = "",
                         enabled: bool, kind: int = 0,
+                        instances: "list[int] | None" = None,
                         timeout: float = 2.0) -> dict[str, Any]:
         # ConfigureTrace(req{ config: TraceConfig{ target_node;
-        #   platform.runtime.TraceControlPush trace_ctrl } }). msg_type is no
-        # longer carried (kept as an accepted-but-ignored kwarg for callers).
+        #   platform.runtime.TraceControlPush trace_ctrl; instances[] } }). msg_type
+        # is no longer carried (accepted-but-ignored). instances[] (optional) targets
+        # specific CLONES of the node's TIPC type; empty = the node's single address.
+        cfg = dict(target_node=target_node,
+                   trace_ctrl=dict(kind=kind, enabled=enabled))
+        if instances:
+            cfg["instances"] = list(instances)
         return self.probe.call(
-            self._target, "ConfigureTrace", timeout=timeout,
-            config=dict(target_node=target_node,
-                        trace_ctrl=dict(kind=kind, enabled=enabled)))
+            self._target, "ConfigureTrace", timeout=timeout, config=cfg)
 
     def get_trace_config(self, timeout: float = 2.0) -> dict[str, Any]:
         return self.probe.call(self._target, "GetTraceConfig", timeout=timeout)
@@ -99,13 +103,17 @@ class SupervisorClient:
     _LEVELS = {"trace": 0, "debug": 1, "info": 2, "warn": 3, "error": 4}
 
     def configure_log_level(self, *, target_node: str, level: str,
+                            instances: "list[int] | None" = None,
                             timeout: float = 2.0) -> dict[str, Any]:
         # LogLevelConfig now embeds a LogLevelPush{level} (like TraceConfig
-        # embeds TraceControlPush). level name → LogLevelValue ordinal.
+        # embeds TraceControlPush). level name → LogLevelValue ordinal. instances[]
+        # (optional) targets specific clones; empty = the node's single address.
         lvl = self._LEVELS.get(level.lower(), 2)
+        cfg = dict(target_node=target_node, log_level=dict(level=lvl))
+        if instances:
+            cfg["instances"] = list(instances)
         return self.probe.call(
-            self._target, "ConfigureLogLevel", timeout=timeout,
-            config=dict(target_node=target_node, log_level=dict(level=lvl)))
+            self._target, "ConfigureLogLevel", timeout=timeout, config=cfg)
 
     # LogLevelValue ordinal → name (inverse of _LEVELS).
     _LEVEL_NAMES = {0: "trace", 1: "debug", 2: "info", 3: "warn", 4: "error"}

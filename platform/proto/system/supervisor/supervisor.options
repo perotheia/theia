@@ -40,8 +40,10 @@ system_supervisor.ChildSpec.start_cmd   max_size:128 max_count:8
 system_supervisor.ChildSpec.modules   max_size:64 max_count:16
 system_supervisor.DeleteChildRequest.name   max_size:64
 system_supervisor.TraceConfig.target_node   max_size:64
+system_supervisor.TraceConfig.instances   max_count:32
 system_supervisor.TraceConfigList.configs   max_count:64
 system_supervisor.LogLevelConfig.target_node   max_size:64
+system_supervisor.LogLevelConfig.instances   max_count:32
 system_supervisor.GetTombstoneRequest.child_name   max_size:64
 system_supervisor.GetTombstoneReply.path   max_size:256
 system_supervisor.GetTombstoneReply.content   max_size:40960

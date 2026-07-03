@@ -211,6 +211,26 @@ void resolve_and_cast(const std::string& child, const Msg& m) {
                            /*dst_name=*/nullptr, /*connect_timeout_ms=*/250);
 }
 
+// Per-INSTANCE variant: resolve the child's node TYPE, then cast the message to
+// (type, each requested instance) — for a CLONED node (N instances at one TIPC
+// type). `instances` empty is handled by the caller (falls back to resolve_and_cast,
+// the node's single resolved address). This is `tdb trace --instance 2,3,4` landing
+// on exactly those clones. Direct-to-supervisor, no log[trace] proxy.
+template <typename Msg>
+void resolve_and_cast_instances(const std::string& child, const Msg& m,
+                                const uint32_t* instances, size_t count) {
+    if (!g_ctl || count == 0) return;
+    auto* eng = ::supervisor::supervisor_instance();
+    if (!eng) return;
+    const auto addr = eng->registry().resolve(child);
+    if (!addr.ok) return;                 // unknown node → nothing to target
+    for (size_t i = 0; i < count; ++i) {
+        ::theia::runtime::cast(*g_ctl, m,
+            ::theia::runtime::TipcAddr{addr.type, instances[i]},
+            /*dst_name=*/nullptr, /*connect_timeout_ms=*/250);
+    }
+}
+
 // Typed entry points — the handlers pass the message straight off the wire.
 void ctl_set_trace(const std::string& child,
                    const platform_runtime_TraceControlPush& m) {
@@ -219,6 +239,18 @@ void ctl_set_trace(const std::string& child,
 void ctl_set_log_level(const std::string& child,
                        const platform_runtime_LogLevelPush& m) {
     resolve_and_cast(child, m);
+}
+// Per-instance variants: push to exactly the listed instances (empty → caller uses
+// the single-address ctl_set_trace above).
+void ctl_set_trace(const std::string& child,
+                   const platform_runtime_TraceControlPush& m,
+                   const uint32_t* instances, size_t count) {
+    resolve_and_cast_instances(child, m, instances, count);
+}
+void ctl_set_log_level(const std::string& child,
+                       const platform_runtime_LogLevelPush& m,
+                       const uint32_t* instances, size_t count) {
+    resolve_and_cast_instances(child, m, instances, count);
 }
 
 // Ordinal entry points — the engine (protobuf-free) passes plain values; we
@@ -643,9 +675,15 @@ ControlReply SupervisorCtl::handle_call(
     // Push live FROM THIS (runtime-backed) thread — the lifted resolve+cast,
     // cfg.trace_ctrl verbatim. resolve runs on the loop (via call); the cast is
     // here (the worker runnable can't touch transport). SAME function the
-    // engine's restart re-push calls (by ordinal).
-    ctl_set_trace(target, cfg.trace_ctrl);
-    set_reply(rep, 0, target, "trace config applied");
+    // engine's restart re-push calls (by ordinal). With instances[] set, target
+    // exactly those clones (a cloned node); empty = the node's single address.
+    if (cfg.instances_count > 0) {
+        ctl_set_trace(target, cfg.trace_ctrl, cfg.instances, cfg.instances_count);
+        set_reply(rep, 0, target, "trace config applied (per-instance)");
+    } else {
+        ctl_set_trace(target, cfg.trace_ctrl);
+        set_reply(rep, 0, target, "trace config applied");
+    }
     return rep;
 }
 
@@ -728,9 +766,14 @@ ControlReply SupervisorCtl::handle_call(
         return rep;
     }
     // Push live FROM THIS thread — resolve (loop) + cast (here), cfg.log_level
-    // verbatim.
-    ctl_set_log_level(target, cfg.log_level);
-    set_reply(rep, 0, target, "log level applied");
+    // verbatim. instances[] set → target those clones; empty → single address.
+    if (cfg.instances_count > 0) {
+        ctl_set_log_level(target, cfg.log_level, cfg.instances, cfg.instances_count);
+        set_reply(rep, 0, target, "log level applied (per-instance)");
+    } else {
+        ctl_set_log_level(target, cfg.log_level);
+        set_reply(rep, 0, target, "log level applied");
+    }
     return rep;
 }
 

@@ -1985,6 +1985,12 @@ def cmd_release(args: list[str]) -> int:
     import json   # noqa: F401  (kept for parity / future manifest reads)
     import shutil
 
+    # NOTE: patch-versioning is an APP-PLANE concern and lives on `release-swp`
+    # (`theia release-swp <app> --patch`), NOT here. `theia release` ships the
+    # RUNTIME plane, which is FIXED per install — rolling it means a re-provision
+    # (colony/base plane), never a free version swap. Keep runtime fixed, exchange
+    # the app SWP freely: that split is the whole point (see cmd_release_swp).
+
     if "-h" in args or "--help" in args:
         print(cmd_release.__doc__, file=sys.stderr)
         return 0
@@ -2121,6 +2127,68 @@ def cmd_release(args: list[str]) -> int:
     return 0
 
 
+def _semver_parts(ver: str) -> "tuple[int, int, int]":
+    """<ver>[-<abi>] → (major, minor, patch), abi stripped, short forms padded
+    (1 → (1,0,0), 1.2 → (1,2,0)). Non-numeric component raises ValueError."""
+    core = (ver or "0.0.0").split("-", 1)[0]
+    parts = core.split(".")
+    while len(parts) < 3:
+        parts.append("0")
+    return (int(parts[0]), int(parts[1]), int(parts[2]))
+
+
+def _bump_patch(ver: str) -> str:
+    """major.minor.PATCH → major.minor.(PATCH+1). A bare/short semver is padded
+    (1 → 1.0.1, 1.0 → 1.0.1). Non-numeric PATCH raises (caller reports)."""
+    major, minor, patch = _semver_parts(ver)
+    return f"{major}.{minor}.{patch + 1}"
+
+
+def _s3_latest_swp_version(s3_url: str, fleet: str, app: str) -> "str | None":
+    """The highest published SWP semver for <app> on the package plane, ABI
+    stripped (versions are stored as <ver>-<abi>). Reads
+    s3://theia-swp/user-software/<fleet>/<app>/ with the aws cli. None if the aws
+    cli is missing or the app has no releases yet. Used by `release-swp --patch` to
+    know what to increment."""
+    import os
+    import subprocess
+    if not shutil.which("aws"):
+        return None
+    bucket = os.environ.get("THEIA_SWP_BUCKET", "theia-swp")
+    env = {**os.environ,
+           "AWS_ACCESS_KEY_ID": os.environ.get("MINIO_USER", "theia"),
+           "AWS_SECRET_ACCESS_KEY": os.environ.get("MINIO_PASSWORD", "theiaminio"),
+           "AWS_DEFAULT_REGION": "us-east-1"}
+    prefix = f"user-software/{fleet}/{app}/"
+    # `s3 ls <prefix>` lists the version dirs as `PRE <ver>-<abi>/` lines.
+    r = subprocess.run(["aws", "--endpoint-url", s3_url, "s3", "ls",
+                        f"s3://{bucket}/{prefix}"],
+                       env=env, capture_output=True, text=True)
+    if r.returncode != 0:
+        return None
+
+    def _semver_key(v: str) -> tuple:
+        # <ver>-<abi> → sort key on the numeric semver only (abi is a build flavour
+        # of the SAME version, so it must not perturb the ordering).
+        core = v.split("-", 1)[0]
+        try:
+            return tuple(int(x) for x in core.split("."))
+        except ValueError:
+            return (0,)
+
+    versions = []
+    for line in r.stdout.splitlines():
+        line = line.strip()
+        if line.startswith("PRE ") and line.endswith("/"):
+            versions.append(line[4:-1])          # strip "PRE " and trailing "/"
+    if not versions:
+        return None
+    # highest semver; strip the -abi suffix — the patch bump is on the semver, and
+    # the abi is re-derived from --arch by cmd_release_swp.
+    latest = max(versions, key=_semver_key)
+    return latest.split("-", 1)[0]
+
+
 def cmd_release_swp(args: list[str]) -> int:
     """Build + publish a USER-WS SOFTWARE PACKAGE (SWP) for day-2 Mender OTA.
 
@@ -2142,6 +2210,21 @@ def cmd_release_swp(args: list[str]) -> int:
                          compositions live under it (//apps/<app>/<Composition>)
         --swp-version V  the SWP semver (default 0.1.0) — the install dir + Mender
                          artifact name (keyed <app>-<V>-<abi>)
+        --patch          AUTO-BUMP the PATCH of the app's latest published SWP
+                         (1.0.0 → 1.0.1) instead of taking --swp-version. The app
+                         plane is exchanged FREELY on a FIXED runtime — a PATCH is a
+                         no-interface-change swap (no .art change, no migration), the
+                         exact artifact a GS Rollout advances a group onto. Needs
+                         --s3 to discover the latest (else --from); abi/role scoped
+                         in the name = "partial per machine". Pairs with --to/--from.
+        --from V         (with --patch) the base version to bump (default: the
+                         highest published on S3 for this <app>/<fleet>, or 1.0.0).
+        --to V           (with --patch) an explicit target version — skips the bump.
+                         Crossing a MAJOR (X.0.0) is an INTERFACE / .art change: not
+                         a free swap. It is REFUSED unless --migrate is also given.
+        --migrate        acknowledge a MAJOR bump: an .art-level interface change
+                         implies a migration + a runtime pin (no backward compat).
+                         Required to cross a major boundary via --to.
         --fleet F        the hardware-capability fleet / Mender device-group
                          (default theia-rig) — the S3 package-plane key + Mender
                          --device-type
@@ -2172,7 +2255,14 @@ def cmd_release_swp(args: list[str]) -> int:
         print(cmd_release_swp.__doc__, file=sys.stderr)
         return 0 if args else 2
 
-    app = next((a for a in args if not a.startswith("-")), None)
+    # The <app> is the first bare positional — but SKIP the values of value-taking
+    # options (e.g. `--to 2.0.0` must not make "2.0.0" the app).
+    _VALUE_OPTS = {"--swp-version", "--app-version", "--fleet", "--arch", "--machine",
+                   "--s3", "--from", "--to", "--requires-runtime", "--asset", "--env"}
+    _skip = {i + 1 for i, a in enumerate(args)
+             if a in _VALUE_OPTS and i + 1 < len(args)}
+    app = next((a for i, a in enumerate(args)
+                if not a.startswith("-") and i not in _skip), None)
     if not app:
         print("theia release-swp: needs an <app> name (apps/<app>).",
               file=sys.stderr)
@@ -2184,9 +2274,58 @@ def cmd_release_swp(args: list[str]) -> int:
                 return args[i + 1]
         return default
 
-    # --swp-version is canonical; --app-version kept as a back-compat alias.
-    app_ver = _opt("--swp-version") or _opt("--app-version", "0.1.0")
     fleet = _opt("--fleet", "theia-rig")
+    # --swp-version is canonical; --app-version kept as a back-compat alias.
+    # --patch OVERRIDES both: auto-increment the app's latest published SWP. The app
+    # plane is a FREE swap on a FIXED runtime, so a PATCH bump is the default (no
+    # interface / .art change, no migration). --to gives an explicit target;
+    # crossing a MAJOR is an interface change and is refused without --migrate.
+    if "--patch" in args:
+        s3_for_latest = _opt("--s3")
+        explicit_to = _opt("--to")
+        base = _opt("--from")
+        if explicit_to:
+            app_ver = explicit_to
+        else:
+            if not base:
+                if s3_for_latest:
+                    base = _s3_latest_swp_version(s3_for_latest, fleet, app)
+                if not base:
+                    base = "1.0.0"
+                    print(f"theia release-swp --patch: no published SWP for {app!r} "
+                          f"on {fleet!r} (or no --s3/aws) — starting from {base}.",
+                          file=sys.stderr)
+            try:
+                app_ver = _bump_patch(base)
+            except ValueError:
+                print(f"theia release-swp --patch: base version {base!r} has a "
+                      "non-numeric component — pass --to <version> explicitly.",
+                      file=sys.stderr)
+                return 2
+        # MAJOR guard: an .art-level interface change is NOT a free app swap. Refuse
+        # to cross a major boundary (relative to the base/latest) without --migrate.
+        try:
+            base_major = _semver_parts(base or "0.0.0")[0]
+            new_major = _semver_parts(app_ver)[0]
+        except ValueError:
+            base_major = new_major = 0
+        if new_major > base_major and "--migrate" not in args:
+            print(f"theia release-swp --patch: {app_ver} crosses a MAJOR boundary "
+                  f"(from major {base_major}). A major bump is an INTERFACE / .art "
+                  "change — not a free app swap: it needs a migration + a matching "
+                  "runtime (no backward compat). Re-run with --migrate to confirm.",
+                  file=sys.stderr)
+            return 2
+        if new_major > base_major:
+            print(f"theia release-swp --patch: WARNING — {app_ver} is a MAJOR bump "
+                  "(.art interface change). --migrate given: a migration step + a "
+                  "runtime pin are implied; this is NOT a free version swap.",
+                  file=sys.stderr)
+        print(f"theia release-swp: {app} {base or '?'} → v{app_ver} "
+              f"({'explicit --to' if explicit_to else 'patch bump'})",
+              file=sys.stderr)
+    else:
+        app_ver = _opt("--swp-version") or _opt("--app-version", "0.1.0")
     # --arch is a BOARD TARGET (host | rpi4 | jetson), NOT a bare cpu — because the
     # app plane is ABI-keyed exactly like the runtime plane: rpi4=bookworm-arm64 and
     # jetson=focal-arm64 are different aarch64 ABIs (different sysroots, non-

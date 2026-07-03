@@ -34,6 +34,11 @@ public:
     // Accepts the synthetic "mN" form too (parses N). Returns false if unknown.
     bool index_of(const std::string& machine_name, uint32_t& out) const;
 
+    // The machine's ROLE (master/zonal — the deployment identity), from the
+    // manifest's role_map. Empty when no role_map was loaded or the instance
+    // is unknown. NOT unique across machines (workers share "zonal").
+    std::string role(uint32_t instance) const;
+
     // Was a manifest actually loaded (vs the env-unset fallback)? For logging.
     bool loaded() const;
 

@@ -658,6 +658,9 @@ public:
             // executor.json still carries a stale role name ("zonal") is listed by
             // its real unique name from machines.json.
             mi->set_name(machine_name_of(kv.first));
+            // ROLE (master/zonal) — the deployment identity from machines.json
+            // role_map. Non-unique; informational alongside the unique name.
+            mi->set_role(services_com::MachineManifest::instance().role(kv.first));
             mi->set_present(kv.second.present);
             if (!kv.second.system_info.empty())
                 mi->mutable_info()->ParseFromString(kv.second.system_info);

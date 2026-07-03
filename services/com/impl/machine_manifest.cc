@@ -35,7 +35,8 @@ long read_machine_index(const std::string& dir) {
 }  // namespace
 
 struct MachineManifest::Impl {
-    std::unordered_map<uint32_t, std::string> by_instance;
+    std::unordered_map<uint32_t, std::string> by_instance;   // index → name
+    std::unordered_map<uint32_t, std::string> role_by_inst;  // index → role
     bool                                      loaded = false;
 
     void load() {
@@ -58,6 +59,18 @@ struct MachineManifest::Impl {
                     if (idx < 0) continue;
                     by_instance[static_cast<uint32_t>(idx)] = kv.key();  // idx → name
                     loaded = true;
+                }
+            }
+            // role_map (name → role, master/zonal) → role_by_inst (index → role),
+            // resolving names through the machine_index we just built. The role is
+            // the DEPLOYMENT identity — non-unique, informational for the GUI.
+            if (loaded && j.contains("role_map") && j.at("role_map").is_object()) {
+                for (const auto& kv : j.at("machine_index").items()) {
+                    if (!kv.value().is_number()) continue;
+                    const auto idx = static_cast<uint32_t>(kv.value().get<long>());
+                    const auto rit = j.at("role_map").find(kv.key());
+                    if (rit != j.at("role_map").end() && rit->is_string())
+                        role_by_inst[idx] = rit->get<std::string>();
                 }
             }
             if (loaded) return;   // inline map is complete — done.
@@ -105,6 +118,11 @@ std::string MachineManifest::name(uint32_t inst) const {
     auto it = impl_->by_instance.find(inst);
     if (it != impl_->by_instance.end()) return it->second;
     return "m" + std::to_string(inst);   // synthetic fallback (Stage-3 prefix)
+}
+
+std::string MachineManifest::role(uint32_t inst) const {
+    auto it = impl_->role_by_inst.find(inst);
+    return it != impl_->role_by_inst.end() ? it->second : std::string();
 }
 
 bool MachineManifest::index_of(const std::string& nm, uint32_t& out) const {

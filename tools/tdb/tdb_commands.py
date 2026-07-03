@@ -210,15 +210,20 @@ def cmd_machines(args, sup, _tf) -> int:
     if not rows:
         print("(no machines reported — is com's cluster scan up?)")
         return 0
-    hdr = f"{'INST':<5} {'MACHINE':<12} {'PRESENT':<8} {'HOST':<18} UPTIME"
+    # Columns: INST | MACHINE (unique runtime identity) | ROLE (deployment
+    # identity, master/zonal — non-unique) | PRESENT | HOST | UPTIME.
+    hdr = (f"{'INST':<5} {'MACHINE':<10} {'ROLE':<8} {'PRESENT':<8} "
+           f"{'HOST':<16} UPTIME")
     out = [hdr]
     for m in rows:
         info = _g(m, "info", None)
         host = _g(info, "hostname", "") if info is not None else ""
         start_ms = _g(info, "start_timestamp_ms", 0) if info is not None else 0
         up = _fmt_epoch_ms(start_ms) if start_ms else ""
-        out.append(f"{_g(m, 'instance', 0):<5} {_g(m, 'name', ''):<12} "
-                   f"{'yes' if _g(m, 'present') else 'no':<8} {host:<18} {up}")
+        role = _g(m, "role", "") or "—"
+        out.append(f"{_g(m, 'instance', 0):<5} {_g(m, 'name', ''):<10} "
+                   f"{role:<8} {'yes' if _g(m, 'present') else 'no':<8} "
+                   f"{host:<16} {up}")
     print("\n".join(out))
     return 0
 

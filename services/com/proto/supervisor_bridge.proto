@@ -127,13 +127,18 @@ message ListMachinesCall {}
 
 message MachineInfo {
     uint32 instance = 1;   // TIPC instance (central=0, compute=1, …)
-    string name     = 2;   // machine name from the manifest (or "mN" fallback)
+    string name     = 2;   // machine NAME — the unique RUNTIME identity
+                           // (central/compute/frontal), from the manifest (or "mN")
     bool   present  = 3;   // currently published in the TIPC topology
     // The machine's host identity, cached from its supervisor's GetSystemInfo on
     // first discovery. Empty until the first successful fetch. (Live host metrics
     // — disk/uptime/ram/gpu — ride the SHWA AccelSample arm of Subscribe, stamped
     // per machine_index; this carries the STATIC identity only.)
     system_supervisor.SystemInfo info = 4;
+    // The machine's ROLE — the DEPLOYMENT identity (master/zonal), from
+    // machines.json role_map. NOT unique (N workers share "zonal"); the `name`
+    // above is the unique key. Empty when no manifest role_map is loaded.
+    string role     = 5;
 }
 
 message MachineList {

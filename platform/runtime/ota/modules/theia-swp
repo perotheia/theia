@@ -117,10 +117,18 @@ print(f"theia-swp: merged SWP '{name}' ({n_procs} app proc(s)) into {exec_path}"
 PY
 }
 
-# Read {app, on[0]} from machines.json: the SWP name + the machine whose slice
-# carries the SWP's processes (the overlay target board).
+# Read {app, machine} from machines.json: the SWP name + THIS board's slice.
+# PER-MACHINE: prefer $THEIA_MACHINE (the board's own identity, exported by the
+# supervisor unit) if the SWP ships a slice for it — so a multi-machine SWP
+# (on=[central,compute]) applies the CORRECT slice on each board, not on[0]
+# everywhere. Fall back to on[0] for a single-machine SWP or an unset $THEIA_MACHINE.
 _swp_name() { python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("app","unknown"))' "$1"; }
-_swp_machine() { python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));o=d.get("on") or d.get("roles") or [];print(o[0] if o else "")' "$1"; }
+_swp_machine() {
+    python3 -c 'import json,sys,os
+d=json.load(open(sys.argv[1]))
+on=d.get("on") or d.get("roles") or []
+me=os.environ.get("THEIA_MACHINE","")
+print(me if me and me in on else (on[0] if on else ""))' "$1"; }
 _swp_procs() {
     # the SWP's process names = the application.json processes for the SWP app,
     # OR every bin/<fc> we shipped (fallback). Echo space-separated.
@@ -134,6 +142,27 @@ for a in d.get("applications",[]):
     ps += a.get("processes",[])
 print(" ".join(ps))
 PY
+    fi
+}
+
+# Run a MAJOR SWP's migration BEFORE the overlay/merge. A major (.art interface)
+# bump ships migration/<name>.py in its payload (theia release-swp --migrate). It
+# moves on-device config/state across the interface break; invoked as
+#   python3 <migration.py> <THEIA_ROOT>
+# The migration runs against the STILL-OLD release ($CURRENT), so it can read the
+# pre-upgrade config. A non-zero exit ABORTS the install (Mender then rolls back) —
+# a broken migration must not leave a half-migrated box. A PATCH SWP ships no
+# migration/ dir, so this is a no-op for the common (free-swap) case.
+_run_migration() {
+    work="$1"
+    mig="$(ls "$work"/migration/*.py 2>/dev/null | head -1 || true)"
+    [ -n "$mig" ] || { echo "theia-swp: no migration (free-swap SWP)"; return 0; }
+    echo "theia-swp: running migration $(basename "$mig") (MAJOR — .art interface change)"
+    if python3 "$mig" "$THEIA_ROOT"; then
+        echo "theia-swp: migration $(basename "$mig") OK"
+    else
+        echo "theia-swp: migration $(basename "$mig") FAILED — aborting install" >&2
+        return 1
     fi
 }
 
@@ -217,6 +246,11 @@ case "$STATE" in
     appj="$work/manifest/$machine/application.json"
     srcexec="$work/manifest/$machine/executor.json"
     procs="$(_swp_procs "$mj" "$appj")"
+
+    # MAJOR migration (if any) runs FIRST — against the still-old release, before we
+    # overlay the new binaries or merge the executor. A failed migration aborts the
+    # install so Mender rolls back (no half-migrated box). No-op for a PATCH SWP.
+    _run_migration "$work" || { rm -rf "$work"; exit 1; }
 
     # The overlay target. If the runtime isn't provisioned yet ($CURRENT absent),
     # create a minimal layout so the SWP binaries still land (they run once the

@@ -2222,9 +2222,19 @@ def cmd_release_swp(args: list[str]) -> int:
         --to V           (with --patch) an explicit target version — skips the bump.
                          Crossing a MAJOR (X.0.0) is an INTERFACE / .art change: not
                          a free swap. It is REFUSED unless --migrate is also given.
-        --migrate        acknowledge a MAJOR bump: an .art-level interface change
-                         implies a migration + a runtime pin (no backward compat).
-                         Required to cross a major boundary via --to.
+        --migrate        acknowledge a MAJOR bump: an .art-level interface change.
+                         Required to cross a major boundary (via --to or an explicit
+                         X.0.0 --swp-version). It MAKES TWO THINGS MANDATORY:
+                           • --requires-runtime <V> (the runtime pin) — refused if
+                             empty (the GS gate can't protect an unpinned major app).
+                           • a migration file — --migration <path>, else the
+                             conventional apps/<app>/migrations/v<F>-to-v<T>.py; an
+                             empty no-op stub is AUTO-CREATED if none exists (edit +
+                             re-run). It ships as a package part (in the .mender +
+                             synced to S3 <key>/migration/) and runs on-device during
+                             ArtifactInstall, before the executor merge.
+        --migration P    (with --migrate) the migration script to ship (default: the
+                         conventional apps/<app>/migrations/v<F>-to-v<T>.py stub).
         --fleet F        the hardware-capability fleet / Mender device-group
                          (default theia-rig) — the S3 package-plane key + Mender
                          --device-type
@@ -2258,7 +2268,8 @@ def cmd_release_swp(args: list[str]) -> int:
     # The <app> is the first bare positional — but SKIP the values of value-taking
     # options (e.g. `--to 2.0.0` must not make "2.0.0" the app).
     _VALUE_OPTS = {"--swp-version", "--app-version", "--fleet", "--arch", "--machine",
-                   "--s3", "--from", "--to", "--requires-runtime", "--asset", "--env"}
+                   "--s3", "--from", "--to", "--requires-runtime", "--migration",
+                   "--asset", "--env"}
     _skip = {i + 1 for i, a in enumerate(args)
              if a in _VALUE_OPTS and i + 1 < len(args)}
     app = next((a for i, a in enumerate(args)
@@ -2280,6 +2291,7 @@ def cmd_release_swp(args: list[str]) -> int:
     # plane is a FREE swap on a FIXED runtime, so a PATCH bump is the default (no
     # interface / .art change, no migration). --to gives an explicit target;
     # crossing a MAJOR is an interface change and is refused without --migrate.
+    is_major = False        # a MAJOR (.art interface) bump — forces pin + migration
     if "--patch" in args:
         s3_for_latest = _opt("--s3")
         explicit_to = _opt("--to")
@@ -2309,23 +2321,28 @@ def cmd_release_swp(args: list[str]) -> int:
             new_major = _semver_parts(app_ver)[0]
         except ValueError:
             base_major = new_major = 0
-        if new_major > base_major and "--migrate" not in args:
+        is_major = new_major > base_major
+        if is_major and "--migrate" not in args:
             print(f"theia release-swp --patch: {app_ver} crosses a MAJOR boundary "
                   f"(from major {base_major}). A major bump is an INTERFACE / .art "
                   "change — not a free app swap: it needs a migration + a matching "
                   "runtime (no backward compat). Re-run with --migrate to confirm.",
                   file=sys.stderr)
             return 2
-        if new_major > base_major:
+        if is_major:
             print(f"theia release-swp --patch: WARNING — {app_ver} is a MAJOR bump "
                   "(.art interface change). --migrate given: a migration step + a "
-                  "runtime pin are implied; this is NOT a free version swap.",
+                  "runtime pin are REQUIRED; this is NOT a free version swap.",
                   file=sys.stderr)
         print(f"theia release-swp: {app} {base or '?'} → v{app_ver} "
               f"({'explicit --to' if explicit_to else 'patch bump'})",
               file=sys.stderr)
     else:
         app_ver = _opt("--swp-version") or _opt("--app-version", "0.1.0")
+        # --migrate WITHOUT --patch (explicit --swp-version X.0.0): the operator is
+        # declaring a migration outright — treat it as a major bump (forces the
+        # pin + migration file below), the same contract as the --patch path.
+        is_major = "--migrate" in args
     # --arch is a BOARD TARGET (host | rpi4 | jetson), NOT a bare cpu — because the
     # app plane is ABI-keyed exactly like the runtime plane: rpi4=bookworm-arm64 and
     # jetson=focal-arm64 are different aarch64 ABIs (different sysroots, non-
@@ -2340,6 +2357,56 @@ def cmd_release_swp(args: list[str]) -> int:
     requires_runtime = _opt("--requires-runtime", "")
     s3_url = _opt("--s3")
     mender_only = "--mender-only" in args or not s3_url
+
+    # ── MAJOR (.art interface change): FORCE the runtime pin + a migration part. ──
+    # A major SWP is not a free swap; it depends on a specific runtime and needs a
+    # migration script to move the on-device config/state across the interface
+    # break. Both are MANDATORY on --migrate (the migration may be a no-op stub, but
+    # it must EXIST — an explicit, reviewable, shippable artifact).
+    migration_src: "Path | None" = None
+    if is_major:
+        # (b) FORCE requires_runtime. A major app pins EXACTLY ONE runtime; refuse to
+        # ship a major with an empty pin (the GS gate can't protect an unpinned app).
+        if not requires_runtime:
+            print("theia release-swp --migrate: a MAJOR bump MUST pin a runtime — "
+                  "pass --requires-runtime <runtime-version> (the base this app's "
+                  "interface is built against). No backward compat.", file=sys.stderr)
+            return 2
+        # (a) require a migration file — even empty. Explicit --migration <path>, else
+        # the conventional migrations/<from>-to-<to>.py; auto-CREATE an empty stub
+        # (a reviewable no-op) if neither exists, so a migration ALWAYS ships.
+        mig_opt = _opt("--migration")
+        if mig_opt:
+            migration_src = Path(mig_opt)
+            if not migration_src.is_file():
+                print(f"theia release-swp --migrate: --migration {mig_opt} not found.",
+                      file=sys.stderr)
+                return 2
+        else:
+            from_ver = (base if "--patch" in args else _opt("--from")) or "0"
+            frm = _semver_parts(from_ver)[0] if from_ver != "0" else 0
+            to = _semver_parts(app_ver)[0]
+            mig_dir = WORKSPACE / "apps" / app / "migrations"
+            migration_src = mig_dir / f"v{frm}-to-v{to}.py"
+            if not migration_src.is_file():
+                mig_dir.mkdir(parents=True, exist_ok=True)
+                migration_src.write_text(
+                    f'"""Migration {app} v{frm} → v{to} (MAJOR / .art interface '
+                    f'change).\n\nRuns on-device during ArtifactInstall of the '
+                    f'{app}-{app_ver} SWP, BEFORE the executor merge, to move config/'
+                    f'\nstate across the interface break. Edit me — this is a no-op '
+                    f'stub.\n\nInvoked:  python3 v{frm}-to-v{to}.py <THEIA_ROOT>\n"""\n'
+                    "import sys\n\n\n"
+                    "def migrate(theia_root: str) -> None:\n"
+                    "    # TODO: migrate config/state for the new interface. No-op by "
+                    "default.\n    pass\n\n\n"
+                    'if __name__ == "__main__":\n'
+                    "    migrate(sys.argv[1] if len(sys.argv) > 1 else \"/opt/theia\")\n")
+                print(f"theia release-swp --migrate: created empty migration stub "
+                      f"{migration_src} — EDIT it, then re-run.", file=sys.stderr)
+            else:
+                print(f"theia release-swp --migrate: using migration {migration_src}",
+                      file=sys.stderr)
     tgt = _target(arch)
     if not tgt:
         print(f"theia release-swp: no board target for arch '{arch}' "
@@ -2515,9 +2582,22 @@ def cmd_release_swp(args: list[str]) -> int:
     # artifacts (e.g. gateway-1.0-bookworm-arm64 vs gateway-1.0-focal-arm64).
     artifact_name = f"{swp_name}-{ver_key}"
     (stage / "version.txt").write_text(artifact_name + "\n")
+    # (c) A MAJOR SWP ships its migration as a PACKAGE PART: stage/migration/<name>
+    # goes into the tarball (→ on-device payload, run during ArtifactInstall) AND is
+    # synced to S3 alongside the artifact (see _publish_swp_plane). The index records
+    # the filename so GS/on-device know a migration must run.
+    migration_name = ""
+    if migration_src and migration_src.is_file():
+        (stage / "migration").mkdir(exist_ok=True)
+        migration_name = migration_src.name
+        _sh.copy2(migration_src, stage / "migration" / migration_name)
+        print(f"theia release-swp: packed migration {migration_name} into the SWP",
+              file=sys.stderr)
     # The plane-index fields the GS catalog reads, all DERIVED from the manifest.
     swp_meta = {"abi": abi, "arity": arity, "roles": roles, "on": swp_on,
-                "requires_runtime": requires_runtime}
+                "requires_runtime": requires_runtime,
+                # (d) record the migration + major flag on the index.
+                "migration": migration_name, "major": bool(is_major)}
 
     # ── Pack the Mender artifact (theia-swp module). Reuse mender-artifact if
     #    present; else leave the staged tree + a tarball for the GW to pack. ─────
@@ -2804,6 +2884,10 @@ def _publish_swp_plane(s3_url: str, fleet: str, app: str, ver: str,
            "abi": swp_meta.get("abi", ""),
            "arity": swp_meta.get("arity", len(roles) or 1),
            "roles": roles, "on": swp_meta.get("on", roles),
+           # A MAJOR SWP records its migration part + the flag so GS/on-device know
+           # a migration must run (and that this is not a free swap).
+           "migration": swp_meta.get("migration", ""),
+           "major": bool(swp_meta.get("major", False)),
            "files": objs}
     # Write the index alongside the artifact (tarball.parent is the staged
     # dist/apps/<pkg>/ dir) — `app` here is the SWP/rig name, which may differ from
@@ -2823,6 +2907,15 @@ def _publish_swp_plane(s3_url: str, fleet: str, app: str, ver: str,
                  f"s3://{bucket}/{key}/manifest"]) != 0:
             return 1
         print(f"$ aws sync {stage_manifest} → s3://{bucket}/{key}/manifest/",
+              file=sys.stderr)
+    # ── The MIGRATION as a SEPARATE S3 object (a package part), so GS/an operator
+    # can read/fetch it without unpacking the .mender — mirrors the manifest sync.
+    stage_migration = (tarball.parent / "_stage" / "migration") if tarball else None
+    if stage_migration and stage_migration.is_dir():
+        if _aws([*aws, "sync", str(stage_migration),
+                 f"s3://{bucket}/{key}/migration"]) != 0:
+            return 1
+        print(f"$ aws sync {stage_migration} → s3://{bucket}/{key}/migration/",
               file=sys.stderr)
     print(f"theia release-swp: published → s3://{bucket}/{key}/ "
           "(artifact + index + manifest)", file=sys.stderr)

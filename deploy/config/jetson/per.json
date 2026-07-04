@@ -1,8 +1,0 @@
-{
-  "_comment": "L4-B shared-etcd: the Jetson compute board has NO local etcd — its per points at the CENTRAL board's etcd (one etcd per robot) so V-UCM on central reads every board's ucm_activation_<board> marker from the one shared keyspace. central's etcd binds 0.0.0.0:2379 (colony etcd.yml).",
-  "nodes": {
-    "per_client": {
-      "etcd_endpoint": "10.0.0.22:2379"
-    }
-  }
-}

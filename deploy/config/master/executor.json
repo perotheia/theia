@@ -1,0 +1,12 @@
+{
+  "children": [
+    {
+      "name": "services_sup",
+      "children": [
+        {"name": "fw", "run_on_start": false},
+        {"name": "tsync", "run_on_start": false},
+        {"name": "rds", "run_on_start": false}
+      ]
+    }
+  ]
+}

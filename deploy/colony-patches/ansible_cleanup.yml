@@ -174,5 +174,5 @@
         msg: >-
           Theia removed from {{ inventory_hostname }} ({{ machine }}).
           etcd data {{ 'WIPED' if wipe_etcd | bool else 'kept' }};
-          Mender {{ 'WIPED' if wipe_mender | bool else 'kept' }}.
+          Mender {{ 'WIPED' if clean_mender | bool else 'kept' }}.
           Run `theia orchestrate {{ machine }}` to install the new bundle.

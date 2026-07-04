@@ -1134,11 +1134,11 @@ def _apply_config_overrides(machine: str, cfg_dir: Path) -> None:
             merged = _deep_merge(_json.loads(target.read_text()),
                                  _json.loads(ov.read_text()))
         except ValueError as e:
-            print(f"theia install: skipping malformed override {ov} ({e})",
+            print(f"theia: skipping malformed override {ov} ({e})",
                   file=sys.stderr)
             continue
         target.write_text(_json.dumps(merged, indent=2))
-        print(f"theia install: applied override {ov.name} → {target}",
+        print(f"theia: applied config override {ov.name} → {target}",
               file=sys.stderr)
 
 
@@ -1830,6 +1830,23 @@ def cmd_manifest(args: list[str]) -> int:
         return rc
 
     machines = json.loads((out / "machines.json").read_text())["machines"]
+
+    # SAFE BASE: deep-merge the per-machine deploy/config/<machine>/*.json
+    # overrides (INCLUDING executor.json) onto the freshly-serialized manifest —
+    # the SAME routine `theia install` uses (_apply_config_overrides). This bakes
+    # rig-owned safe defaults (e.g. run_on_start:false for HW-gated FCs like
+    # fw/tsync/rds) into the emitted manifest, so every consumer — the services
+    # deb, the S3 manifest, and a user SWP that inherits this rig — deploys
+    # cleanly on ANY rig regardless of HW/CAPA. An operator whose target HAS the
+    # subsystem re-enables it with a per-machine override.
+    for _m in machines:
+        _apply_config_overrides(_m, out / _m / "config")
+        # config/executor.json is what the supervisor reads; keep the top-level
+        # machine executor.json (used by dist/deb staging) in sync.
+        _cfg_ex = out / _m / "config" / "executor.json"
+        _top_ex = out / _m / "executor.json"
+        if _cfg_ex.is_file() and _top_ex.is_file():
+            _top_ex.write_text(_cfg_ex.read_text())
 
     # config/<fc>.json and config/config-defaults.json are emitted by
     # serialize-manifest directly (from PROCESS_PARAMS / PROCESS_CONFIG_DEFAULTS

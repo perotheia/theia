@@ -494,20 +494,15 @@ void GrpcClient::run() {
             }
         }
 
-        // One-shot host + build facts on connect (the `tdb info` surface) for
-        // THIS connection's local machine — a fallback if ListMachines is absent
-        // (older com) or didn't carry cached info for it yet. Per-boot-static, so
-        // once per (re)connect is enough. Same unary stub.
-        {
-            ::services::com::GetSystemInfoCall si_req;
-            ::system_supervisor::SystemInfo si;
-            grpc::ClientContext si_ctx;
-            si_ctx.set_deadline(std::chrono::system_clock::now() +
-                                std::chrono::seconds(3));
-            if (stub->GetSystemInfo(&si_ctx, si_req, &si).ok() && callback_) {
-                callback_(machine_name_, kTagSystemInfo, si.SerializeAsString());
-            }
-        }
+        // NOTE: no per-connection GetSystemInfo fallback here. ListMachines above
+        // is the SINGLE authoritative source of per-machine identity — it emits a
+        // SystemInfo frame keyed on each machine's REAL name (master/zonal-1/…).
+        // A per-connection fallback keyed on machine_name_ (the connection's name,
+        // e.g. "localhost") fabricated a PHANTOM machine box that duplicated and
+        // MIS-KEYED master's data (the connection's com == master, so its
+        // GetSystemInfo returned master's facts under a "localhost" box). Fail
+        // fast on a com that can't enumerate — an empty Machines list is the
+        // honest signal, not a synthetic localhost row.
 
         ::services::com::SupervisorObservation obs;
         while (running_.load() && reader->Read(&obs)) {

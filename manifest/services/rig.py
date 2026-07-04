@@ -20,18 +20,17 @@ No user apps (apps are the day-2 Mender plane, not the factory runtime). colony
 provisions a board from the ROLE slice (runtime+services from S3); the user's
 gateway/monitor app is installed later via Mender.
 
-Two exports:
-  RIG   — master only (the arity-1 single-master runtime; the common case).
-  MULTI — master + zonal (arity ≥2; a multi-board Distribution serializes this,
-          one master + N zonal workers, each role bound to a board day-2).
-`theia manifest services` serializes RIG; `--attr MULTI` serializes the
-2-role variant. Addressed as `services` (manifest/services/rig.py →
-manifest.<target>.rig), symmetric with the user-app side (`theia manifest
+ONE export — RIG — the master + zonal deployment. Both roles ALWAYS exist in the
+manifest; arity is a DEPLOY-TIME fact (colony deploys role=master → the master
+slice, role=zonal → the zonal slice, fanning the single zonal slice onto N
+boards). There is no master-only variant: a 1-board deploy simply never
+materializes the zonal slice. Addressed as `services` (manifest/services/rig.py
+→ manifest.services.rig), symmetric with the user-app side (`theia manifest
 single`).
 
 ARCH-AGNOSTIC by design: each machine's arch is injected at serialize time —
-  artheia serialize-manifest manifest.services.rig --attr RIG   --arch x86_64
-  artheia serialize-manifest manifest.services.rig --attr MULTI --arch aarch64
+  artheia serialize-manifest manifest.services.rig --arch x86_64
+  artheia serialize-manifest manifest.services.rig --arch aarch64
 ONE rig → per-arch outputs (the --arch flag removes per-arch rig duplication).
 Default arch is a placeholder overridden by --arch.
 """
@@ -81,18 +80,7 @@ def _zonal_machine():
                         cores={0, 1}, machine_states={"Startup", "Running"})
 
 
-# ── RIG — master only (arity 1: the single-master runtime, the common case). ──
-RIG = BASE.combine(DeploymentLayer(
-    machines=MachineSetLayer(machines={_master_machine()}),
-    execution=ExecutionLayer(processes={
-        *(Append(ProcessLayer(name=n, machine=Explicit("master"))) for n in ALL),
-    }),
-    applications=ApplicationSetLayer(applications={
-        Append(ApplicationLayer(name="services", host_machine=Explicit("master"))),
-    }),
-))
-
-# ── MULTI — master + the single `zonal` worker slice (the 2-role runtime). ────
+# ── RIG — master + the `zonal` worker slice (the framework runtime). ─────────
 # EXACTLY two machines: `master` (all singletons + control-plane FCs) and `zonal`
 # (the per-board worker set: ucm + shwa). N-arity is a DEPLOY-TIME fact — colony
 # fans the one `zonal` slice onto N boards — NOT a manifest fact. The framework
@@ -104,7 +92,7 @@ RIG = BASE.combine(DeploymentLayer(
 _PER_BOARD   = {"shwa"} & ALL        # runs on master AND zonal (HW telemetry)
 _ZONE_ONLY   = ZONAL - _PER_BOARD    # zonal-exclusive (ucm — worker OTA installer)
 _MASTER_ONLY = ALL - ZONAL           # everything else → master only
-MULTI = BASE.combine(DeploymentLayer(
+RIG = BASE.combine(DeploymentLayer(
     machines=MachineSetLayer(machines={_master_machine(), _zonal_machine()}),
     execution=ExecutionLayer(processes={
         *(Append(ProcessLayer(name=n, machine=Explicit("master")))

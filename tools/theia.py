@@ -1972,25 +1972,24 @@ def _dist_app(mdir: Path, machines: list, arch_override) -> int:
 
 # The two runtime service ROLES the services deb carries config for. `master` is
 # the full-platform coordinator (all FCs); `zonal` is the per-board worker slice
-# (ucm + shwa). serialize-manifest emits master under `--attr RIG` and the zonal
-# worker slice under `--attr MULTI` (its named workers share role="zonal").
+# (ucm + shwa). The rig declares both as machines (name == role), so one
+# serialize pass emits both slices — see _generate_role_configs.
 _SERVICES_ROLES = ("master", "zonal")
 
 
 def _generate_role_configs(dest_root: Path) -> int:
-    """Serialize the framework services rig for each ROLE and lay the per-FC
-    config JSON (+ executor.json + config-defaults.json) under
-    dest_root/<role>/. This is the SAME config `theia manifest` emits per
-    machine — but keyed by ROLE so the theia-services deb can ship it at
-    /opt/theia/config/<role>/ and `theia install` can select by the machine's
-    role (closing the deb-path gap vs the local-install / S3-manifest paths,
-    which already carry config). Returns 0 on success.
+    """Serialize the framework services rig and lay each ROLE's per-FC config
+    JSON (+ executor.json + config-defaults.json) under dest_root/<role>/. This
+    is the SAME config `theia manifest` emits per machine — keyed by ROLE so the
+    theia-services deb can ship it at /opt/theia/config/<role>/ and `theia
+    install` selects by the machine's role (closing the deb-path gap vs the
+    local-install / S3-manifest paths, which already carry config). Returns 0 on
+    success.
 
-    master → `--attr RIG` (one machine `master`, every FC).
-    zonal  → `--attr MULTI` (master + named zonal workers); we take the maximal
-             zonal slice (the union across worker boards = {ucm, shwa}).
+    The rig declares exactly two machines whose NAME is their ROLE (master,
+    zonal), so one serialize pass yields both role slices — copy each machine's
+    config/ dir straight to dest_root/<role>/.
     """
-    import json
     import shutil
     import tempfile
     # serialize-manifest must import manifest.services.rig — resolvable from
@@ -1998,55 +1997,30 @@ def _generate_role_configs(dest_root: Path) -> int:
     env = {**os.environ, "PYTHONPATH": f"{THEIA_ROOT}{os.pathsep}"
            + os.environ.get("PYTHONPATH", "")}
     with tempfile.TemporaryDirectory() as td:
-        tdp = Path(td)
-        specs = (("master", "RIG"), ("zonal", "MULTI"))
-        for role, attr in specs:
-            out = tdp / attr
-            if (rc := _run(["artheia", "serialize-manifest",
-                            "manifest.services.rig", "--attr", attr,
-                            "--arch", "x86_64", "--out", str(out)],
-                           cwd=THEIA_ROOT)) != 0:
-                # Fall back to the env-injected import path if cwd alone didn't
-                # put manifest.* on sys.path.
-                proc = subprocess.run(
-                    ["artheia", "serialize-manifest", "manifest.services.rig",
-                     "--attr", attr, "--arch", "x86_64", "--out", str(out)],
-                    cwd=THEIA_ROOT, env=env)
-                if proc.returncode != 0:
-                    print(f"theia release: role config gen failed ({role}/{attr})",
-                          file=sys.stderr)
-                    return proc.returncode
-            # Pick the machine whose role matches: master → machine "master";
-            # zonal → the worker with the RICHEST config (the maximal slice).
-            machines_json = json.loads((out / "machines.json").read_text())
-            role_map = machines_json.get("role_map", {})
-            candidates = [m for m in machines_json["machines"]
-                          if role_map.get(m, m) == role]
-            if not candidates:
-                candidates = [role]                       # single-machine RIG
-            # The role slice is the MAXIMAL config across matching machines: a
-            # zonal worker may run a subset (e.g. shwa-only), but the ROLE ships
-            # its full set. UNION every matching machine's config/*.json by
-            # filename (a later machine's file wins ties — they're role-identical
-            # defaults), so the shipped slice is complete regardless of how the
-            # rig distributed FCs across named workers. Deterministic: iterate
-            # candidates sorted, union into one dir.
+        out = Path(td) / "rig"
+        argv = ["artheia", "serialize-manifest", "manifest.services.rig",
+                "--arch", "x86_64", "--out", str(out)]
+        if _run(argv, cwd=THEIA_ROOT) != 0:
+            # Fall back to the env-injected import path if cwd alone didn't put
+            # manifest.* on sys.path.
+            proc = subprocess.run(argv, cwd=THEIA_ROOT, env=env)
+            if proc.returncode != 0:
+                print("theia release: role config gen failed", file=sys.stderr)
+                return proc.returncode
+        # Machine name == role (master, zonal): copy each machine's config/.
+        for role in ("master", "zonal"):
+            mcfg = out / role / "config"
+            if not mcfg.is_dir():
+                print(f"theia release: no config/ for role {role}",
+                      file=sys.stderr)
+                return 1
             dst = dest_root / role
             dst.mkdir(parents=True, exist_ok=True)
-            seen: set = set()
-            for m in sorted(candidates):
-                mcfg = out / m / "config"
-                if not mcfg.is_dir():
-                    continue
-                for f in mcfg.glob("*.json"):
-                    shutil.copy2(f, dst / f.name)
-                    seen.add(f.name)
-            if not seen:
-                print(f"theia release: no config/ for role {role} "
-                      f"(candidates {candidates})", file=sys.stderr)
-                return 1
+            files = list(mcfg.glob("*.json"))
+            for f in files:
+                shutil.copy2(f, dst / f.name)
             print(f"theia release: role config {role} → {dst} "
-                  f"({len(seen)} files, union of {sorted(candidates)})")
+                  f"({len(files)} files)")
     return 0
 
 

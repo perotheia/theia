@@ -41,6 +41,39 @@ export THEIA_SUPERVISOR_MANIFEST="$THEIA_ROOT_DIR/config/executor.json"
 if [[ -f "$THEIA_ROOT_DIR/config/machines.json" ]]; then
     export THEIA_MACHINE_MANIFEST="${THEIA_MACHINE_MANIFEST:-$THEIA_ROOT_DIR/config}"
 fi
+
+# THEIA_MACHINE / THEIA_MACHINE_INSTANCE: this board's identity. DERIVE them from
+# on-device state so EVERY launcher gets it right — colony's supervisor unit, the
+# container entrypoint, AND the theia-swp OTA relaunch — without each having to
+# pass them. The name is executor.json's root "machine"; the instance is that
+# name's machines.json machine_index. This is the single source: an OTA relaunch
+# that forgot to pass THEIA_MACHINE_INSTANCE used to boot a worker at instance 0,
+# colliding with master in the shared TIPC namespace (com couldn't reach it).
+# An explicit env wins (caller override); we only fill what's unset.
+if [[ -z "${THEIA_MACHINE:-}" && -f "$THEIA_ROOT_DIR/config/executor.json" ]]; then
+    THEIA_MACHINE="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("machine",""))' \
+        "$THEIA_ROOT_DIR/config/executor.json" 2>/dev/null)"
+    [[ -n "$THEIA_MACHINE" ]] && export THEIA_MACHINE
+fi
+if [[ -z "${THEIA_MACHINE_INSTANCE:-}" && -n "${THEIA_MACHINE:-}" \
+      && -f "$THEIA_ROOT_DIR/config/machines.json" ]]; then
+    _mi="$(python3 -c 'import json,sys
+d=json.load(open(sys.argv[1])); idx=d.get("machine_index",{})
+v=idx.get(sys.argv[2])
+print(v if isinstance(v,int) else "")' \
+        "$THEIA_ROOT_DIR/config/machines.json" "$THEIA_MACHINE" 2>/dev/null)"
+    # FAIL FAST: a manifest that names this machine MUST carry its index. A silent
+    # default to 0 is what caused the collision — surface it instead.
+    if [[ -n "$_mi" ]]; then
+        export THEIA_MACHINE_INSTANCE="$_mi"
+    else
+        echo "theia-run: machine '$THEIA_MACHINE' has no machine_index in" \
+             "$THEIA_ROOT_DIR/config/machines.json — cannot resolve its TIPC" \
+             "instance (refusing to default to 0 and collide)." >&2
+        exit 1
+    fi
+fi
+
 export THEIA_LOG_LEVEL="${THEIA_LOG_LEVEL:-info}"
 # The CHILDREN's libs come from the current release; OTA swaps them with current.
 export LD_LIBRARY_PATH="$THEIA_ROOT_DIR/current/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"

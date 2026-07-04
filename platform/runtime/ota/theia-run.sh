@@ -42,36 +42,20 @@ if [[ -f "$THEIA_ROOT_DIR/config/machines.json" ]]; then
     export THEIA_MACHINE_MANIFEST="${THEIA_MACHINE_MANIFEST:-$THEIA_ROOT_DIR/config}"
 fi
 
-# THEIA_MACHINE / THEIA_MACHINE_INSTANCE: this board's identity. DERIVE them from
-# on-device state so EVERY launcher gets it right — colony's supervisor unit, the
-# container entrypoint, AND the theia-swp OTA relaunch — without each having to
-# pass them. The name is executor.json's root "machine"; the instance is that
-# name's machines.json machine_index. This is the single source: an OTA relaunch
-# that forgot to pass THEIA_MACHINE_INSTANCE used to boot a worker at instance 0,
-# colliding with master in the shared TIPC namespace (com couldn't reach it).
-# An explicit env wins (caller override); we only fill what's unset.
-if [[ -z "${THEIA_MACHINE:-}" && -f "$THEIA_ROOT_DIR/config/executor.json" ]]; then
-    THEIA_MACHINE="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("machine",""))' \
-        "$THEIA_ROOT_DIR/config/executor.json" 2>/dev/null)"
-    [[ -n "$THEIA_MACHINE" ]] && export THEIA_MACHINE
-fi
-if [[ -z "${THEIA_MACHINE_INSTANCE:-}" && -n "${THEIA_MACHINE:-}" \
-      && -f "$THEIA_ROOT_DIR/config/machines.json" ]]; then
-    _mi="$(python3 -c 'import json,sys
-d=json.load(open(sys.argv[1])); idx=d.get("machine_index",{})
-v=idx.get(sys.argv[2])
-print(v if isinstance(v,int) else "")' \
-        "$THEIA_ROOT_DIR/config/machines.json" "$THEIA_MACHINE" 2>/dev/null)"
-    # FAIL FAST: a manifest that names this machine MUST carry its index. A silent
-    # default to 0 is what caused the collision — surface it instead.
-    if [[ -n "$_mi" ]]; then
-        export THEIA_MACHINE_INSTANCE="$_mi"
-    else
-        echo "theia-run: machine '$THEIA_MACHINE' has no machine_index in" \
-             "$THEIA_ROOT_DIR/config/machines.json — cannot resolve its TIPC" \
-             "instance (refusing to default to 0 and collide)." >&2
-        exit 1
-    fi
+# THEIA_MACHINE_INSTANCE persistence: the board's TIPC instance is a DEPLOY fact
+# (colony passes machine_instance per board: master=0, and each zonal worker a
+# distinct 1,2,… — it is NOT derivable from the machine NAME, which is shared
+# across all zonal workers). The FIRST launcher to receive it (colony's
+# supervisor unit) persists it here so any LATER launch on this board — the
+# theia-swp OTA relaunch, a manual restart — recovers the SAME instance instead
+# of defaulting to 0 (which collided with master in the shared TIPC namespace).
+_INST_FILE="$THEIA_ROOT_DIR/config/machine_instance"
+if [[ -n "${THEIA_MACHINE_INSTANCE:-}" ]]; then
+    # A caller passed it (colony/first boot) — persist for later launches.
+    printf '%s\n' "$THEIA_MACHINE_INSTANCE" > "$_INST_FILE" 2>/dev/null || true
+elif [[ -r "$_INST_FILE" ]]; then
+    # No caller value — recover the persisted deploy-time instance.
+    export THEIA_MACHINE_INSTANCE="$(cat "$_INST_FILE")"
 fi
 
 export THEIA_LOG_LEVEL="${THEIA_LOG_LEVEL:-info}"

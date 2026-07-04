@@ -224,7 +224,7 @@ std::unordered_map<uint32_t, MachineEntry>   g_machines;     // instance → ent
 //      no manifest is published (a single-machine dev stack with no
 //      THEIA_MACHINE_MANIFEST still shows "central": the supervisor tells com).
 //   3. "mN".
-std::string machine_name_of(uint32_t inst) {
+std::string machine_base_name_of(uint32_t inst) {
     const auto& mm = services_com::MachineManifest::instance();
     // 1. AUTHORITATIVE: the manifest map, when it knows this instance.
     if (mm.has(inst)) return mm.name(inst);
@@ -237,6 +237,39 @@ std::string machine_name_of(uint32_t inst) {
     }
     // 3. synthetic "mN".
     return mm.name(inst);
+}
+
+// The UNIQUE machine name com keys on (prefix + selector + the MACHINE column).
+// The base name is the ROLE-generic identity — for `1 master, N zonal` every
+// worker's base name is "zonal" (the framework manifest is role-keyed; colony
+// fans the ONE zonal slice onto N boards, so it can't mint unique names). A
+// non-unique base name would collide: `rtdb ps` folds both workers' trees under
+// "zonal/", and the name→instance selector picks a random one. So when the base
+// name is shared by ANOTHER present instance, disambiguate it with the TIPC
+// instance: "zonal" → "zonal-1"/"zonal-2". A name that IS unique (master, a
+// single-machine dev stack, real distinct hostnames) is returned untouched.
+std::string machine_name_of(uint32_t inst) {
+    const std::string base = machine_base_name_of(inst);
+    const auto& mm = services_com::MachineManifest::instance();
+    // Does any OTHER present instance resolve to the SAME base name? (Cheap: the
+    // cluster is a handful of machines.) If so, this base is ambiguous → suffix
+    // the instance. Snapshot the present instances under the lock, then resolve
+    // their base names OUTSIDE it (machine_base_name_of takes the lock itself).
+    std::vector<uint32_t> others;
+    {
+        std::lock_guard<std::mutex> lk(g_machines_mtx);
+        for (const auto& kv : g_machines)
+            if (kv.first != inst && kv.second.present) others.push_back(kv.first);
+    }
+    for (uint32_t o : others) {
+        // Cheap path: the manifest name (no lock). Fall back to the cached
+        // reported name via machine_base_name_of for a manifest it doesn't list.
+        const std::string obase =
+            mm.has(o) ? mm.name(o) : machine_base_name_of(o);
+        if (obase == base)
+            return base + "-" + std::to_string(inst);
+    }
+    return base;
 }
 
 // Mark an instance present/absent (called from the topology callback). The
@@ -294,13 +327,19 @@ bool machine_name_to_instance(const std::string& sel, uint32_t& inst) {
         inst = static_cast<uint32_t>(std::strtoul(sel.c_str(), nullptr, 10));
         return true;
     }
-    // Otherwise the machine NAME — the unique runtime identity. serialize-manifest
-    // enforces unique names, so a name resolves to exactly one instance.
+    // Otherwise the machine NAME — the UNIQUE name com presents (the same one the
+    // MACHINE column / tree prefix use). For a role-generic worker that's the
+    // instance-disambiguated form ("zonal-1"), so match on machine_name_of(); a
+    // raw base ("zonal") still matches a machine that IS unique. Snapshot the
+    // present instances under the lock, resolve names outside it (machine_name_of
+    // takes the lock itself).
+    std::vector<uint32_t> insts;
     {
         std::lock_guard<std::mutex> lk(g_machines_mtx);
-        for (const auto& kv : g_machines)
-            if (kv.second.name == sel) { inst = kv.first; return true; }
+        for (const auto& kv : g_machines) insts.push_back(kv.first);
     }
+    for (uint32_t i : insts)
+        if (machine_name_of(i) == sel) { inst = i; return true; }
     return services_com::MachineManifest::instance().index_of(sel, inst);
 }
 

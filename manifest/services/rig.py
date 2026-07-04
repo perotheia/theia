@@ -69,22 +69,16 @@ def _master_machine():
                         machine_states={"Startup", "Running"})
 
 
-def _zonal_machine(name):
-    # A worker board (zone of responsibility). role="zonal" is the DEPLOYMENT
-    # identity (shared by every worker — colony pulls the manifest/zonal/ slice);
-    # `name` is the unique RUNTIME identity (compute/frontal/…) com + the GUI key
-    # on. Keep them SEPARATE: role is not unique, the name IS. No etcd (reaches the
-    # master's shared etcd).
-    return MachineLayer(name=name, role=Explicit("zonal"),
+def _zonal_machine():
+    # The zone-of-responsibility worker slice. Its name IS its role — "zonal" —
+    # because the framework runtime manifest is ROLE-KEYED, not board-named: it
+    # declares exactly TWO machines, `master` and `zonal`. colony deploys the
+    # `zonal` slice to N worker boards (all role="zonal", all named "zonal" at
+    # runtime until a day-2 user SWP renames them); the framework has NO knowledge
+    # of any board names. No etcd (reaches the master's shared etcd over TIPC).
+    return MachineLayer(name="zonal", role=Explicit("zonal"),
                         arch=Explicit("x86_64"),
                         cores={0, 1}, machine_states={"Startup", "Running"})
-
-
-# The MULTI rig's worker board NAMES — each a distinct, UNIQUE runtime identity
-# (the manifest now has N named machines, not one role-named "zonal" slice). All
-# share role="zonal"; serialize-manifest gives them sequential machine_index 1,2,…
-# (master=0). Override by editing this list for more/other workers.
-_ZONAL_NAMES = ["compute", "frontal"]
 
 
 # ── RIG — master only (arity 1: the single-master runtime, the common case). ──
@@ -98,31 +92,28 @@ RIG = BASE.combine(DeploymentLayer(
     }),
 ))
 
-# ── MULTI — master + N named zonal workers (arity ≥2: a multi-board Distribution).
-# The master runs every singleton + control-plane FC; each zonal worker runs only
-# its per-board installer (ucm). shwa is PER-BOARD HW telemetry, so it runs on the
-# master AND every worker via a set-valued `machines` (the serializer fans it onto
-# each — see _proc_machines). Everything not shwa/ucm is master-only (the
-# singletons com/per/sm/phm land there by construction). Each worker is a DISTINCT
-# named machine (compute/frontal/…) — a unique runtime identity — NOT one shared
-# "zonal" slice; they share only the zonal ROLE.
-_PER_BOARD = {"shwa"} & ALL          # runs on every board (HW telemetry)
-_ZONE_ONLY = (ZONAL - _PER_BOARD)    # the zone board's exclusive FCs (ucm)
-_MASTER_ONLY = ALL - ZONAL           # everything but ucm/shwa → master only
-_ALL_BOARDS = {"master", *_ZONAL_NAMES}   # shwa fans onto master + every worker
+# ── MULTI — master + the single `zonal` worker slice (the 2-role runtime). ────
+# EXACTLY two machines: `master` (all singletons + control-plane FCs) and `zonal`
+# (the per-board worker set: ucm + shwa). N-arity is a DEPLOY-TIME fact — colony
+# fans the one `zonal` slice onto N boards — NOT a manifest fact. The framework
+# names no boards; a day-2 user SWP renames the deployed workers as it wishes.
+#
+# Processes are deduplicated BY NAME in the serializer (last placement wins), so
+# an FC that runs on BOTH machines (shwa — per-board HW telemetry) MUST be one
+# ProcessLayer with set-valued `machines`, NOT two single-machine layers.
+_PER_BOARD   = {"shwa"} & ALL        # runs on master AND zonal (HW telemetry)
+_ZONE_ONLY   = ZONAL - _PER_BOARD    # zonal-exclusive (ucm — worker OTA installer)
+_MASTER_ONLY = ALL - ZONAL           # everything else → master only
 MULTI = BASE.combine(DeploymentLayer(
-    machines=MachineSetLayer(machines={
-        _master_machine(),
-        *(_zonal_machine(n) for n in _ZONAL_NAMES),
-    }),
+    machines=MachineSetLayer(machines={_master_machine(), _zonal_machine()}),
     execution=ExecutionLayer(processes={
         *(Append(ProcessLayer(name=n, machine=Explicit("master")))
           for n in _MASTER_ONLY),
-        # each worker's exclusive FCs (ucm) on EVERY named worker board.
-        *(Append(ProcessLayer(name=n, machine=Explicit(z)))
-          for z in _ZONAL_NAMES for n in _ZONE_ONLY),
-        # shwa on the master + every worker — set-valued machines fans it out.
-        *(Append(ProcessLayer(name=n, machines=set(_ALL_BOARDS)))
+        # zonal-exclusive FCs (ucm) on the `zonal` machine only.
+        *(Append(ProcessLayer(name=n, machine=Explicit("zonal")))
+          for n in _ZONE_ONLY),
+        # shwa on master AND zonal — set-valued machines (one process, two boards).
+        *(Append(ProcessLayer(name=n, machines={"master", "zonal"}))
           for n in _PER_BOARD),
     }),
     applications=ApplicationSetLayer(applications={

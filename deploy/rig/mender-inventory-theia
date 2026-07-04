@@ -1,0 +1,11 @@
+#!/bin/sh
+# Mender inventory script — reports device facts to the Mender server on each
+# inventory poll. base_version is the DEVICE TRUTH for the installed runtime:
+# the actual theia-runtime deb version (dpkg), so the GS reads a real
+# base_version from inventory instead of an optimistic tag set at dispatch time
+# (which lied when Orchestrate later failed). "none" = runtime not provisioned.
+echo "device_type=theia-rig"
+echo "hostname=$(hostname)"
+echo "kernel=$(uname -r)"
+rt="$(dpkg-query -W -f='${Version}' theia-runtime 2>/dev/null)"
+echo "base_version=${rt:-none}"

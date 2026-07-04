@@ -572,8 +572,15 @@ def deploy_distribution(req: DistDeployRequest) -> dict:
                 rig, "orchestrate", host=ip,
                 extra={"role": orch_role, "machine_instance": _i,
                        "runtime_version": role["runtime_build"]})
+            # DO NOT tag base_version here — that was OPTIMISTIC (set at dispatch,
+            # before orchestrate actually installed the deb), so a failed
+            # Orchestrate left a lie the deploy gate + Fleet UI believed. The
+            # device now reports its REAL installed theia-runtime version via the
+            # mender-inventory-theia script (base_version=<dpkg version>|none), so
+            # base_version self-corrects from device truth on the next inventory
+            # submit. Only the operator conveniences (local_ip) are tagged here.
             if ip:
-                try: m.set_tags(a.device_id, {"local_ip": ip, "base_version": role["runtime_build"]})
+                try: m.set_tags(a.device_id, {"local_ip": ip})
                 except Exception: pass  # noqa: BLE001
             step["base"] = role["runtime_build"]; step["colony_id"] = dep.get("id")
         except Exception as e:  # noqa: BLE001

@@ -86,10 +86,14 @@ RUN install -d -m0755 /var/lib/mender /etc/mender /usr/share/mender/identity \
     printf 'artifact_name=unprovisioned\n' > /etc/mender/artifact_info && \
     printf '#!/bin/sh\ndid="$(cat /etc/mender/device-id 2>/dev/null)"\n[ -n "$did" ] || did="$(cat /sys/class/net/*/address 2>/dev/null | head -1)"\necho "device_id=$did"\n' \
         > /usr/share/mender/identity/mender-device-identity && \
-    chmod 0755 /usr/share/mender/identity/mender-device-identity && \
-    printf '#!/bin/sh\necho "device_type=theia-rig"\necho "hostname=$(hostname)"\necho "kernel=$(uname -r)"\n' \
-        > /usr/share/mender/inventory/mender-inventory-theia && \
-    chmod 0755 /usr/share/mender/inventory/mender-inventory-theia
+    chmod 0755 /usr/share/mender/identity/mender-device-identity
+
+# The Mender inventory script — reports base_version (the real installed
+# theia-runtime deb version) so the GS gets device truth, not an optimistic tag.
+# Shipped as a real file (brace-heavy dpkg format doesn't survive an inline
+# Dockerfile printf).
+COPY rig/mender-inventory-theia /usr/share/mender/inventory/mender-inventory-theia
+RUN chmod 0755 /usr/share/mender/inventory/mender-inventory-theia
 
 # sshd needs a runtime dir + host keys. Allow root login by key only (no
 # password); colony connects as root with its key (matches a real rig where

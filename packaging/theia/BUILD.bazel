@@ -51,7 +51,7 @@ fi
 exit 0
 """
 
-_VERSION = "0.2.2"
+_VERSION = "0.3.0"
 
 # Debian runtime/-dev split: a RUNTIME-ONLY machine gets just the binaries (+ the
 # shared libs they link); everything build-time — sources, headers, protos, the

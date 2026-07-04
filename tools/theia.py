@@ -2162,7 +2162,7 @@ _RELEASE_BAZEL_PKGS = [
 ]
 
 
-def _build_framework_deb(out_dir: Path, version: str = "0.2.2") -> int:
+def _build_framework_deb(out_dir: Path, version: str = "0.3.0") -> int:
     """Build theia-framework as a real .deb — WHEELS-AS-DATA, no system Python.
 
     Theia does NOT own the user's Python. The deb ships only:
@@ -2371,7 +2371,7 @@ def _release_runtime_plane(target: str, args: list[str]) -> int:
                 return args[i + 1]
         return default
 
-    ver = _opt("--version", "0.2.2")
+    ver = _opt("--version", "0.3.0")
     s3_url = _opt("--s3")
     bucket = _opt("--bucket") or os.environ.get("THEIA_RUNTIME_BUCKET", "theia-runtime")
     arch_opt = _opt("--arch")
@@ -3302,7 +3302,7 @@ def cmd_release_role(args: list[str]) -> int:
 
     role = _opt("--role")
     arch = _opt("--arch", "rpi4")
-    ver = _opt("--version", "0.2.2")
+    ver = _opt("--version", "0.3.0")
     fleet = _opt("--fleet", "theia-rig")
     s3_url = _opt("--s3")
     services_deb = _opt("--deb")

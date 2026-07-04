@@ -139,31 +139,6 @@ def _find_child(reply, name: str):
     return None
 
 
-def _machine_names(sup) -> "list[str]":
-    """Every accepted MACHINE SELECTOR, via the client's ListMachines (rtdb →
-    com's scan registry). Each machine's NAME (the unique runtime identity — com
-    resolves it from the manifest's machine_index; serialize-manifest enforces
-    unique names) plus its INSTANCE number as a convenience. Returns [] when the
-    transport has no enumeration (tdb over TIPC talks to one supervisor; it uses
-    `-i <instance>` instead)."""
-    lm = getattr(sup, "list_machines", None)
-    if lm is None:
-        return []
-    try:
-        reply = lm()
-        out: list[str] = []
-        for m in (_g(reply, "machines", []) or []):
-            nm = _g(m, "name", "")
-            if nm:
-                out.append(nm)
-            inst = _g(m, "instance", None)
-            if inst is not None:
-                out.append(str(inst))
-        return out
-    except Exception:
-        return []
-
-
 def _pull_instances(args):
     """Extract `--instance N[,M,…]` (per-clone targeting) from args. Returns
     (instances_list_or_None, remaining_args). Accepts a comma list or a repeated
@@ -186,24 +161,80 @@ def _pull_instances(args):
     return (out or None), rest
 
 
-def _split_machine(args, sup):
-    """Pull a MACHINE selector out of the positionals: if a non-flag positional
-    matches a known machine name, return (machine, remaining_args); else
-    ("", args). Lets `ps central` / `apps compute` select one machine the same
-    way the GUI does (rtdb → com routes to that instance). A node name (not a
-    machine) is left in place for the per-node detail view.
+def _machines_index(sup) -> "list[tuple[int, str]]":
+    """[(instance, name), …] from the client's ListMachines (com's scan registry).
+    The authoritative instance↔name map rtdb resolves a `-i <n>` selector against.
+    [] when the transport has no enumeration (tdb over TIPC)."""
+    lm = getattr(sup, "list_machines", None)
+    if lm is None:
+        return []
+    try:
+        reply = lm()
+        out: list[tuple[int, str]] = []
+        for m in (_g(reply, "machines", []) or []):
+            inst = _g(m, "instance", None)
+            nm = _g(m, "name", "")
+            if inst is not None:
+                out.append((int(inst), nm))
+        return out
+    except Exception:
+        return []
 
-    Only queries the cluster list when there IS a candidate positional (a
-    non-flag, non-numeric token) — so the common `ps` / `ps --follow` path pays
-    no extra round-trip."""
-    cand = [a for a in args if not a.startswith("-") and not _is_number(a)]
-    if not cand:
+
+def _split_machine(args, sup):
+    """Pull a MACHINE selector out of the args → (selector, remaining_args). The
+    selector is the machine NAME the gRPC edge routes on (com maps name→instance
+    server-side); "" means the whole-cluster aggregate. Three accepted forms, all
+    resolved against com's ListMachines (the instance↔name map):
+
+      ps <name>       — a machine name        (e.g. `ps zonal-1`, `ps master`)
+      ps -i <inst>    — a TIPC instance number (e.g. `ps -i 2`, tdb-parity)
+      ps <inst>       — a bare instance number (e.g. `ps 2`)
+
+    `-i <n>` / a bare number is resolved to that instance's NAME so the selector
+    is consistent whichever form the operator typed (and the name is what com
+    keys the per-machine tree on). An unknown machine/instance leaves the token
+    in place (so a node name for the per-node detail view isn't stolen).
+
+    Only queries the cluster list when there IS a candidate token — so the common
+    `ps` / `ps --follow` path pays no extra round-trip."""
+    # 1. explicit `-i <inst>` (tdb-parity instance selector).
+    inst_sel = None
+    rest: list[str] = []
+    i = 0
+    while i < len(args):
+        if args[i] in ("-i", "--instance") and i + 1 < len(args) \
+                and _is_number(args[i + 1]):
+            inst_sel = int(args[i + 1])
+            i += 2
+            continue
+        rest.append(args[i])
+        i += 1
+    # 2. candidate positionals: a machine name OR a bare instance number.
+    cand = [a for a in rest if not a.startswith("-")]
+    if inst_sel is None and not cand:
         return "", args
-    machines = set(_machine_names(sup))
+    index = _machines_index(sup)                 # [(inst, name), …]
+    by_inst = {i: n for i, n in index}
+    names = {n for _, n in index if n}
+
+    # explicit -i wins.
+    if inst_sel is not None:
+        nm = by_inst.get(inst_sel)
+        if nm:
+            return nm, rest
+        # instance not in the list — pass the number through (com accepts a
+        # numeric selector too), so a just-appeared board still resolves.
+        return str(inst_sel), rest
+
+    # a positional: match a name first, then a bare instance number.
     for a in cand:
-        if a in machines:
-            rest = [x for x in args if x != a]
-            return a, rest
+        if a in names:
+            return a, [x for x in args if x != a]
+    for a in cand:
+        if _is_number(a) and int(a) in by_inst:
+            nm = by_inst[int(a)]
+            return (nm or a), [x for x in args if x != a]
     return "", args
 
 
@@ -996,9 +1027,11 @@ _COMMANDS = {
 _HELP = """tdb — Theia Debug Bridge. commands:
   machines                 cluster machines (instance/name/present/host) [rtdb]
   apps                     the supervisor tree (hierarchy; GUI Applications)
-  apps [<machine>] [<name>]  one machine's tree / one process's metrics
+  apps [<sel>] [<name>]    one machine's tree / one process's metrics
   ps                       flat Linux-ps list: PID/TID/name/cpu/rss (GUI Processes)
-  ps [<machine>] [<name>]  one machine's processes / one process's metrics
+  ps [<sel>] [<name>]      one machine's processes / one process's metrics
+    <sel> = a machine NAME (zonal-1), `-i <inst>`, or a bare instance number
+            (rtdb resolves it against `machines`; com routes to that supervisor)
   supervisor [<machine>]   supervisor host facts (per-board via com)
   info [<machine>]         host facts + running build (git sha / ts) + start time
   trace                    list every node with an active trace + its kinds

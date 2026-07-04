@@ -362,16 +362,27 @@ def repl(sess: _Session) -> int:
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
 
-    # --target host:port : which com endpoint to drive (default localhost:7700).
-    # Parsed before the verb so the rest of the CLI matches tdb exactly.
+    # Pre-verb flags, parsed in any order before the verb so the CLI matches tdb:
+    #   --target/-t host:port  : which com endpoint to drive (default :7700)
+    #   -i/--instance <n>      : a machine selector (tdb-parity `rtdb -i 0 ps`).
+    #                            Threaded into the command's args as `-i <n>`, so
+    #                            it works pre-verb OR post-verb (`rtdb ps -i 0`);
+    #                            _split_machine resolves it against `machines`.
     target = _DEFAULT_TARGET
-    if argv and argv[0] in ("--target", "-t"):
-        if len(argv) < 2:
-            print("rtdb: --target needs host:port (e.g. --target 10.0.0.5:7700)",
-                  file=sys.stderr)
-            return 2
-        target = argv[1]
-        argv = argv[2:]
+    pre_sel: list[str] = []
+    while argv:
+        if argv[0] in ("--target", "-t"):
+            if len(argv) < 2:
+                print("rtdb: --target needs host:port (e.g. --target 10.0.0.5:7700)",
+                      file=sys.stderr)
+                return 2
+            target = argv[1]
+            argv = argv[2:]
+        elif argv[0] in ("-i", "--instance") and len(argv) >= 2:
+            pre_sel = ["-i", argv[1]]
+            argv = argv[2:]
+        else:
+            break
 
     # Bare `rtdb` → show help (NOT the REPL). The interactive REPL is opt-in via
     # `rtdb repl`, since it needs prompt_toolkit (often not installed) — falling
@@ -397,7 +408,10 @@ def main(argv: list[str] | None = None) -> int:
 
     sess = _Session(target)
     try:
-        return _dispatch(sess, argv[0], argv[1:])
+        # A pre-verb `-i <n>` is appended to the command's args (post-verb form),
+        # so `rtdb -i 0 ps` and `rtdb ps -i 0` are identical — _split_machine
+        # resolves the selector either way.
+        return _dispatch(sess, argv[0], argv[1:] + pre_sel)
     finally:
         sess.close()
 

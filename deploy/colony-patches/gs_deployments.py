@@ -598,24 +598,47 @@ def deploy_distribution(req: DistDeployRequest) -> dict:
     return result
 
 class ClearActionsRequest(BaseModel):
-    rig: str                         # the colony rig name (e.g. central)
+    rig: str | None = None           # colony rig; None/"" = GLOBAL (all rigs)
     before: float | None = None      # epoch; app rows older are UI-hidden
                                      # (Mender owns its records — not deletable)
 
 @router.post("/clear", dependencies=[Depends(require_key)])
 def clear_actions(req: ClearActionsRequest) -> dict:
-    """Clear FINISHED actions for a target: prune colony's base entries
-    (provision/orchestrate/cleanup) from its journal, and return a
-    `cleared_before` epoch the UI uses to hide this target's app (Mender)
-    rows — Mender owns those records, so the app side is a UI-only hide."""
+    """Clear FINISHED base actions from colony's journal + return a
+    `cleared_before` epoch the UI uses to hide app (Mender) rows. GLOBAL by
+    default (rig None/empty prunes EVERY rig): Action History is one shared
+    surface, and a per-target clear orphaned history when a target was deleted.
+    Pass a rig to scope the colony prune to it."""
     import time
     s = settings()
     pruned = 0
     try:
-        r = colony_client(s).prune(req.rig, finished_only=True)
+        r = colony_client(s).prune(req.rig or None, finished_only=True)
         pruned = r.get("pruned", 0)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"clear (colony): {e}")
-    return {"rig": req.rig, "colony_pruned": pruned,
+    return {"rig": req.rig, "global": not req.rig, "colony_pruned": pruned,
             "cleared_before": req.before or time.time()}
+
+
+class CancelActionRequest(BaseModel):
+    id: str                          # the deployment id (mender or colony)
+    authority: str                   # "app" (Mender) | "base" (colony)
+
+@router.post("/cancel", dependencies=[Depends(require_key)])
+def cancel_action(req: CancelActionRequest) -> dict:
+    """Cancel ONE in-flight Action History action, routed to the right
+    authority: app→Mender abort_deployment (PUT status=aborted), base→colony
+    abort (POST /deployments/{id}/abort). Cancels a SWP pending on the theia-swp
+    runtime gate; a finished action is a no-op."""
+    s = settings()
+    try:
+        if req.authority == "base":
+            colony_client(s).abort(req.id)
+        else:
+            mender_client(s).abort_deployment(req.id)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502,
+                            detail=f"cancel ({req.authority}): {e}")
+    return {"cancelled": req.id, "authority": req.authority}
 

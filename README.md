@@ -1,5 +1,10 @@
 # Theia
 
+[![build & release .deb](https://github.com/perotheia/theia/actions/workflows/release-deb.yml/badge.svg)](https://github.com/perotheia/theia/actions/workflows/release-deb.yml)
+[![rf-theia selftests](https://github.com/perotheia/theia/actions/workflows/selftest.yml/badge.svg)](https://github.com/perotheia/theia/actions/workflows/selftest.yml)
+[![PyPI artheia](https://img.shields.io/pypi/v/artheia?label=artheia)](https://pypi.org/project/artheia/)
+[![PyPI rf-theia](https://img.shields.io/pypi/v/rf-theia?label=rf-theia)](https://pypi.org/project/rf-theia/)
+
 An AUTOSAR-Adaptive-Platform-style framework: **Functional Clusters (FCs)**
 running as supervised processes on a custom C++ **actor runtime** ("the Theia
 runtime"), with the whole system modeled in the **artheia** `.art` DSL and built

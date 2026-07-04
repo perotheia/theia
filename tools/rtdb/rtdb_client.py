@@ -113,6 +113,10 @@ class SupervisorClient:
         self._target = target
         self._channel = _make_channel(target)
         self._stub = _brg.SupervisorViewStub(self._channel)
+        # The TRANSPORT machine selector (pre-verb `rtdb -i <n>` → resolved name),
+        # the gRPC analogue of tdb's connect-time `-i`. "" = whole-cluster. The
+        # shared cmd_* / _split_machine read it when no positional machine is given.
+        self.default_machine: str = ""
 
     # tdb_client parity: from_workspace(repo, instance). rtdb is transport-only
     # (no workspace .art), so repo is ignored; instance has no meaning over a

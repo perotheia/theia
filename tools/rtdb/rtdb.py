@@ -362,14 +362,15 @@ def repl(sess: _Session) -> int:
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
 
-    # Pre-verb flags, parsed in any order before the verb so the CLI matches tdb:
+    # Pre-verb flags, parsed in any order before the verb so the CLI matches tdb.
+    # These are TRANSPORT selectors — they say WHICH endpoint/machine to drive,
+    # orthogonal to the verb's own args:
     #   --target/-t host:port  : which com endpoint to drive (default :7700)
-    #   -i/--instance <n>      : a machine selector (tdb-parity `rtdb -i 0 ps`).
-    #                            Threaded into the command's args as `-i <n>`, so
-    #                            it works pre-verb OR post-verb (`rtdb ps -i 0`);
-    #                            _split_machine resolves it against `machines`.
+    #   -i/--instance <n>      : which MACHINE to target (`tdb -i 0 ps` parity) —
+    #                            a TIPC instance number, applied to the client as
+    #                            its default machine (resolved to a name below).
     target = _DEFAULT_TARGET
-    pre_sel: list[str] = []
+    inst_sel: "int | None" = None
     while argv:
         if argv[0] in ("--target", "-t"):
             if len(argv) < 2:
@@ -378,8 +379,12 @@ def main(argv: list[str] | None = None) -> int:
                 return 2
             target = argv[1]
             argv = argv[2:]
-        elif argv[0] in ("-i", "--instance") and len(argv) >= 2:
-            pre_sel = ["-i", argv[1]]
+        elif argv[0] in ("-i", "--instance"):
+            if len(argv) < 2 or not argv[1].lstrip("-").isdigit():
+                print("rtdb: -i needs a TIPC instance number (e.g. `rtdb -i 1 ps`)",
+                      file=sys.stderr)
+                return 2
+            inst_sel = int(argv[1])
             argv = argv[2:]
         else:
             break
@@ -408,10 +413,22 @@ def main(argv: list[str] | None = None) -> int:
 
     sess = _Session(target)
     try:
-        # A pre-verb `-i <n>` is appended to the command's args (post-verb form),
-        # so `rtdb -i 0 ps` and `rtdb ps -i 0` are identical — _split_machine
-        # resolves the selector either way.
-        return _dispatch(sess, argv[0], argv[1:] + pre_sel)
+        # Apply the pre-verb `-i <n>` transport selector: resolve the TIPC
+        # instance → its machine NAME (via ListMachines) and set it as the
+        # client's default machine, so every verb targets that board unless it
+        # carries its own positional `<machine>`. An instance not (yet) in the
+        # list falls back to the numeric selector (com accepts a numeric too).
+        if inst_sel is not None:
+            name = str(inst_sel)
+            try:
+                for m in (sess.sup.list_machines().machines or []):
+                    if getattr(m, "instance", None) == inst_sel:
+                        name = getattr(m, "name", "") or name
+                        break
+            except Exception:
+                pass
+            sess.sup.default_machine = name
+        return _dispatch(sess, argv[0], argv[1:])
     finally:
         sess.close()
 

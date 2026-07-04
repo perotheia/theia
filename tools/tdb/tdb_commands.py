@@ -182,60 +182,33 @@ def _machines_index(sup) -> "list[tuple[int, str]]":
 
 
 def _split_machine(args, sup):
-    """Pull a MACHINE selector out of the args → (selector, remaining_args). The
-    selector is the machine NAME the gRPC edge routes on (com maps name→instance
-    server-side); "" means the whole-cluster aggregate. Three accepted forms, all
-    resolved against com's ListMachines (the instance↔name map):
+    """Pull a MACHINE selector out of the POSITIONALS → (selector, remaining_args).
+    The selector is the machine NAME the gRPC edge routes on (com maps name→
+    instance server-side); "" means the whole-cluster aggregate.
 
-      ps <name>       — a machine name        (e.g. `ps zonal-1`, `ps master`)
-      ps -i <inst>    — a TIPC instance number (e.g. `ps -i 2`, tdb-parity)
-      ps <inst>       — a bare instance number (e.g. `ps 2`)
+    This handles the per-verb POSITIONAL form only — `ps <machine>` /
+    `apps <machine>` — the same way the GUI does (a machine name, e.g.
+    `ps zonal-1` / `ps master`). The TRANSPORT selector `-i <inst>` is NOT parsed
+    here: it's a pre-verb flag (rtdb sets it on the client as `default_machine`,
+    like `tdb -i`), so it never collides with a verb's own args. When no
+    positional selector is given, fall back to the client's default_machine (the
+    pre-verb `-i`).
 
-    `-i <n>` / a bare number is resolved to that instance's NAME so the selector
-    is consistent whichever form the operator typed (and the name is what com
-    keys the per-machine tree on). An unknown machine/instance leaves the token
-    in place (so a node name for the per-node detail view isn't stolen).
-
-    Only queries the cluster list when there IS a candidate token — so the common
-    `ps` / `ps --follow` path pays no extra round-trip."""
-    # 1. explicit `-i <inst>` (tdb-parity instance selector).
-    inst_sel = None
-    rest: list[str] = []
-    i = 0
-    while i < len(args):
-        if args[i] in ("-i", "--instance") and i + 1 < len(args) \
-                and _is_number(args[i + 1]):
-            inst_sel = int(args[i + 1])
-            i += 2
-            continue
-        rest.append(args[i])
-        i += 1
-    # 2. candidate positionals: a machine name OR a bare instance number.
-    cand = [a for a in rest if not a.startswith("-")]
-    if inst_sel is None and not cand:
-        return "", args
-    index = _machines_index(sup)                 # [(inst, name), …]
-    by_inst = {i: n for i, n in index}
-    names = {n for _, n in index if n}
-
-    # explicit -i wins.
-    if inst_sel is not None:
-        nm = by_inst.get(inst_sel)
-        if nm:
-            return nm, rest
-        # instance not in the list — pass the number through (com accepts a
-        # numeric selector too), so a just-appeared board still resolves.
-        return str(inst_sel), rest
-
-    # a positional: match a name first, then a bare instance number.
-    for a in cand:
-        if a in names:
-            return a, [x for x in args if x != a]
-    for a in cand:
-        if _is_number(a) and int(a) in by_inst:
-            nm = by_inst[int(a)]
-            return (nm or a), [x for x in args if x != a]
-    return "", args
+    An unknown positional is left in place (so a NODE name for the per-node detail
+    view isn't stolen as a machine). Only queries the cluster list when there IS a
+    candidate positional — the common `ps` / `ps --follow` path pays no round-trip.
+    """
+    cand = [a for a in args if not a.startswith("-")]
+    if cand:
+        index = _machines_index(sup)             # [(inst, name), …]
+        names = {n for _, n in index if n}
+        for a in cand:
+            if a in names:
+                return a, [x for x in args if x != a]
+    # No positional machine selector — use the pre-verb `-i` (client default), if
+    # any. tdb's TIPC client has no such attr (it's already pinned to one
+    # supervisor via connect-time -i), so getattr defaults to "".
+    return getattr(sup, "default_machine", "") or "", args
 
 
 def _get_tree(sup, *, timeout: float, machine: str = ""):
@@ -1025,13 +998,13 @@ _COMMANDS = {
 }
 
 _HELP = """tdb — Theia Debug Bridge. commands:
+  (rtdb: `-i <inst>` before the verb targets ONE machine — `rtdb -i 1 ps` — the
+   transport selector, like `tdb -i`. `<machine>` below is a per-verb positional.)
   machines                 cluster machines (instance/name/present/host) [rtdb]
   apps                     the supervisor tree (hierarchy; GUI Applications)
-  apps [<sel>] [<name>]    one machine's tree / one process's metrics
+  apps [<machine>] [<name>]  one machine's tree / one process's metrics
   ps                       flat Linux-ps list: PID/TID/name/cpu/rss (GUI Processes)
-  ps [<sel>] [<name>]      one machine's processes / one process's metrics
-    <sel> = a machine NAME (zonal-1), `-i <inst>`, or a bare instance number
-            (rtdb resolves it against `machines`; com routes to that supervisor)
+  ps [<machine>] [<name>]  one machine's processes / one process's metrics
   supervisor [<machine>]   supervisor host facts (per-board via com)
   info [<machine>]         host facts + running build (git sha / ts) + start time
   trace                    list every node with an active trace + its kinds

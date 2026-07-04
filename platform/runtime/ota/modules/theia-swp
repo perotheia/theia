@@ -166,6 +166,62 @@ _run_migration() {
     fi
 }
 
+# The RUNTIME the installed theia-runtime deb reports (M.m.p), or "" if the deb
+# isn't installed (runtime not provisioned). The runtime is a deb (colony
+# orchestrate → dpkg install), NOT the /opt/theia/current SWP overlay dir — so
+# this is the authoritative "is the base present + which version" on-device.
+_installed_runtime() {
+    dpkg-query -W -f='${Version}' theia-runtime 2>/dev/null || true
+}
+
+# Does the installed runtime satisfy the SWP's requires_runtime? EQUALITY UP TO
+# PATCH: major.minor must match exactly, patch is tolerated (0.2.7 satisfies a
+# 0.2.2 pin; 0.3.0 does NOT). An empty pin = unpinned SWP → always satisfied.
+# Strips a trailing abi suffix from the pin (0.2.2-amd64 → 0.2.2) and any deb
+# epoch/revision from the installed version.
+_runtime_satisfies() {
+    pin="$1"; got="$2"
+    [ -n "$pin" ] || return 0                 # unpinned → satisfied
+    [ -n "$got" ] || return 1                 # no runtime installed → not satisfied
+    # normalize: drop -<abi> from pin, drop epoch (N:) and -<rev> from the deb ver.
+    pin_mm="$(echo "$pin" | sed 's/-[a-z0-9._-]*$//' | cut -d. -f1,2)"
+    got_mm="$(echo "$got" | sed 's/^[0-9]*://; s/-.*$//' | cut -d. -f1,2)"
+    [ "$pin_mm" = "$got_mm" ]
+}
+
+# Gate the SWP install on the runtime dependency (the deploy-sequencing fix). The
+# GS fans runtime→colony and app→Mender in PARALLEL, so the SWP can reach the
+# device before its runtime deb is installed. Rather than overlay onto a missing
+# runtime, WAIT: re-check every 10s (the runtime deb is small + lands fast) up to
+# a long timeout — cancellation is the escape hatch (a cancelled Mender
+# deployment SIGTERMs this script; the short sleep makes the loop responsive).
+# Returns 0 once satisfied; non-zero on timeout (Mender fails → retries later).
+_require_runtime() {
+    pin="$1"
+    got="$(_installed_runtime)"
+    if _runtime_satisfies "$pin" "$got"; then
+        echo "theia-swp: runtime dependency satisfied (requires '$pin', installed '$got')"
+        return 0
+    fi
+    # T = long ceiling (colony may install runtime serially across many boards;
+    # this board just waits its turn). 10s poll → ~1h ceiling by default; override
+    # with THEIA_SWP_RUNTIME_WAIT_S. Cancel via the GS to abort sooner.
+    T="${THEIA_SWP_RUNTIME_WAIT_S:-3600}"
+    echo "theia-swp: runtime not ready (requires '$pin', installed '${got:-none}') — SWP PENDING, re-checking every 10s (up to ${T}s; cancel in the GS to abort)"
+    waited=0
+    while [ "$waited" -lt "$T" ]; do
+        sleep 10
+        waited=$((waited + 10))
+        got="$(_installed_runtime)"
+        if _runtime_satisfies "$pin" "$got"; then
+            echo "theia-swp: runtime now satisfied (installed '$got') after ${waited}s — proceeding"
+            return 0
+        fi
+    done
+    echo "theia-swp: runtime dependency '$pin' not satisfied within ${T}s (installed '${got:-none}') — failing install; redeploy once the runtime is up" >&2
+    return 1
+}
+
 # Make the running supervisor adopt the merged tree. The supervisor reads
 # executor.json ONCE at startup and runs a static tree (no SIGHUP/inotify reload),
 # so "reload" = RESTART it: it re-reads the now-merged executor.json and spawns the
@@ -239,6 +295,15 @@ case "$STATE" in
       *)     tar -xf "$tarball"  -C "$work" ;;
     esac
 
+    # RUNTIME PRECONDITION (deploy sequencing): the SWP overlays app FCs onto the
+    # runtime base, which colony installs (theia-runtime deb) in PARALLEL with
+    # this Mender deploy. Gate on it — WAIT until the installed runtime satisfies
+    # the SWP's requires_runtime (major.minor), rather than overlaying onto a
+    # missing/wrong base. requires_runtime.txt is in the payload; empty = unpinned.
+    req_rt="$(_payload requires_runtime.txt)"
+    pin=""; [ -n "$req_rt" ] && pin="$(tr -d '[:space:]' < "$req_rt")"
+    _require_runtime "$pin" || { rm -rf "$work"; exit 1; }
+
     mj="$work/manifest/machines.json"
     [ -f "$mj" ] || { echo "theia-swp: no manifest/machines.json in payload" >&2; exit 1; }
     swp="$(_swp_name "$mj")"
@@ -252,10 +317,12 @@ case "$STATE" in
     # install so Mender rolls back (no half-migrated box). No-op for a PATCH SWP.
     _run_migration "$work" || { rm -rf "$work"; exit 1; }
 
-    # The overlay target. If the runtime isn't provisioned yet ($CURRENT absent),
-    # create a minimal layout so the SWP binaries still land (they run once the
-    # runtime/base is installed under the same $CURRENT).
-    [ -d "$CURRENT/bin" ] || { mkdir -p "$CURRENT/bin"; echo "theia-swp: $CURRENT/bin created (runtime not yet provisioned)"; }
+    # The overlay target. The runtime precondition above guarantees the base deb
+    # is installed, so $CURRENT/bin normally exists. A pinned SWP that got here
+    # has its runtime; an UNPINNED (legacy) SWP may still land before a runtime —
+    # create the dir so its binaries stage (they run once a runtime lands under
+    # the same $CURRENT). A pinned SWP never hits this fallback.
+    [ -d "$CURRENT/bin" ] || { mkdir -p "$CURRENT/bin"; echo "theia-swp: $CURRENT/bin created (unpinned SWP, runtime not yet provisioned)"; }
 
     # back up the prior install of THIS SWP (bin copies + the executor) for rollback
     rec="$SWP_STATE/$swp"

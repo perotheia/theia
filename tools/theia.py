@@ -3146,6 +3146,12 @@ def cmd_release_swp(args: list[str]) -> int:
     # artifacts (e.g. gateway-1.0-bookworm-arm64 vs gateway-1.0-focal-arm64).
     artifact_name = f"{swp_name}-{ver_key}"
     (stage / "version.txt").write_text(artifact_name + "\n")
+    # requires_runtime.txt — the runtime version this SWP depends on, in the
+    # PAYLOAD (not just the GS index) so the on-device theia-swp module can gate
+    # its install: the SWP stays pending until the installed theia-runtime deb
+    # satisfies it (major.minor match, patch-tolerant). Empty = no pin (a legacy
+    # / unpinned SWP installs immediately, as before).
+    (stage / "requires_runtime.txt").write_text((requires_runtime or "") + "\n")
     # (c) A MAJOR SWP ships its migration as a PACKAGE PART: stage/migration/<name>
     # goes into the tarball (→ on-device payload, run during ArtifactInstall) AND is
     # synced to S3 alongside the artifact (see _publish_swp_plane). The index records

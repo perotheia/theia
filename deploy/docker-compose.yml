@@ -28,15 +28,16 @@
 
 services:
 
-  # etcd — ONE per cluster (central's machine.json declares it). Behind the
-  # `etcd` profile because a dev box usually already runs etcd on
-  # 127.0.0.1:2379 (under network_mode: host a second one collides on :2380).
-  # Bring it up only on a clean host with no etcd:
-  #     docker compose --profile etcd up -d
+  # etcd — ONE per cluster (central's machine.json declares it). Always up with
+  # the stack: nothing on `central` starts etcd (colony provisions/orchestrates
+  # central with etcd_external=true — it expects the cluster etcd to already
+  # exist), so this sidecar IS the cluster etcd. It shares the host network with
+  # the rigs (network_mode: host), so central reaches it on 127.0.0.1:2379.
+  # NOTE: on a dev box that already runs a host etcd on :2379, stop that first —
+  # a second etcd here collides on the client/peer ports.
   etcd:
     image: quay.io/coreos/etcd:v3.5.12
     container_name: theia-etcd
-    profiles: ["etcd"]
     network_mode: host
     command:
       - /usr/local/bin/etcd

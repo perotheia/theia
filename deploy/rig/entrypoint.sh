@@ -36,5 +36,24 @@ sleep 1
 sleep 1
 ( while true; do mender-update daemon >>/var/log/mender-update.log 2>&1; sleep 5; done ) &
 
-# 4. sshd in the foreground (the container's PID-1 process). -p from compose.
+# 5. Supervisor launcher. There is NO supervisor at provision time — colony
+#    orchestration (ansible) lays the runtime: /opt/theia/bin/supervisor (the
+#    version-stable binary) + /opt/theia/current (the release symlink the
+#    launcher needs). A real board's systemd unit starts it after that; these
+#    containers have sshd as PID 1 and no systemd, so poll for the two markers
+#    and start the supervisor once they appear. theia-run exports
+#    THEIA_INSTALL_DIR=/opt/theia/current and execs the supervisor; a keep-alive
+#    loop restarts it if it exits (crash, or `theia cleanup` removing current).
+(
+    while true; do
+        if [ -x /opt/theia/bin/supervisor ] && [ -e /opt/theia/current ] \
+           && ! pgrep -f /opt/theia/bin/supervisor >/dev/null 2>&1; then
+            THEIA_ROOT=/opt/theia /opt/theia/bin/theia-run \
+                >>/var/log/theia/supervisor.log 2>&1
+        fi
+        sleep 5
+    done
+) &
+
+# 6. sshd in the foreground (the container's PID-1 process). -p from compose.
 exec /usr/sbin/sshd -D -e "$@"

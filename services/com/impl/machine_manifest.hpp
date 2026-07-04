@@ -39,6 +39,13 @@ public:
     // is unknown. NOT unique across machines (workers share "zonal").
     std::string role(uint32_t instance) const;
 
+    // The ROLE for a machine NAME — a direct role_map lookup. com uses this when
+    // it discovers a supervisor at an instance the manifest never DECLARED (the
+    // Nth zonal board, N≥2: colony fans the one `zonal` slice onto N boards). The
+    // board reports its machine name ("zonal"); role_map[name] is its role. Empty
+    // if the name isn't in role_map.
+    std::string role_of_name(const std::string& machine_name) const;
+
     // Was a manifest actually loaded (vs the env-unset fallback)? For logging.
     bool loaded() const;
 

@@ -201,6 +201,14 @@ struct MachineEntry {
                                // over the manifest/"mN" fallback. "" until fetched.
                                // The UNIQUE runtime identity (serialize-manifest
                                // enforces unique names + sequential machine_index).
+    std::string role;          // deployment role (master/zonal), resolved from the
+                               // manifest role_map by the reported NAME when com
+                               // caches this instance's identity. The manifest maps
+                               // role by declared INSTANCE (master=0, zonal=1) only;
+                               // the Nth zonal board (N≥2 — colony fans the one
+                               // `zonal` slice onto N boards) is NOT a declared
+                               // instance, but its reported name IS its role slice,
+                               // so role_map[name] fills it. "" until fetched.
     std::string system_info;   // raw system_supervisor::SystemInfo bytes ("" until fetched)
 };
 std::mutex                                   g_machines_mtx;
@@ -257,10 +265,18 @@ void cache_machine_sysinfo(uint32_t inst) {
         if (si.ParseFromString(r.system_info) && !si.machine_name().empty())
             reported = si.machine_name();
     }
+    // Resolve the ROLE from the reported name via the manifest role_map. com
+    // maps cluster TIPC instance → machine here; the role is a property of the
+    // machine (role_map[name]), NOT of the raw instance — so the Nth zonal board
+    // (instance the manifest never declared) still gets role "zonal".
+    std::string role;
+    if (!reported.empty())
+        role = services_com::MachineManifest::instance().role_of_name(reported);
     {
         std::lock_guard<std::mutex> lk(g_machines_mtx);
         g_machines[inst].system_info = r.system_info;
         if (!reported.empty()) g_machines[inst].name = reported;
+        if (!role.empty())     g_machines[inst].role = role;
     }
     std::fprintf(stderr, "[com] cached host identity for machine %u (%s)\n",
                  inst, machine_name_of(inst).c_str());
@@ -658,12 +674,27 @@ public:
             // executor.json still carries a stale role name ("zonal") is listed by
             // its real unique name from machines.json.
             mi->set_name(machine_name_of(kv.first));
-            // ROLE (master/zonal) — the deployment identity from machines.json
-            // role_map. Non-unique; informational alongside the unique name.
-            mi->set_role(services_com::MachineManifest::instance().role(kv.first));
+            // ROLE (master/zonal) — the deployment identity. Prefer the role
+            // resolved at discovery from the reported name (role_map[name]) — it
+            // covers the Nth zonal board the manifest never declared; fall back to
+            // the manifest's by-instance role for a machine not yet sysinfo-cached.
+            std::string role = kv.second.role;
+            if (role.empty())
+                role = services_com::MachineManifest::instance().role(kv.first);
+            mi->set_role(role);
             mi->set_present(kv.second.present);
             if (!kv.second.system_info.empty())
                 mi->mutable_info()->ParseFromString(kv.second.system_info);
+            else if (kv.second.present) {
+                // Present but no cached host identity yet. Instance 0 (the LOCAL
+                // supervisor) is seeded ONCE at topology-up (do_start) and never
+                // re-PUBLISHes, so if that one-shot GetSystemInfo raced the sup
+                // uplink and returned empty, the HOST column would stay blank
+                // forever. Remotes self-heal on their next PUBLISH; the local one
+                // needs a lazy retry — fire a detached re-cache (deduped by the
+                // empty check, so it only runs while still uncached).
+                std::thread(cache_machine_sysinfo, kv.first).detach();
+            }
         }
         return grpc::Status::OK;
     }

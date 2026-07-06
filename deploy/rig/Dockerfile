@@ -72,6 +72,11 @@ RUN curl -fsSL https://downloads.mender.io/repos/debian/gpg \
 # at it; ServerCertificate trusts the dalek server CA.
 COPY rig/mender.conf /etc/mender/mender.conf
 COPY rig/mender-server-ca.crt /etc/mender/server.crt
+# The PUBLIC artifact-verify key (mender.conf's ArtifactVerifyKey). mender-update
+# REFUSES any .mender not signed by the matching private key — so an unsigned or
+# forged SWP is rejected at the client, upstream of the theia-swp module. The
+# private key stays with the release operator (deploy/signing/, gitignored).
+COPY rig/artifact-verify-key.pem /etc/mender/artifact-verify-key.pem
 RUN cp /etc/mender/server.crt /usr/local/share/ca-certificates/mender-server.crt && \
     update-ca-certificates >/dev/null 2>&1 || true
 

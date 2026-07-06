@@ -2824,7 +2824,7 @@ def cmd_release_swp(args: list[str]) -> int:
     # options (e.g. `--to 2.0.0` must not make "2.0.0" the app).
     _VALUE_OPTS = {"--swp-version", "--app-version", "--fleet", "--arch", "--machine",
                    "--s3", "--from", "--to", "--requires-runtime", "--migration",
-                   "--asset", "--env"}
+                   "--asset", "--env", "--sign-key"}
     _skip = {i + 1 for i, a in enumerate(args)
              if a in _VALUE_OPTS and i + 1 < len(args)}
     app = next((a for i, a in enumerate(args)
@@ -3169,7 +3169,20 @@ def cmd_release_swp(args: list[str]) -> int:
         tf.add(stage, arcname=".")
     ma = _mender_artifact_bin()    # prefers the OpenSSL-1.1-shim wrapper on a host
     if ma:                          # running OpenSSL 3 (mender-artifact links 1.1).
-        rc = _run([
+        # SIGN the artifact (public-key authenticity, not just the S3 sha256
+        # integrity). `mender-artifact write -k <priv>` RSA/ECDSA-signs; the
+        # device's mender-update REFUSES any artifact not signed by the matching
+        # ArtifactVerifyKey (colony ships the PUBLIC key to /etc/mender). Key
+        # resolution: --sign-key > $THEIA_SWP_SIGN_KEY > deploy/signing/
+        # theia-swp-signing.key (the default operator key, gitignored). Unsigned
+        # only if none is found — warn loudly (a fleet with ArtifactVerifyKey set
+        # will then reject the SWP, which is the safe failure).
+        sign_key = (_opt("--sign-key")
+                    or os.environ.get("THEIA_SWP_SIGN_KEY")
+                    or (str(THEIA_ROOT / "deploy" / "signing" / "theia-swp-signing.key")
+                        if (THEIA_ROOT / "deploy" / "signing" / "theia-swp-signing.key").is_file()
+                        else ""))
+        cmd = [
             ma, "write", "module-image",
             "--type", "theia-swp",
             "--artifact-name", artifact_name,
@@ -3178,12 +3191,22 @@ def cmd_release_swp(args: list[str]) -> int:
             "--file", str(stage / "version.txt"),
             "--file", str(stage / "manifest" / "machines.json"),
             "--output-path", str(mender_out),
-        ])
+        ]
+        if sign_key and Path(sign_key).is_file():
+            cmd += ["--key", sign_key]
+        rc = _run(cmd)
         if rc != 0:
             print("theia release-swp: mender-artifact pack failed.",
                   file=sys.stderr)
             return rc
-        print(f"theia release-swp: wrote {mender_out}", file=sys.stderr)
+        if sign_key and Path(sign_key).is_file():
+            print(f"theia release-swp: wrote {mender_out} (SIGNED with "
+                  f"{Path(sign_key).name})", file=sys.stderr)
+        else:
+            print(f"theia release-swp: wrote {mender_out} (UNSIGNED — no signing "
+                  "key; a fleet with ArtifactVerifyKey set will REJECT it. Set "
+                  "--sign-key / $THEIA_SWP_SIGN_KEY / deploy/signing/"
+                  "theia-swp-signing.key)", file=sys.stderr)
     else:
         print("theia release-swp: mender-artifact not installed — staged tree + "
               f"{tarball} written; pack on the GW.", file=sys.stderr)

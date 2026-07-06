@@ -140,3 +140,4 @@ services/idsm/bpf/vmlinux.h
 #   --modulepath deploy/puppet/modules
 /deploy/puppet/modules/stdlib/
 /third_party/codegen-bookworm-x86/
+deploy/signing/*.key

@@ -87,6 +87,11 @@ def _dist_pkg_impl(ctx):
     args.add("--package", ctx.attr.package)
     args.add("--version", ctx.attr.version)
     args.add("--format", fmt)
+    # DEB MODE (consuming ws pinned to /opt/theia): the framework FCs are prebuilt
+    # by the runtime/services deb, so `binaries` is empty/app-only and pack_ipk
+    # must tolerate the framework processes missing from the filegroup.
+    if ctx.attr.deb_mode:
+        args.add("--allow-prefix-binaries")
     for b in bins:
         args.add("--bin", b)
     for l in libs:
@@ -114,6 +119,7 @@ _dist_pkg = rule(
         "binaries": attr.label_list(allow_files = True, default = ALL_BINARIES),
         "libs": attr.label_list(allow_files = True, default = DEFAULT_LIBS),
         "format": attr.string(default = "deb", values = ["deb", "ipk"]),
+        "deb_mode": attr.bool(default = False),
         "_packer": attr.label(
             default = "//rules:pack_ipk",
             executable = True,

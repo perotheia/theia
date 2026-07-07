@@ -118,6 +118,12 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--format", choices=["deb", "ipk"], default="deb",
                     help="archive format (same ar layout; deb adds Installed-Size "
                          "+ amd64 arch, ipk is opkg-lean + x86_64 arch).")
+    ap.add_argument("--allow-prefix-binaries", action="store_true",
+                    help="DEB MODE: tolerate wanted processes with no filegroup "
+                         "binary — they are PREBUILT by the theia-runtime/services "
+                         "deb on the target (like the supervisor). The .deb packs "
+                         "the manifest + whatever binaries ARE present (the ws's "
+                         "own apps); the runtime plane supplies the rest.")
     args = ap.parse_args(argv)
 
     wanted = _wanted(args.execution)     # name → (dest, target_pkg_path)
@@ -132,9 +138,14 @@ def main(argv: list[str]) -> int:
         if hit:
             resolved[name] = hit
     # The supervisor is optional: in deb mode it is pre-installed by
-    # theia-runtime.deb and not present in the binaries filegroup.
+    # theia-runtime.deb and not present in the binaries filegroup. With
+    # --allow-prefix-binaries (a consuming ws pinned to /opt/theia) the SAME is
+    # true of every FRAMEWORK FC — the runtime/services deb ships them prebuilt,
+    # so a missing binary is expected, not an error. The app .deb then carries the
+    # manifest + the ws's own app binaries only.
     missing = [n for n in wanted if n not in resolved
-               and not (n == "supervisor" and _SUPERVISOR_OPTIONAL)]
+               and not (n == "supervisor" and _SUPERVISOR_OPTIONAL)
+               and not args.allow_prefix_binaries]
     if missing:
         sys.stderr.write(
             f"pack_ipk: {args.package}: processes in execution.json have no "

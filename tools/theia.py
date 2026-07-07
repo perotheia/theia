@@ -1776,6 +1776,7 @@ def _emit_manifest_build_files(mdir: Path, machines: list[str]) -> None:
         'load("@pero_theia//rules:dist_ipk.bzl", "dist_pkg")',
         "",
     ]
+    deb = _deb_mode()
     for h in machines:
         execu = _json.loads((mdir / h / "execution.json").read_text())
         labels = {
@@ -1791,10 +1792,24 @@ def _emit_manifest_build_files(mdir: Path, machines: list[str]) -> None:
         # and is NOT a buildable target in the consuming workspace — omit it.
         # In source mode (THEIA_ROOT is the checkout) include it so `theia dist`
         # builds everything in one go.
-        if not _deb_mode():
+        if not deb:
             labels.add(_qualify(_SUPERVISOR_TARGET))
+        else:
+            # DEB MODE: the framework binaries (@pero_theia//services/*,
+            # //platform/*) are PREBUILT under /opt/theia/bin — the deb ships no
+            # source for them, so they are NOT buildable targets here. Drop them
+            # from `binaries` (dist stages them from the prefix, like `install`);
+            # keep only the workspace's OWN binaries (@@//apps/…). A framework-
+            # only manifest (the with-services bootstrap smoke test) then packs an
+            # EMPTY buildable set — the .deb carries the app plane, the runtime
+            # deb carries the services.
+            labels = {l for l in labels if not l.startswith("@pero_theia")}
         bins = "".join(f'\n        "{lbl}",' for lbl in sorted(labels))
-        lines.append(f'dist_pkg(\n    name = "{h}",\n    binaries = [{bins}\n    ],\n)')
+        # deb_mode tells pack_ipk to tolerate the prebuilt framework FCs missing
+        # from the (app-only) filegroup — they come from the runtime deb.
+        deb_attr = "\n    deb_mode = True," if deb else ""
+        lines.append(
+            f'dist_pkg(\n    name = "{h}",\n    binaries = [{bins}\n    ],{deb_attr}\n)')
     (mdir / "BUILD.bazel").write_text("\n".join(lines) + "\n")
 
 

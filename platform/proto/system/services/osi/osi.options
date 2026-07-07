@@ -16,6 +16,7 @@ system_services_osi.ResourceStatus.fcs   max_count:32
 system_services_osi.NeighborObs.neighbor_eid   max_size:64
 system_services_osi.Beacon.eid   max_size:64
 system_services_osi.Beacon.neighbors   max_count:16
+system_services_osi.Beacon.alerts   max_count:8
 system_services_osi.ConstellationVertex.eid   max_size:64
 system_services_osi.ConstellationUpdate.vertices   max_count:64
 system_services_osi.MeshtasticConfig.serial   max_size:64

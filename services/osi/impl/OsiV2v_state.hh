@@ -15,6 +15,7 @@
 
 #include "impl/v2v/beacon.hpp"
 #include "impl/v2v/estimator.hpp"
+#include "impl/v2v/consensus.hpp"          // AlertConsensus (HANDOFF2)
 #include "system/services/osi/osi.pb.h"   // ConstellationVertex (raw pb cache)
 
 namespace ara::osi {
@@ -33,6 +34,13 @@ struct OsiV2vState {
 
     // ---- the estimator (STATEFUL: TrackManager persists across solves) ----
     std::shared_ptr<::ara::osi::v2v::TopologyEstimator> est;
+
+    // ---- cooperative-alert consensus (HANDOFF2) — this vehicle's per-topic
+    //      belief, fused from heard beacon alerts each round. Independent of the
+    //      SLAM estimate; shares only the heard-beacon stream. ----
+    ::ara::osi::v2v::ConsensusConfig con_cfg;
+    std::shared_ptr<::ara::osi::v2v::AlertConsensus> con;
+    double con_t = 0.0;   // last consensus round time (monotone beacon clock)
 
     // ---- the beacon window: one frame (vector<Beacon>) per beacon tick ----
     // Beacons accrued since the last frame boundary are flushed into `frames` on

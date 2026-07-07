@@ -24,3 +24,13 @@ cc_test(
     copts = ["-std=c++17", "-fPIC"] + _EIGEN_COPTS,
     deps = ["//services/osi/impl:v2v_estimator"],
 )
+
+# Cooperative-alert consensus parity test (HANDOFF2 §7): convergence, E3 majority,
+# E5 lone-witness containment. Scalar-only, but links v2v_estimator (consensus
+# reuses the TrackManager), so it carries the same Eigen copts.
+cc_test(
+    name = "test_consensus",
+    srcs = ["test_consensus.cc"],
+    copts = ["-std=c++17", "-fPIC"] + _EIGEN_COPTS,
+    deps = ["//services/osi/impl:v2v_estimator"],
+)

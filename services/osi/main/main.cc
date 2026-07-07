@@ -248,6 +248,10 @@ int main(int argc, char** argv) {
         // ops → register_call; senderReceiver `in` data → register_cast.
         config_mux.register_call<GetConstellationReq, ConstellationUpdate>(
             osi_v2v_cfg, osi_v2v);
+        config_mux.register_call<GetAlertDecisionReq, AlertDecision>(
+            osi_v2v_cfg, osi_v2v);
+        config_mux.register_call<InjectBeaconReq, InjectBeaconReply>(
+            osi_v2v_cfg, osi_v2v);
         config_mux.register_cast<Beacon>(osi_v2v_cfg, osi_v2v);
         // ---- process groups (pg): MANUAL pub/sub control (OTP pg shape) ----
         // The node OWNS its membership: pg_join<T>() to CONSUME a group,

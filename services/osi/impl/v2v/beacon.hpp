@@ -32,6 +32,18 @@ struct NeighborObs {
     double      rssi = 0.0;   // dBm, as measured
 };
 
+// A cooperative-alert belief piggybacked on the beacon (HANDOFF2 §2). One
+// independent binary-topic consensus instance per topic id; the sender broadcasts
+// its full belief (mu, lam). The `witness` provenance bit is LOAD-BEARING
+// (HANDOFF2 §5.1) — it selects the receiver's precision cap so a crowd's relayed
+// echo can never outweigh a direct observation.
+struct AlertBelief {
+    uint8_t topic = 0;       // topic id (one consensus instance per topic)
+    double  mu = 0.5;        // sender's belief mean over [0,1]
+    double  lam = 0.0;       // sender's belief precision (1/variance)
+    bool    witness = false; // sender DIRECTLY observes this topic right now
+};
+
 // A single beacon. heading_deg + speed_mps MUST be in a shared GLOBAL frame
 // (e.g. true north) — that is what pins global rotation and stitches rotating
 // ids. `true_id` is simulator-only ground truth: the estimator NEVER reads it.
@@ -42,6 +54,7 @@ struct Beacon {
     double                    heading_deg = 0.0;  // global-frame heading (deg)
     double                    speed_mps = 0.0;    // speed (m/s)
     std::vector<NeighborObs>  neighbors;          // strongest-K (K=6 default)
+    std::vector<AlertBelief>  alerts;             // HANDOFF2 §2 — alert beliefs (per topic)
     int                       true_id = -1;       // sim-only eval; DO NOT pass to estimator
 };
 

@@ -53,6 +53,11 @@ extern node atomic PerClient { }
 // shwa.)
 extern node atomic OsiCtl { }
 
+// osi's V2V node (tipc 0x800100A0) — system.services.osi. Provides V2vCtlIf:
+// GetConstellation / GetAlertDecision / InjectBeacon. The consensus RF probe
+// (TdbV2v) drives it. Forward-decl so the probe can resolve it as a call target.
+extern node atomic OsiV2v { }
+
 // shwa's accelerator-telemetry + power node (tipc 0x80010012) —
 // system.services.shwa. GetAccelStatus (CPU/GPU/mem/temp/power) / SetPowerMode.
 extern node atomic ShwaDaemon { }
@@ -131,6 +136,17 @@ node atomic TdbFw {
     tipc type=0x80020105 instance=0
     ports {
         client fw_ctl  requires system.services.fw.FwCtlIf
+    }
+}
+
+// v2v client: drives V2vCtlIf (GetConstellation / GetAlertDecision / InjectBeacon)
+// — used by the cooperative-alert consensus RF probe suite to inject beacons over
+// TIPC (replacing the Meshtastic radio when run_on_start=false) and read back the
+// FC's consensus decision. HANDOFF2.
+node atomic TdbV2v {
+    tipc type=0x8002010A instance=0
+    ports {
+        client v2v_ctl  requires system.services.osi.V2vCtlIf
     }
 }
 

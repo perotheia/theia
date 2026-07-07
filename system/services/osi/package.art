@@ -137,6 +137,18 @@ message NeighborObs {
     double rssi          = 2    // dBm, as measured
 }
 
+// Cooperative-alert consensus belief piggybacked on the beacon (HANDOFF2 §2).
+// One independent binary-topic consensus instance per topic id; the sender
+// broadcasts its full belief as a Gaussian (mu, lam). The `witness` provenance
+// bit is LOAD-BEARING (HANDOFF2 §5.1): it selects the receiver's precision cap so
+// a crowd's relayed echo can never outweigh a direct observation.
+message AlertBelief {
+    uint32 topic   = 1          // topic id (one consensus instance per topic)
+    double mu      = 2          // sender's belief mean over [0,1]
+    double lam     = 3          // sender's belief precision (1/variance)
+    bool   witness = 4          // sender DIRECTLY observes this topic right now
+}
+
 message Beacon {
     double t           = 1      // timestamp (s)
     string eid         = 2      // sender ephemeral id (may rotate)
@@ -144,6 +156,7 @@ message Beacon {
     double heading_deg = 4      // GLOBAL-frame heading (deg) — REQUIRED
     double speed_mps   = 5      // speed (m/s) — REQUIRED
     repeated NeighborObs neighbors = 6 [max_count:16]   // strongest-K (K=6)
+    repeated AlertBelief alerts    = 7 [max_count:8]    // HANDOFF2 §2 — alert beliefs
 }
 
 // ─── Constellation update — vertices, NodeEdge-style partial-on-change ───────
@@ -190,6 +203,16 @@ message V2vConfig {
     double huber_delta      = 6.0     // robust cap on residuals
     double gate_vel         = 6.0     // association: max |Δv| to stitch (m/s)
     double lost_after_s     = 3.0     // association: track lost after this unseen
+    // ─ Cooperative-alert consensus (HANDOFF2 §4) — tuned defaults, port verbatim.
+    //   Caps are LOAD-BEARING (§5.1): (live neighbours) × cap_hearsay < witness
+    //   prior lam, so a crowd of any size loses to one direct observation.
+    double c_sigma_witness    = 0.05  // witness prior sigma (lam 400)
+    double c_sigma_uninformed = 2.0   // uninformed prior sigma at 0.5
+    double c_sigma_consensus  = 0.1   // smoothness potential
+    double c_cap_witness      = 300.0 // witness-message precision cap
+    double c_cap_hearsay      = 30.0  // relayed-message precision cap (§5.1)
+    double c_damping          = 0.5   // EMA weight of the new message
+    double c_lost_after_s     = 15.0  // alert msg expiry = 3 × beacon interval (5 s)
 }
 
 message MeshtasticConfig {
@@ -197,6 +220,30 @@ message MeshtasticConfig {
     string channel = "LongFast"       // Meshtastic channel name
     string topic   = "v2v/beacon"     // → Meshtastic portnum / app id
     string key     = ""               // channel PSK (base64); "" = default channel key
+}
+
+// The consensus decision this vehicle currently holds for one topic.
+message AlertDecision {
+    uint32 topic    = 1     // topic id
+    double mu       = 2     // belief mean over [0,1]
+    double lam      = 3     // belief precision
+    bool   decision = 4     // mu > 0.5 (the precision-weighted majority vote)
+    bool   witness  = 5     // am I a direct witness of this topic
+}
+
+message GetAlertDecisionReq {
+    uint32 topic = 1        // which topic to read
+}
+
+// A beacon INJECTED by a test/probe over TIPC — the meshtastic transport's job,
+// done by the probe when the radio node is disabled (run_on_start=false). Carries
+// the sender's piggybacked alert beliefs so consensus can run headless.
+message InjectBeaconReq {
+    Beacon beacon = 1
+}
+
+message InjectBeaconReply {
+    bool accepted = 1
 }
 
 // ─── Interfaces ─────────────────────────────────────────────────────────────
@@ -211,9 +258,13 @@ interface senderReceiver ConstellationStream {
     data ConstellationUpdate upd
 }
 
-// Constellation read-back (the getter).
+// Constellation read-back (the getter) + cooperative-alert consensus control.
 interface clientServer V2vCtlIf {
     operation GetConstellation(in r: GetConstellationReq) returns ConstellationUpdate
+    // Alert consensus (HANDOFF2): read this vehicle's current decision on a topic,
+    // and (test path) inject a neighbour beacon when the radio node is disabled.
+    operation GetAlertDecision(in r: GetAlertDecisionReq) returns AlertDecision
+    operation InjectBeacon(in r: InjectBeaconReq) returns InjectBeaconReply
 }
 
 // ─── Nodes ──────────────────────────────────────────────────────────────────

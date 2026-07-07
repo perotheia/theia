@@ -42,6 +42,15 @@ uint64_t now_ns_() {
         out.neighbors.push_back({std::string(b.neighbors[i].neighbor_eid),
                                  b.neighbors[i].rssi});
     }
+    // HANDOFF2 §2 — the piggybacked alert beliefs (one per topic).
+    for (pb_size_t i = 0; i < b.alerts_count && i < 8; ++i) {
+        ::ara::osi::v2v::AlertBelief a;
+        a.topic   = static_cast<uint8_t>(b.alerts[i].topic);
+        a.mu      = b.alerts[i].mu;
+        a.lam     = b.alerts[i].lam;
+        a.witness = b.alerts[i].witness;
+        out.alerts.push_back(a);
+    }
     return out;
 }
 
@@ -62,6 +71,19 @@ void OsiV2v::init(OsiV2vState& s) {
     s.est_cfg.anchor_sigma = cfg.f64("anchor_sigma", 0.5);
     s.est_cfg.huber_delta = cfg.f64("huber_delta", 6.0);
     s.est = std::make_shared<::ara::osi::v2v::TopologyEstimator>(s.est_cfg);
+
+    // Cooperative-alert consensus (HANDOFF2 §4). Defaults are the tuned values;
+    // the caps are load-bearing (§5.1). Reuse the estimator's stitch keying so
+    // alerts survive EID rotation.
+    s.con_cfg.sigma_witness    = cfg.f64("c_sigma_witness", 0.05);
+    s.con_cfg.sigma_uninformed = cfg.f64("c_sigma_uninformed", 2.0);
+    s.con_cfg.sigma_consensus  = cfg.f64("c_sigma_consensus", 0.1);
+    s.con_cfg.cap_witness      = cfg.f64("c_cap_witness", 300.0);
+    s.con_cfg.cap_hearsay      = cfg.f64("c_cap_hearsay", 30.0);
+    s.con_cfg.damping          = cfg.f64("c_damping", 0.5);
+    s.con_cfg.lost_after_s     = cfg.f64("c_lost_after_s", 15.0);
+    s.con_cfg.stitch           = true;   // key alerts by track (§3.2)
+    s.con = std::make_shared<::ara::osi::v2v::AlertConsensus>(s.con_cfg);
 
     // Consume the Beacon group (Meshtastic produces it). pg_join routes each
     // multicast Beacon into this node's handle_cast(Beacon) below.
@@ -97,6 +119,13 @@ void OsiV2v::handle_info(const char* info, OsiV2vState& s) {
         ? 0.0
         : s.frame_times.back() + s.beacon_interval_s;
     if (!s.pending.empty()) {
+        // Cooperative-alert consensus round: fuse THIS round's heard beacons'
+        // alert beliefs before the pending frame is moved into the window. The
+        // consensus clock is monotone in beacon intervals (§5.4 — timeouts are in
+        // rounds, not wall time), so it stays consistent with lost_after_s.
+        s.con_t += s.beacon_interval_s;
+        if (s.con) s.con->step(s.con_t, s.pending);
+
         s.frames.push_back(std::move(s.pending));
         s.frame_times.push_back(s.frames.back().empty() ? t : s.frames.back().front().t);
         s.pending.clear();
@@ -217,6 +246,39 @@ ConstellationUpdate OsiV2v::handle_call(
         out.vertices[nv++] = kv.second;
     }
     out.vertices_count = nv;
+    return out;
+}
+
+// GetAlertDecision: this vehicle's current consensus belief/decision on a topic
+// (HANDOFF2 §3.4). Read-only; the decision is mu > 0.5 (precision-weighted vote).
+AlertDecision OsiV2v::handle_call(
+        const GetAlertDecisionReq& req, OsiV2vState& s) {
+    system_services_osi_AlertDecision out =
+        system_services_osi_AlertDecision_init_zero;
+    out.topic = req.topic;
+    if (s.con) {
+        auto st = s.con->state(static_cast<uint8_t>(req.topic), s.con_t);
+        out.mu       = st.mu;
+        out.lam      = st.lam;
+        out.decision = st.decision;
+        out.witness  = st.witness;
+    } else {
+        out.mu = 0.5;
+    }
+    return out;
+}
+
+// InjectBeacon: the TEST path — a probe injects a neighbour beacon over TIPC when
+// the Meshtastic radio node is disabled (run_on_start=false). It lands in the same
+// `pending` bucket as a radio-decoded beacon, so the next solve tick fuses its
+// alert beliefs into consensus (and the beacon into the SLAM window) exactly as
+// if the radio delivered it.
+InjectBeaconReply OsiV2v::handle_call(
+        const InjectBeaconReq& req, OsiV2vState& s) {
+    system_services_osi_InjectBeaconReply out =
+        system_services_osi_InjectBeaconReply_init_zero;
+    s.pending.push_back(decode_beacon(req.beacon));
+    out.accepted = true;
     return out;
 }
 

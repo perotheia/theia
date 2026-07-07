@@ -32,6 +32,7 @@ cc_library(
         "v2v/association.cpp",
         "v2v/graph.cpp",
         "v2v/estimator.cpp",
+        "v2v/consensus.cpp",
     ],
     hdrs = [
         "v2v/beacon.hpp",
@@ -39,6 +40,7 @@ cc_library(
         "v2v/association.hpp",
         "v2v/graph.hpp",
         "v2v/estimator.hpp",
+        "v2v/consensus.hpp",
     ],
     includes = [".."],   # so includes resolve as "impl/v2v/<x>.hpp"
     copts = ["-std=c++17", "-Wall", "-fPIC"] + EIGEN_COPTS,

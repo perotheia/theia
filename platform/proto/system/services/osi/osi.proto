@@ -45,6 +45,13 @@ message NeighborObs {
     double rssi = 2;
 }
 
+message AlertBelief {
+    uint32 topic = 1;
+    double mu = 2;
+    double lam = 3;
+    bool witness = 4;
+}
+
 message Beacon {
     double t = 1;
     string eid = 2;
@@ -52,6 +59,7 @@ message Beacon {
     double heading_deg = 4;
     double speed_mps = 5;
     repeated NeighborObs neighbors = 6;
+    repeated AlertBelief alerts = 7;
 }
 
 message ConstellationVertex {
@@ -93,6 +101,13 @@ message V2vConfig {
     double huber_delta = 10;
     double gate_vel = 11;
     double lost_after_s = 12;
+    double c_sigma_witness = 13;
+    double c_sigma_uninformed = 14;
+    double c_sigma_consensus = 15;
+    double c_cap_witness = 16;
+    double c_cap_hearsay = 17;
+    double c_damping = 18;
+    double c_lost_after_s = 19;
 }
 
 message MeshtasticConfig {
@@ -100,5 +115,25 @@ message MeshtasticConfig {
     string channel = 2;
     string topic = 3;
     string key = 4;
+}
+
+message AlertDecision {
+    uint32 topic = 1;
+    double mu = 2;
+    double lam = 3;
+    bool decision = 4;
+    bool witness = 5;
+}
+
+message GetAlertDecisionReq {
+    uint32 topic = 1;
+}
+
+message InjectBeaconReq {
+    Beacon beacon = 1;
+}
+
+message InjectBeaconReply {
+    bool accepted = 1;
 }
 

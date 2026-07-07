@@ -45,6 +45,10 @@ namespace ara::osi {
 using Beacon = system_services_osi_Beacon;
 using ConstellationUpdate = system_services_osi_ConstellationUpdate;
 using GetConstellationReq = system_services_osi_GetConstellationReq;
+using GetAlertDecisionReq = system_services_osi_GetAlertDecisionReq;
+using AlertDecision = system_services_osi_AlertDecision;
+using InjectBeaconReq = system_services_osi_InjectBeaconReq;
+using InjectBeaconReply = system_services_osi_InjectBeaconReply;
 
 
 
@@ -180,6 +184,12 @@ public:
 
 
     ConstellationUpdate handle_call(const GetConstellationReq& req,
+                                            OsiV2vState& s);
+
+    AlertDecision handle_call(const GetAlertDecisionReq& req,
+                                            OsiV2vState& s);
+
+    InjectBeaconReply handle_call(const InjectBeaconReq& req,
                                             OsiV2vState& s);
 
 

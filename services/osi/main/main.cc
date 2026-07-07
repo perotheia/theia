@@ -118,27 +118,50 @@ int main(int argc, char** argv) {
         ::theia::runtime::set_process_logger(osi_ctl_log);
         osi_ctl.set_logger(std::move(osi_ctl_log));
     }
-    osi_ctl.start();
-    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (the supervisor
-    // sets it from the rig's NodeToCPUMapping). No-op when unset / no entry for
-    // this node; soft-fails (logs) on EPERM. Applied AFTER start() — the thread
-    // exists now.
-    ::theia::runtime::apply_node_affinity(osi_ctl.native_handle(),
-        OsiCtl::kNodeName, std::getenv("THEIA_NODE_CFG"));
     // Resolve this node's TIPC address from the --tipc arg the supervisor built
     // from executor.json (per node, instance machine-shifted), so the BINARY is
     // address-agnostic — same binary on every machine. Falls back to the compiled
-    // kTipcType/kTipcInstance (the .art instance) for a standalone run.
+    // kTipcType/kTipcInstance (the .art instance) for a standalone run. Done BEFORE
+    // start() so the node's init() — which runs on the node thread right after
+    // start() — sees its own instance via tipc_instance() (a clone that keys its
+    // per-instance config in init() would otherwise race and read 0).
     uint32_t osi_ctl_type, osi_ctl_inst;
     ::theia::runtime::resolve_node_tipc(OsiCtl::kNodeName,
         OsiCtl::kTipcType, OsiCtl::kTipcInstance,
         osi_ctl_type, osi_ctl_inst);
+    // set_tipc_instance() is a GenServer method (a runnable resolves its own
+    // instance in do_start via resolve_node_tipc); only emit it for gen_server/
+    // statem nodes so init() sees its instance before start().
+    osi_ctl.set_tipc_instance(osi_ctl_inst);
+    // Generic node params (read via the static-deploy ParamsConfig, overridable
+    // per-rig in config/<fc>.json under this node's section — same mechanism as
+    // tsync's prebuilt `enabled`):
+    //   enabled          (default true)  — boot gate; a disabled node does NOT
+    //                     start, freeing its TIPC slot (e.g. a probe replaces it).
+    //   start_delay_ms   (default 0)     — deterministic intra-executable ordering.
+    // A node section may be absent entirely → all defaults apply (start normally).
+    const auto osi_ctl_params =
+        ::theia::runtime::get_config().node(OsiCtl::kNodeName);
+    const bool osi_ctl_enabled = osi_ctl_params.boolean("enabled", true);
+    if (!osi_ctl_enabled) {
+        osi_ctl.log().info("node disabled (params.enabled=false) — not "
+            "started; its TIPC address is free for a test/probe to bind");
+    } else {
+    if (auto osi_ctl_delay = osi_ctl_params.u32("start_delay_ms", 0))
+        std::this_thread::sleep_for(std::chrono::milliseconds(osi_ctl_delay));
+    osi_ctl.start();
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
                       osi_ctl_type, osi_ctl_inst);
         osi_ctl.log().info(_tipc);
     }
+    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (the supervisor
+    // sets it from the rig's NodeToCPUMapping). No-op when unset / no entry for
+    // this node; soft-fails (logs) on EPERM. Applied AFTER start() — the thread
+    // exists now.
+    ::theia::runtime::apply_node_affinity(osi_ctl.native_handle(),
+        OsiCtl::kNodeName, std::getenv("THEIA_NODE_CFG"));
 
     if (auto* osi_ctl_cfg = config_mux.bind_node(
             osi_ctl, osi_ctl_type,
@@ -195,6 +218,7 @@ int main(int argc, char** argv) {
         }
     }
 
+    }  // end if (osi_ctl_enabled)
 
     OsiV2v osi_v2v;
     // Per-node logger: tagged [#osi_v2v] (kNodeName, matches `tdb ps`),
@@ -206,27 +230,50 @@ int main(int argc, char** argv) {
         osi_v2v_log->set_level(boot_level);
         osi_v2v.set_logger(std::move(osi_v2v_log));
     }
-    osi_v2v.start();
-    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (the supervisor
-    // sets it from the rig's NodeToCPUMapping). No-op when unset / no entry for
-    // this node; soft-fails (logs) on EPERM. Applied AFTER start() — the thread
-    // exists now.
-    ::theia::runtime::apply_node_affinity(osi_v2v.native_handle(),
-        OsiV2v::kNodeName, std::getenv("THEIA_NODE_CFG"));
     // Resolve this node's TIPC address from the --tipc arg the supervisor built
     // from executor.json (per node, instance machine-shifted), so the BINARY is
     // address-agnostic — same binary on every machine. Falls back to the compiled
-    // kTipcType/kTipcInstance (the .art instance) for a standalone run.
+    // kTipcType/kTipcInstance (the .art instance) for a standalone run. Done BEFORE
+    // start() so the node's init() — which runs on the node thread right after
+    // start() — sees its own instance via tipc_instance() (a clone that keys its
+    // per-instance config in init() would otherwise race and read 0).
     uint32_t osi_v2v_type, osi_v2v_inst;
     ::theia::runtime::resolve_node_tipc(OsiV2v::kNodeName,
         OsiV2v::kTipcType, OsiV2v::kTipcInstance,
         osi_v2v_type, osi_v2v_inst);
+    // set_tipc_instance() is a GenServer method (a runnable resolves its own
+    // instance in do_start via resolve_node_tipc); only emit it for gen_server/
+    // statem nodes so init() sees its instance before start().
+    osi_v2v.set_tipc_instance(osi_v2v_inst);
+    // Generic node params (read via the static-deploy ParamsConfig, overridable
+    // per-rig in config/<fc>.json under this node's section — same mechanism as
+    // tsync's prebuilt `enabled`):
+    //   enabled          (default true)  — boot gate; a disabled node does NOT
+    //                     start, freeing its TIPC slot (e.g. a probe replaces it).
+    //   start_delay_ms   (default 0)     — deterministic intra-executable ordering.
+    // A node section may be absent entirely → all defaults apply (start normally).
+    const auto osi_v2v_params =
+        ::theia::runtime::get_config().node(OsiV2v::kNodeName);
+    const bool osi_v2v_enabled = osi_v2v_params.boolean("enabled", true);
+    if (!osi_v2v_enabled) {
+        osi_v2v.log().info("node disabled (params.enabled=false) — not "
+            "started; its TIPC address is free for a test/probe to bind");
+    } else {
+    if (auto osi_v2v_delay = osi_v2v_params.u32("start_delay_ms", 0))
+        std::this_thread::sleep_for(std::chrono::milliseconds(osi_v2v_delay));
+    osi_v2v.start();
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
                       osi_v2v_type, osi_v2v_inst);
         osi_v2v.log().info(_tipc);
     }
+    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (the supervisor
+    // sets it from the rig's NodeToCPUMapping). No-op when unset / no entry for
+    // this node; soft-fails (logs) on EPERM. Applied AFTER start() — the thread
+    // exists now.
+    ::theia::runtime::apply_node_affinity(osi_v2v.native_handle(),
+        OsiV2v::kNodeName, std::getenv("THEIA_NODE_CFG"));
 
     if (auto* osi_v2v_cfg = config_mux.bind_node(
             osi_v2v, osi_v2v_type,
@@ -286,6 +333,7 @@ int main(int argc, char** argv) {
         }
     }
 
+    }  // end if (osi_v2v_enabled)
 
     Meshtastic meshtastic;
     // Per-node logger: tagged [#meshtastic] (kNodeName, matches `tdb ps`),
@@ -297,27 +345,46 @@ int main(int argc, char** argv) {
         meshtastic_log->set_level(boot_level);
         meshtastic.set_logger(std::move(meshtastic_log));
     }
-    meshtastic.start();
-    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (the supervisor
-    // sets it from the rig's NodeToCPUMapping). No-op when unset / no entry for
-    // this node; soft-fails (logs) on EPERM. Applied AFTER start() — the thread
-    // exists now.
-    ::theia::runtime::apply_node_affinity(meshtastic.native_handle(),
-        Meshtastic::kNodeName, std::getenv("THEIA_NODE_CFG"));
     // Resolve this node's TIPC address from the --tipc arg the supervisor built
     // from executor.json (per node, instance machine-shifted), so the BINARY is
     // address-agnostic — same binary on every machine. Falls back to the compiled
-    // kTipcType/kTipcInstance (the .art instance) for a standalone run.
+    // kTipcType/kTipcInstance (the .art instance) for a standalone run. Done BEFORE
+    // start() so the node's init() — which runs on the node thread right after
+    // start() — sees its own instance via tipc_instance() (a clone that keys its
+    // per-instance config in init() would otherwise race and read 0).
     uint32_t meshtastic_type, meshtastic_inst;
     ::theia::runtime::resolve_node_tipc(Meshtastic::kNodeName,
         Meshtastic::kTipcType, Meshtastic::kTipcInstance,
         meshtastic_type, meshtastic_inst);
+    // Generic node params (read via the static-deploy ParamsConfig, overridable
+    // per-rig in config/<fc>.json under this node's section — same mechanism as
+    // tsync's prebuilt `enabled`):
+    //   enabled          (default true)  — boot gate; a disabled node does NOT
+    //                     start, freeing its TIPC slot (e.g. a probe replaces it).
+    //   start_delay_ms   (default 0)     — deterministic intra-executable ordering.
+    // A node section may be absent entirely → all defaults apply (start normally).
+    const auto meshtastic_params =
+        ::theia::runtime::get_config().node(Meshtastic::kNodeName);
+    const bool meshtastic_enabled = meshtastic_params.boolean("enabled", true);
+    if (!meshtastic_enabled) {
+        meshtastic.log().info("node disabled (params.enabled=false) — not "
+            "started; its TIPC address is free for a test/probe to bind");
+    } else {
+    if (auto meshtastic_delay = meshtastic_params.u32("start_delay_ms", 0))
+        std::this_thread::sleep_for(std::chrono::milliseconds(meshtastic_delay));
+    meshtastic.start();
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
                       meshtastic_type, meshtastic_inst);
         meshtastic.log().info(_tipc);
     }
+    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (the supervisor
+    // sets it from the rig's NodeToCPUMapping). No-op when unset / no entry for
+    // this node; soft-fails (logs) on EPERM. Applied AFTER start() — the thread
+    // exists now.
+    ::theia::runtime::apply_node_affinity(meshtastic.native_handle(),
+        Meshtastic::kNodeName, std::getenv("THEIA_NODE_CFG"));
 
 
     // GenRunnable has no mailbox, so it can't take the supervisor's control
@@ -354,6 +421,7 @@ int main(int argc, char** argv) {
         }
     }
 
+    }  // end if (meshtastic_enabled)
 
 
     config_mux.start();

@@ -5,13 +5,7 @@
       "children": [
         {"name": "fw", "run_on_start": false},
         {"name": "tsync", "run_on_start": false},
-        {"name": "rds", "run_on_start": false},
-        {
-          "name": "osi",
-          "nodes": [
-            {"name": "meshtastic", "run_on_start": false}
-          ]
-        }
+        {"name": "rds", "run_on_start": false}
       ]
     }
   ]

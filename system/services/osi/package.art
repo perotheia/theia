@@ -299,4 +299,12 @@ node runnable Meshtastic {
     ports {
         sender beacons_out provides V2vBeaconStream       // decoded beacons → OsiV2v
     }
+    // Generic node params (read by gen-app main via ParamsConfig). `enabled=false`
+    // (a per-rig config/osi.json override) gates the radio OFF at boot — the node
+    // does not start, freeing its TIPC slot so a test/probe can inject beacons over
+    // V2vCtlIf.InjectBeacon in its place (HANDOFF2 consensus probe). Default true =
+    // the radio runs normally.
+    params {
+        enabled : bool = true
+    }
 }

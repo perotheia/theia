@@ -591,6 +591,15 @@ def cmd_start(args: list[str]) -> int:
         **os.environ,
         "THEIA_SUPERVISOR_MANIFEST": "config/executor.json",
         "THEIA_INSTALL_DIR": _install_dirs,
+        # The deploy root the children anchor their config/ to. A forked FC runs
+        # with cwd=<dest>/releases/local (the release symlink), so its
+        # init_config("<fc>") + THEIA_CONFIG_DIR=config (relative) would look under
+        # releases/local/config/ — which does NOT exist (config/ is at <dest>/
+        # config/). init_config anchors a RELATIVE THEIA_CONFIG_DIR to
+        # THEIA_ROOT_DIR (mirrors platform/runtime/ota/theia-run.sh on a real rig,
+        # where it's /opt/theia). Without this, a node's per-rig params (e.g.
+        # meshtastic.enabled=false) silently fall back to their .art defaults.
+        "THEIA_ROOT_DIR": _dest_abs,
         "THEIA_SUPERVISOR_INSTANCE": instance,
         # The cluster machine index — a supervisor BOOT knob (not a node address):
         # the supervisor reads it to shift each CHILD's --tipc instance by N when

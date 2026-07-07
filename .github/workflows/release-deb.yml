@@ -103,6 +103,37 @@ jobs:
         run: |
           ./.github/scripts/fix-deb-depends.sh "${{ matrix.ubuntu }}"
 
+      # GATE: a CONSUMING workspace pinned to the installed deb must be able to
+      # `theia manifest` + `theia dist` (DEB MODE — framework FCs are prebuilt,
+      # no services/ source). The source-mode demo/ nightly never exercises this,
+      # so a deb-mode regression (e.g. dist_pkg emitting unbuildable @pero_theia//
+      # services labels) slips through unless we install the deb and build against
+      # it here. Non-fatal to the RELEASE (continue-on-error) but visible as a
+      # failed step.
+      - name: Deb-mode smoke test (consuming ws builds against /opt/theia)
+        continue-on-error: true
+        run: |
+          set -euxo pipefail
+          sudo dpkg -i dist/debian/theia-framework/*.deb \
+                       dist/debian/theia-runtime/*_amd64.deb \
+                       dist/debian/theia-services/*_amd64.deb || sudo apt-get -f install -y
+          # scaffold a fresh consuming ws against the installed /opt/theia
+          WS="$RUNNER_TEMP/deb_ws"; mkdir -p "$WS"; cd "$WS"
+          python3 -m venv .venv
+          . .venv/bin/activate
+          pip install --no-index --find-links /opt/theia/wheels artheia rf-theia
+          . /opt/theia/setup.sh
+          theia init --with-services --name debtest
+          # DEB MODE: manifest emits deb_mode=True + drops framework labels; dist
+          # packs via pack_ipk --allow-prefix-binaries. Both must succeed.
+          theia manifest bootstrap
+          grep -q "deb_mode = True" dist/manifest/BUILD.bazel \
+            || { echo "FAIL: dist_pkg missing deb_mode in deb mode"; exit 1; }
+          theia dist bootstrap
+          test -f dist/manifest/central/central.deb \
+            || { echo "FAIL: deb-mode dist produced no central.deb"; exit 1; }
+          echo "deb-mode consuming-ws build OK"
+
       - name: Stamp .deb filenames with the Ubuntu release
         id: stamp
         run: |

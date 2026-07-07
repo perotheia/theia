@@ -1,0 +1,47 @@
+# install-verify-key.yml — pull the SWP artifact-verify PUBLIC key from the S3
+# provisioning plane onto the rig, and point mender.conf's ArtifactVerifyKey at
+# it. This is what makes the device REFUSE any SWP not signed by the operator's
+# private key (`theia release-swp` signs it; `theia cert copy` uploaded this
+# public key). Fail-CLOSED: with the key installed, mender-update rejects
+# unsigned/forged artifacts upstream of the theia-swp module.
+#
+# The key is NEVER baked into the rig image or committed — the operator
+# regenerates the pair per deployment (`theia cert generate`) and ships only the
+# public half here. Include this from install-mender.yml, AFTER mender.conf is in
+# place. NO-OP when s3_endpoint is empty (a local/dev provision without S3).
+#
+# Reference copy — the AUTHORITATIVE file is colony's
+# ansible/tasks/install-verify-key.yml (see README.md).
+
+- name: "Verify key: is the S3 provisioning plane configured?"
+  ansible.builtin.set_fact:
+    _verify_key: "{{ (s3_endpoint | default('') | length) > 0 }}"
+
+- name: "Verify key: pull the PUBLIC artifact-verify key from S3 → /etc/mender"
+  ansible.builtin.get_url:
+    url: "{{ s3_endpoint }}/{{ s3_runtime_bucket | default('theia-runtime') }}/provisioning/artifact-verify-key.pem"
+    dest: /etc/mender/artifact-verify-key.pem
+    mode: "0644"
+    force: true                    # always refresh (a rotated key must land)
+  become: true
+  when: _verify_key | bool
+
+# mender.conf ships with ArtifactVerifyKey already set (deploy/rig/mender.conf),
+# but a hand-provisioned rig may not — ensure the setting exists so the pulled
+# key is actually consulted. Idempotent: only inserts when absent.
+- name: "Verify key: ensure mender.conf sets ArtifactVerifyKey"
+  ansible.builtin.lineinfile:
+    path: /etc/mender/mender.conf
+    regexp: '"ArtifactVerifyKey"'
+    line: '  "ArtifactVerifyKey": "/etc/mender/artifact-verify-key.pem",'
+    insertafter: '"ServerURL"'
+  become: true
+  when: _verify_key | bool
+
+- name: "Verify key: report"
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'ArtifactVerifyKey installed — this rig REFUSES unsigned/forged SWPs'
+         if _verify_key | bool
+         else 'no S3 endpoint — verify key NOT installed (dev provision; SWPs
+               unverified)' }}

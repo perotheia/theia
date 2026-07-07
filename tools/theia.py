@@ -60,6 +60,21 @@ if not (WORKSPACE / "manifest").is_dir() and not (WORKSPACE / ".theia").is_file(
         WORKSPACE = THEIA_ROOT
 
 COMPOSE = THEIA_ROOT / "deploy" / "docker-compose.yml"
+
+# ── SWP signing material (app-plane authenticity) ────────────────────────────
+# The operator generates an RSA keypair with `theia cert generate`; release-swp
+# signs the .mender with the PRIVATE key; colony ships the PUBLIC key to each rig
+# (`theia cert copy` uploads it to the S3 provisioning plane) where mender.conf's
+# ArtifactVerifyKey points at it and mender-update REFUSES anything not signed by
+# it. NEITHER key is ever committed — deploy/signing/ is gitignored and the pair
+# is regenerated per deployment/nightly (an ephemeral dir via THEIA_SIGNING_DIR).
+SIGNING_DIR = Path(os.environ.get("THEIA_SIGNING_DIR")
+                   or (WORKSPACE / "deploy" / "signing"))
+SWP_SIGN_KEY = SIGNING_DIR / "theia-swp-signing.key"     # PRIVATE (never leaves)
+SWP_VERIFY_KEY = SIGNING_DIR / "theia-swp-verify.pub"    # PUBLIC (shipped to rigs)
+# Where colony's provision pulls the verify key from, and drops it on the rig.
+SWP_VERIFY_S3_KEY = "provisioning/artifact-verify-key.pem"
+SWP_VERIFY_RIG_PATH = "/etc/mender/artifact-verify-key.pem"
 # provision/orchestrate/cleanup moved OUT to the `colony` repo (the deploy adapter):
 # theia's deploy surface is now `manifest`/`dist`/`release` (emit the per-rig
 # bundle to S3 — theia release <svc> --s3 ships the runtime debs + manifest+config;
@@ -3172,16 +3187,14 @@ def cmd_release_swp(args: list[str]) -> int:
         # SIGN the artifact (public-key authenticity, not just the S3 sha256
         # integrity). `mender-artifact write -k <priv>` RSA/ECDSA-signs; the
         # device's mender-update REFUSES any artifact not signed by the matching
-        # ArtifactVerifyKey (colony ships the PUBLIC key to /etc/mender). Key
-        # resolution: --sign-key > $THEIA_SWP_SIGN_KEY > deploy/signing/
-        # theia-swp-signing.key (the default operator key, gitignored). Unsigned
+        # ArtifactVerifyKey (colony ships the PUBLIC key to /etc/mender via
+        # `theia cert copy`). Key resolution: --sign-key > $THEIA_SWP_SIGN_KEY >
+        # the generated SWP_SIGN_KEY (`theia cert generate`, gitignored). Unsigned
         # only if none is found — warn loudly (a fleet with ArtifactVerifyKey set
         # will then reject the SWP, which is the safe failure).
         sign_key = (_opt("--sign-key")
                     or os.environ.get("THEIA_SWP_SIGN_KEY")
-                    or (str(THEIA_ROOT / "deploy" / "signing" / "theia-swp-signing.key")
-                        if (THEIA_ROOT / "deploy" / "signing" / "theia-swp-signing.key").is_file()
-                        else ""))
+                    or (str(SWP_SIGN_KEY) if SWP_SIGN_KEY.is_file() else ""))
         cmd = [
             ma, "write", "module-image",
             "--type", "theia-swp",
@@ -3204,9 +3217,9 @@ def cmd_release_swp(args: list[str]) -> int:
                   f"{Path(sign_key).name})", file=sys.stderr)
         else:
             print(f"theia release-swp: wrote {mender_out} (UNSIGNED — no signing "
-                  "key; a fleet with ArtifactVerifyKey set will REJECT it. Set "
-                  "--sign-key / $THEIA_SWP_SIGN_KEY / deploy/signing/"
-                  "theia-swp-signing.key)", file=sys.stderr)
+                  "key; a fleet with ArtifactVerifyKey set will REJECT it. Run "
+                  "`theia cert generate` first, or pass --sign-key / "
+                  "$THEIA_SWP_SIGN_KEY)", file=sys.stderr)
     else:
         print("theia release-swp: mender-artifact not installed — staged tree + "
               f"{tarball} written; pack on the GW.", file=sys.stderr)
@@ -3275,6 +3288,115 @@ def _mender_artifact_bin() -> "str | None":
         if shutil.which(cand):
             return cand
     return None
+
+
+def cmd_cert(args: list[str]) -> int:
+    """Manage the SWP signing keypair (app-plane authenticity).
+
+      theia cert generate [--force] [--bits N] [--dir D]
+      theia cert copy     [--s3 URL] [--bucket B]
+
+    The app plane (the user SWP) is public-key signed: `release-swp` signs the
+    .mender with the PRIVATE key; each rig verifies with the PUBLIC key (mender
+    .conf ArtifactVerifyKey) and mender-update REFUSES anything not signed by it.
+
+    `generate` writes an RSA keypair to the signing dir (deploy/signing/ by
+    default, or $THEIA_SIGNING_DIR — gitignored, NEVER committed). Regenerate it
+    per deployment / per nightly (an ephemeral dir keeps nothing on the box):
+        THEIA_SIGNING_DIR=$(mktemp -d) theia cert generate
+
+    `copy` uploads ONLY the PUBLIC verify key to the S3 provisioning plane
+    (s3://<bucket>/provisioning/artifact-verify-key.pem); colony's provision
+    pulls it onto each rig at /etc/mender/artifact-verify-key.pem. The private
+    key never leaves the release host. Run generate → copy → release-swp."""
+    import os
+    import shutil
+    import subprocess
+
+    def _opt(name, default=None):
+        for i, a in enumerate(args):
+            if a == name and i + 1 < len(args):
+                return args[i + 1]
+        return default
+
+    sub = args[0] if args and not args[0].startswith("-") else ""
+
+    # honor --dir override for generate (else the module SIGNING_DIR / env)
+    _dir = _opt("--dir")
+    sdir = Path(_dir) if _dir else SIGNING_DIR
+    priv = sdir / SWP_SIGN_KEY.name
+    pub = sdir / SWP_VERIFY_KEY.name
+
+    if sub == "generate":
+        force = "--force" in args
+        bits = _opt("--bits", "3072")
+        if priv.is_file() and not force:
+            print(f"theia cert: {priv} already exists — reuse it, or pass --force "
+                  "to regenerate (INVALIDATES already-deployed verify keys).",
+                  file=sys.stderr)
+            return 1
+        if not shutil.which("openssl"):
+            print("theia cert: openssl not found.", file=sys.stderr)
+            return 1
+        sdir.mkdir(parents=True, exist_ok=True)
+        # PKCS#8 RSA private key + the matching public key. mender-artifact signs
+        # with the private (RSA-PSS); mender-update verifies with the public.
+        if subprocess.run(["openssl", "genpkey", "-algorithm", "RSA",
+                           "-pkeyopt", f"rsa_keygen_bits:{bits}",
+                           "-out", str(priv)]).returncode != 0:
+            print("theia cert: key generation failed.", file=sys.stderr)
+            return 1
+        os.chmod(priv, 0o600)
+        if subprocess.run(["openssl", "rsa", "-in", str(priv), "-pubout",
+                           "-out", str(pub)],
+                          stdout=subprocess.DEVNULL,
+                          stderr=subprocess.DEVNULL).returncode != 0:
+            print("theia cert: public-key extraction failed.", file=sys.stderr)
+            return 1
+        print(f"theia cert: generated {priv} (PRIVATE — gitignored, do NOT commit)",
+              file=sys.stderr)
+        print(f"theia cert: generated {pub} (PUBLIC — `theia cert copy` ships it "
+              "to colony)", file=sys.stderr)
+        return 0
+
+    if sub == "copy":
+        if not pub.is_file():
+            print(f"theia cert: no public key at {pub} — run "
+                  "`theia cert generate` first.", file=sys.stderr)
+            return 1
+        s3_url = _opt("--s3") or os.environ.get("THEIA_S3_URL")
+        bucket = (_opt("--bucket") or os.environ.get("THEIA_RUNTIME_BUCKET")
+                  or "theia-runtime")
+        if not s3_url:
+            print("theia cert: no --s3 URL (or $THEIA_S3_URL) — where should the "
+                  "verify key go? (e.g. --s3 http://10.0.0.99:9000)",
+                  file=sys.stderr)
+            return 1
+        if not shutil.which("aws"):
+            print("theia cert: aws cli not found — push the key from a host that "
+                  "has it.", file=sys.stderr)
+            return 1
+        env = {**os.environ,
+               "AWS_ACCESS_KEY_ID": os.environ.get("MINIO_USER", "theia"),
+               "AWS_SECRET_ACCESS_KEY": os.environ.get("MINIO_PASSWORD",
+                                                        "theiaminio"),
+               "AWS_DEFAULT_REGION": "us-east-1"}
+        aws = ["aws", "--endpoint-url", s3_url, "s3"]
+        subprocess.run([*aws, "mb", f"s3://{bucket}"], env=env,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        dst = f"s3://{bucket}/{SWP_VERIFY_S3_KEY}"
+        print(f"$ aws cp {pub.name} {dst}", file=sys.stderr)
+        if subprocess.run([*aws, "cp", str(pub), dst], env=env).returncode != 0:
+            print("theia cert: upload failed.", file=sys.stderr)
+            return 1
+        print(f"theia cert: copied the PUBLIC verify key → {dst}\n"
+              f"  colony's provision drops it at {SWP_VERIFY_RIG_PATH} on each "
+              "rig (mender.conf ArtifactVerifyKey). The private key stays here.",
+              file=sys.stderr)
+        return 0
+
+    print(cmd_cert.__doc__, file=sys.stderr)
+    return 2
 
 
 def cmd_release_role(args: list[str]) -> int:
@@ -4393,6 +4515,7 @@ COMMANDS = {
     "release-swp": (cmd_release_swp, "build + publish a user-ws Software Package (day-2 Mender OTA, the package plane)"),
     "release-app": (cmd_release_swp, "alias for release-swp (deprecated)"),
     "release-role": (cmd_release_role, "build + publish a per-board role .mender (L4-C vehicle campaign)"),
+    "cert":        (cmd_cert,        "{generate|copy} the SWP signing keypair; copy ships the PUBLIC verify key to colony via S3"),
     "compdb":      (cmd_compdb,      "regen compile_commands.json from bazel (clangd)"),
     "observer":    (cmd_observer,    "launch the supervisor-GUI against the local cluster (always mTLS)"),
 }

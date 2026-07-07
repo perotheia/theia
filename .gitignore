@@ -140,4 +140,7 @@ services/idsm/bpf/vmlinux.h
 #   --modulepath deploy/puppet/modules
 /deploy/puppet/modules/stdlib/
 /third_party/codegen-bookworm-x86/
-deploy/signing/*.key
+# Signing material is NEVER committed — the operator generates the pair per
+# deployment (`theia cert generate`) and ships only the PUBLIC key to colony via
+# S3 (`theia cert copy`). Ignore the whole dir (private .key + generated .pub).
+deploy/signing/

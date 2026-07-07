@@ -5,8 +5,10 @@ package system.services.osi
 // accounting) PLUS the V2V relative-topology plane — OsiV2v (the SLAM estimator
 // + constellation state/broadcast) fed by Meshtastic (the pluggable mesh
 // transport). See package.art for the V2V data flow.
+// The osi FC is now JUST the OS-interface namespace node (cgroup/resource
+// partitioning + per-FC accounting). The V2V plane moved OUT to standalone
+// PACKAGES a user SWP composes: packages.v2v (estimator + consensus) fed by
+// packages.meshtastic (the mesh transport). osi no longer owns them.
 composition Osi {
     prototype OsiCtl     osi_ctl
-    prototype OsiV2v     osi_v2v
-    prototype Meshtastic meshtastic
 }

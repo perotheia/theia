@@ -15,7 +15,7 @@
 //
 // MQTT uplink semantics of `topic` are explicitly OUT OF SCOPE (serial only).
 
-#include "impl/v2v/mesh_backend.hpp"
+#include "mesh_backend.hpp"
 
 #include <fcntl.h>
 #include <poll.h>

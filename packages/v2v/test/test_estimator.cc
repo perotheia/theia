@@ -9,8 +9,8 @@
 // (chain / cluster), and the offset-solve restart determinism (fixed seed 0) is
 // checked by re-running and asserting an identical result.
 
-#include "impl/v2v/beacon.hpp"
-#include "impl/v2v/estimator.hpp"
+#include "algo/beacon.hpp"
+#include "algo/estimator.hpp"
 
 #include <cassert>
 #include <cmath>

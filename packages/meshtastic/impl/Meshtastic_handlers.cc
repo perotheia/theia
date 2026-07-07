@@ -12,7 +12,8 @@
 #include "PgClient.hh"          // producer pg_watch + broadcast_members
 #include "RemoteCodec.hh"       // RemoteCodec<Beacon>::fields()
 #include "ParamsConfig.hh"      // get_config().node(kNodeName).str(...)
-#include "lib/osi_codecs.hh"    // THEIA_DECLARE_REMOTE_CODEC(Beacon) (FC-wide)
+#include "lib/meshtastic_codecs.hh"    // THEIA_DECLARE_REMOTE_CODEC(Beacon) (FC-wide)
+#include "packages/v2v/v2v.pb.h"    // Beacon (from the v2v package)
 
 #include <pb_decode.h>
 #include <pb_encode.h>
@@ -23,14 +24,14 @@
 #include <string>
 #include <thread>
 
-#include "impl/v2v/mesh_backend.hpp"
-#include "system/services/osi/osi.pb.h"
+#include "mesh_backend.hpp"
+// (Beacon comes from packages/v2v/v2v.pb.h, included above)
 
-namespace ara::osi {
+namespace ara::meshtastic {
 
 namespace {
 
-using Beacon = system_services_osi_Beacon;
+using Beacon = packages_v2v_Beacon;
 
 // File-static runnable state (GenRunnable binds no State type; mirror DoipServer).
 struct MeshState {
@@ -93,7 +94,7 @@ void Meshtastic::do_loop() {
         if (::ara::osi::mesh::backend_recv(payload, /*timeout_ms=*/200)) {
             // The payload is a serialized V2V Beacon (the compact on-air form the
             // backend already converted). Decode + re-broadcast to OsiV2v.
-            Beacon b = system_services_osi_Beacon_init_zero;
+            Beacon b = packages_v2v_Beacon_init_zero;
             auto is = pb_istream_from_buffer(
                 reinterpret_cast<const pb_byte_t*>(payload.data()), payload.size());
             if (pb_decode(&is, ::theia::runtime::RemoteCodec<Beacon>::fields(), &b)) {

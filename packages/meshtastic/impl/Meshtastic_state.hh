@@ -12,7 +12,7 @@
 #include <cstdint>
 #include <string>
 
-namespace ara::osi {
+namespace ara::meshtastic {
 
 struct MeshtasticState {
     // Add app fields here, e.g.:

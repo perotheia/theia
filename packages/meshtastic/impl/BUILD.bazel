@@ -1,0 +1,59 @@
+# FIRST-TIME-ONLY (regenerated with --force). source: system/packages/meshtastic/package.art
+#
+# Impl slice — handler bodies. The user owns this BUILD.bazel after
+# first emit (you may want to add per-FC test_*.cc files; gen-app
+# won't reach in and squash that).
+
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+# Pluggable mesh-transport backend: mesh_meshtastic.cc (serial protobuf) on
+# `--define mesh=meshtastic`, else the no-op mesh_null.cc (radio compiled OUT,
+# zero serial dependency — the default). This is the "another protocol could
+# substitute" seam: swap the backend, keep the node + V2vBeaconStream contract.
+cc_library(
+    name = "mesh_backend",
+    srcs = select({
+        "@pero_theia//rules/config:mesh_meshtastic": ["mesh_meshtastic.cc"],
+        "//conditions:default": ["mesh_null.cc"],
+    }),
+    hdrs = ["mesh_backend.hpp"],
+    includes = ["."],
+    copts = ["-std=c++17", "-Wall", "-fPIC"],
+)
+
+# State structs (write-once, app-owned). A leaf header-only target so
+# BOTH the lib (which #includes "impl/<Node>_state.hh" as the GenServer
+# State type) and the impl can depend on it WITHOUT a lib<->impl cycle:
+#   meshtastic_state  ←  lib  ←  impl
+cc_library(
+    name = "meshtastic_state",
+    hdrs = [
+        "Meshtastic_state.hh",
+    ],
+    # The lib #includes these as "impl/<Node>_state.hh", so the include
+    # root is the FC out_dir (one above impl/).
+    includes = [".."],
+    copts = ["-std=c++17", "-fPIC"],
+    deps = ["@pero_theia//platform/runtime:runtime"],
+)
+
+cc_library(
+    name = "meshtastic_impl",
+    srcs = [
+        "Meshtastic_handlers.cc",
+    ],
+    copts = [
+        "-std=c++17",
+        "-Wall",
+        "-Wextra",
+        "-fPIC",
+    ],
+    deps = [
+        "//packages/meshtastic/lib:meshtastic_lib",
+        ":mesh_backend",
+        # the transport carries the v2v Beacon message it decodes + forwards.
+        "//platform/proto/packages/v2v:v2v_proto",
+    ],
+)

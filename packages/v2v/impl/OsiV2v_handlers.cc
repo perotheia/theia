@@ -17,10 +17,10 @@
 #include <cstring>
 #include <string>
 
-#include "impl/v2v/beacon.hpp"
-#include "impl/v2v/estimator.hpp"
+#include "algo/beacon.hpp"
+#include "algo/estimator.hpp"
 
-namespace ara::osi {
+namespace ara::v2v {
 
 namespace {
 
@@ -147,8 +147,8 @@ void OsiV2v::handle_info(const char* info, OsiV2vState& s) {
             res.positions.count(res.anchor) ? res.positions.at(res.anchor)
                                             : ::ara::osi::v2v::Vec2{};
 
-        system_services_osi_ConstellationUpdate upd =
-            system_services_osi_ConstellationUpdate_init_zero;
+        packages_v2v_ConstellationUpdate upd =
+            packages_v2v_ConstellationUpdate_init_zero;
         upd.gen          = ++s.generation;
         upd.ts_ns        = now_ns_();
         upd.anchor_track = static_cast<uint32_t>(res.anchor < 0 ? 0 : res.anchor);
@@ -161,8 +161,8 @@ void OsiV2v::handle_info(const char* info, OsiV2vState& s) {
             const ::ara::osi::v2v::Vec2& p = kv.second;
             const ::ara::osi::v2v::Vec2& v = res.velocities.at(tr);
 
-            system_services_osi_ConstellationVertex vert =
-                system_services_osi_ConstellationVertex_init_zero;
+            packages_v2v_ConstellationVertex vert =
+                packages_v2v_ConstellationVertex_init_zero;
             vert.op             = 0;   // UPSERT
             vert.track_id       = static_cast<uint32_t>(tr);
             vert.x = p.x; vert.y = p.y;
@@ -185,8 +185,8 @@ void OsiV2v::handle_info(const char* info, OsiV2vState& s) {
         for (auto it = s.last_vertices.begin(); it != s.last_vertices.end();) {
             if (res.positions.count(it->first) == 0) {
                 if (nv < 64) {
-                    system_services_osi_ConstellationVertex rm =
-                        system_services_osi_ConstellationVertex_init_zero;
+                    packages_v2v_ConstellationVertex rm =
+                        packages_v2v_ConstellationVertex_init_zero;
                     rm.op = 1;   // REMOVE
                     rm.track_id = static_cast<uint32_t>(it->first);
                     upd.vertices[nv++] = rm;
@@ -209,10 +209,10 @@ void OsiV2v::handle_info(const char* info, OsiV2vState& s) {
 // on_config_update: apply V2vConfig live (rebuild the estimator).
 void OsiV2v::on_config_update(
         const platform_runtime_ConfigUpdated& cfg, OsiV2vState& s) {
-    system_services_osi_V2vConfig c = system_services_osi_V2vConfig_init_zero;
+    packages_v2v_V2vConfig c = packages_v2v_V2vConfig_init_zero;
     auto stream = pb_istream_from_buffer(
         reinterpret_cast<const pb_byte_t*>(cfg.config.bytes), cfg.config.size);
-    if (!pb_decode(&stream, system_services_osi_V2vConfig_fields, &c)) {
+    if (!pb_decode(&stream, packages_v2v_V2vConfig_fields, &c)) {
         log().warn("on_config_update: V2vConfig decode failed — ignored");
         return;
     }
@@ -235,8 +235,8 @@ void OsiV2v::on_config_update(
 // GetConstellation: serve the full cached constellation (the getter).
 ConstellationUpdate OsiV2v::handle_call(
         const GetConstellationReq& /*req*/, OsiV2vState& s) {
-    system_services_osi_ConstellationUpdate out =
-        system_services_osi_ConstellationUpdate_init_zero;
+    packages_v2v_ConstellationUpdate out =
+        packages_v2v_ConstellationUpdate_init_zero;
     out.gen          = s.generation;
     out.ts_ns        = now_ns_();
     out.anchor_track = static_cast<uint32_t>(s.anchor_track < 0 ? 0 : s.anchor_track);
@@ -253,8 +253,8 @@ ConstellationUpdate OsiV2v::handle_call(
 // (HANDOFF2 §3.4). Read-only; the decision is mu > 0.5 (precision-weighted vote).
 AlertDecision OsiV2v::handle_call(
         const GetAlertDecisionReq& req, OsiV2vState& s) {
-    system_services_osi_AlertDecision out =
-        system_services_osi_AlertDecision_init_zero;
+    packages_v2v_AlertDecision out =
+        packages_v2v_AlertDecision_init_zero;
     out.topic = req.topic;
     if (s.con) {
         auto st = s.con->state(static_cast<uint8_t>(req.topic), s.con_t);
@@ -275,8 +275,8 @@ AlertDecision OsiV2v::handle_call(
 // if the radio delivered it.
 InjectBeaconReply OsiV2v::handle_call(
         const InjectBeaconReq& req, OsiV2vState& s) {
-    system_services_osi_InjectBeaconReply out =
-        system_services_osi_InjectBeaconReply_init_zero;
+    packages_v2v_InjectBeaconReply out =
+        packages_v2v_InjectBeaconReply_init_zero;
     s.pending.push_back(decode_beacon(req.beacon));
     out.accepted = true;
     return out;

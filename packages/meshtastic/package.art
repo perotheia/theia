@@ -1,0 +1,45 @@
+// packages.meshtastic — a V2V mesh TRANSPORT package.
+//
+// A ROS-style package: it defines the Meshtastic transport node + its config,
+// built once as a linkable lib. It PROVIDES the V2vBeaconStream that packages.v2v
+// consumes — so it's swappable: another transport (a different radio protocol)
+// could provide the same stream to feed v2v. Pure transport: no estimator/
+// consensus math here (that's packages.v2v).
+//
+// Imports packages.v2v for the Beacon message + the V2vBeaconStream interface it
+// provides (the interface is DEFINED in v2v, the algorithm side).
+
+package packages.meshtastic
+
+import packages.v2v.*
+
+
+// ─── Config ───────────────────────────────────────────────────────────────────
+
+message MeshtasticConfig {
+    string serial  = "/dev/ttyUSB0"   // device the backend opens
+    string channel = "LongFast"       // Meshtastic channel name
+    string topic   = "v2v/beacon"     // → Meshtastic portnum / app id
+    string key     = ""               // channel PSK (base64); "" = default channel key
+}
+
+// ─── Node ─────────────────────────────────────────────────────────────────────
+
+// The mesh transport. tipc 0x800100A1. A runnable that owns the radio thread: it
+// opens the (compile-time-selected) backend — `null` (no-op, default) or
+// `meshtastic` (serial protobuf) — decodes inbound beacon frames, and forwards
+// them to OsiV2v over V2vBeaconStream (which it PROVIDES; v2v consumes it).
+node runnable Meshtastic {
+    tipc type=0x800100A1 instance=0
+    reporting = true
+    tag = "MESH"
+    config MeshtasticConfig
+    ports {
+        sender beacons_out provides V2vBeaconStream       // decoded beacons → OsiV2v
+    }
+    // `enabled=false` (a per-rig config override) gates the radio OFF at boot so a
+    // probe can inject beacons in its place. Default true = the radio runs.
+    params {
+        enabled : bool = true
+    }
+}

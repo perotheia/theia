@@ -7,7 +7,7 @@
 // OsiV2v's beacons_in over TIPC). This keeps the OSI FC fully buildable + the V2V
 // plane testable with ZERO serial/radio dependency on the CI/dev path.
 
-#include "impl/v2v/mesh_backend.hpp"
+#include "mesh_backend.hpp"
 
 namespace ara::osi::mesh {
 

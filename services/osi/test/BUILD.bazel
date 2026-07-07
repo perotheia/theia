@@ -1,36 +1,7 @@
-# HAND-OWNED. osi tests.
+# osi tests. The V2V SLAM/consensus parity tests MOVED to
+# //packages/v2v/test (they belong with the algorithm). What remains here is the
+# osi_probe_smoke.py live probe (a script, not a bazel target — run via robot /
+# directly against a live OsiCtl).
 load("@rules_cc//cc:defs.bzl", "cc_test")
 
 package(default_visibility = ["//visibility:public"])
-
-# V2V relative-topology SLAM estimator parity test. Synthesizes beacons from
-# known constellations via the path-loss model and asserts the estimator recovers
-# the relative topology (pairwise distances) within tolerance + deterministically
-# (fixed-seed restarts). Pins the port against mesh_topo/estimator (HANDOFF). The
-# estimator lib is self-contained (Eigen-only) — no Theia/runtime deps needed.
-# Eigen is a header-only SYSTEM lib. A cross-build (rpi4/jetson sysroot) CANNOT
-# use the host absolute `-I/usr/include/eigen3` (bazel rejects "outside the
-# execution root") — use GCC's sysroot-relative `-I=/usr/include/eigen3` (the
-# leading `=` expands to the active --sysroot, where eigen3 is staged). Mirrors
-# EIGEN_COPTS in //services/osi/impl:BUILD.bazel.
-_EIGEN_COPTS = select({
-    "//rules/config:is_arm64": ["-I=/usr/include/eigen3"],
-    "//conditions:default": ["-I/usr/include/eigen3"],
-})
-
-cc_test(
-    name = "test_estimator",
-    srcs = ["test_estimator.cc"],
-    copts = ["-std=c++17", "-fPIC"] + _EIGEN_COPTS,
-    deps = ["//services/osi/impl:v2v_estimator"],
-)
-
-# Cooperative-alert consensus parity test (HANDOFF2 §7): convergence, E3 majority,
-# E5 lone-witness containment. Scalar-only, but links v2v_estimator (consensus
-# reuses the TrackManager), so it carries the same Eigen copts.
-cc_test(
-    name = "test_consensus",
-    srcs = ["test_consensus.cc"],
-    copts = ["-std=c++17", "-fPIC"] + _EIGEN_COPTS,
-    deps = ["//services/osi/impl:v2v_estimator"],
-)

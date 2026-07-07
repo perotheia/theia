@@ -13,12 +13,12 @@
 #include <memory>
 #include <vector>
 
-#include "impl/v2v/beacon.hpp"
-#include "impl/v2v/estimator.hpp"
-#include "impl/v2v/consensus.hpp"          // AlertConsensus (HANDOFF2)
-#include "system/services/osi/osi.pb.h"   // ConstellationVertex (raw pb cache)
+#include "algo/beacon.hpp"
+#include "algo/estimator.hpp"
+#include "algo/consensus.hpp"          // AlertConsensus (HANDOFF2)
+#include "packages/v2v/v2v.pb.h"   // ConstellationVertex (raw pb cache)
 
-namespace ara::osi {
+namespace ara::v2v {
 
 struct OsiV2vState {
     // ---- applied config (from V2vConfig / on_config_update) ----
@@ -55,7 +55,7 @@ struct OsiV2vState {
     int      anchor_track = -1;
     // track_id -> last emitted vertex (raw pb): serves GetConstellation + the
     // change-diff (emit only when a track's pose moves beyond an epsilon).
-    std::map<int, system_services_osi_ConstellationVertex> last_vertices;
+    std::map<int, packages_v2v_ConstellationVertex> last_vertices;
 };
 
 }  // namespace ara::osi

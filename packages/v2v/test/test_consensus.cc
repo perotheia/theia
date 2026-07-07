@@ -10,8 +10,8 @@
 //     consensus (§5.5 — the spoof/fault guard), but TWO concurring can.
 // Scalar, deterministic, no radios.
 
-#include "impl/v2v/beacon.hpp"
-#include "impl/v2v/consensus.hpp"
+#include "algo/beacon.hpp"
+#include "algo/consensus.hpp"
 
 #include <cassert>
 #include <cstdio>

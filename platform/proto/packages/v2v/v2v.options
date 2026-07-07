@@ -7,9 +7,9 @@
 # override per field with an .art `[max_size:N]` / `[max_count:N]` option
 # (also: fixed_count, fixed_length, int_size, type:FT_*).
 
-system_services_osi.OsiConfig.cgroup_root   max_size:64
-system_services_osi.OsiConfig.slice_name   max_size:64
-system_services_osi.ResourceLimitReq.fc   max_size:64
-system_services_osi.ResourceLimitReply.message   max_size:96
-system_services_osi.FcResource.fc   max_size:64
-system_services_osi.ResourceStatus.fcs   max_count:32
+packages_v2v.NeighborObs.neighbor_eid   max_size:64
+packages_v2v.Beacon.eid   max_size:64
+packages_v2v.Beacon.neighbors   max_count:16
+packages_v2v.Beacon.alerts   max_count:8
+packages_v2v.ConstellationVertex.eid   max_size:64
+packages_v2v.ConstellationUpdate.vertices   max_count:64

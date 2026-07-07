@@ -28,6 +28,7 @@ import system.supervisor.*
 import system.services.log.*
 import system.services.per.*
 import system.services.osi.*
+import packages.v2v.*
 import system.services.fw.*
 import system.services.idsm.*
 import system.services.shwa.*
@@ -146,7 +147,7 @@ node atomic TdbFw {
 node atomic TdbV2v {
     tipc type=0x8002010A instance=0
     ports {
-        client v2v_ctl  requires system.services.osi.V2vCtlIf
+        client v2v_ctl  requires packages.v2v.V2vCtlIf
     }
 }
 

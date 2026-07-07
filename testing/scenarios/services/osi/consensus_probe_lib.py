@@ -1,6 +1,6 @@
 """Robot library wrapping the cooperative-alert consensus probe suite (HANDOFF2).
 
-The Python suite (services/osi/test/consensus_probe.py) is the single source of
+The Python suite (packages/v2v/test/consensus_probe.py) is the single source of
 truth for WHAT is checked. It has two layers:
 
   - a HERMETIC multi-node sim (E1-E7 parity, `--sim-only`) — the algorithm gate,
@@ -23,7 +23,7 @@ from robot.api.deco import keyword, library
 # .../testing/scenarios/services/osi/consensus_probe_lib.py → repo root:
 # osi[0] services[1] scenarios[2] testing[3] theia[4].
 _WS = Path(__file__).resolve().parents[4]
-_SUITE = _WS / "services" / "osi" / "test" / "consensus_probe.py"
+_SUITE = _WS / "packages" / "v2v" / "test" / "consensus_probe.py"
 # osi OsiV2v TIPC service type (system.services.osi OsiV2v = 0x800100A0).
 _OSI_V2V_TIPC_DEC = 0x800100A0
 

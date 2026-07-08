@@ -4025,7 +4025,7 @@ def _init_package(ws: Path, theia_root: Path, name: str,
     consumes. Everything is parameterized by `name` so the whole toolchain runs
     on a FRESH scaffold with zero edits:
 
-        gen-app --kind package packages/<name>/package.art      --out impl → impl/
+        gen-app --kind package packages/<name>/package.art --out packages/<name> --ns ara::<name> → packages/<name>/{lib,impl}
         gen-app --kind fc      system/apps/component.art  --out apps → apps/ (gitignored)
         gen-manifest / serialize-manifest (from manifest/rig.py)
         theia install / theia start
@@ -4095,13 +4095,15 @@ def _init_package(ws: Path, theia_root: Path, name: str,
     # (_PKG_ENTRY_PRIORITY prefers system.art) and resolve the forward-decl stub.
     _write("system/system.art", _sub(_PKG_SYSTEM_ART))
 
-    # impl/ python marker + the generic rig (one machine, this package's app).
-    # Reuse the WORKSPACE rig templates verbatim: the dev/test app is
-    # `package system.apps` → gen-manifest emits manifest/apps/manifest.py exactly
-    # as a workspace does, so the same guarded-import rig (labels + process names
-    # come from the generated manifest, NOT hand-written) works unchanged. With
-    # --with-services it also folds in the framework's ARA services manifest.
-    _write("impl/__init__.py", "")
+    # The generic rig (one machine, this package's app). Reuse the WORKSPACE rig
+    # templates verbatim: the dev/test app is `package system.apps` → gen-manifest
+    # emits manifest/apps/manifest.py exactly as a workspace does, so the same
+    # guarded-import rig (labels + process names come from the generated manifest,
+    # NOT hand-written) works unchanged. With --with-services it also folds in the
+    # framework's ARA services manifest.
+    # (The package's OWN generated impl goes to packages/<name>/{lib,impl} via
+    #  `gen-app --kind package … --out packages/<name>`, matching the //packages/
+    #  <name> bazel label the composition derives from `import packages.<name>.*`.)
     _write("manifest/__init__.py", "")
     _write("manifest/rig/__init__.py", "")
     _write("manifest/rig/rig.py",
@@ -4122,7 +4124,18 @@ def _init_package(ws: Path, theia_root: Path, name: str,
                                              .replace("@THEIA_REL@", theia_rel))
     _write(".bazelrc", _INIT_BAZELRC)
     _write(".bazelversion", _read_or(theia_root / ".bazelversion", "8.0.0"))
+    # The dev/test app's proto shims — SAME as a workspace: proto/BUILD.bazel is
+    # the //proto:platform_protos aggregate the app lib links; it depends on
+    # //proto/system/apps:apps_pb_{c,h}, so the nanopb genrule BUILD must be
+    # present (gen-app --kind fc writes proto/system/apps/apps.proto but NOT its
+    # BUILD). apps/__init__.py + deploy/ gitkeeps + .mcp.json round out the
+    # workspace shape so `theia install`/dev-loop tooling works unchanged.
     _write("proto/BUILD.bazel", _INIT_PROTO_AGG)
+    _write("proto/system/apps/BUILD.bazel", _INIT_APPS_PROTO_BUILD)
+    _write("apps/__init__.py", "")
+    _write("deploy/registry/.gitkeep", "")
+    _write("deploy/config/.gitkeep", "")
+    _write(".mcp.json", _INIT_MCP_JSON.replace("@THEIA_ROOT@", str(theia_root)))
     _write("local_setup.sh", _INIT_SETUP_LOCAL.replace("@NAME@", name))
     if (ws / "local_setup.sh").exists():
         (ws / "local_setup.sh").chmod(0o755)
@@ -4600,6 +4613,16 @@ bazel_dep(name = "nanopb", version = "0.4.9.1")
 # against. Sibling checkout ($THEIA_ROOT); swap for /opt/theia once Theia is a deb.
 bazel_dep(name = "pero_theia", version = "0.1.0")
 local_path_override(module_name = "pero_theia", path = "@THEIA_REL@")
+
+# Hermetic proto codegen (@theia_codegen) — the content-hashed protoc + nanopb a
+# PACKAGE's proto genrule declares as `tools` (proto/packages/<X>/BUILD.bazel from
+# gen-app --kind package). Re-exported from @pero_theia's toolchains/codegen so a
+# consuming workspace resolves @theia_codegen the same way the framework does.
+# (Workspace-only apps under proto/system/apps/ use the host nanopb and don't need
+# it, but declaring it is harmless — only referenced when a package proto builds.)
+theia_codegen_ext = use_extension(
+    "@pero_theia//toolchains/codegen:extension.bzl", "theia_codegen_ext")
+use_repo(theia_codegen_ext, "theia_codegen")
 '''
 
 _INIT_BAZELRC = '''\
@@ -4820,7 +4843,7 @@ class @CLS@ProbeLib:
         sys.path.insert(0, str(Path(_WS).parent))   # allow artheia on the venv
         sys.path.insert(0, str(_WS / ".." / "artheia"))
         from artheia.gen_server.probe import ArtheiaContext
-        art = _WS / "system" / "@NAME@" / "component.art"
+        art = _WS / "system" / "apps" / "component.art"
         proto = _WS / "proto"
         ctx = ArtheiaContext(str(art), proto_root=str(proto))
         probe = ctx.probe("@CLS@Node").start()
@@ -4836,11 +4859,19 @@ class @CLS@ProbeLib:
 '''
 
 _PKG_GITIGNORE = '''\
-# GENERATED trees (gen-app output — never committed):
-/apps/
-/proto/
+# GENERATED trees (gen-app / gen-manifest / install output — never committed).
+# The scaffold's hand-written build shims (proto/*/BUILD.bazel, apps/__init__.py)
+# are re-included so `bazel build` works from a fresh clone before any gen-app.
+/apps/*
+!/apps/__init__.py
+/proto/*
+!/proto/BUILD.bazel
+!/proto/system/
+/proto/system/apps/*
+!/proto/system/apps/BUILD.bazel
 /install/
 /dist/
+/manifest/apps/
 /bazel-*
 __pycache__/
 *.pyc
@@ -4856,7 +4887,7 @@ A composable Theia PACKAGE (nodes + protocol + impl) a workspace consumes.
 ```sh
 source local_setup.sh
 # 1. impl lib from the schema:
-artheia gen-app --kind package packages/@NAME@/package.art --out impl --proto-out proto
+artheia gen-app --kind package packages/@NAME@/package.art --out packages/@NAME@ --proto-out proto --ns ara::@NAME@
 # 2. runnable app from the composition (apps/ is gitignored):
 artheia gen-app --kind fc      system/apps/component.art --out apps --proto-out proto
 # 3. manifest + install + run:
@@ -4879,13 +4910,14 @@ ln -s ../../packages/@NAME@ system/packages/@NAME@
 _PKG_NEXT_STEPS = '''
 Scaffold complete. The whole toolchain runs UNMODIFIED:
   source local_setup.sh
-  artheia gen-app --kind package packages/@NAME@/package.art  --out impl --proto-out proto
+  artheia gen-app --kind package packages/@NAME@/package.art --out packages/@NAME@ --proto-out proto --ns ara::@NAME@
   artheia gen-app --kind fc      system/apps/component.art --out apps --proto-out proto
   artheia gen-manifest system/apps/component.art manifest/apps/manifest.py
   theia manifest rig && theia install rig && theia start
   robot test/@NAME@.robot
 
-Edit packages/@NAME@/package.art (your nodes + protocol) + impl/@CLS@Node_handlers.cc.
+Edit packages/@NAME@/package.art (your nodes + protocol) +
+packages/@NAME@/impl/@CLS@Node_handlers.cc.
 '''
 
 

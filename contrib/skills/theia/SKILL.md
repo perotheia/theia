@@ -220,10 +220,40 @@ Key conventions (each fixes a concrete resolver/label bug — don't "simplify"):
   so it does not impersonate the node's own TIPC address (self-impersonation →
   TIPC anycast routes the probe's connect onto its own socket → timeout).
 
-**Consuming a package from a workspace:** clone the package repo next to your
-workspace, add its bazel module, then in your app's `.art`: `import system.<X>.*`
-and prototype `<Node>` in a composition — `gen-app --kind fc` links the prebuilt
-lib (the imported node is NOT regenerated). The tester in-repo IS this pattern.
+**Consuming a package from a workspace** (verified end to end with `v2v`): a
+package is a **separate bazel module** — a consumer references it module-
+qualified (`@<X>//src/lib:<X>_lib`), exactly like `@pero_theia`, so the package's
+own `//src/…` labels resolve within ITS module (nothing to rewrite). Steps:
+
+```sh
+# 1. add the package repo as a git submodule under packages/<X>
+git submodule add <package-repo-url> packages/<X>
+
+# 2. wire it as a bazel module in the workspace MODULE.bazel:
+#      bazel_dep(name = "<X>", version = "0.1.0")
+#      local_path_override(module_name = "<X>", path = "packages/<X>")
+
+# 3. map the FQN to the submodule so the artheia resolver finds it:
+ln -s ../packages/<X>/system/<X> system/<X>       # → import system.<X>
+
+# 4. import + prototype it in your app composition (system/apps/component.art):
+#      import system.<X>.*
+#      composition MyApp   { prototype <Node> n }
+#      cluster Applications { composition MyApp app }
+
+# 5. generate the PACKAGE's own lib+proto inside the submodule (gitignored
+#    codegen — not in a fresh clone), then build your app:
+( cd packages/<X> && artheia gen-app --kind package system/<X>/package.art \
+    --out src --proto-out proto --ns ara::<X> )
+artheia gen-app --kind fc system/apps/component.art --out apps --proto-out proto
+bazel build //apps/MyApp/main:apps       # links @<X>//src/{lib,impl} — NOT regenerated
+```
+
+`gen-app --kind fc` emits `@<X>//src/lib:<X>_lib` + `@<X>//src/impl:<X>_impl` +
+`@<X>//proto/system/<X>:<X>_proto` (module-qualified, from the package's
+`MODULE.bazel` module name) and a module-local include `src/lib/<Node>.hh`; the
+imported node is linked, never regenerated. The **in-repo tester** is the same
+pattern in the same module — there the labels are plain `//src/lib` (no `@<X>`).
 
 See `references/artheia-gen-app.md` for the generator internals.
 

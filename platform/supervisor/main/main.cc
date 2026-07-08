@@ -138,26 +138,18 @@ int main(int argc, char** argv) {
     // A node section may be absent entirely → all defaults apply (start normally).
     const auto supervisor_ctl_params =
         ::theia::runtime::get_config().node(SupervisorCtl::kNodeName);
+    // Boot gate — recomputed identically in the START pass below (cheap param
+    // read). PASS 1 (here): wire the mux (bind_node + register_* + pg_attach)
+    // BEFORE config_mux.start() and BEFORE the node thread runs. PASS 2 (after
+    // the mux is pumping): node.start() — so init()'s OWN pg_join/pg_watch (a
+    // BLOCKING CALL to the supervisor's PG allocator) gets its reply pumped. If
+    // start() ran here (before config_mux.start()), a pg_join in init() would
+    // deadlock, the node would never beat, and the watchdog would SIGTERM it.
     const bool supervisor_ctl_enabled = supervisor_ctl_params.boolean("enabled", true);
     if (!supervisor_ctl_enabled) {
         supervisor_ctl.log().info("node disabled (params.enabled=false) — not "
             "started; its TIPC address is free for a test/probe to bind");
     } else {
-    if (auto supervisor_ctl_delay = supervisor_ctl_params.u32("start_delay_ms", 0))
-        std::this_thread::sleep_for(std::chrono::milliseconds(supervisor_ctl_delay));
-    supervisor_ctl.start();
-    {
-        char _tipc[64];
-        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
-                      supervisor_ctl_type, supervisor_ctl_inst);
-        supervisor_ctl.log().info(_tipc);
-    }
-    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (the supervisor
-    // sets it from the rig's NodeToCPUMapping). No-op when unset / no entry for
-    // this node; soft-fails (logs) on EPERM. Applied AFTER start() — the thread
-    // exists now.
-    ::theia::runtime::apply_node_affinity(supervisor_ctl.native_handle(),
-        SupervisorCtl::kNodeName, std::getenv("THEIA_NODE_CFG"));
 
     if (auto* supervisor_ctl_cfg = config_mux.bind_node(
             supervisor_ctl, supervisor_ctl_type,
@@ -224,24 +216,7 @@ int main(int argc, char** argv) {
     }
 
 
-
-    // Liveness beat to the supervisor watchdog (#PHM). A reporting node — of
-    // EITHER base — must beat or the watchdog SIGTERMs it after K missed
-    // deadlines. One publisher per node, own timer thread; period TODO from the
-    // manifest (1s default matches the supervisor's check cadence).
-    {
-        auto supervisor_ctl_hb = std::make_unique<
-            ::theia::runtime::HeartbeatPublisher>(SupervisorCtl::kNodeName);
-        if (supervisor_ctl_hb->open()) {
-            supervisor_ctl_hb->start(/*period_ms=*/1000);
-            heartbeats.push_back(std::move(supervisor_ctl_hb));
-        } else {
-            supervisor_ctl.log().warn("heartbeat publisher open failed; "
-                                     "supervisor watchdog will not see beats");
-        }
-    }
-
-    }  // end if (supervisor_ctl_enabled)
+    }  // end if (supervisor_ctl_enabled) — PASS 1 (mux wiring)
 
     SupervisorWorker supervisor_worker;
     // Per-node logger: tagged [#supervisor_worker] (kNodeName, matches `tdb ps`),
@@ -273,26 +248,18 @@ int main(int argc, char** argv) {
     // A node section may be absent entirely → all defaults apply (start normally).
     const auto supervisor_worker_params =
         ::theia::runtime::get_config().node(SupervisorWorker::kNodeName);
+    // Boot gate — recomputed identically in the START pass below (cheap param
+    // read). PASS 1 (here): wire the mux (bind_node + register_* + pg_attach)
+    // BEFORE config_mux.start() and BEFORE the node thread runs. PASS 2 (after
+    // the mux is pumping): node.start() — so init()'s OWN pg_join/pg_watch (a
+    // BLOCKING CALL to the supervisor's PG allocator) gets its reply pumped. If
+    // start() ran here (before config_mux.start()), a pg_join in init() would
+    // deadlock, the node would never beat, and the watchdog would SIGTERM it.
     const bool supervisor_worker_enabled = supervisor_worker_params.boolean("enabled", true);
     if (!supervisor_worker_enabled) {
         supervisor_worker.log().info("node disabled (params.enabled=false) — not "
             "started; its TIPC address is free for a test/probe to bind");
     } else {
-    if (auto supervisor_worker_delay = supervisor_worker_params.u32("start_delay_ms", 0))
-        std::this_thread::sleep_for(std::chrono::milliseconds(supervisor_worker_delay));
-    supervisor_worker.start();
-    {
-        char _tipc[64];
-        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
-                      supervisor_worker_type, supervisor_worker_inst);
-        supervisor_worker.log().info(_tipc);
-    }
-    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (the supervisor
-    // sets it from the rig's NodeToCPUMapping). No-op when unset / no entry for
-    // this node; soft-fails (logs) on EPERM. Applied AFTER start() — the thread
-    // exists now.
-    ::theia::runtime::apply_node_affinity(supervisor_worker.native_handle(),
-        SupervisorWorker::kNodeName, std::getenv("THEIA_NODE_CFG"));
 
 
     // GenRunnable has no mailbox, so it can't take the supervisor's control
@@ -312,11 +279,70 @@ int main(int argc, char** argv) {
                                  "push disabled");
     }
 
+    }  // end if (supervisor_worker_enabled) — PASS 1 (mux wiring)
 
-    // Liveness beat to the supervisor watchdog (#PHM). A reporting node — of
-    // EITHER base — must beat or the watchdog SIGTERMs it after K missed
-    // deadlines. One publisher per node, own timer thread; period TODO from the
-    // manifest (1s default matches the supervisor's check cadence).
+
+    // The mux is now WIRED for every node (bind_node + register_* + pg_attach)
+    // but no node thread runs yet. Start pumping BEFORE any node.start() so a
+    // node's init()/1 can issue blocking pg_join / pg_watch / supervisor CALLs
+    // and get the reply pumped — init() runs on a fully-live stack, OTP-style.
+    config_mux.start();
+
+
+    // PASS 2 — start the node thread (runs init()/1) now that the mux pumps,
+    // then apply post-start settings (affinity) + the liveness heartbeat.
+    if (supervisor_ctl_params.boolean("enabled", true)) {
+    if (auto supervisor_ctl_delay = supervisor_ctl_params.u32("start_delay_ms", 0))
+        std::this_thread::sleep_for(std::chrono::milliseconds(supervisor_ctl_delay));
+    supervisor_ctl.start();
+    {
+        char _tipc[64];
+        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
+                      supervisor_ctl_type, supervisor_ctl_inst);
+        supervisor_ctl.log().info(_tipc);
+    }
+    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG. Applied AFTER
+    // start() — the thread exists now. No-op when unset; soft-fails on EPERM.
+    ::theia::runtime::apply_node_affinity(supervisor_ctl.native_handle(),
+        SupervisorCtl::kNodeName, std::getenv("THEIA_NODE_CFG"));
+
+    // Liveness beat to the supervisor watchdog (#PHM). A reporting node must beat
+    // or the watchdog SIGTERMs it after K missed deadlines. One publisher per
+    // node, own timer thread; 1s default matches the supervisor's check cadence.
+    {
+        auto supervisor_ctl_hb = std::make_unique<
+            ::theia::runtime::HeartbeatPublisher>(SupervisorCtl::kNodeName);
+        if (supervisor_ctl_hb->open()) {
+            supervisor_ctl_hb->start(/*period_ms=*/1000);
+            heartbeats.push_back(std::move(supervisor_ctl_hb));
+        } else {
+            supervisor_ctl.log().warn("heartbeat publisher open failed; "
+                                     "supervisor watchdog will not see beats");
+        }
+    }
+
+    }  // end if (supervisor_ctl_enabled) — PASS 2 (start + heartbeat)
+
+    // PASS 2 — start the node thread (runs init()/1) now that the mux pumps,
+    // then apply post-start settings (affinity) + the liveness heartbeat.
+    if (supervisor_worker_params.boolean("enabled", true)) {
+    if (auto supervisor_worker_delay = supervisor_worker_params.u32("start_delay_ms", 0))
+        std::this_thread::sleep_for(std::chrono::milliseconds(supervisor_worker_delay));
+    supervisor_worker.start();
+    {
+        char _tipc[64];
+        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
+                      supervisor_worker_type, supervisor_worker_inst);
+        supervisor_worker.log().info(_tipc);
+    }
+    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG. Applied AFTER
+    // start() — the thread exists now. No-op when unset; soft-fails on EPERM.
+    ::theia::runtime::apply_node_affinity(supervisor_worker.native_handle(),
+        SupervisorWorker::kNodeName, std::getenv("THEIA_NODE_CFG"));
+
+    // Liveness beat to the supervisor watchdog (#PHM). A reporting node must beat
+    // or the watchdog SIGTERMs it after K missed deadlines. One publisher per
+    // node, own timer thread; 1s default matches the supervisor's check cadence.
     {
         auto supervisor_worker_hb = std::make_unique<
             ::theia::runtime::HeartbeatPublisher>(SupervisorWorker::kNodeName);
@@ -329,10 +355,7 @@ int main(int argc, char** argv) {
         }
     }
 
-    }  // end if (supervisor_worker_enabled)
-
-
-    config_mux.start();
+    }  // end if (supervisor_worker_enabled) — PASS 2 (start + heartbeat)
 
 
     while (g_running.load()) {

@@ -41,6 +41,11 @@ jobs:
           pip install -e "artheia/[dev]" || pip install -e artheia/ pytest pytest-snapshot
       - name: Run the artheia pytest suite
         run: python -m pytest artheia/ -q
+      - name: Run the tools pytest suite (theia.py guards, migrate)
+        # tools/test_*.py — pure-Python unit tests for the dev-loop CLI:
+        # the supervisor-collision fail-fast guard (test_theia_start_guard.py)
+        # + the migration applier (migrate/test_migrate.py). No live stack.
+        run: python -m pytest tools/ -q
 
   hermetic:
     runs-on: ubuntu-latest

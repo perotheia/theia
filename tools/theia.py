@@ -519,6 +519,32 @@ def _sup_pidfile(dest: Path) -> Path:
     return dest / "supervisor.pid"
 
 
+def _tipc_addr_bound(tipc_type: int, instance: int) -> bool:
+    """True if a TIPC name (type, instance) is currently published on this host.
+
+    Reads `tipc nametable show` and checks for any row whose Type matches and
+    whose [Lower, Upper] range covers `instance`. Used by `theia start` to detect
+    a cross-workspace supervisor already bound at the same address (the pidfile
+    guard is per-workspace and can't see it). Best-effort: if `tipc` is missing or
+    errors, returns False (don't block a start on a tooling gap)."""
+    try:
+        out = subprocess.run(["tipc", "nametable", "show"],
+                             capture_output=True, text=True, timeout=5).stdout
+    except (FileNotFoundError, subprocess.SubprocessError):
+        return False
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) < 3 or not parts[0].isdigit():
+            continue          # header / malformed
+        try:
+            row_type, lower, upper = int(parts[0]), int(parts[1]), int(parts[2])
+        except ValueError:
+            continue
+        if row_type == tipc_type and lower <= instance <= upper:
+            return True
+    return False
+
+
 def cmd_start(args: list[str]) -> int:
     """Run the staged supervisor from install/<machine>/ (default central).
 
@@ -575,6 +601,27 @@ def cmd_start(args: list[str]) -> int:
                     break
             except (OSError, ValueError, KeyError, TypeError):
                 continue
+
+    # FAIL-FAST on a cross-workspace TIPC address collision. The supervisor's ctl
+    # binds a FIXED TIPC address 0x80020001:<machine_instance>. The pidfile guard
+    # above only sees THIS workspace's supervisor — a supervisor from a DIFFERENT
+    # workspace (its own pidfile) that co-binds the same address is invisible to
+    # it. Since TIPC name binds are SEQPACKET-anycast, two co-bound supervisors
+    # make a probe (tdb ps / GetTree) land nondeterministically on either one (or
+    # time out if one is crash-looping). One host = one supervisor per address:
+    # distinct dev stacks must use distinct tipc_cluster_id (or a distinct
+    # machine_index). Refuse to start rather than silently co-bind.
+    _sup_bound = _tipc_addr_bound(0x80020001, int(machine_instance))
+    if _sup_bound:
+        print(f"theia: a supervisor is ALREADY bound at TIPC 0x80020001:"
+              f"{machine_instance} on this host (not from this workspace — its "
+              f"pidfile is separate).\n"
+              f"  Two supervisors sharing one TIPC address anycast-collide: "
+              f"`tdb ps` / probes hit the wrong one or time out.\n"
+              f"  Stop the other stack (`theia stop` in its workspace), or give "
+              f"this rig a distinct Machine.tipc_cluster_id / machine_index.",
+              file=sys.stderr)
+        return 1
 
     log = dest / "supervisor.log"
     # THEIA_INSTALL_DIR: colon-separated list of dirs the supervisor scans to

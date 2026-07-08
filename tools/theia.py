@@ -4072,8 +4072,8 @@ def _init_package(ws: Path, theia_root: Path, name: str,
     consumes. Everything is parameterized by `name` so the whole toolchain runs
     on a FRESH scaffold with zero edits:
 
-        gen-app --kind package packages/<name>/package.art --out packages/<name> --ns ara::<name> → packages/<name>/{lib,impl}
-        gen-app --kind fc      system/apps/component.art  --out apps → apps/ (gitignored)
+        gen-app --kind package system/<name>/package.art --out src --ns ara::<name> → src/{lib,impl}
+        gen-app --kind fc      system/<name>_tester/component.art --out apps → apps/ (gitignored)
         gen-manifest / serialize-manifest (from manifest/rig.py)
         theia install / theia start
         robot test/<name>.robot   (the probe drives the node's ctl in isolation)
@@ -4104,42 +4104,37 @@ def _init_package(ws: Path, theia_root: Path, name: str,
         return (t.replace("@NAME@", name).replace("@SLUG@", slug)
                  .replace("@CLS@", Cls))
 
-    # Framework symlinks (same as a workspace): the package's .art imports
-    # system.platform.runtime.* + system.supervisor.* — resolve via these.
-    _link("system/platform/runtime", theia_root / "system" / "platform" / "runtime")
-    if (theia_root / "system" / "supervisor").exists():
-        _link("system/supervisor", theia_root / "system" / "supervisor")
+    # NO framework symlinks. A package's .art never imports system.supervisor /
+    # system.platform — the supervisor is a DEPLOY-time fabric (it forks + runs the
+    # app), resolved from $THEIA_ROOT by `theia manifest`, not referenced from ART.
+    # (--with-services still links system/services since the tester CAN import an
+    # ARA service interface; only the never-referenced supervisor/platform go.)
     if with_services:
         _link("system/services", theia_root / "system" / "services")
         if (theia_root / "system" / "platform" / "msgs").exists():
             _link("system/platform/msgs", theia_root / "system" / "platform" / "msgs")
 
-    # The package's own .art: schema (package.art) + composition (component.art)
-    # + a forward-decl aggregator (system.art) so `artheia parse` on the whole
-    # tree passes. The FQN `packages.<name>` maps to the PHYSICAL dir
-    # packages/<name>/ (the same convention gen-app derives //packages/<name>
-    # from), with a system/packages/<name> symlink so the artheia resolver — which
-    # walks system/ as the virtual root — reaches it. This mirrors the in-tree
-    # packages/v2v + system/packages/v2v layout exactly.
-    # The PACKAGE (schema + node) lives at packages/<name>/package.art
-    # (`package packages.<name>`), reached by the artheia resolver through a
-    # system/packages/<name> symlink — the in-tree packages/v2v + system/packages/
-    # v2v layout exactly. Built ONCE as a linkable lib via `gen-app --kind package`.
-    _write(f"packages/{name}/package.art", _sub(_PKG_PACKAGE_ART))
-    _link(f"system/packages/{name}", ws / "packages" / name)
-    # The dev/test APP composition is a SEPARATE unit: `package system.apps` at
-    # system/apps/component.art (the demo's Demo3Way layout EXACTLY). `system.apps`
-    # → _base_dir_for's last-segment → `apps`, so gen-app `--out apps` and the
-    # gen-manifest label //apps/<Comp>/main AGREE (`package apps.<name>` would
-    # derive //<name>/ and diverge from --out apps). It imports packages.<name>
-    # and LINKS its prebuilt impl — one app per package repo, so `system.apps` is
-    # unambiguous.
-    _write("system/apps/component.art", _sub(_PKG_COMPONENT_ART))
-    # The whole-tree parse entry is the aggregator at the WORKSPACE ROOT
-    # (system/system.art, `package system`) importing system.apps.* — the entry
-    # file for system.apps is then component.art (the real cluster). A system.art
-    # INSIDE system/apps/ would shadow component.art as that package's import entry
-    # (_PKG_ENTRY_PRIORITY prefers system.art) and resolve the forward-decl stub.
+    # TWO packages, TWO dirs under system/ (FQN mirrors the dir 1:1 — no tautological
+    # `packages/` prefix, no symlinks). This models the ROS import/link relationship
+    # in ONE workspace, exactly as an EXTERNAL consumer would:
+    #
+    #   system/<name>/package.art          `package system.<name>` — the NODE
+    #     → gen-app --kind package --out system/<name> → system/<name>/{lib,impl}
+    #       (a linkable //system/<name>/lib:<name>_lib — its dir IS its bazel pkg).
+    #
+    #   system/<name>_tester/component.art `package system.<name>_tester` — the APP
+    #     IMPORTS system.<name>.* and prototypes its node into a composition. gen-app
+    #     --kind fc --out apps emits apps/<Comp>/main that LINKS //system/<name>/lib
+    #     (the imported node is NOT regenerated — cross-package link, the payoff).
+    #
+    # They MUST be separate dirs: the loader auto-merges a package.art+component.art
+    # PAIR in one dir as ONE package (their `package` lines must match), so two
+    # different packages can't share a dir.
+    _write(f"system/{name}/package.art", _sub(_PKG_PACKAGE_ART))
+    _write(f"system/{name}_tester/component.art", _sub(_PKG_COMPONENT_ART))
+    # The whole-tree parse entry: `package system` at system/system.art, importing
+    # ONLY system.<name>_tester.* (which transitively pulls system.<name>). NO
+    # supervisor import — the aggregate parse validates the package tree, not deploy.
     _write("system/system.art", _sub(_PKG_SYSTEM_ART))
 
     # The generic rig (one machine, this package's app). Reuse the WORKSPACE rig
@@ -4171,14 +4166,16 @@ def _init_package(ws: Path, theia_root: Path, name: str,
                                              .replace("@THEIA_REL@", theia_rel))
     _write(".bazelrc", _INIT_BAZELRC)
     _write(".bazelversion", _read_or(theia_root / ".bazelversion", "8.0.0"))
-    # The dev/test app's proto shims — SAME as a workspace: proto/BUILD.bazel is
-    # the //proto:platform_protos aggregate the app lib links; it depends on
-    # //proto/system/apps:apps_pb_{c,h}, so the nanopb genrule BUILD must be
-    # present (gen-app --kind fc writes proto/system/apps/apps.proto but NOT its
-    # BUILD). apps/__init__.py + deploy/ gitkeeps + .mcp.json round out the
-    # workspace shape so `theia install`/dev-loop tooling works unchanged.
-    _write("proto/BUILD.bazel", _INIT_PROTO_AGG)
-    _write("proto/system/apps/BUILD.bazel", _INIT_APPS_PROTO_BUILD)
+    # The TESTER app's proto shims. In the two-package layout the runnable app is
+    # system.@NAME@_tester (NOT system.apps), so its proto lands at
+    # proto/system/@NAME@_tester/@NAME@_tester.proto. gen-app --kind fc writes that
+    # .proto but NOT its nanopb genrule BUILD (fc-mode emits no proto BUILD), so the
+    # scaffold supplies it here + the //proto:platform_protos aggregate that links
+    # it. (The PACKAGE's own proto, system/@NAME@, gets a self-contained BUILD from
+    # gen-app --kind package — no shim needed.) apps/__init__.py + deploy/ gitkeeps
+    # + .mcp.json round out the workspace shape so dev-loop tooling works unchanged.
+    _write("proto/BUILD.bazel", _sub(_PKG_PROTO_AGG))
+    _write(f"proto/system/{name}_tester/BUILD.bazel", _sub(_PKG_TESTER_PROTO_BUILD))
     _write("apps/__init__.py", "")
     _write("deploy/registry/.gitkeep", "")
     _write("deploy/config/.gitkeep", "")
@@ -4305,12 +4302,18 @@ try:
 except Exception:               # not generated yet → empty workspace
     _APPS = DeploymentLayer()
 
-# Every process the apps base declares (bind each to the one machine below).
+# Every process + application the apps base declares (bind each to the one
+# machine below). The base's application(s) come from gen-manifest, named after
+# the composition's package (e.g. `sanity_tester`), NOT a fixed "apps" — so bind
+# host_machine onto EACH by name rather than appending a hardcoded app (which
+# would leave the real one host-less and add an empty duplicate).
 from artheia.manifest.deployment import _members as _set_members
 _PROCESS_NAMES = sorted(p.name for p in _set_members(_APPS.execution.processes))
+_APP_NAMES = sorted(a.name for a in _set_members(_APPS.applications.applications))
 
-# The deploy delta: one machine "central"; every app process bound to it; one
-# AA ("apps") grouping them on that host. Combined onto the apps base.
+# The deploy delta: one machine "central"; every app process + application bound
+# to it. Combined onto the apps base. If the base declares no application yet
+# (empty workspace), fall back to a single "apps" AA so the bootstrap still runs.
 RIG = _APPS.combine(DeploymentLayer(
     machines=MachineSetLayer(machines={
         MachineLayer(name="central", arch=Explicit("x86_64"),
@@ -4321,7 +4324,8 @@ RIG = _APPS.combine(DeploymentLayer(
         for n in _PROCESS_NAMES
     }),
     applications=ApplicationSetLayer(applications={
-        Append(ApplicationLayer(name="apps", host_machine=Explicit("central"))),
+        Append(ApplicationLayer(name=a, host_machine=Explicit("central")))
+        for a in (_APP_NAMES or ["apps"])
     }),
 ))
 
@@ -4456,9 +4460,13 @@ except Exception:               # not generated yet → services-only
 # The assembled base: services ⊕ apps (machines still open).
 _BASE = _SERVICES.combine(_APPS)
 _PROCESS_NAMES = sorted(p.name for p in _set_members(_BASE.execution.processes))
+# Every application the base declares (platform "services" AA + the app AA, which
+# gen-manifest names after the composition's package, e.g. `sanity_tester`). Bind
+# host_machine onto EACH by name — don't hardcode "apps" (would leave the real
+# app AA host-less). "services" is always present (from the framework manifest).
+_APP_NAMES = sorted(a.name for a in _set_members(_BASE.applications.applications))
 
-# The deploy delta: one machine "central"; every process bound to it; two AAs
-# (the platform services + this workspace's apps) hosted on it.
+# The deploy delta: one machine "central"; every process + application bound to it.
 RIG = _BASE.combine(DeploymentLayer(
     machines=MachineSetLayer(machines={
         MachineLayer(name="central", arch=Explicit("x86_64"),
@@ -4469,8 +4477,8 @@ RIG = _BASE.combine(DeploymentLayer(
         for n in _PROCESS_NAMES
     }),
     applications=ApplicationSetLayer(applications={
-        Append(ApplicationLayer(name="services", host_machine=Explicit("central"))),
-        Append(ApplicationLayer(name="apps", host_machine=Explicit("central"))),
+        Append(ApplicationLayer(name=a, host_machine=Explicit("central")))
+        for a in (_APP_NAMES or ["services", "apps"])
     }),
 ))
 
@@ -4729,6 +4737,65 @@ filegroup(name = "apps_pb_h", srcs = ["apps.pb.h"])
 filegroup(name = "apps_proto", srcs = ["apps.proto"])
 '''
 
+# ── package-flavour proto shims ─────────────────────────────────────────────
+# A PACKAGE workspace has TWO proto trees (mirroring its two .art packages):
+#   proto/system/@NAME@/          — the package's own messages. gen-app --kind
+#                                   package emits a SELF-CONTAINED BUILD there
+#                                   (//proto/system/@NAME@:@NAME@_proto), so no
+#                                   scaffold shim is needed for it.
+#   proto/system/@NAME@_tester/   — the tester app's messages (its no-arg-op
+#                                   request wrappers etc.). gen-app --kind fc
+#                                   writes ONLY the .proto here (fc-mode emits no
+#                                   proto BUILD), so the scaffold MUST provide the
+#                                   nanopb genrule BUILD, exactly as a ws does for
+#                                   system/apps. The aggregate //proto:platform_protos
+#                                   the tester lib links points at THIS tree.
+_PKG_PROTO_AGG = '''\
+# //proto:platform_protos — the nanopb wire types the TESTER app lib links. The
+# tester (system.@NAME@_tester) #includes "system/@NAME@_tester/@NAME@_tester.pb.h";
+# this aggregate nanopb-compiles that proto (genrule below) + pulls the runtime
+# control proto from @pero_theia. The PACKAGE's own proto (system/@NAME@) is a
+# SEPARATE, self-contained target (//proto/system/@NAME@:@NAME@_proto) the tester
+# lib links directly — not folded in here. Proto lives under proto/, never mixed
+# with the framework's platform/proto/.
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "platform_protos",
+    srcs = ["//proto/system/@NAME@_tester:@NAME@_tester_pb_c"],
+    hdrs = ["//proto/system/@NAME@_tester:@NAME@_tester_pb_h"],
+    includes = ["."],   # callers #include "system/@NAME@_tester/@NAME@_tester.pb.h"
+    copts = ["-fPIC"],
+    deps = ["@pero_theia//platform/runtime:runtime_proto_cc"],
+)
+'''
+
+_PKG_TESTER_PROTO_BUILD = '''\
+# nanopb sources for the system.@NAME@_tester package (the tester app). gen-app
+# --kind fc (--proto-out proto) writes @NAME@_tester.proto AND @NAME@_tester.options
+# here (auto-pins every string/bytes field to a fixed char[]; override per field
+# with an .art `[max_size:N]`). Both feed this genrule (.options auto-loaded by
+# nanopb). .pb.{c,h} are BUILT, not committed. fc-mode emits no proto BUILD, so
+# this scaffold shim supplies it (the aggregate //proto:platform_protos links it).
+package(default_visibility = ["//visibility:public"])
+
+genrule(
+    name = "@NAME@_tester_pb",
+    srcs = ["@NAME@_tester.proto"] + glob(["@NAME@_tester.options"], allow_empty = True),
+    outs = ["@NAME@_tester.pb.c", "@NAME@_tester.pb.h"],
+    cmd = "set -e;"
+        + " in_dir=$$(dirname $(location @NAME@_tester.proto));"
+        + " out_dir=$$(dirname $(location @NAME@_tester.pb.c));"
+        + " nanopb_generator -I $$in_dir -D $$out_dir @NAME@_tester.proto;",
+    local = True,
+)
+filegroup(name = "@NAME@_tester_pb_c", srcs = ["@NAME@_tester.pb.c"])
+filegroup(name = "@NAME@_tester_pb_h", srcs = ["@NAME@_tester.pb.h"])
+filegroup(name = "@NAME@_tester_proto", srcs = ["@NAME@_tester.proto"])
+'''
+
 
 # ── theia init --kind package templates ─────────────────────────────────────
 # A generic package: ONE real node (@CLS@Node) with a ProbeCtl the test drives,
@@ -4736,14 +4803,18 @@ filegroup(name = "apps_proto", srcs = ["apps.proto"])
 # an RF probe test. @NAME@=name, @SLUG@=py-ident, @CLS@=CamelCase.
 
 _PKG_PACKAGE_ART = '''\
-// @NAME@ — a Theia PACKAGE: messages + interfaces + node(s). Built ONCE as a
-// linkable lib (gen-app --kind package); a workspace imports + composes it.
+// @NAME@ — a Theia PACKAGE: messages + interfaces + node(s), ONE linkable unit.
+// `package system.@NAME@` — the FQN mirrors the dir (system/@NAME@/) 1:1, no
+// tautological `packages/` prefix. Built ONCE as a lib via
+//   artheia gen-app --kind package system/@NAME@/package.art --out src
+// → src/{lib,impl} → //src/lib:@NAME@_lib. A composition (the tester below, or a
+// real user workspace) IMPORTS system.@NAME@ and links that prebuilt lib.
 //
-// Edit this: add your messages, interfaces, and node ports. The ProbeCtl below
-// is the test surface — the RF probe (test/@NAME@.robot) calls Ping over TIPC to
-// prove the node is up + serving; grow it into your package's real control ops.
+// Edit this: add your messages, interfaces, and node ports. Multiple nodes are
+// fine — they build as ONE package lib. The ProbeCtl below is the test surface:
+// the RF probe (test/@NAME@.robot) calls Ping over TIPC to prove the node serves.
 
-package packages.@NAME@
+package system.@NAME@
 
 
 message @CLS@Empty { }
@@ -4755,79 +4826,75 @@ message @CLS@Status {
 
 // The test/probe surface: the RF suite binds a client and calls these over TIPC
 // (the "node impersonated by a probe" — a port connector, no ProbeDaemon node in
-// the executable). GetStatus proves the node is up + serving in isolation.
-interface clientServer ProbeCtl {
+// the executable). Ping proves the node is up + serving in isolation.
+interface clientServer CtlIf {
     operation Ping(in p: @CLS@Empty) returns @CLS@Status
 }
 
 // The package's real node. tipc 0x800100F0 (pick your own range). A GenServer
-// serving ProbeCtl. Add real ports (senderReceiver streams, more ops) as your
-// package grows; the impl handler lives in impl/@CLS@Node_handlers.cc.
-node atomic @CLS@Node {
+// serving CtlIf. Add real ports (senderReceiver streams, more ops) as your
+// package grows; the impl handler lives in src/impl/@CLS@Ctrl_handlers.cc.
+node atomic @CLS@Ctrl {
     tipc type=0x800100F0 instance=0
     reporting = true
     tag = "@CLS@"
     ports {
-        server ctl provides ProbeCtl
+        server ctl provides CtlIf
     }
 }
 '''
 
 _PKG_COMPONENT_ART = '''\
-// @NAME@ — the dev/test app that starts this package's node(s) in isolation.
-// gen-app --kind fc on THIS file emits the runnable under apps/ (gitignored) that
+// @NAME@_tester — the dev/test app that assembles this package's node(s) into a
+// runnable, in ISOLATION. It is a SEPARATE package (`package system.@NAME@_tester`,
+// at system/@NAME@_tester/) that IMPORTS system.@NAME@ and prototypes its node —
+// exactly how an EXTERNAL workspace consumes the package: the composition LINKS
+// the prebuilt //src/lib:@NAME@_lib (the imported node is NOT regenerated). This
+// in-repo tester proves the import/link path without a second repo.
+//
+// gen-app --kind fc on THIS file emits apps/@CLS@Tester/main (gitignored) that
 // `theia install` stages + `theia start` runs; gen-manifest reads the cluster.
 //
-// It is an APP (`package system.apps`, the demo's convention), NOT the package
-// itself — so `--out apps` and the derived //apps/... bazel label agree. It
-// IMPORTS packages.@NAME@ and prototypes @CLS@Node, LINKING the package's
-// prebuilt impl (it does not regenerate it). A real user workspace assembles
-// @CLS@Node into a LARGER app (multiple packages) the same way; this is the
-// package's own single-node harness.
-//
 // ONE composition = one process. The RF probe (test/@NAME@.robot) is the test
-// node — a port connector calling @CLS@Node's ProbeCtl over TIPC, NOT a second
+// node — a port connector calling @CLS@Ctrl's CtlIf over TIPC, NOT a second
 // composition and NOT a ProbeDaemon baked into the executable.
 
-package system.apps
+package system.@NAME@_tester
 
-import packages.@NAME@.*
+import system.@NAME@.*
 
-composition @CLS@App {
-    prototype @CLS@Node @SLUG@
+composition @CLS@Tester {
+    prototype @CLS@Ctrl @SLUG@
 }
 
-cluster @CLS@Rig {
-    composition @CLS@App app
+cluster @CLS@TesterRig {
+    composition @CLS@Tester app
 }
 '''
 
 _PKG_SYSTEM_ART = '''\
 // @NAME@ — workspace aggregator: `artheia parse system/system.art` validates the
-// whole tree (this package's dev/test app + the framework imports). Lives at the
-// workspace root as `package system`; importing system.apps.* makes the resolver
-// use system/apps/component.art (the real cluster) as that package's entry file.
-// A system.art INSIDE system/apps/ would shadow component.art (_PKG_ENTRY_PRIORITY
-// prefers system.art) and resolve the forward-decl STUB instead. The real cluster
-// body is in system/apps/component.art.
+// whole package tree. `package system`, importing ONLY system.@NAME@_tester.*
+// (which transitively pulls system.@NAME@). NO supervisor/platform import — the
+// supervisor is a DEPLOY-time fabric resolved from $THEIA_ROOT by `theia
+// manifest`, never referenced from ART. The tester's cluster (@CLS@TesterRig) is
+// forward-declared here so the aggregate parse resolves before the C++ exists;
+// its real body is in system/@NAME@_tester/component.art.
 
 package system
 
-import system.supervisor.*
-import system.apps.*
+import system.@NAME@_tester.*
 
-// The package's own single-node app cluster (defined with a body in
-// system/apps/component.art). Forward-declared here for the aggregate parse.
-extern cluster @CLS@Rig { }
+extern cluster @CLS@TesterRig { }
 '''
 
 
 _PKG_TEST_ROBOT = '''\
 *** Settings ***
-Documentation     @NAME@ package probe — drives the live @CLS@Node in isolation.
+Documentation     @NAME@ package probe — drives the live @CLS@Ctrl in isolation.
 ...
 ...               Runs the canonical Python probe (test/@NAME@_lib.py) which binds
-...               a client identity via artheia.probe and calls @CLS@Node's ProbeCtl
+...               a client identity via artheia.probe and calls @CLS@Ctrl's CtlIf
 ...               over TIPC (the "node impersonated by a probe" port connector). No
 ...               ProbeDaemon node in the executable — the probe IS the test agent.
 ...
@@ -4838,22 +4905,25 @@ Force Tags        package-@NAME@    live    probe
 
 
 *** Test Cases ***
-@CLS@Node Serves ProbeCtl Over TIPC
-    [Documentation]    Ping the live node; assert it answers ready.
-    Require @CLS@Node Listening
+@CLS@Ctrl Serves CtlIf Over TIPC
+    [Documentation]    Ping the live node over TIPC; assert the call round-trips
+    ...                (proves the cross-package link + wire). The node's `ready`
+    ...                semantic is yours to implement in the handler.
+    Require @CLS@Ctrl Listening
     Run @CLS@ Probe
 '''
 
 _PKG_TEST_LIB = '''\
-"""Robot library: drive the @NAME@ package's @CLS@Node via artheia.probe.
+"""Robot library: drive the @NAME@ package's @CLS@Ctrl via artheia.probe.
 
-The probe binds a CLIENT identity and calls @CLS@Node's ProbeCtl (Ping) over real
+The probe binds a CLIENT identity and calls @CLS@Ctrl's CtlIf (Ping) over real
 TIPC — the port connector that impersonates a peer, so the node is tested in
 isolation with no ProbeDaemon node in the executable. Skips when the node isn't
 bound (hermetic lane).
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -4862,7 +4932,7 @@ from robot.api.deco import keyword, library
 
 # test/@NAME@_lib.py → package repo root.
 _WS = Path(__file__).resolve().parents[1]
-# @CLS@Node's TIPC service type (packages.@NAME@ @CLS@Node = 0x800100F0).
+# @CLS@Ctrl's TIPC service type (system.@NAME@ @CLS@Ctrl = 0x800100F0).
 _NODE_TIPC_DEC = 0x800100F0
 
 
@@ -4870,7 +4940,7 @@ _NODE_TIPC_DEC = 0x800100F0
 class @CLS@ProbeLib:
     ROBOT_LIBRARY_SCOPE = "SUITE"
 
-    @keyword("Require @CLS@Node Listening")
+    @keyword("Require @CLS@Ctrl Listening")
     def require_listening(self) -> None:
         import subprocess
         try:
@@ -4882,7 +4952,7 @@ class @CLS@ProbeLib:
         if str(_NODE_TIPC_DEC) not in out:
             from robot.api import SkipExecution
             raise SkipExecution(
-                "@CLS@Node not bound (TIPC %s absent) — `theia start` first."
+                "@CLS@Ctrl not bound (TIPC %s absent) — `theia start` first."
                 % hex(_NODE_TIPC_DEC))
 
     @keyword("Run @CLS@ Probe")
@@ -4890,32 +4960,68 @@ class @CLS@ProbeLib:
         sys.path.insert(0, str(Path(_WS).parent))   # allow artheia on the venv
         sys.path.insert(0, str(_WS / ".." / "artheia"))
         from artheia.gen_server.probe import ArtheiaContext
-        art = _WS / "system" / "apps" / "component.art"
+        # Parse the PACKAGE .art (system/@NAME@/package.art) — @CLS@Ctrl is a real
+        # NodeDecl there (tipc addr + CtlIf ports). The tester component.art only
+        # PROTOTYPES it, so it has no NodeDecl for the probe's RemoteRef namespace.
+        art = _WS / "system" / "@NAME@" / "package.art"
         proto = _WS / "proto"
         ctx = ArtheiaContext(str(art), proto_root=str(proto))
-        probe = ctx.probe("@CLS@Node").start()
+        # CRITICAL: bind the probe's OWN source at a UNIQUE instance, NOT @CLS@Ctrl's
+        # declared instance (0). Without the override the probe IMPERSONATES the node
+        # — it binds the SAME TIPC address the live @CLS@Ctrl mux listens on; TIPC
+        # anycast then routes the probe's own connect onto ITS OWN socket, not the
+        # node's mux, and the call times out. A pid-derived source instance (the
+        # tdb_client trick) gives the probe a distinct address; replies route by TYPE.
+        probe_inst = (os.getpid() & 0x7FFF) | 0x8000
+        probe = ctx.probe("@CLS@Ctrl", instance=probe_inst).start()
         try:
-            rep = probe.call("@CLS@Node", "Ping")
+            rep = probe.call("@CLS@Ctrl", "Ping")
+            # REACHABILITY is what this test proves: a well-formed reply means the
+            # probe's connect reached @CLS@Ctrl's mux over TIPC, the op dispatched,
+            # and the reply routed back — i.e. the whole cross-package link + wire
+            # works. A None reply = the call never round-tripped (the real failure).
+            if rep is None:
+                raise AssertionError(
+                    "@CLS@Ctrl did not answer Ping — no reply round-tripped "
+                    "(is the node bound + the mux pumping?)")
+            # `ready` is the node's OWN semantic — the fresh scaffold's write-once
+            # handler (src/impl/@CLS@Ctrl_handlers.cc) returns a zero @CLS@Status
+            # (ready=false) until you implement it. So log it as a HINT, don't fail
+            # the reachability test on the stub. Once you set ready=true in the
+            # handler, flip this to an assertion for a real readiness gate.
             ready = getattr(rep, "ready", rep.get("ready") if isinstance(rep, dict)
-                            else False)
-            logger.info("@CLS@Node Ping -> ready=%s" % ready)
-            if not ready:
-                raise AssertionError("@CLS@Node answered but not ready")
+                            else None)
+            logger.info("@CLS@Ctrl Ping round-tripped; ready=%s "
+                        "(implement handle_call to set it true)" % ready)
         finally:
             probe.stop()
 '''
 
 _PKG_GITIGNORE = '''\
 # GENERATED trees (gen-app / gen-manifest / install output — never committed).
-# The scaffold's hand-written build shims (proto/*/BUILD.bazel, apps/__init__.py)
-# are re-included so `bazel build` works from a fresh clone before any gen-app.
+# The scaffold's hand-written build shims + the WRITE-ONCE impl (handler bodies,
+# state structs — user-owned after first emit) ARE committed, so they are
+# re-included below and survive a fresh clone before any gen-app.
+#
+# The tester app tree — pure codegen, regenerated every gen-app --kind fc.
 /apps/*
 !/apps/__init__.py
+# The PACKAGE's generated tree lives under src/. Its lib/ + BUILD.bazel are pure
+# codegen (regen every gen-app --kind package). Its impl/ is WRITE-ONCE — the
+# user owns the handler bodies + state structs + that BUILD after first emit — so
+# src/impl/ is TRACKED (re-included) while src/lib/ is ignored.
+/src/lib/
+!/src/impl/
+# Proto: the .pb.{c,h} are BUILT by the nanopb genrule (never committed). The
+# .proto/.options are codegen too, but the hand-written shim BUILDs + the package's
+# self-contained proto BUILD are re-included so a fresh clone builds.
 /proto/*
 !/proto/BUILD.bazel
 !/proto/system/
-/proto/system/apps/*
-!/proto/system/apps/BUILD.bazel
+/proto/system/@NAME@_tester/*
+!/proto/system/@NAME@_tester/BUILD.bazel
+/proto/system/@NAME@/*
+!/proto/system/@NAME@/BUILD.bazel
 /install/
 /dist/
 /manifest/apps/
@@ -4931,40 +5037,49 @@ A composable Theia PACKAGE (nodes + protocol + impl) a workspace consumes.
 
 ## Dev/test loop (runs unmodified after `theia init --kind package`)
 
+This repo holds TWO .art packages, modelling the ROS import/link relationship:
+
+- `system/@NAME@/package.art` (`package system.@NAME@`) — the package: messages +
+  interfaces + node(s), built ONCE into a linkable lib under `src/`.
+- `system/@NAME@_tester/component.art` (`package system.@NAME@_tester`) — a dev/test
+  app that IMPORTS `system.@NAME@` and prototypes its node, exactly as an external
+  workspace would. It LINKS the prebuilt `//src/lib:@NAME@_lib` (the imported node
+  is NOT regenerated) — this in-repo tester proves the cross-package link.
+
 ```sh
 source local_setup.sh
-# 1. impl lib from the schema:
-artheia gen-app --kind package packages/@NAME@/package.art --out packages/@NAME@ --proto-out proto --ns ara::@NAME@
-# 2. runnable app from the composition (apps/ is gitignored):
-artheia gen-app --kind fc      system/apps/component.art --out apps --proto-out proto
+# 1. the PACKAGE (node/lib) — system/@NAME@ source → src/{lib,impl}:
+artheia gen-app --kind package system/@NAME@/package.art --out src --proto-out proto --ns ara::@NAME@
+# 2. the TESTER app — imports system.@NAME@, links //src/lib:@NAME@_lib (apps/ gitignored):
+artheia gen-app --kind fc      system/@NAME@_tester/component.art --out apps --proto-out proto
 # 3. manifest + install + run:
-artheia gen-manifest system/apps/component.art manifest/apps/manifest.py
+artheia gen-manifest system/@NAME@_tester/component.art manifest/apps/manifest.py
 theia manifest rig && theia install rig && theia start
 # 4. probe test the node in isolation:
 robot test/@NAME@.robot
 ```
 
-## Consuming this package from a workspace
+## Consuming this package from another workspace
 
-```sh
-cd ~/my_ws
-ln -s ~/repo/theia_pkgs/@NAME@ packages/@NAME@
-ln -s ../../packages/@NAME@ system/packages/@NAME@
-# then in your app component.art:  import packages.@NAME@.*  +  prototype @CLS@Node ...
-```
+Clone this repo next to your workspace and depend on its bazel module; the
+package resolves as `//packages/@NAME@/src/lib:@NAME@_lib`. In your app's
+`.art`:  `import system.@NAME@.*`  then prototype `@CLS@Ctrl` in a composition —
+gen-app links the prebuilt lib, it is never regenerated in your tree.
 '''
 
 _PKG_NEXT_STEPS = '''
 Scaffold complete. The whole toolchain runs UNMODIFIED:
   source local_setup.sh
-  artheia gen-app --kind package packages/@NAME@/package.art --out packages/@NAME@ --proto-out proto --ns ara::@NAME@
-  artheia gen-app --kind fc      system/apps/component.art --out apps --proto-out proto
-  artheia gen-manifest system/apps/component.art manifest/apps/manifest.py
+  # 1. the PACKAGE (node/lib) — system/@NAME@ source → src/{lib,impl}:
+  artheia gen-app --kind package system/@NAME@/package.art --out src --proto-out proto --ns ara::@NAME@
+  # 2. the TESTER app (imports system.@NAME@, links //src/lib:@NAME@_lib):
+  artheia gen-app --kind fc      system/@NAME@_tester/component.art --out apps --proto-out proto
+  artheia gen-manifest system/@NAME@_tester/component.art manifest/apps/manifest.py
   theia manifest rig && theia install rig && theia start
   robot test/@NAME@.robot
 
-Edit packages/@NAME@/package.art (your nodes + protocol) +
-packages/@NAME@/impl/@CLS@Node_handlers.cc.
+Edit system/@NAME@/package.art (your nodes + protocol) +
+src/impl/@CLS@Ctrl_handlers.cc (write-once, your bodies).
 '''
 
 

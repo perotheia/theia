@@ -3839,9 +3839,16 @@ def cmd_init(args: list[str]) -> int:
     # checkout before dispatch; THEIA_INVOCATION_CWD preserves where we started).
     ws = Path(os.environ.get("THEIA_INVOCATION_CWD", Path.cwd())).resolve()
     name = ws.name
+    kind = "ws"
     for i, a in enumerate(args):
         if a == "--name" and i + 1 < len(args):
             name = args[i + 1]
+        elif a == "--kind" and i + 1 < len(args):
+            kind = args[i + 1]
+    if kind not in ("ws", "package"):
+        print(f"theia init: --kind must be ws|package (got {kind!r}).",
+              file=sys.stderr)
+        return 2
     # --with-services: bootstrap with the ARA platform services (com/log/per/sm/
     # ucm/shwa). Links system/services + the rig builds on ServicesSoftware, so a
     # bare `theia start` brings the full service tree up under the supervisor.
@@ -3850,6 +3857,16 @@ def cmd_init(args: list[str]) -> int:
         print("theia init: refusing to init the Theia checkout itself "
               "(run from your CONSUMING workspace dir).", file=sys.stderr)
         return 2
+
+    # --kind package: a ROS-style PACKAGE repo (nodes + protocol + impl as a
+    # composable unit + its own probe test), scaffolded so the WHOLE toolchain
+    # runs unmodified: gen-app --kind package (→impl), gen-app --kind fc
+    # component.art (→apps, gitignored), gen-manifest, serialize-manifest,
+    # theia install/start, and `robot test/<name>.robot` (the probe drives the
+    # node's ctl in isolation). A workspace CONSUMES packages; a package is its
+    # own repo. See docs/tasks/BACKLOG/theia-packages.md.
+    if kind == "package":
+        return _init_package(ws, theia_root, name, with_services)
 
     created: list[str] = []
 
@@ -3997,6 +4014,128 @@ def cmd_init(args: list[str]) -> int:
           "--out apps --proto-out proto\n"
           "  bazel build //apps/...        # compiles against @pero_theia",
           file=sys.stderr)
+    return 0
+
+
+def _init_package(ws: Path, theia_root: Path, name: str,
+                  with_services: bool) -> int:
+    """Scaffold the CWD as a ROS-style Theia PACKAGE repo (theia init --kind
+    package). A package is a self-contained, independently-repo'd, composable
+    unit — nodes + protocol + impl + its own probe test — that a workspace
+    consumes. Everything is parameterized by `name` so the whole toolchain runs
+    on a FRESH scaffold with zero edits:
+
+        gen-app --kind package packages/<name>/package.art      --out impl → impl/
+        gen-app --kind fc      system/apps/component.art  --out apps → apps/ (gitignored)
+        gen-manifest / serialize-manifest (from manifest/rig.py)
+        theia install / theia start
+        robot test/<name>.robot   (the probe drives the node's ctl in isolation)
+    """
+    import os as _os
+    slug = _py_ident_safe(name)
+    Cls = "".join(p.capitalize() for p in name.replace("-", "_").split("_"))
+    created: list[str] = []
+
+    def _write(rel: str, content: str) -> None:
+        p = ws / rel
+        if p.exists():
+            print(f"theia init: keep existing {rel}", file=sys.stderr)
+            return
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content)
+        created.append(rel)
+
+    def _link(rel: str, target: Path) -> None:
+        p = ws / rel
+        if p.exists() or p.is_symlink():
+            return
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.symlink_to(_os.path.relpath(target, p.parent))
+        created.append(f"{rel} -> {_os.path.relpath(target, p.parent)}")
+
+    def _sub(t: str) -> str:
+        return (t.replace("@NAME@", name).replace("@SLUG@", slug)
+                 .replace("@CLS@", Cls))
+
+    # Framework symlinks (same as a workspace): the package's .art imports
+    # system.platform.runtime.* + system.supervisor.* — resolve via these.
+    _link("system/platform/runtime", theia_root / "system" / "platform" / "runtime")
+    if (theia_root / "system" / "supervisor").exists():
+        _link("system/supervisor", theia_root / "system" / "supervisor")
+    if with_services:
+        _link("system/services", theia_root / "system" / "services")
+        if (theia_root / "system" / "platform" / "msgs").exists():
+            _link("system/platform/msgs", theia_root / "system" / "platform" / "msgs")
+
+    # The package's own .art: schema (package.art) + composition (component.art)
+    # + a forward-decl aggregator (system.art) so `artheia parse` on the whole
+    # tree passes. The FQN `packages.<name>` maps to the PHYSICAL dir
+    # packages/<name>/ (the same convention gen-app derives //packages/<name>
+    # from), with a system/packages/<name> symlink so the artheia resolver — which
+    # walks system/ as the virtual root — reaches it. This mirrors the in-tree
+    # packages/v2v + system/packages/v2v layout exactly.
+    # The PACKAGE (schema + node) lives at packages/<name>/package.art
+    # (`package packages.<name>`), reached by the artheia resolver through a
+    # system/packages/<name> symlink — the in-tree packages/v2v + system/packages/
+    # v2v layout exactly. Built ONCE as a linkable lib via `gen-app --kind package`.
+    _write(f"packages/{name}/package.art", _sub(_PKG_PACKAGE_ART))
+    _link(f"system/packages/{name}", ws / "packages" / name)
+    # The dev/test APP composition is a SEPARATE unit: `package system.apps` at
+    # system/apps/component.art (the demo's Demo3Way layout EXACTLY). `system.apps`
+    # → _base_dir_for's last-segment → `apps`, so gen-app `--out apps` and the
+    # gen-manifest label //apps/<Comp>/main AGREE (`package apps.<name>` would
+    # derive //<name>/ and diverge from --out apps). It imports packages.<name>
+    # and LINKS its prebuilt impl — one app per package repo, so `system.apps` is
+    # unambiguous.
+    _write("system/apps/component.art", _sub(_PKG_COMPONENT_ART))
+    # The whole-tree parse entry is the aggregator at the WORKSPACE ROOT
+    # (system/system.art, `package system`) importing system.apps.* — the entry
+    # file for system.apps is then component.art (the real cluster). A system.art
+    # INSIDE system/apps/ would shadow component.art as that package's import entry
+    # (_PKG_ENTRY_PRIORITY prefers system.art) and resolve the forward-decl stub.
+    _write("system/system.art", _sub(_PKG_SYSTEM_ART))
+
+    # impl/ python marker + the generic rig (one machine, this package's app).
+    # Reuse the WORKSPACE rig templates verbatim: the dev/test app is
+    # `package system.apps` → gen-manifest emits manifest/apps/manifest.py exactly
+    # as a workspace does, so the same guarded-import rig (labels + process names
+    # come from the generated manifest, NOT hand-written) works unchanged. With
+    # --with-services it also folds in the framework's ARA services manifest.
+    _write("impl/__init__.py", "")
+    _write("manifest/__init__.py", "")
+    _write("manifest/rig/__init__.py", "")
+    _write("manifest/rig/rig.py",
+           (_INIT_RIG_PY_SERVICES if with_services else _INIT_RIG_PY)
+           .replace("@NAME@", name))
+    # test/ — the probe RF suite: binds a client identity and calls the node's
+    # ProbeCtl over TIPC (the port connector; NO ProbeDaemon node in the exe).
+    _write(f"test/{name}.robot", _sub(_PKG_TEST_ROBOT))
+    _write(f"test/{name}_lib.py", _sub(_PKG_TEST_LIB))
+
+    # Build wiring vs the sibling @pero_theia (same as a workspace).
+    try:
+        theia_rel = _os.path.relpath(theia_root, ws)
+    except ValueError:
+        theia_rel = str(theia_root)
+    _write(".theia", f"THEIA_ROOT={theia_rel}\nname={name}\nkind=package\n")
+    _write("MODULE.bazel", _INIT_MODULE_BAZEL.replace("@MODNAME@", slug)
+                                             .replace("@THEIA_REL@", theia_rel))
+    _write(".bazelrc", _INIT_BAZELRC)
+    _write(".bazelversion", _read_or(theia_root / ".bazelversion", "8.0.0"))
+    _write("proto/BUILD.bazel", _INIT_PROTO_AGG)
+    _write("local_setup.sh", _INIT_SETUP_LOCAL.replace("@NAME@", name))
+    if (ws / "local_setup.sh").exists():
+        (ws / "local_setup.sh").chmod(0o755)
+    # apps/ + proto/ generated trees are GITIGNORED (gen-app output, not source).
+    _write(".gitignore", _sub(_PKG_GITIGNORE))
+    _write("README.md", _sub(_PKG_README))
+
+    flavour = "package (+services)" if with_services else "package"
+    print(f"\ntheia init: scaffolded '{name}' {flavour} against {theia_root}",
+          file=sys.stderr)
+    for c in created:
+        print(f"  + {c}", file=sys.stderr)
+    print(_sub(_PKG_NEXT_STEPS), file=sys.stderr)
     return 0
 
 
@@ -4518,6 +4657,235 @@ genrule(
 filegroup(name = "apps_pb_c", srcs = ["apps.pb.c"])
 filegroup(name = "apps_pb_h", srcs = ["apps.pb.h"])
 filegroup(name = "apps_proto", srcs = ["apps.proto"])
+'''
+
+
+# ── theia init --kind package templates ─────────────────────────────────────
+# A generic package: ONE real node (@CLS@Node) with a ProbeCtl the test drives,
+# ONE composition that starts it, a forward-decl aggregator, a generic rig, and
+# an RF probe test. @NAME@=name, @SLUG@=py-ident, @CLS@=CamelCase.
+
+_PKG_PACKAGE_ART = '''\
+// @NAME@ — a Theia PACKAGE: messages + interfaces + node(s). Built ONCE as a
+// linkable lib (gen-app --kind package); a workspace imports + composes it.
+//
+// Edit this: add your messages, interfaces, and node ports. The ProbeCtl below
+// is the test surface — the RF probe (test/@NAME@.robot) calls Ping over TIPC to
+// prove the node is up + serving; grow it into your package's real control ops.
+
+package packages.@NAME@
+
+
+message @CLS@Empty { }
+
+message @CLS@Status {
+    uint32 seq   = 1
+    bool   ready = 2
+}
+
+// The test/probe surface: the RF suite binds a client and calls these over TIPC
+// (the "node impersonated by a probe" — a port connector, no ProbeDaemon node in
+// the executable). GetStatus proves the node is up + serving in isolation.
+interface clientServer ProbeCtl {
+    operation Ping(in p: @CLS@Empty) returns @CLS@Status
+}
+
+// The package's real node. tipc 0x800100F0 (pick your own range). A GenServer
+// serving ProbeCtl. Add real ports (senderReceiver streams, more ops) as your
+// package grows; the impl handler lives in impl/@CLS@Node_handlers.cc.
+node atomic @CLS@Node {
+    tipc type=0x800100F0 instance=0
+    reporting = true
+    tag = "@CLS@"
+    ports {
+        server ctl provides ProbeCtl
+    }
+}
+'''
+
+_PKG_COMPONENT_ART = '''\
+// @NAME@ — the dev/test app that starts this package's node(s) in isolation.
+// gen-app --kind fc on THIS file emits the runnable under apps/ (gitignored) that
+// `theia install` stages + `theia start` runs; gen-manifest reads the cluster.
+//
+// It is an APP (`package system.apps`, the demo's convention), NOT the package
+// itself — so `--out apps` and the derived //apps/... bazel label agree. It
+// IMPORTS packages.@NAME@ and prototypes @CLS@Node, LINKING the package's
+// prebuilt impl (it does not regenerate it). A real user workspace assembles
+// @CLS@Node into a LARGER app (multiple packages) the same way; this is the
+// package's own single-node harness.
+//
+// ONE composition = one process. The RF probe (test/@NAME@.robot) is the test
+// node — a port connector calling @CLS@Node's ProbeCtl over TIPC, NOT a second
+// composition and NOT a ProbeDaemon baked into the executable.
+
+package system.apps
+
+import packages.@NAME@.*
+
+composition @CLS@App {
+    prototype @CLS@Node @SLUG@
+}
+
+cluster @CLS@Rig {
+    composition @CLS@App app
+}
+'''
+
+_PKG_SYSTEM_ART = '''\
+// @NAME@ — workspace aggregator: `artheia parse system/system.art` validates the
+// whole tree (this package's dev/test app + the framework imports). Lives at the
+// workspace root as `package system`; importing system.apps.* makes the resolver
+// use system/apps/component.art (the real cluster) as that package's entry file.
+// A system.art INSIDE system/apps/ would shadow component.art (_PKG_ENTRY_PRIORITY
+// prefers system.art) and resolve the forward-decl STUB instead. The real cluster
+// body is in system/apps/component.art.
+
+package system
+
+import system.supervisor.*
+import system.apps.*
+
+// The package's own single-node app cluster (defined with a body in
+// system/apps/component.art). Forward-declared here for the aggregate parse.
+extern cluster @CLS@Rig { }
+'''
+
+
+_PKG_TEST_ROBOT = '''\
+*** Settings ***
+Documentation     @NAME@ package probe — drives the live @CLS@Node in isolation.
+...
+...               Runs the canonical Python probe (test/@NAME@_lib.py) which binds
+...               a client identity via artheia.probe and calls @CLS@Node's ProbeCtl
+...               over TIPC (the "node impersonated by a probe" port connector). No
+...               ProbeDaemon node in the executable — the probe IS the test agent.
+...
+...               Needs the node up (`theia start`); SKIPS cleanly otherwise.
+Library           ${CURDIR}/@NAME@_lib.py
+
+Force Tags        package-@NAME@    live    probe
+
+
+*** Test Cases ***
+@CLS@Node Serves ProbeCtl Over TIPC
+    [Documentation]    Ping the live node; assert it answers ready.
+    Require @CLS@Node Listening
+    Run @CLS@ Probe
+'''
+
+_PKG_TEST_LIB = '''\
+"""Robot library: drive the @NAME@ package's @CLS@Node via artheia.probe.
+
+The probe binds a CLIENT identity and calls @CLS@Node's ProbeCtl (Ping) over real
+TIPC — the port connector that impersonates a peer, so the node is tested in
+isolation with no ProbeDaemon node in the executable. Skips when the node isn't
+bound (hermetic lane).
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+from robot.api import logger
+from robot.api.deco import keyword, library
+
+# test/@NAME@_lib.py → package repo root.
+_WS = Path(__file__).resolve().parents[1]
+# @CLS@Node's TIPC service type (packages.@NAME@ @CLS@Node = 0x800100F0).
+_NODE_TIPC_DEC = 0x800100F0
+
+
+@library(scope="SUITE")
+class @CLS@ProbeLib:
+    ROBOT_LIBRARY_SCOPE = "SUITE"
+
+    @keyword("Require @CLS@Node Listening")
+    def require_listening(self) -> None:
+        import subprocess
+        try:
+            out = subprocess.run(["tipc", "nametable", "show"],
+                                 capture_output=True, text=True, timeout=10).stdout
+        except (FileNotFoundError, subprocess.SubprocessError):
+            logger.info("`tipc` unavailable — deferring to the probe's own gate.")
+            return
+        if str(_NODE_TIPC_DEC) not in out:
+            from robot.api import SkipExecution
+            raise SkipExecution(
+                "@CLS@Node not bound (TIPC %s absent) — `theia start` first."
+                % hex(_NODE_TIPC_DEC))
+
+    @keyword("Run @CLS@ Probe")
+    def run_probe(self) -> None:
+        sys.path.insert(0, str(Path(_WS).parent))   # allow artheia on the venv
+        sys.path.insert(0, str(_WS / ".." / "artheia"))
+        from artheia.gen_server.probe import ArtheiaContext
+        art = _WS / "system" / "@NAME@" / "component.art"
+        proto = _WS / "proto"
+        ctx = ArtheiaContext(str(art), proto_root=str(proto))
+        probe = ctx.probe("@CLS@Node").start()
+        try:
+            rep = probe.call("@CLS@Node", "Ping")
+            ready = getattr(rep, "ready", rep.get("ready") if isinstance(rep, dict)
+                            else False)
+            logger.info("@CLS@Node Ping -> ready=%s" % ready)
+            if not ready:
+                raise AssertionError("@CLS@Node answered but not ready")
+        finally:
+            probe.stop()
+'''
+
+_PKG_GITIGNORE = '''\
+# GENERATED trees (gen-app output — never committed):
+/apps/
+/proto/
+/install/
+/dist/
+/bazel-*
+__pycache__/
+*.pyc
+'''
+
+_PKG_README = '''\
+# @NAME@ — a Theia package
+
+A composable Theia PACKAGE (nodes + protocol + impl) a workspace consumes.
+
+## Dev/test loop (runs unmodified after `theia init --kind package`)
+
+```sh
+source local_setup.sh
+# 1. impl lib from the schema:
+artheia gen-app --kind package packages/@NAME@/package.art --out impl --proto-out proto
+# 2. runnable app from the composition (apps/ is gitignored):
+artheia gen-app --kind fc      system/apps/component.art --out apps --proto-out proto
+# 3. manifest + install + run:
+artheia gen-manifest system/apps/component.art manifest/apps/manifest.py
+theia manifest rig && theia install rig && theia start
+# 4. probe test the node in isolation:
+robot test/@NAME@.robot
+```
+
+## Consuming this package from a workspace
+
+```sh
+cd ~/my_ws
+ln -s ~/repo/theia_pkgs/@NAME@ packages/@NAME@
+ln -s ../../packages/@NAME@ system/packages/@NAME@
+# then in your app component.art:  import packages.@NAME@.*  +  prototype @CLS@Node ...
+```
+'''
+
+_PKG_NEXT_STEPS = '''
+Scaffold complete. The whole toolchain runs UNMODIFIED:
+  source local_setup.sh
+  artheia gen-app --kind package packages/@NAME@/package.art  --out impl --proto-out proto
+  artheia gen-app --kind fc      system/apps/component.art --out apps --proto-out proto
+  artheia gen-manifest system/apps/component.art manifest/apps/manifest.py
+  theia manifest rig && theia install rig && theia start
+  robot test/@NAME@.robot
+
+Edit packages/@NAME@/package.art (your nodes + protocol) + impl/@CLS@Node_handlers.cc.
 '''
 
 

@@ -114,46 +114,50 @@ int main(int argc, char** argv) {
         ::theia::runtime::set_process_logger(supervisor_ctl_log);
         supervisor_ctl.set_logger(std::move(supervisor_ctl_log));
     }
-    supervisor_ctl.start();
-    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (the supervisor
-    // sets it from the rig's NodeToCPUMapping). No-op when unset / no entry for
-    // this node; soft-fails (logs) on EPERM. Applied AFTER start() — the thread
-    // exists now.
-    ::theia::runtime::apply_node_affinity(supervisor_ctl.native_handle(),
-        SupervisorCtl::kNodeName, std::getenv("THEIA_NODE_CFG"));
     // Resolve this node's TIPC address from the --tipc arg the supervisor built
     // from executor.json (per node, instance machine-shifted), so the BINARY is
     // address-agnostic — same binary on every machine. Falls back to the compiled
-    // kTipcType/kTipcInstance (the .art instance) for a standalone run.
+    // kTipcType/kTipcInstance (the .art instance) for a standalone run. Done BEFORE
+    // start() so the node's init() — which runs on the node thread right after
+    // start() — sees its own instance via tipc_instance() (a clone that keys its
+    // per-instance config in init() would otherwise race and read 0).
     uint32_t supervisor_ctl_type, supervisor_ctl_inst;
     ::theia::runtime::resolve_node_tipc(SupervisorCtl::kNodeName,
         SupervisorCtl::kTipcType, SupervisorCtl::kTipcInstance,
         supervisor_ctl_type, supervisor_ctl_inst);
-    // MACHINE-SHIFT the supervisor's OWN control node. The supervisor shifts every
-    // CHILD's --tipc instance by THEIA_MACHINE_INSTANCE, but its own SupervisorCtl
-    // address was only shifted when the LAUNCHER passed --tipc=supervisor_ctl=:N
-    // (which `theia start` does, but theia-run.sh / the colony unit / OTA do NOT —
-    // they set THEIA_MACHINE_INSTANCE in the env only, and resolve_node_tipc is
-    // ARG-only). Without the shift, EVERY machine's supervisor binds instance 0 on
-    // a shared host TIPC namespace → they collide, TIPC load-balances the co-bound
-    // port, and com's topology scan discovers only ONE machine (the whole /3
-    // multi-machine view collapses). So when --tipc did NOT override the instance
-    // (it's still the compiled default) AND THEIA_MACHINE_INSTANCE is set, apply the
-    // same per-machine shift here — making the supervisor self-address correctly
-    // under ANY launcher. An explicit --tipc still wins (it changes the resolved
-    // instance off the compiled default, so this fallback is skipped).
-    if (supervisor_ctl_inst == SupervisorCtl::kTipcInstance) {
-        if (const char* mi = std::getenv("THEIA_MACHINE_INSTANCE"); mi && *mi) {
-            const auto shift = static_cast<uint32_t>(std::strtoul(mi, nullptr, 10));
-            supervisor_ctl_inst += shift;
-        }
-    }
+    // set_tipc_instance() is a GenServer method (a runnable resolves its own
+    // instance in do_start via resolve_node_tipc); only emit it for gen_server/
+    // statem nodes so init() sees its instance before start().
+    supervisor_ctl.set_tipc_instance(supervisor_ctl_inst);
+    // Generic node params (read via the static-deploy ParamsConfig, overridable
+    // per-rig in config/<fc>.json under this node's section — same mechanism as
+    // tsync's prebuilt `enabled`):
+    //   enabled          (default true)  — boot gate; a disabled node does NOT
+    //                     start, freeing its TIPC slot (e.g. a probe replaces it).
+    //   start_delay_ms   (default 0)     — deterministic intra-executable ordering.
+    // A node section may be absent entirely → all defaults apply (start normally).
+    const auto supervisor_ctl_params =
+        ::theia::runtime::get_config().node(SupervisorCtl::kNodeName);
+    const bool supervisor_ctl_enabled = supervisor_ctl_params.boolean("enabled", true);
+    if (!supervisor_ctl_enabled) {
+        supervisor_ctl.log().info("node disabled (params.enabled=false) — not "
+            "started; its TIPC address is free for a test/probe to bind");
+    } else {
+    if (auto supervisor_ctl_delay = supervisor_ctl_params.u32("start_delay_ms", 0))
+        std::this_thread::sleep_for(std::chrono::milliseconds(supervisor_ctl_delay));
+    supervisor_ctl.start();
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
                       supervisor_ctl_type, supervisor_ctl_inst);
         supervisor_ctl.log().info(_tipc);
     }
+    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (the supervisor
+    // sets it from the rig's NodeToCPUMapping). No-op when unset / no entry for
+    // this node; soft-fails (logs) on EPERM. Applied AFTER start() — the thread
+    // exists now.
+    ::theia::runtime::apply_node_affinity(supervisor_ctl.native_handle(),
+        SupervisorCtl::kNodeName, std::getenv("THEIA_NODE_CFG"));
 
     if (auto* supervisor_ctl_cfg = config_mux.bind_node(
             supervisor_ctl, supervisor_ctl_type,
@@ -163,11 +167,6 @@ int main(int argc, char** argv) {
         // Trace control (#403): supervisor pushes TraceControlPush to flip
         // this node's Tracer kind filter — same path as LogLevelPush.
         config_mux.register_cast<platform_runtime_TraceControlPush>(
-            supervisor_ctl_cfg, supervisor_ctl);
-        // Config update: services/per casts ConfigUpdated when a watched
-        // config changes — same framework path; GenServer base handle_cast
-        // applies it (decode + on_config_update hook).
-        config_mux.register_cast<platform_runtime_ConfigUpdated>(
             supervisor_ctl_cfg, supervisor_ctl);
         // Receiver ports (#387): register the node's declared inbound
         // types so a real peer — or a robot-test inject via services/com
@@ -209,16 +208,16 @@ int main(int argc, char** argv) {
             supervisor_ctl_cfg, supervisor_ctl);
         config_mux.register_cast<HeartbeatReport>(supervisor_ctl_cfg, supervisor_ctl);
         config_mux.register_cast<SendTimeoutReport>(supervisor_ctl_cfg, supervisor_ctl);
-        // ---- process groups (pg): MANUAL pub/sub control ------------------
-        // The node OWNS its group membership: it calls pg_join<T>() to consume a
-        // broadcast group, pg_resolve<T>()/broadcast_*() to publish, and
-        // pg_leave<T>() to stop — from its OWN logic (init()/handlers), NOT
-        // automatically here. We only ATTACH the node's PgClient to its demux
-        // binding so a received group datagram routes into the node's normal
-        // handle_cast (entries[service_id] filled by register_cast above) and the
-        // supervisor CALL is labelled with this node's name. Manual, like OTP
-        // pg:join/leave — declaring a port means "I CAN", not "subscribe me".
-        supervisor_ctl.pg_attach(SupervisorCtl::kNodeName, supervisor_ctl_cfg);
+        // ---- process groups (pg): MANUAL pub/sub control (OTP pg shape) ----
+        // The node OWNS its membership: pg_join<T>() to CONSUME a group,
+        // pg_watch<T>()/broadcast_*() to PRODUCE, pg_leave<T>() to stop — from its
+        // OWN logic (init()/handlers), never automatically here. We ATTACH the
+        // node's PgClient to its demux binding (so a joined group's frames + the
+        // supervisor's PgMembership pushes route into handle_cast) and pass its
+        // BOUND ADDRESS as the watcher address — where the supervisor casts
+        // PgMembership when this node pg_watch'es a group it produces to.
+        supervisor_ctl.pg_attach(SupervisorCtl::kNodeName, supervisor_ctl_cfg,
+                                supervisor_ctl_type, supervisor_ctl_inst);
     } else {
         supervisor_ctl.log().warn("config service bind failed; live log-level "
                                  "push + signal inject disabled");
@@ -242,6 +241,7 @@ int main(int argc, char** argv) {
         }
     }
 
+    }  // end if (supervisor_ctl_enabled)
 
     SupervisorWorker supervisor_worker;
     // Per-node logger: tagged [#supervisor_worker] (kNodeName, matches `tdb ps`),
@@ -253,27 +253,46 @@ int main(int argc, char** argv) {
         supervisor_worker_log->set_level(boot_level);
         supervisor_worker.set_logger(std::move(supervisor_worker_log));
     }
-    supervisor_worker.start();
-    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (the supervisor
-    // sets it from the rig's NodeToCPUMapping). No-op when unset / no entry for
-    // this node; soft-fails (logs) on EPERM. Applied AFTER start() — the thread
-    // exists now.
-    ::theia::runtime::apply_node_affinity(supervisor_worker.native_handle(),
-        SupervisorWorker::kNodeName, std::getenv("THEIA_NODE_CFG"));
     // Resolve this node's TIPC address from the --tipc arg the supervisor built
     // from executor.json (per node, instance machine-shifted), so the BINARY is
     // address-agnostic — same binary on every machine. Falls back to the compiled
-    // kTipcType/kTipcInstance (the .art instance) for a standalone run.
+    // kTipcType/kTipcInstance (the .art instance) for a standalone run. Done BEFORE
+    // start() so the node's init() — which runs on the node thread right after
+    // start() — sees its own instance via tipc_instance() (a clone that keys its
+    // per-instance config in init() would otherwise race and read 0).
     uint32_t supervisor_worker_type, supervisor_worker_inst;
     ::theia::runtime::resolve_node_tipc(SupervisorWorker::kNodeName,
         SupervisorWorker::kTipcType, SupervisorWorker::kTipcInstance,
         supervisor_worker_type, supervisor_worker_inst);
+    // Generic node params (read via the static-deploy ParamsConfig, overridable
+    // per-rig in config/<fc>.json under this node's section — same mechanism as
+    // tsync's prebuilt `enabled`):
+    //   enabled          (default true)  — boot gate; a disabled node does NOT
+    //                     start, freeing its TIPC slot (e.g. a probe replaces it).
+    //   start_delay_ms   (default 0)     — deterministic intra-executable ordering.
+    // A node section may be absent entirely → all defaults apply (start normally).
+    const auto supervisor_worker_params =
+        ::theia::runtime::get_config().node(SupervisorWorker::kNodeName);
+    const bool supervisor_worker_enabled = supervisor_worker_params.boolean("enabled", true);
+    if (!supervisor_worker_enabled) {
+        supervisor_worker.log().info("node disabled (params.enabled=false) — not "
+            "started; its TIPC address is free for a test/probe to bind");
+    } else {
+    if (auto supervisor_worker_delay = supervisor_worker_params.u32("start_delay_ms", 0))
+        std::this_thread::sleep_for(std::chrono::milliseconds(supervisor_worker_delay));
+    supervisor_worker.start();
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
                       supervisor_worker_type, supervisor_worker_inst);
         supervisor_worker.log().info(_tipc);
     }
+    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (the supervisor
+    // sets it from the rig's NodeToCPUMapping). No-op when unset / no entry for
+    // this node; soft-fails (logs) on EPERM. Applied AFTER start() — the thread
+    // exists now.
+    ::theia::runtime::apply_node_affinity(supervisor_worker.native_handle(),
+        SupervisorWorker::kNodeName, std::getenv("THEIA_NODE_CFG"));
 
 
     // GenRunnable has no mailbox, so it can't take the supervisor's control
@@ -310,6 +329,7 @@ int main(int argc, char** argv) {
         }
     }
 
+    }  // end if (supervisor_worker_enabled)
 
 
     config_mux.start();

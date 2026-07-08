@@ -83,26 +83,30 @@ message ChildState {
     // budget nearing exhaustion). 0 = healthy.
     uint32  flags
 
-    // TIPC traffic summary (worker only) — the node's per-socket receive /
-    // transmit queue depths SUMMED over its bound TIPC ports, in bytes. The
-    // headline "is this node backed up?" number for the GUI Processes panel.
-    // Sampled each tick from `ss --tipc -e` joined against /proc/<pid>/fd.
-    // Cheap (2 scalars) so it rides the GetTree snapshot without bloating it —
-    // unlike the full per-socket `sockets` list, which stays off the wire
-    // (max_count:0) the way per-thread detail does.
-    uint32  tipc_rx          // summed receive-queue bytes across TIPC sockets
-    uint32  tipc_tx          // summed transmit-queue bytes
+    // FIELD ORDER IS THE WIRE TAG (positional 1..N). These four MUST stay in
+    // this order — threads_detail=20, sockets=21, tipc_rx=22, tipc_tx=23 — to
+    // match the deployed com/GUI wire. (Do not sort by "logical" grouping: the
+    // scalars read AFTER the two repeated fields on the wire.)
 
     // Per-thread detail (one entry per TID, sampled from
     // /proc/<pid>/task/<tid>/{stat,status,sched,comm}). The `threads`
     // field above is the count; this is the breakdown the GUI shows
     // as expandable child rows.
-    repeated ThreadSample threads_detail [max_count:0]
+    repeated ThreadSample threads_detail [max_count:0]  // 20
 
     // Open TCP/TIPC sockets owned by this pid (full per-socket detail). Kept
-    // OFF the GetTree wire (max_count:0) — the scalar tipc_rx/tipc_tx above are
+    // OFF the GetTree wire (max_count:0) — the scalar tipc_rx/tipc_tx below are
     // what the snapshot carries; this stays for a future per-socket view.
-    repeated SocketInfo sockets [max_count:0]
+    repeated SocketInfo sockets [max_count:0]           // 21
+
+    // TIPC traffic summary (worker only) — the node's per-socket receive /
+    // transmit queue depths SUMMED over its bound TIPC ports, in bytes. The
+    // headline "is this node backed up?" number for the GUI Processes panel.
+    // Sampled each tick from `ss --tipc -e` joined against /proc/<pid>/fd.
+    // Cheap (2 scalars) so it rides the GetTree snapshot without bloating it —
+    // unlike the full per-socket `sockets` list, which stays off the wire.
+    uint32  tipc_rx          // 22 — summed receive-queue bytes across TIPC sockets
+    uint32  tipc_tx          // 23 — summed transmit-queue bytes
 }
 
 // One open socket from /proc/<pid>/net/tcp{,6}. Fields are a flat
@@ -280,12 +284,29 @@ message GetSystemInfoRequest {
 // numbers — parental responsibility, not a system dashboard. Proto field tags
 // kept stable (4,5,6,10-13 reserved) so the wire stays compatible.
 message SystemInfo {
-    string  hostname            // uname(2).nodename
-    string  kernel [max_size:128]         // sysname + release + machine
-    string  os_pretty_name [max_size:128] // /etc/os-release PRETTY_NAME
-    string  theia_git_sha       // -DTHEIA_GIT_SHA at build time
-    string  build_timestamp [max_size:48] // -DTHEIA_BUILD_TIMESTAMP
-    uint64  start_timestamp_ms  // wall-clock millis when supervisor started
+    // Supervisor identity only. The host hardware stats (tags 4,5,6,10-13:
+    // cpu_count/total_ram_kb/uptime_sec/disk_*) moved to services/shwa — the host
+    // system-monitor. Reserved so the wire stays compatible + the numbers are
+    // never reused. Positional tags: `reserved` markers hold the migrated slots.
+    string  hostname            // 1 — uname(2).nodename
+    string  kernel [max_size:128]         // 2 — sysname + release + machine
+    string  os_pretty_name [max_size:128] // 3 — /etc/os-release PRETTY_NAME
+    reserved cpu_count          // 4 — moved to services/shwa
+    reserved total_ram_kb       // 5 — moved to services/shwa
+    reserved uptime_sec         // 6 — moved to services/shwa
+    string  theia_git_sha       // 7 — -DTHEIA_GIT_SHA at build time
+    string  build_timestamp [max_size:48] // 8 — -DTHEIA_BUILD_TIMESTAMP
+    uint64  start_timestamp_ms  // 9 — wall-clock millis when supervisor started
+    reserved disk_root_total_kb    // 10 — moved to services/shwa
+    reserved disk_root_avail_kb    // 11 — moved to services/shwa
+    reserved disk_install_total_kb // 12 — moved to services/shwa
+    reserved disk_install_avail_kb // 13 — moved to services/shwa
+    // 14 — this board's machine name (executor.json root "machine"); "" if none.
+    // com reads it to label per-machine telemetry by the REAL name (central/
+    // compute) instead of a hostname/manifest/"mN" guess.
+    string  machine_name [max_size:64]
+    // 15 — the deployed release/software version (UCM), for GetSystemInfo readout.
+    string  release_version [max_size:48]
 }
 
 message ChildSelector {

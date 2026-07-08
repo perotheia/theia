@@ -1,6 +1,6 @@
 ---
 name: theia
-description: Refresher for agents working in the theia framework — the AUTOSAR-Adaptive-style platform (Functional Clusters on the Theia C++ actor runtime, modeled in the artheia .art DSL). Orients you to the layout, the build, the consuming-workspace flow (theia init), and where to dig deeper. Args: (none) — read top-to-bottom, then load a reference under references/ for the task at hand.
+description: Refresher for agents working in the theia framework — the AUTOSAR-Adaptive-style platform (Functional Clusters on the Theia C++ actor runtime, modeled in the artheia .art DSL). Orients you to the layout, the build, the consuming-workspace flow AND the reusable-package flow (theia init --kind ws|package), and where to dig deeper. Args: (none) — read top-to-bottom, then load a reference under references/ for the task at hand.
 ---
 
 Theia is a AUTOSAR-Adaptive-Platform-style
@@ -153,6 +153,79 @@ How `theia` resolves work in a consuming workspace (`theia.py`):
 The in-repo `demo/` is just Theia dogfooding this same path (its rig is
 `demo/manifest/rig.py`) so CI exercises the consuming flow against the real
 framework.
+
+## Packages (`theia init --kind package`) — the reusable-unit flow
+
+A **package** is the layer between the runtime and a workspace (the ROS
+`runtime / libraries / workspace` split): a self-contained, independently-repo'd
+**node + protocol + impl** unit — no executable of its own — that any workspace
+imports and links. `theia init` has two kinds:
+
+- `theia init` **(`--kind ws`, default)** — a consuming **workspace** (above).
+- `theia init --kind package --name <X>` — a **package** repo.
+
+A package repo holds **TWO `.art` packages in TWO dirs**, modelling the
+import/link relationship in one repo exactly as an external consumer would:
+
+```
+system/<X>/package.art          package system.<X>          — the node(s) + protocol + algo
+system/<X>_tester/component.art  package system.<X>_tester   — imports system.<X>, LINKS its lib
+system/system.art                package system              — aggregate parse entry
+src/{lib,impl}                   ← gen-app --kind package  (lib generated+gitignored; impl WRITE-ONCE+tracked)
+proto/system/<X>/                ← the package's own self-contained proto
+```
+
+The whole toolchain runs **UNMODIFIED** on a fresh scaffold — dogfooded by the
+`v2v` package (perotheia-packages/v2v), the first shipped package:
+
+```sh
+source local_setup.sh
+# 1. the PACKAGE (node/lib) — system/<X> source → src/{lib,impl}, //src/lib:<X>_lib:
+artheia gen-app --kind package system/<X>/package.art --out src --proto-out proto --ns ara::<X>
+# 2. the TESTER app — imports system.<X>, links //src/lib:<X>_lib (apps/ gitignored):
+artheia gen-app --kind fc      system/<X>_tester/component.art --out apps --proto-out proto
+# 3. manifest + install + run:
+artheia gen-manifest system/<X>_tester/component.art manifest/apps/manifest.py
+theia manifest rig && theia install rig && theia start
+# 4. probe the node in isolation (a client-identity port connector over TIPC):
+robot test/<X>.robot
+```
+
+Key conventions (each fixes a concrete resolver/label bug — don't "simplify"):
+
+- **Source (`system/`) vs codegen (`src/`) are separate.** `gen-app --kind
+  package --out src` writes `src/lib/` (regenerated every run, gitignored) +
+  `src/impl/` (the write-once handler bodies + state + your BUILD — **tracked**,
+  yours to own after first emit). Never `--out system/<X>` — codegen stays out of
+  the hand-edited source tree.
+- **The two packages MUST be separate dirs.** The loader auto-merges a
+  `package.art` + `component.art` PAIR in ONE dir as ONE package (their `package`
+  lines must match) — so `system.<X>` and `system.<X>_tester` can't share a dir.
+- **Namespace `ara::<X>`** (`--ns`) — co-composed packages otherwise collide on
+  `Log.hh` / `ContextLogger`. The tester's `main.cc` hardcodes `ara::<X>::<Node>`.
+- **No framework symlinks.** A package `.art` never imports `system.supervisor` /
+  `system.platform` — the supervisor is a deploy-time fabric resolved from
+  `$THEIA_ROOT` by `theia manifest`, not referenced from ART. (The old
+  `packages/<X>` prefix + `system/{platform,supervisor}` symlinks are gone.)
+- **The tester deploys from `apps/`.** `system.<X>_tester` generates with
+  `--out apps`, so its manifest label is `//apps/<Cls>Tester/main:<X>_tester` —
+  the tester package name never appears in the bazel path.
+- **Bazel labels:** in-repo the package is `//src/lib:<X>_lib` +
+  `//src/impl:<X>_impl` + `//proto/system/<X>:<X>_proto`; a downstream workspace
+  that clones the package sees `//packages/<X>/src/lib:<X>_lib`.
+- **The probe asserts REACHABILITY** — that `Ping` round-trips over TIPC (proving
+  the cross-package link + wire), not the node's own `ready` semantic (the
+  write-once stub returns `ready=false` until you implement it), so a fresh
+  scaffold is green out of the box. It binds a UNIQUE pid-derived source instance
+  so it does not impersonate the node's own TIPC address (self-impersonation →
+  TIPC anycast routes the probe's connect onto its own socket → timeout).
+
+**Consuming a package from a workspace:** clone the package repo next to your
+workspace, add its bazel module, then in your app's `.art`: `import system.<X>.*`
+and prototype `<Node>` in a composition — `gen-app --kind fc` links the prebuilt
+lib (the imported node is NOT regenerated). The tester in-repo IS this pattern.
+
+See `references/artheia-gen-app.md` for the generator internals.
 
 ## The Functional Cluster catalog
 

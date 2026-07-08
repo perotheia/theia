@@ -3824,6 +3824,9 @@ def cmd_init(args: list[str]) -> int:
         source ../theia/env.sh             # exports THEIA_ROOT (source checkout)
         theia init [--name <ws>]           # bare workspace (supervisor + your apps)
         theia init --with-services         # + the ARA services (com/log/per/sm/ucm/shwa)
+        theia init --kind package --name <X>   # a reusable PACKAGE repo (node +
+                                               # protocol + impl → src/{lib,impl}),
+                                               # NOT a workspace — see _init_package
 
     --with-services bootstraps the workspace with the platform services: it links
     system/services and emits a rig built on the framework's ServicesSoftware, so

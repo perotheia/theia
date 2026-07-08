@@ -128,10 +128,30 @@ def _dbg_run(script: Path, prog: str, argv: list[str],
 # ── local dev loop ──────────────────────────────────────────────────────────
 
 @mcp.tool()
-def theia_init(with_services: bool = False) -> str:
-    """Scaffold a Theia workspace in the current directory (the workspace root).
-    Pass with_services=True to include the platform services rig. Idempotent."""
-    argv = ["init"] + (["--with-services"] if with_services else [])
+def theia_init(kind: str = "ws", name: str | None = None,
+               with_services: bool = False) -> str:
+    """Scaffold a Theia repo in the current directory. Idempotent.
+
+    kind='ws' (default) → a CONSUMING WORKSPACE (the catkin/colcon analogue): an
+    app repo bound to $THEIA_ROOT that builds compositions under system/apps.
+
+    kind='package' → a ROS-style PACKAGE repo: a reusable node+protocol+impl unit
+    a workspace imports and links. Requires `name`. Produces the two-package
+    layout — system/<name>/package.art (the node, `package system.<name>`, built
+    to src/{lib,impl} → //src/lib:<name>_lib) + system/<name>_tester/component.art
+    (`package system.<name>_tester`, imports+links the package to prove the
+    cross-package link) + system/system.art. The whole toolchain then runs
+    UNMODIFIED: gen-app --kind package (→src) + gen-app --kind fc (→apps) +
+    gen-manifest + theia manifest/install/start + robot (a reachability probe).
+
+    name — the package/workspace name (a valid identifier; used for the FQN, the
+    C++ namespace ara::<name>, and the bazel labels). Required for kind='package'.
+    with_services=True → also link the platform services rig (com/log/per/sm/…)."""
+    argv = ["init", "--kind", kind]
+    if name:
+        argv += ["--name", name]
+    if with_services:
+        argv += ["--with-services"]
     return _theia_run(argv)
 
 

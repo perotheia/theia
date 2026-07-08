@@ -118,3 +118,50 @@ When you add a field/node to a spec, regenerate, then build to confirm:
 ```sh
 bazel build --config=linux //services/<fc>/main:<fc>
 ```
+
+## `gen-app --kind package`: the reusable-unit (no-main) mode
+
+`--kind fc` builds a runnable daemon (lib + **main** + impl). `--kind package`
+builds a **linkable unit with NO main** — the ROS-package shape a workspace
+imports and links. It is how `theia init --kind package` scaffolds are built (see
+the SKILL's "Packages" section for the two-package repo layout).
+
+```sh
+# from a package repo, source .art under system/<X>/, codegen to src/:
+artheia gen-app --kind package system/<X>/package.art \
+  --out src --proto-out proto --ns ara::<X>
+```
+
+| flag | effect (vs `--kind fc`) |
+| --- | --- |
+| `--kind package` | emit `lib/` + `impl/` + a **self-contained proto** (nanopb genrule + `<X>_proto` cc_library), **NO `main/`**. |
+| `--out src` | codegen tree. Lib → `src/lib` (regen, gitignored); impl → `src/impl` (**write-once**, tracked). Keep it OUT of the hand-edited `system/` source. |
+| `--ns ara::<X>` | the package's C++ namespace — required, else co-composed packages collide on `Log.hh`. |
+| `--proto-out proto` | the package's proto lands at `proto/system/<X>/` (keyed off the `.art` **FQN**, not `--out`); label `//proto/system/<X>:<X>_proto`. |
+
+What lands where — the labels a consuming composition derives from
+`import system.<X>.*` (all resolved in `fc_app.py`
+`_imported_node_lib` / `_imported_package_impl_deps` /
+`_imported_package_proto_deps`):
+
+- `//src/lib:<X>_lib` — the node class + wiring (regenerated every run; the proto
+  dep is auto-correct).
+- `//src/impl:<X>_impl` + `//src/impl:<X>_state` — handler bodies + state structs.
+  **Write-once**: `gen-app` refuses to overwrite `src/impl/*` and its
+  `BUILD.bazel` without `--force` — so a custom algo target (e.g. v2v's
+  `v2v_algo`) or a `select()` survives regen. **`--force` CLOBBERS the write-once
+  impl** — back it up first if you must refresh lib+proto that way; plain regen
+  (no `--force`) skips impl.
+- `//proto/system/<X>:<X>_proto` — the package's own messages (a consuming SWP
+  links just these, not the framework `//platform/proto` aggregate).
+
+A `gen-app --kind fc` run on a `component.art` that `import`s the package then
+LINKS these prebuilt targets and does **not** regenerate the imported node
+(filtered in the per-node loop + `BUILD.lib/impl.j2`). Externally (package cloned
+into another workspace) the same node resolves as `//packages/<X>/src/lib:<X>_lib`.
+
+Verify a fresh package end to end:
+
+```sh
+bazel build //apps/<Cls>Tester/main:<X>_tester   # the in-repo tester links the package
+```

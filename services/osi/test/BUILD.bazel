@@ -1,5 +1,5 @@
-# osi tests. The V2V SLAM/consensus parity tests MOVED to
-# //packages/v2v/test (they belong with the algorithm). What remains here is the
+# osi tests. The V2V SLAM/consensus parity tests MOVED OUT with the v2v
+# package repo (they belong with the algorithm). What remains here is the
 # osi_probe_smoke.py live probe (a script, not a bazel target — run via robot /
 # directly against a live OsiCtl).
 load("@rules_cc//cc:defs.bzl", "cc_test")

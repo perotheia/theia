@@ -645,7 +645,7 @@ def cmd_start(args: list[str]) -> int:
         # config/). init_config anchors a RELATIVE THEIA_CONFIG_DIR to
         # THEIA_ROOT_DIR (mirrors platform/runtime/ota/theia-run.sh on a real rig,
         # where it's /opt/theia). Without this, a node's per-rig params (e.g.
-        # meshtastic.enabled=false) silently fall back to their .art defaults.
+        # <node>.enabled=false) silently fall back to their .art defaults.
         "THEIA_ROOT_DIR": _dest_abs,
         "THEIA_SUPERVISOR_INSTANCE": instance,
         # The cluster machine index — a supervisor BOOT knob (not a node address):

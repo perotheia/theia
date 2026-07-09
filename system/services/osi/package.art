@@ -106,7 +106,6 @@ node atomic OsiCtl {
     }
 }
 
-// (The V2V plane — beacon/constellation messages, V2vBeaconStream/
-// ConstellationStream/V2vCtlIf interfaces, OsiV2v + Meshtastic nodes — moved OUT
-// to standalone packages: system/packages/v2v + system/packages/meshtastic. A
+// (The V2V relative-topology plane that once lived in this FC moved OUT to
+// standalone package repos under the perotheia-packages org. A
 // user SWP imports + composes them. osi is now just the OS-interface node.)

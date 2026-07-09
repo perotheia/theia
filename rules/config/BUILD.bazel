@@ -136,11 +136,13 @@ config_setting(
     values = {"define": "gps=nmea"},
 )
 
-# V2V mesh-transport backend selector for services/osi's Meshtastic node. The
-# default (no --define) compiles the NULL backend (mesh_null.cc — no-op, radio
-# compiled OUT) so the dev/CI box builds + runs clean with NO serial/radio
-# dependency. The real radio is opt-in:
-#   --define mesh=meshtastic → mesh_meshtastic.cc (serial protobuf stream; no MQTT)
+# Mesh-transport backend selector, referenced by EXTERNAL package repos (the
+# meshtastic package's impl BUILD selects on
+# @pero_theia//rules/config:mesh_meshtastic — keep this target stable). The
+# default (no --define) compiles the NULL backend (no-op, radio compiled OUT) so
+# a dev/CI box builds + runs clean with NO serial/radio dependency. The real
+# radio is opt-in:
+#   --define mesh=meshtastic → the serial-protobuf backend
 config_setting(
     name = "mesh_meshtastic",
     values = {"define": "mesh=meshtastic"},

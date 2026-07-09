@@ -1,14 +1,10 @@
 package system.services.osi
 
 
-// The OS-Interface FC: OsiCtl (cgroup v2 resource partitioning + per-FC
-// accounting) PLUS the V2V relative-topology plane — OsiV2v (the SLAM estimator
-// + constellation state/broadcast) fed by Meshtastic (the pluggable mesh
-// transport). See package.art for the V2V data flow.
-// The osi FC is now JUST the OS-interface namespace node (cgroup/resource
-// partitioning + per-FC accounting). The V2V plane moved OUT to standalone
-// PACKAGES a user SWP composes: packages.v2v (estimator + consensus) fed by
-// packages.meshtastic (the mesh transport). osi no longer owns them.
+// The OS-Interface FC: OsiCtl — cgroup v2 resource partitioning + per-FC
+// accounting. (The V2V relative-topology plane that once lived here moved OUT
+// to standalone package repos under the perotheia-packages org; a user
+// workspace imports + composes them. osi no longer owns any of it.)
 composition Osi {
     prototype OsiCtl     osi_ctl
 }

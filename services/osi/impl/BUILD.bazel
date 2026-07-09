@@ -6,7 +6,7 @@
 # the regen-stability diff (see fc_regen_lib.py hand_owned_impl_build).
 #
 # The V2V plane (estimator + consensus + the mesh transport) MOVED OUT to
-# standalone packages: //packages/v2v + //packages/meshtastic. osi is now just
+# standalone package repos (perotheia-packages org). osi is now just
 # the OS-interface node (OsiCtl).
 
 load("@rules_cc//cc:defs.bzl", "cc_library")

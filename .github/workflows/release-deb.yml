@@ -48,7 +48,6 @@ jobs:
             libssl-dev libprotobuf-dev protobuf-compiler \
             libgrpc++-dev protobuf-compiler-grpc libabsl-dev \
             libcpprest-dev \
-            libeigen3-dev \
             libnftables-dev
           # The runtime/FC protos #include <pb.h> at the TOP level, but Ubuntu
           # 24.04's libnanopb-dev (0.4.8) nests the headers under

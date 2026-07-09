@@ -110,11 +110,11 @@ int main(int argc, char** argv) {
     // manifest/supervisor domain uses everywhere (executor.json art_nodes, the
     // --tipc arg keys, config/<proc>.json `nodes` sections, `tdb ps` rows). For a
     // LOCAL node this equals ComDaemon::kNodeName; for an IMPORTED package node it
-    // does NOT (the package lib was compiled without a composition, so its
-    // kNodeName is the snake'd node TYPE, e.g. osi_v2v vs prototype v2v). Keying
-    // main's identity calls on kNodeName made an imported node's --tipc lookup
-    // MISS (silent fallback to the compiled address — machine-shift/clones broken)
-    // and its params section unmatched (silent defaults). Use the prototype name.
+    // does NOT (the package lib is compiled without a composition, so its
+    // kNodeName is the snake'd node TYPE, not this composition's prototype name).
+    // Keying main's identity calls on kNodeName would make an imported node's
+    // --tipc lookup MISS (silent fallback to the compiled address) and its params
+    // section unmatched (silent defaults) — so use the prototype name.
     // Per-node logger: tagged [#com_daemon] (matches `tdb ps`), sink chosen by
     // $THEIA_LOGGER. Installed BEFORE start() so do_start/init log through it. The
     // FIRST node's logger also backs process_logger() — the ConfigureLogLevel-push
@@ -205,11 +205,11 @@ int main(int argc, char** argv) {
     // manifest/supervisor domain uses everywhere (executor.json art_nodes, the
     // --tipc arg keys, config/<proc>.json `nodes` sections, `tdb ps` rows). For a
     // LOCAL node this equals ComGrpcProxy::kNodeName; for an IMPORTED package node it
-    // does NOT (the package lib was compiled without a composition, so its
-    // kNodeName is the snake'd node TYPE, e.g. osi_v2v vs prototype v2v). Keying
-    // main's identity calls on kNodeName made an imported node's --tipc lookup
-    // MISS (silent fallback to the compiled address — machine-shift/clones broken)
-    // and its params section unmatched (silent defaults). Use the prototype name.
+    // does NOT (the package lib is compiled without a composition, so its
+    // kNodeName is the snake'd node TYPE, not this composition's prototype name).
+    // Keying main's identity calls on kNodeName would make an imported node's
+    // --tipc lookup MISS (silent fallback to the compiled address) and its params
+    // section unmatched (silent defaults) — so use the prototype name.
     // Per-node logger: tagged [#com_grpc_proxy] (matches `tdb ps`), sink chosen by
     // $THEIA_LOGGER. Installed BEFORE start() so do_start/init log through it. The
     // FIRST node's logger also backs process_logger() — the ConfigureLogLevel-push
@@ -260,11 +260,11 @@ int main(int argc, char** argv) {
     // manifest/supervisor domain uses everywhere (executor.json art_nodes, the
     // --tipc arg keys, config/<proc>.json `nodes` sections, `tdb ps` rows). For a
     // LOCAL node this equals TraceForwarder::kNodeName; for an IMPORTED package node it
-    // does NOT (the package lib was compiled without a composition, so its
-    // kNodeName is the snake'd node TYPE, e.g. osi_v2v vs prototype v2v). Keying
-    // main's identity calls on kNodeName made an imported node's --tipc lookup
-    // MISS (silent fallback to the compiled address — machine-shift/clones broken)
-    // and its params section unmatched (silent defaults). Use the prototype name.
+    // does NOT (the package lib is compiled without a composition, so its
+    // kNodeName is the snake'd node TYPE, not this composition's prototype name).
+    // Keying main's identity calls on kNodeName would make an imported node's
+    // --tipc lookup MISS (silent fallback to the compiled address) and its params
+    // section unmatched (silent defaults) — so use the prototype name.
     // Per-node logger: tagged [#trace_forwarder] (matches `tdb ps`), sink chosen by
     // $THEIA_LOGGER. Installed BEFORE start() so do_start/init log through it. The
     // FIRST node's logger also backs process_logger() — the ConfigureLogLevel-push
@@ -315,11 +315,11 @@ int main(int argc, char** argv) {
     // manifest/supervisor domain uses everywhere (executor.json art_nodes, the
     // --tipc arg keys, config/<proc>.json `nodes` sections, `tdb ps` rows). For a
     // LOCAL node this equals LogForwarder::kNodeName; for an IMPORTED package node it
-    // does NOT (the package lib was compiled without a composition, so its
-    // kNodeName is the snake'd node TYPE, e.g. osi_v2v vs prototype v2v). Keying
-    // main's identity calls on kNodeName made an imported node's --tipc lookup
-    // MISS (silent fallback to the compiled address — machine-shift/clones broken)
-    // and its params section unmatched (silent defaults). Use the prototype name.
+    // does NOT (the package lib is compiled without a composition, so its
+    // kNodeName is the snake'd node TYPE, not this composition's prototype name).
+    // Keying main's identity calls on kNodeName would make an imported node's
+    // --tipc lookup MISS (silent fallback to the compiled address) and its params
+    // section unmatched (silent defaults) — so use the prototype name.
     // Per-node logger: tagged [#log_forwarder] (matches `tdb ps`), sink chosen by
     // $THEIA_LOGGER. Installed BEFORE start() so do_start/init log through it. The
     // FIRST node's logger also backs process_logger() — the ConfigureLogLevel-push

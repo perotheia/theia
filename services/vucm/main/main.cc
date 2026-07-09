@@ -97,15 +97,18 @@ int main(int argc, char** argv) {
         ::theia::runtime::set_process_logger(vucm_campaign_log);
         vucm_campaign.set_logger(std::move(vucm_campaign_log));
     }
-    vucm_campaign.start_statem(timers);
     // Resolve this node’s TIPC address from the --tipc arg (the supervisor built
     // it per node from executor.json, instance machine-shifted) so the binary is
     // address-agnostic. Falls back to the compiled kTipcType/kTipcInstance for a
-    // standalone run.
+    // standalone run. Done + set_tipc_instance BEFORE start so init()/on_enter (run
+    // on the node thread right after start) see this node's own instance — a clone
+    // keying per-instance config in init() would otherwise race and read 0.
     uint32_t vucm_campaign_type, vucm_campaign_inst;
     ::theia::runtime::resolve_node_tipc(VucmCampaign::kNodeName,
         VucmCampaign::kTipcType, VucmCampaign::kTipcInstance,
         vucm_campaign_type, vucm_campaign_inst);
+    vucm_campaign.set_tipc_instance(vucm_campaign_inst);
+    vucm_campaign.start_statem(timers);
     {
         char _tipc[96];
         std::snprintf(_tipc, sizeof(_tipc),
@@ -171,15 +174,18 @@ int main(int argc, char** argv) {
         vucm_gate_log->set_level(boot_level);
         vucm_gate.set_logger(std::move(vucm_gate_log));
     }
-    vucm_gate.start();
     // Resolve this node’s TIPC address from the --tipc arg (the supervisor built
     // it per node from executor.json, instance machine-shifted) so the binary is
     // address-agnostic. Falls back to the compiled kTipcType/kTipcInstance for a
-    // standalone run.
+    // standalone run. Done + set_tipc_instance BEFORE start so init()/on_enter (run
+    // on the node thread right after start) see this node's own instance — a clone
+    // keying per-instance config in init() would otherwise race and read 0.
     uint32_t vucm_gate_type, vucm_gate_inst;
     ::theia::runtime::resolve_node_tipc(VucmGate::kNodeName,
         VucmGate::kTipcType, VucmGate::kTipcInstance,
         vucm_gate_type, vucm_gate_inst);
+    vucm_gate.set_tipc_instance(vucm_gate_inst);
+    vucm_gate.start();
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",

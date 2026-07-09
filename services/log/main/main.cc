@@ -115,27 +115,45 @@ int main(int argc, char** argv) {
         ::theia::runtime::set_process_logger(log_daemon_log);
         log_daemon.set_logger(std::move(log_daemon_log));
     }
-    log_daemon.start();
-    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (the supervisor
-    // sets it from the rig's NodeToCPUMapping). No-op when unset / no entry for
-    // this node; soft-fails (logs) on EPERM. Applied AFTER start() — the thread
-    // exists now.
-    ::theia::runtime::apply_node_affinity(log_daemon.native_handle(),
-        LogDaemon::kNodeName, std::getenv("THEIA_NODE_CFG"));
     // Resolve this node's TIPC address from the --tipc arg the supervisor built
     // from executor.json (per node, instance machine-shifted), so the BINARY is
     // address-agnostic — same binary on every machine. Falls back to the compiled
-    // kTipcType/kTipcInstance (the .art instance) for a standalone run.
+    // kTipcType/kTipcInstance (the .art instance) for a standalone run. Done BEFORE
+    // start() so the node's init() — which runs on the node thread right after
+    // start() — sees its own instance via tipc_instance() (a clone that keys its
+    // per-instance config in init() would otherwise race and read 0).
     uint32_t log_daemon_type, log_daemon_inst;
     ::theia::runtime::resolve_node_tipc(LogDaemon::kNodeName,
         LogDaemon::kTipcType, LogDaemon::kTipcInstance,
         log_daemon_type, log_daemon_inst);
-    {
-        char _tipc[64];
-        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
-                      log_daemon_type, log_daemon_inst);
-        log_daemon.log().info(_tipc);
-    }
+    // set_tipc_instance() is a GenServer/GenStateM method — only atomic + statem
+    // nodes have it. A `node runnable` (GenRunnable) resolves its own instance in
+    // do_start via resolve_node_tipc; a `node prebuilt` (also a GenRunnable
+    // subclass, wrapping a 3rd-party child) likewise has no such method. Emit the
+    // call ONLY for gen_server/statem nodes so init() sees its instance before
+    // start(); a runnable/prebuilt would fail to compile (no member).
+    log_daemon.set_tipc_instance(log_daemon_inst);
+    // Generic node params (read via the static-deploy ParamsConfig, overridable
+    // per-rig in config/<fc>.json under this node's section — same mechanism as
+    // tsync's prebuilt `enabled`):
+    //   enabled          (default true)  — boot gate; a disabled node does NOT
+    //                     start, freeing its TIPC slot (e.g. a probe replaces it).
+    //   start_delay_ms   (default 0)     — deterministic intra-executable ordering.
+    // A node section may be absent entirely → all defaults apply (start normally).
+    const auto log_daemon_params =
+        ::theia::runtime::get_config().node(LogDaemon::kNodeName);
+    // Boot gate — recomputed identically in the START pass below (cheap param
+    // read). PASS 1 (here): wire the mux (bind_node + register_* + pg_attach)
+    // BEFORE config_mux.start() and BEFORE the node thread runs. PASS 2 (after
+    // the mux is pumping): node.start() — so init()'s OWN pg_join/pg_watch (a
+    // BLOCKING CALL to the supervisor's PG allocator) gets its reply pumped. If
+    // start() ran here (before config_mux.start()), a pg_join in init() would
+    // deadlock, the node would never beat, and the watchdog would SIGTERM it.
+    const bool log_daemon_enabled = log_daemon_params.boolean("enabled", true);
+    if (!log_daemon_enabled) {
+        log_daemon.log().info("node disabled (params.enabled=false) — not "
+            "started; its TIPC address is free for a test/probe to bind");
+    } else {
 
     if (auto* log_daemon_cfg = config_mux.bind_node(
             log_daemon, log_daemon_type,
@@ -145,11 +163,6 @@ int main(int argc, char** argv) {
         // Trace control (#403): supervisor pushes TraceControlPush to flip
         // this node's Tracer kind filter — same path as LogLevelPush.
         config_mux.register_cast<platform_runtime_TraceControlPush>(
-            log_daemon_cfg, log_daemon);
-        // Config update: services/per casts ConfigUpdated when a watched
-        // config changes — same framework path; GenServer base handle_cast
-        // applies it (decode + on_config_update hook).
-        config_mux.register_cast<platform_runtime_ConfigUpdated>(
             log_daemon_cfg, log_daemon);
         // Receiver ports (#387): register the node's declared inbound
         // types so a real peer — or a robot-test inject via services/com
@@ -171,23 +184,7 @@ int main(int argc, char** argv) {
     }
 
 
-
-    // Liveness beat to the supervisor watchdog (#PHM). A reporting node — of
-    // EITHER base — must beat or the watchdog SIGTERMs it after K missed
-    // deadlines. One publisher per node, own timer thread; period TODO from the
-    // manifest (1s default matches the supervisor's check cadence).
-    {
-        auto log_daemon_hb = std::make_unique<
-            ::theia::runtime::HeartbeatPublisher>(LogDaemon::kNodeName);
-        if (log_daemon_hb->open()) {
-            log_daemon_hb->start(/*period_ms=*/1000);
-            heartbeats.push_back(std::move(log_daemon_hb));
-        } else {
-            log_daemon.log().warn("heartbeat publisher open failed; "
-                                     "supervisor watchdog will not see beats");
-        }
-    }
-
+    }  // end if (log_daemon_enabled) — PASS 1 (mux wiring)
 
     LogStreamPump log_pump;
     // Per-node logger: tagged [#log_pump] (kNodeName, matches `tdb ps`),
@@ -199,27 +196,38 @@ int main(int argc, char** argv) {
         log_pump_log->set_level(boot_level);
         log_pump.set_logger(std::move(log_pump_log));
     }
-    log_pump.start();
-    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (the supervisor
-    // sets it from the rig's NodeToCPUMapping). No-op when unset / no entry for
-    // this node; soft-fails (logs) on EPERM. Applied AFTER start() — the thread
-    // exists now.
-    ::theia::runtime::apply_node_affinity(log_pump.native_handle(),
-        LogStreamPump::kNodeName, std::getenv("THEIA_NODE_CFG"));
     // Resolve this node's TIPC address from the --tipc arg the supervisor built
     // from executor.json (per node, instance machine-shifted), so the BINARY is
     // address-agnostic — same binary on every machine. Falls back to the compiled
-    // kTipcType/kTipcInstance (the .art instance) for a standalone run.
+    // kTipcType/kTipcInstance (the .art instance) for a standalone run. Done BEFORE
+    // start() so the node's init() — which runs on the node thread right after
+    // start() — sees its own instance via tipc_instance() (a clone that keys its
+    // per-instance config in init() would otherwise race and read 0).
     uint32_t log_pump_type, log_pump_inst;
     ::theia::runtime::resolve_node_tipc(LogStreamPump::kNodeName,
         LogStreamPump::kTipcType, LogStreamPump::kTipcInstance,
         log_pump_type, log_pump_inst);
-    {
-        char _tipc[64];
-        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
-                      log_pump_type, log_pump_inst);
-        log_pump.log().info(_tipc);
-    }
+    // Generic node params (read via the static-deploy ParamsConfig, overridable
+    // per-rig in config/<fc>.json under this node's section — same mechanism as
+    // tsync's prebuilt `enabled`):
+    //   enabled          (default true)  — boot gate; a disabled node does NOT
+    //                     start, freeing its TIPC slot (e.g. a probe replaces it).
+    //   start_delay_ms   (default 0)     — deterministic intra-executable ordering.
+    // A node section may be absent entirely → all defaults apply (start normally).
+    const auto log_pump_params =
+        ::theia::runtime::get_config().node(LogStreamPump::kNodeName);
+    // Boot gate — recomputed identically in the START pass below (cheap param
+    // read). PASS 1 (here): wire the mux (bind_node + register_* + pg_attach)
+    // BEFORE config_mux.start() and BEFORE the node thread runs. PASS 2 (after
+    // the mux is pumping): node.start() — so init()'s OWN pg_join/pg_watch (a
+    // BLOCKING CALL to the supervisor's PG allocator) gets its reply pumped. If
+    // start() ran here (before config_mux.start()), a pg_join in init() would
+    // deadlock, the node would never beat, and the watchdog would SIGTERM it.
+    const bool log_pump_enabled = log_pump_params.boolean("enabled", true);
+    if (!log_pump_enabled) {
+        log_pump.log().info("node disabled (params.enabled=false) — not "
+            "started; its TIPC address is free for a test/probe to bind");
+    } else {
 
 
     // GenRunnable has no mailbox, so it can't take the supervisor's control
@@ -239,23 +247,7 @@ int main(int argc, char** argv) {
                                  "push disabled");
     }
 
-
-    // Liveness beat to the supervisor watchdog (#PHM). A reporting node — of
-    // EITHER base — must beat or the watchdog SIGTERMs it after K missed
-    // deadlines. One publisher per node, own timer thread; period TODO from the
-    // manifest (1s default matches the supervisor's check cadence).
-    {
-        auto log_pump_hb = std::make_unique<
-            ::theia::runtime::HeartbeatPublisher>(LogStreamPump::kNodeName);
-        if (log_pump_hb->open()) {
-            log_pump_hb->start(/*period_ms=*/1000);
-            heartbeats.push_back(std::move(log_pump_hb));
-        } else {
-            log_pump.log().warn("heartbeat publisher open failed; "
-                                     "supervisor watchdog will not see beats");
-        }
-    }
-
+    }  // end if (log_pump_enabled) — PASS 1 (mux wiring)
 
     TraceStreamPump trace_pump;
     // Per-node logger: tagged [#trace_pump] (kNodeName, matches `tdb ps`),
@@ -267,27 +259,38 @@ int main(int argc, char** argv) {
         trace_pump_log->set_level(boot_level);
         trace_pump.set_logger(std::move(trace_pump_log));
     }
-    trace_pump.start();
-    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (the supervisor
-    // sets it from the rig's NodeToCPUMapping). No-op when unset / no entry for
-    // this node; soft-fails (logs) on EPERM. Applied AFTER start() — the thread
-    // exists now.
-    ::theia::runtime::apply_node_affinity(trace_pump.native_handle(),
-        TraceStreamPump::kNodeName, std::getenv("THEIA_NODE_CFG"));
     // Resolve this node's TIPC address from the --tipc arg the supervisor built
     // from executor.json (per node, instance machine-shifted), so the BINARY is
     // address-agnostic — same binary on every machine. Falls back to the compiled
-    // kTipcType/kTipcInstance (the .art instance) for a standalone run.
+    // kTipcType/kTipcInstance (the .art instance) for a standalone run. Done BEFORE
+    // start() so the node's init() — which runs on the node thread right after
+    // start() — sees its own instance via tipc_instance() (a clone that keys its
+    // per-instance config in init() would otherwise race and read 0).
     uint32_t trace_pump_type, trace_pump_inst;
     ::theia::runtime::resolve_node_tipc(TraceStreamPump::kNodeName,
         TraceStreamPump::kTipcType, TraceStreamPump::kTipcInstance,
         trace_pump_type, trace_pump_inst);
-    {
-        char _tipc[64];
-        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
-                      trace_pump_type, trace_pump_inst);
-        trace_pump.log().info(_tipc);
-    }
+    // Generic node params (read via the static-deploy ParamsConfig, overridable
+    // per-rig in config/<fc>.json under this node's section — same mechanism as
+    // tsync's prebuilt `enabled`):
+    //   enabled          (default true)  — boot gate; a disabled node does NOT
+    //                     start, freeing its TIPC slot (e.g. a probe replaces it).
+    //   start_delay_ms   (default 0)     — deterministic intra-executable ordering.
+    // A node section may be absent entirely → all defaults apply (start normally).
+    const auto trace_pump_params =
+        ::theia::runtime::get_config().node(TraceStreamPump::kNodeName);
+    // Boot gate — recomputed identically in the START pass below (cheap param
+    // read). PASS 1 (here): wire the mux (bind_node + register_* + pg_attach)
+    // BEFORE config_mux.start() and BEFORE the node thread runs. PASS 2 (after
+    // the mux is pumping): node.start() — so init()'s OWN pg_join/pg_watch (a
+    // BLOCKING CALL to the supervisor's PG allocator) gets its reply pumped. If
+    // start() ran here (before config_mux.start()), a pg_join in init() would
+    // deadlock, the node would never beat, and the watchdog would SIGTERM it.
+    const bool trace_pump_enabled = trace_pump_params.boolean("enabled", true);
+    if (!trace_pump_enabled) {
+        trace_pump.log().info("node disabled (params.enabled=false) — not "
+            "started; its TIPC address is free for a test/probe to bind");
+    } else {
 
 
     // GenRunnable has no mailbox, so it can't take the supervisor's control
@@ -307,11 +310,104 @@ int main(int argc, char** argv) {
                                  "push disabled");
     }
 
+    }  // end if (trace_pump_enabled) — PASS 1 (mux wiring)
 
-    // Liveness beat to the supervisor watchdog (#PHM). A reporting node — of
-    // EITHER base — must beat or the watchdog SIGTERMs it after K missed
-    // deadlines. One publisher per node, own timer thread; period TODO from the
-    // manifest (1s default matches the supervisor's check cadence).
+
+    // The mux is now WIRED for every node (bind_node + register_* + pg_attach)
+    // but no node thread runs yet. Start pumping BEFORE any node.start() so a
+    // node's init()/1 can issue blocking pg_join / pg_watch / supervisor CALLs
+    // and get the reply pumped — init() runs on a fully-live stack, OTP-style.
+    config_mux.start();
+
+
+    // PASS 2 — start the node thread (runs init()/1) now that the mux pumps,
+    // then apply post-start settings (affinity) + the liveness heartbeat.
+    if (log_daemon_params.boolean("enabled", true)) {
+    if (auto log_daemon_delay = log_daemon_params.u32("start_delay_ms", 0))
+        std::this_thread::sleep_for(std::chrono::milliseconds(log_daemon_delay));
+    log_daemon.start();
+    {
+        char _tipc[64];
+        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
+                      log_daemon_type, log_daemon_inst);
+        log_daemon.log().info(_tipc);
+    }
+    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG. Applied AFTER
+    // start() — the thread exists now. No-op when unset; soft-fails on EPERM.
+    ::theia::runtime::apply_node_affinity(log_daemon.native_handle(),
+        LogDaemon::kNodeName, std::getenv("THEIA_NODE_CFG"));
+
+    // Liveness beat to the supervisor watchdog (#PHM). A reporting node must beat
+    // or the watchdog SIGTERMs it after K missed deadlines. One publisher per
+    // node, own timer thread; 1s default matches the supervisor's check cadence.
+    {
+        auto log_daemon_hb = std::make_unique<
+            ::theia::runtime::HeartbeatPublisher>(LogDaemon::kNodeName);
+        if (log_daemon_hb->open()) {
+            log_daemon_hb->start(/*period_ms=*/1000);
+            heartbeats.push_back(std::move(log_daemon_hb));
+        } else {
+            log_daemon.log().warn("heartbeat publisher open failed; "
+                                     "supervisor watchdog will not see beats");
+        }
+    }
+
+    }  // end if (log_daemon_enabled) — PASS 2 (start + heartbeat)
+
+    // PASS 2 — start the node thread (runs init()/1) now that the mux pumps,
+    // then apply post-start settings (affinity) + the liveness heartbeat.
+    if (log_pump_params.boolean("enabled", true)) {
+    if (auto log_pump_delay = log_pump_params.u32("start_delay_ms", 0))
+        std::this_thread::sleep_for(std::chrono::milliseconds(log_pump_delay));
+    log_pump.start();
+    {
+        char _tipc[64];
+        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
+                      log_pump_type, log_pump_inst);
+        log_pump.log().info(_tipc);
+    }
+    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG. Applied AFTER
+    // start() — the thread exists now. No-op when unset; soft-fails on EPERM.
+    ::theia::runtime::apply_node_affinity(log_pump.native_handle(),
+        LogStreamPump::kNodeName, std::getenv("THEIA_NODE_CFG"));
+
+    // Liveness beat to the supervisor watchdog (#PHM). A reporting node must beat
+    // or the watchdog SIGTERMs it after K missed deadlines. One publisher per
+    // node, own timer thread; 1s default matches the supervisor's check cadence.
+    {
+        auto log_pump_hb = std::make_unique<
+            ::theia::runtime::HeartbeatPublisher>(LogStreamPump::kNodeName);
+        if (log_pump_hb->open()) {
+            log_pump_hb->start(/*period_ms=*/1000);
+            heartbeats.push_back(std::move(log_pump_hb));
+        } else {
+            log_pump.log().warn("heartbeat publisher open failed; "
+                                     "supervisor watchdog will not see beats");
+        }
+    }
+
+    }  // end if (log_pump_enabled) — PASS 2 (start + heartbeat)
+
+    // PASS 2 — start the node thread (runs init()/1) now that the mux pumps,
+    // then apply post-start settings (affinity) + the liveness heartbeat.
+    if (trace_pump_params.boolean("enabled", true)) {
+    if (auto trace_pump_delay = trace_pump_params.u32("start_delay_ms", 0))
+        std::this_thread::sleep_for(std::chrono::milliseconds(trace_pump_delay));
+    trace_pump.start();
+    {
+        char _tipc[64];
+        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
+                      trace_pump_type, trace_pump_inst);
+        trace_pump.log().info(_tipc);
+    }
+    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG. Applied AFTER
+    // start() — the thread exists now. No-op when unset; soft-fails on EPERM.
+    ::theia::runtime::apply_node_affinity(trace_pump.native_handle(),
+        TraceStreamPump::kNodeName, std::getenv("THEIA_NODE_CFG"));
+
+    // Liveness beat to the supervisor watchdog (#PHM). A reporting node must beat
+    // or the watchdog SIGTERMs it after K missed deadlines. One publisher per
+    // node, own timer thread; 1s default matches the supervisor's check cadence.
     {
         auto trace_pump_hb = std::make_unique<
             ::theia::runtime::HeartbeatPublisher>(TraceStreamPump::kNodeName);
@@ -324,9 +420,7 @@ int main(int argc, char** argv) {
         }
     }
 
-
-
-    config_mux.start();
+    }  // end if (trace_pump_enabled) — PASS 2 (start + heartbeat)
 
 
     while (g_running.load()) {

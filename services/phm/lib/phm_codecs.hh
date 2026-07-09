@@ -39,3 +39,23 @@ THEIA_DECLARE_REMOTE_CODEC(system_supervisor_HeartbeatReport)
 THEIA_DECLARE_REMOTE_CODEC(system_supervisor_SendTimeoutReport)
 THEIA_DECLARE_REMOTE_CODEC(system_services_phm_PhmCheckpoint)
 THEIA_DECLARE_REMOTE_CODEC(system_services_phm_FcHealthReport)
+
+// FC-wide enum aliases — the enum TYPE and each VALUE inside the FC namespace, so
+// impl code writes the readable `HealthLevel` / `OK`
+// instead of nanopb's double-prefixed name
+// (system_services_phm_<Enum>_<Enum>_<VALUE>). Emitted ONCE here (this header
+// is #pragma once + included by every node header) — NOT per-node, so two node
+// headers in one TU don't redefine them.
+namespace ara::phm {
+using HealthLevel = system_services_phm_HealthLevel;
+inline constexpr HealthLevel OK = system_services_phm_HealthLevel_HealthLevel_OK;
+inline constexpr HealthLevel WARNING = system_services_phm_HealthLevel_HealthLevel_WARNING;
+inline constexpr HealthLevel DEGRADED = system_services_phm_HealthLevel_HealthLevel_DEGRADED;
+inline constexpr HealthLevel FAILED = system_services_phm_HealthLevel_HealthLevel_FAILED;
+using SupervisionKind = system_services_phm_SupervisionKind;
+inline constexpr SupervisionKind SK_ALIVE = system_services_phm_SupervisionKind_SupervisionKind_SK_ALIVE;
+inline constexpr SupervisionKind SK_DEADLINE = system_services_phm_SupervisionKind_SupervisionKind_SK_DEADLINE;
+inline constexpr SupervisionKind SK_LOGICAL = system_services_phm_SupervisionKind_SupervisionKind_SK_LOGICAL;
+inline constexpr SupervisionKind SK_STATE = system_services_phm_SupervisionKind_SupervisionKind_SK_STATE;
+inline constexpr SupervisionKind SK_FC_HEALTH = system_services_phm_SupervisionKind_SupervisionKind_SK_FC_HEALTH;
+}  // namespace ara::phm

@@ -35,3 +35,16 @@ THEIA_DECLARE_REMOTE_CODEC(system_services_idsm_IdsStatusMsg)
 THEIA_DECLARE_REMOTE_CODEC(system_services_idsm_IdsmDigestUpdate)
 THEIA_DECLARE_REMOTE_CODEC(system_services_idsm_IdsmModeInput)
 THEIA_DECLARE_REMOTE_CODEC(system_services_phm_FcHealthReport)
+
+// FC-wide enum aliases — the enum TYPE and each VALUE inside the FC namespace, so
+// impl code writes the readable `IdsState` / `IDS_UNAVAILABLE`
+// instead of nanopb's double-prefixed name
+// (system_services_idsm_<Enum>_<Enum>_<VALUE>). Emitted ONCE here (this header
+// is #pragma once + included by every node header) — NOT per-node, so two node
+// headers in one TU don't redefine them.
+namespace ara::idsm {
+using IdsState = system_services_idsm_IdsState;
+inline constexpr IdsState IDS_UNAVAILABLE = system_services_idsm_IdsState_IdsState_IDS_UNAVAILABLE;
+inline constexpr IdsState IDS_LOADED = system_services_idsm_IdsState_IdsState_IDS_LOADED;
+inline constexpr IdsState IDS_DEGRADED = system_services_idsm_IdsState_IdsState_IDS_DEGRADED;
+}  // namespace ara::idsm

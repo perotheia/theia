@@ -60,3 +60,20 @@ THEIA_DECLARE_REMOTE_CODEC(system_services_nm_TxnConfirm)
 THEIA_DECLARE_REMOTE_CODEC(system_services_nm_TxnAbort)
 THEIA_DECLARE_REMOTE_CODEC(system_services_nm_TxnTimeout)
 THEIA_DECLARE_REMOTE_CODEC(system_services_nm_NmCfgTxnData)
+
+// FC-wide enum aliases — the enum TYPE and each VALUE inside the FC namespace, so
+// impl code writes the readable `NetState` / `NETWORK_OFF`
+// instead of nanopb's double-prefixed name
+// (system_services_nm_<Enum>_<Enum>_<VALUE>). Emitted ONCE here (this header
+// is #pragma once + included by every node header) — NOT per-node, so two node
+// headers in one TU don't redefine them.
+namespace ara::nm {
+using NetState = system_services_nm_NetState;
+inline constexpr NetState NETWORK_OFF = system_services_nm_NetState_NetState_NETWORK_OFF;
+inline constexpr NetState LINK_AVAILABLE = system_services_nm_NetState_NetState_LINK_AVAILABLE;
+inline constexpr NetState WIFI_ASSOCIATED = system_services_nm_NetState_NetState_WIFI_ASSOCIATED;
+inline constexpr NetState IP_ACQUIRED = system_services_nm_NetState_NetState_IP_ACQUIRED;
+inline constexpr NetState VPN_ESTABLISHED = system_services_nm_NetState_NetState_VPN_ESTABLISHED;
+inline constexpr NetState NETWORK_OPERATIONAL = system_services_nm_NetState_NetState_NETWORK_OPERATIONAL;
+inline constexpr NetState DEGRADED = system_services_nm_NetState_NetState_DEGRADED;
+}  // namespace ara::nm

@@ -118,30 +118,41 @@ int main(int argc, char** argv) {
         ::theia::runtime::set_process_logger(ptp4l_log);
         ptp4l.set_logger(std::move(ptp4l_log));
     }
-    ptp4l.start();
-    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (the supervisor
-    // sets it from the rig's NodeToCPUMapping). No-op when unset / no entry for
-    // this node; soft-fails (logs) on EPERM. Applied AFTER start() — the thread
-    // exists now.
-    ::theia::runtime::apply_node_affinity(ptp4l.native_handle(),
-        Ptp4lProvider::kNodeName, std::getenv("THEIA_NODE_CFG"));
     // Resolve this node's TIPC address from the --tipc arg the supervisor built
     // from executor.json (per node, instance machine-shifted), so the BINARY is
     // address-agnostic — same binary on every machine. Falls back to the compiled
-    // kTipcType/kTipcInstance (the .art instance) for a standalone run.
+    // kTipcType/kTipcInstance (the .art instance) for a standalone run. Done BEFORE
+    // start() so the node's init() — which runs on the node thread right after
+    // start() — sees its own instance via tipc_instance() (a clone that keys its
+    // per-instance config in init() would otherwise race and read 0).
     uint32_t ptp4l_type, ptp4l_inst;
     ::theia::runtime::resolve_node_tipc(Ptp4lProvider::kNodeName,
         Ptp4lProvider::kTipcType, Ptp4lProvider::kTipcInstance,
         ptp4l_type, ptp4l_inst);
-    {
-        char _tipc[64];
-        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
-                      ptp4l_type, ptp4l_inst);
-        ptp4l.log().info(_tipc);
-    }
+    // Generic node params (read via the static-deploy ParamsConfig, overridable
+    // per-rig in config/<fc>.json under this node's section — same mechanism as
+    // tsync's prebuilt `enabled`):
+    //   enabled          (default true)  — boot gate; a disabled node does NOT
+    //                     start, freeing its TIPC slot (e.g. a probe replaces it).
+    //   start_delay_ms   (default 0)     — deterministic intra-executable ordering.
+    // A node section may be absent entirely → all defaults apply (start normally).
+    const auto ptp4l_params =
+        ::theia::runtime::get_config().node(Ptp4lProvider::kNodeName);
+    // Boot gate — recomputed identically in the START pass below (cheap param
+    // read). PASS 1 (here): wire the mux (bind_node + register_* + pg_attach)
+    // BEFORE config_mux.start() and BEFORE the node thread runs. PASS 2 (after
+    // the mux is pumping): node.start() — so init()'s OWN pg_join/pg_watch (a
+    // BLOCKING CALL to the supervisor's PG allocator) gets its reply pumped. If
+    // start() ran here (before config_mux.start()), a pg_join in init() would
+    // deadlock, the node would never beat, and the watchdog would SIGTERM it.
+    const bool ptp4l_enabled = ptp4l_params.boolean("enabled", true);
+    if (!ptp4l_enabled) {
+        ptp4l.log().info("node disabled (params.enabled=false) — not "
+            "started; its TIPC address is free for a test/probe to bind");
+    } else {
 
 
-
+    }  // end if (ptp4l_enabled) — PASS 1 (mux wiring)
 
     Phc2sysProvider phc2sys;
     // Per-node logger: tagged [#phc2sys] (kNodeName, matches `tdb ps`),
@@ -153,30 +164,41 @@ int main(int argc, char** argv) {
         phc2sys_log->set_level(boot_level);
         phc2sys.set_logger(std::move(phc2sys_log));
     }
-    phc2sys.start();
-    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (the supervisor
-    // sets it from the rig's NodeToCPUMapping). No-op when unset / no entry for
-    // this node; soft-fails (logs) on EPERM. Applied AFTER start() — the thread
-    // exists now.
-    ::theia::runtime::apply_node_affinity(phc2sys.native_handle(),
-        Phc2sysProvider::kNodeName, std::getenv("THEIA_NODE_CFG"));
     // Resolve this node's TIPC address from the --tipc arg the supervisor built
     // from executor.json (per node, instance machine-shifted), so the BINARY is
     // address-agnostic — same binary on every machine. Falls back to the compiled
-    // kTipcType/kTipcInstance (the .art instance) for a standalone run.
+    // kTipcType/kTipcInstance (the .art instance) for a standalone run. Done BEFORE
+    // start() so the node's init() — which runs on the node thread right after
+    // start() — sees its own instance via tipc_instance() (a clone that keys its
+    // per-instance config in init() would otherwise race and read 0).
     uint32_t phc2sys_type, phc2sys_inst;
     ::theia::runtime::resolve_node_tipc(Phc2sysProvider::kNodeName,
         Phc2sysProvider::kTipcType, Phc2sysProvider::kTipcInstance,
         phc2sys_type, phc2sys_inst);
-    {
-        char _tipc[64];
-        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
-                      phc2sys_type, phc2sys_inst);
-        phc2sys.log().info(_tipc);
-    }
+    // Generic node params (read via the static-deploy ParamsConfig, overridable
+    // per-rig in config/<fc>.json under this node's section — same mechanism as
+    // tsync's prebuilt `enabled`):
+    //   enabled          (default true)  — boot gate; a disabled node does NOT
+    //                     start, freeing its TIPC slot (e.g. a probe replaces it).
+    //   start_delay_ms   (default 0)     — deterministic intra-executable ordering.
+    // A node section may be absent entirely → all defaults apply (start normally).
+    const auto phc2sys_params =
+        ::theia::runtime::get_config().node(Phc2sysProvider::kNodeName);
+    // Boot gate — recomputed identically in the START pass below (cheap param
+    // read). PASS 1 (here): wire the mux (bind_node + register_* + pg_attach)
+    // BEFORE config_mux.start() and BEFORE the node thread runs. PASS 2 (after
+    // the mux is pumping): node.start() — so init()'s OWN pg_join/pg_watch (a
+    // BLOCKING CALL to the supervisor's PG allocator) gets its reply pumped. If
+    // start() ran here (before config_mux.start()), a pg_join in init() would
+    // deadlock, the node would never beat, and the watchdog would SIGTERM it.
+    const bool phc2sys_enabled = phc2sys_params.boolean("enabled", true);
+    if (!phc2sys_enabled) {
+        phc2sys.log().info("node disabled (params.enabled=false) — not "
+            "started; its TIPC address is free for a test/probe to bind");
+    } else {
 
 
-
+    }  // end if (phc2sys_enabled) — PASS 1 (mux wiring)
 
     TsyncCtl tsync_ctl;
     // Per-node logger: tagged [#tsync_ctl] (kNodeName, matches `tdb ps`),
@@ -188,27 +210,45 @@ int main(int argc, char** argv) {
         tsync_ctl_log->set_level(boot_level);
         tsync_ctl.set_logger(std::move(tsync_ctl_log));
     }
-    tsync_ctl.start();
-    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (the supervisor
-    // sets it from the rig's NodeToCPUMapping). No-op when unset / no entry for
-    // this node; soft-fails (logs) on EPERM. Applied AFTER start() — the thread
-    // exists now.
-    ::theia::runtime::apply_node_affinity(tsync_ctl.native_handle(),
-        TsyncCtl::kNodeName, std::getenv("THEIA_NODE_CFG"));
     // Resolve this node's TIPC address from the --tipc arg the supervisor built
     // from executor.json (per node, instance machine-shifted), so the BINARY is
     // address-agnostic — same binary on every machine. Falls back to the compiled
-    // kTipcType/kTipcInstance (the .art instance) for a standalone run.
+    // kTipcType/kTipcInstance (the .art instance) for a standalone run. Done BEFORE
+    // start() so the node's init() — which runs on the node thread right after
+    // start() — sees its own instance via tipc_instance() (a clone that keys its
+    // per-instance config in init() would otherwise race and read 0).
     uint32_t tsync_ctl_type, tsync_ctl_inst;
     ::theia::runtime::resolve_node_tipc(TsyncCtl::kNodeName,
         TsyncCtl::kTipcType, TsyncCtl::kTipcInstance,
         tsync_ctl_type, tsync_ctl_inst);
-    {
-        char _tipc[64];
-        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
-                      tsync_ctl_type, tsync_ctl_inst);
-        tsync_ctl.log().info(_tipc);
-    }
+    // set_tipc_instance() is a GenServer/GenStateM method — only atomic + statem
+    // nodes have it. A `node runnable` (GenRunnable) resolves its own instance in
+    // do_start via resolve_node_tipc; a `node prebuilt` (also a GenRunnable
+    // subclass, wrapping a 3rd-party child) likewise has no such method. Emit the
+    // call ONLY for gen_server/statem nodes so init() sees its instance before
+    // start(); a runnable/prebuilt would fail to compile (no member).
+    tsync_ctl.set_tipc_instance(tsync_ctl_inst);
+    // Generic node params (read via the static-deploy ParamsConfig, overridable
+    // per-rig in config/<fc>.json under this node's section — same mechanism as
+    // tsync's prebuilt `enabled`):
+    //   enabled          (default true)  — boot gate; a disabled node does NOT
+    //                     start, freeing its TIPC slot (e.g. a probe replaces it).
+    //   start_delay_ms   (default 0)     — deterministic intra-executable ordering.
+    // A node section may be absent entirely → all defaults apply (start normally).
+    const auto tsync_ctl_params =
+        ::theia::runtime::get_config().node(TsyncCtl::kNodeName);
+    // Boot gate — recomputed identically in the START pass below (cheap param
+    // read). PASS 1 (here): wire the mux (bind_node + register_* + pg_attach)
+    // BEFORE config_mux.start() and BEFORE the node thread runs. PASS 2 (after
+    // the mux is pumping): node.start() — so init()'s OWN pg_join/pg_watch (a
+    // BLOCKING CALL to the supervisor's PG allocator) gets its reply pumped. If
+    // start() ran here (before config_mux.start()), a pg_join in init() would
+    // deadlock, the node would never beat, and the watchdog would SIGTERM it.
+    const bool tsync_ctl_enabled = tsync_ctl_params.boolean("enabled", true);
+    if (!tsync_ctl_enabled) {
+        tsync_ctl.log().info("node disabled (params.enabled=false) — not "
+            "started; its TIPC address is free for a test/probe to bind");
+    } else {
 
     if (auto* tsync_ctl_cfg = config_mux.bind_node(
             tsync_ctl, tsync_ctl_type,
@@ -221,7 +261,10 @@ int main(int argc, char** argv) {
             tsync_ctl_cfg, tsync_ctl);
         // Config update: services/per casts ConfigUpdated when a watched
         // config changes — same framework path; GenServer base handle_cast
-        // applies it (decode + on_config_update hook).
+        // decodes + dispatches to this node's on_config_update hook (emitted in
+        // Daemon.hh only when the node binds `config <Msg>`). A node with NO
+        // `config {}` declaration does NOT register this — it neither reads nor
+        // observes etcd-backed config, so per never casts to it.
         config_mux.register_cast<platform_runtime_ConfigUpdated>(
             tsync_ctl_cfg, tsync_ctl);
         // Receiver ports (#387): register the node's declared inbound
@@ -254,11 +297,74 @@ int main(int argc, char** argv) {
     }
 
 
+    }  // end if (tsync_ctl_enabled) — PASS 1 (mux wiring)
 
-    // Liveness beat to the supervisor watchdog (#PHM). A reporting node — of
-    // EITHER base — must beat or the watchdog SIGTERMs it after K missed
-    // deadlines. One publisher per node, own timer thread; period TODO from the
-    // manifest (1s default matches the supervisor's check cadence).
+
+    // The mux is now WIRED for every node (bind_node + register_* + pg_attach)
+    // but no node thread runs yet. Start pumping BEFORE any node.start() so a
+    // node's init()/1 can issue blocking pg_join / pg_watch / supervisor CALLs
+    // and get the reply pumped — init() runs on a fully-live stack, OTP-style.
+    config_mux.start();
+
+
+    // PASS 2 — start the node thread (runs init()/1) now that the mux pumps,
+    // then apply post-start settings (affinity) + the liveness heartbeat.
+    if (ptp4l_params.boolean("enabled", true)) {
+    if (auto ptp4l_delay = ptp4l_params.u32("start_delay_ms", 0))
+        std::this_thread::sleep_for(std::chrono::milliseconds(ptp4l_delay));
+    ptp4l.start();
+    {
+        char _tipc[64];
+        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
+                      ptp4l_type, ptp4l_inst);
+        ptp4l.log().info(_tipc);
+    }
+    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG. Applied AFTER
+    // start() — the thread exists now. No-op when unset; soft-fails on EPERM.
+    ::theia::runtime::apply_node_affinity(ptp4l.native_handle(),
+        Ptp4lProvider::kNodeName, std::getenv("THEIA_NODE_CFG"));
+
+    }  // end if (ptp4l_enabled) — PASS 2 (start + heartbeat)
+
+    // PASS 2 — start the node thread (runs init()/1) now that the mux pumps,
+    // then apply post-start settings (affinity) + the liveness heartbeat.
+    if (phc2sys_params.boolean("enabled", true)) {
+    if (auto phc2sys_delay = phc2sys_params.u32("start_delay_ms", 0))
+        std::this_thread::sleep_for(std::chrono::milliseconds(phc2sys_delay));
+    phc2sys.start();
+    {
+        char _tipc[64];
+        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
+                      phc2sys_type, phc2sys_inst);
+        phc2sys.log().info(_tipc);
+    }
+    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG. Applied AFTER
+    // start() — the thread exists now. No-op when unset; soft-fails on EPERM.
+    ::theia::runtime::apply_node_affinity(phc2sys.native_handle(),
+        Phc2sysProvider::kNodeName, std::getenv("THEIA_NODE_CFG"));
+
+    }  // end if (phc2sys_enabled) — PASS 2 (start + heartbeat)
+
+    // PASS 2 — start the node thread (runs init()/1) now that the mux pumps,
+    // then apply post-start settings (affinity) + the liveness heartbeat.
+    if (tsync_ctl_params.boolean("enabled", true)) {
+    if (auto tsync_ctl_delay = tsync_ctl_params.u32("start_delay_ms", 0))
+        std::this_thread::sleep_for(std::chrono::milliseconds(tsync_ctl_delay));
+    tsync_ctl.start();
+    {
+        char _tipc[64];
+        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
+                      tsync_ctl_type, tsync_ctl_inst);
+        tsync_ctl.log().info(_tipc);
+    }
+    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG. Applied AFTER
+    // start() — the thread exists now. No-op when unset; soft-fails on EPERM.
+    ::theia::runtime::apply_node_affinity(tsync_ctl.native_handle(),
+        TsyncCtl::kNodeName, std::getenv("THEIA_NODE_CFG"));
+
+    // Liveness beat to the supervisor watchdog (#PHM). A reporting node must beat
+    // or the watchdog SIGTERMs it after K missed deadlines. One publisher per
+    // node, own timer thread; 1s default matches the supervisor's check cadence.
     {
         auto tsync_ctl_hb = std::make_unique<
             ::theia::runtime::HeartbeatPublisher>(TsyncCtl::kNodeName);
@@ -271,9 +377,7 @@ int main(int argc, char** argv) {
         }
     }
 
-
-
-    config_mux.start();
+    }  // end if (tsync_ctl_enabled) — PASS 2 (start + heartbeat)
 
 
     while (g_running.load()) {

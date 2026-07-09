@@ -127,9 +127,12 @@ int main(int argc, char** argv) {
     ::theia::runtime::resolve_node_tipc(OsiCtl::kNodeName,
         OsiCtl::kTipcType, OsiCtl::kTipcInstance,
         osi_ctl_type, osi_ctl_inst);
-    // set_tipc_instance() is a GenServer method (a runnable resolves its own
-    // instance in do_start via resolve_node_tipc); only emit it for gen_server/
-    // statem nodes so init() sees its instance before start().
+    // set_tipc_instance() is a GenServer/GenStateM method — only atomic + statem
+    // nodes have it. A `node runnable` (GenRunnable) resolves its own instance in
+    // do_start via resolve_node_tipc; a `node prebuilt` (also a GenRunnable
+    // subclass, wrapping a 3rd-party child) likewise has no such method. Emit the
+    // call ONLY for gen_server/statem nodes so init() sees its instance before
+    // start(); a runnable/prebuilt would fail to compile (no member).
     osi_ctl.set_tipc_instance(osi_ctl_inst);
     // Generic node params (read via the static-deploy ParamsConfig, overridable
     // per-rig in config/<fc>.json under this node's section — same mechanism as
@@ -140,26 +143,18 @@ int main(int argc, char** argv) {
     // A node section may be absent entirely → all defaults apply (start normally).
     const auto osi_ctl_params =
         ::theia::runtime::get_config().node(OsiCtl::kNodeName);
+    // Boot gate — recomputed identically in the START pass below (cheap param
+    // read). PASS 1 (here): wire the mux (bind_node + register_* + pg_attach)
+    // BEFORE config_mux.start() and BEFORE the node thread runs. PASS 2 (after
+    // the mux is pumping): node.start() — so init()'s OWN pg_join/pg_watch (a
+    // BLOCKING CALL to the supervisor's PG allocator) gets its reply pumped. If
+    // start() ran here (before config_mux.start()), a pg_join in init() would
+    // deadlock, the node would never beat, and the watchdog would SIGTERM it.
     const bool osi_ctl_enabled = osi_ctl_params.boolean("enabled", true);
     if (!osi_ctl_enabled) {
         osi_ctl.log().info("node disabled (params.enabled=false) — not "
             "started; its TIPC address is free for a test/probe to bind");
     } else {
-    if (auto osi_ctl_delay = osi_ctl_params.u32("start_delay_ms", 0))
-        std::this_thread::sleep_for(std::chrono::milliseconds(osi_ctl_delay));
-    osi_ctl.start();
-    {
-        char _tipc[64];
-        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
-                      osi_ctl_type, osi_ctl_inst);
-        osi_ctl.log().info(_tipc);
-    }
-    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (the supervisor
-    // sets it from the rig's NodeToCPUMapping). No-op when unset / no entry for
-    // this node; soft-fails (logs) on EPERM. Applied AFTER start() — the thread
-    // exists now.
-    ::theia::runtime::apply_node_affinity(osi_ctl.native_handle(),
-        OsiCtl::kNodeName, std::getenv("THEIA_NODE_CFG"));
 
     if (auto* osi_ctl_cfg = config_mux.bind_node(
             osi_ctl, osi_ctl_type,
@@ -172,7 +167,10 @@ int main(int argc, char** argv) {
             osi_ctl_cfg, osi_ctl);
         // Config update: services/per casts ConfigUpdated when a watched
         // config changes — same framework path; GenServer base handle_cast
-        // applies it (decode + on_config_update hook).
+        // decodes + dispatches to this node's on_config_update hook (emitted in
+        // Daemon.hh only when the node binds `config <Msg>`). A node with NO
+        // `config {}` declaration does NOT register this — it neither reads nor
+        // observes etcd-backed config, so per never casts to it.
         config_mux.register_cast<platform_runtime_ConfigUpdated>(
             osi_ctl_cfg, osi_ctl);
         // Receiver ports (#387): register the node's declared inbound
@@ -199,11 +197,36 @@ int main(int argc, char** argv) {
     }
 
 
+    }  // end if (osi_ctl_enabled) — PASS 1 (mux wiring)
 
-    // Liveness beat to the supervisor watchdog (#PHM). A reporting node — of
-    // EITHER base — must beat or the watchdog SIGTERMs it after K missed
-    // deadlines. One publisher per node, own timer thread; period TODO from the
-    // manifest (1s default matches the supervisor's check cadence).
+
+    // The mux is now WIRED for every node (bind_node + register_* + pg_attach)
+    // but no node thread runs yet. Start pumping BEFORE any node.start() so a
+    // node's init()/1 can issue blocking pg_join / pg_watch / supervisor CALLs
+    // and get the reply pumped — init() runs on a fully-live stack, OTP-style.
+    config_mux.start();
+
+
+    // PASS 2 — start the node thread (runs init()/1) now that the mux pumps,
+    // then apply post-start settings (affinity) + the liveness heartbeat.
+    if (osi_ctl_params.boolean("enabled", true)) {
+    if (auto osi_ctl_delay = osi_ctl_params.u32("start_delay_ms", 0))
+        std::this_thread::sleep_for(std::chrono::milliseconds(osi_ctl_delay));
+    osi_ctl.start();
+    {
+        char _tipc[64];
+        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
+                      osi_ctl_type, osi_ctl_inst);
+        osi_ctl.log().info(_tipc);
+    }
+    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG. Applied AFTER
+    // start() — the thread exists now. No-op when unset; soft-fails on EPERM.
+    ::theia::runtime::apply_node_affinity(osi_ctl.native_handle(),
+        OsiCtl::kNodeName, std::getenv("THEIA_NODE_CFG"));
+
+    // Liveness beat to the supervisor watchdog (#PHM). A reporting node must beat
+    // or the watchdog SIGTERMs it after K missed deadlines. One publisher per
+    // node, own timer thread; 1s default matches the supervisor's check cadence.
     {
         auto osi_ctl_hb = std::make_unique<
             ::theia::runtime::HeartbeatPublisher>(OsiCtl::kNodeName);
@@ -216,10 +239,7 @@ int main(int argc, char** argv) {
         }
     }
 
-    }  // end if (osi_ctl_enabled)
-
-
-    config_mux.start();
+    }  // end if (osi_ctl_enabled) — PASS 2 (start + heartbeat)
 
 
     while (g_running.load()) {

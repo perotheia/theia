@@ -97,15 +97,18 @@ int main(int argc, char** argv) {
         ::theia::runtime::set_process_logger(phm_fsm_log);
         phm_fsm.set_logger(std::move(phm_fsm_log));
     }
-    phm_fsm.start_statem(timers);
     // Resolve this node’s TIPC address from the --tipc arg (the supervisor built
     // it per node from executor.json, instance machine-shifted) so the binary is
     // address-agnostic. Falls back to the compiled kTipcType/kTipcInstance for a
-    // standalone run.
+    // standalone run. Done + set_tipc_instance BEFORE start so init()/on_enter (run
+    // on the node thread right after start) see this node's own instance — a clone
+    // keying per-instance config in init() would otherwise race and read 0.
     uint32_t phm_fsm_type, phm_fsm_inst;
     ::theia::runtime::resolve_node_tipc(PhmFsm::kNodeName,
         PhmFsm::kTipcType, PhmFsm::kTipcInstance,
         phm_fsm_type, phm_fsm_inst);
+    phm_fsm.set_tipc_instance(phm_fsm_inst);
+    phm_fsm.start_statem(timers);
     {
         char _tipc[96];
         std::snprintf(_tipc, sizeof(_tipc),
@@ -171,15 +174,18 @@ int main(int argc, char** argv) {
         phm_gate_log->set_level(boot_level);
         phm_gate.set_logger(std::move(phm_gate_log));
     }
-    phm_gate.start();
     // Resolve this node’s TIPC address from the --tipc arg (the supervisor built
     // it per node from executor.json, instance machine-shifted) so the binary is
     // address-agnostic. Falls back to the compiled kTipcType/kTipcInstance for a
-    // standalone run.
+    // standalone run. Done + set_tipc_instance BEFORE start so init()/on_enter (run
+    // on the node thread right after start) see this node's own instance — a clone
+    // keying per-instance config in init() would otherwise race and read 0.
     uint32_t phm_gate_type, phm_gate_inst;
     ::theia::runtime::resolve_node_tipc(PhmGate::kNodeName,
         PhmGate::kTipcType, PhmGate::kTipcInstance,
         phm_gate_type, phm_gate_inst);
+    phm_gate.set_tipc_instance(phm_gate_inst);
+    phm_gate.start();
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",

@@ -31,3 +31,27 @@
 
 THEIA_DECLARE_REMOTE_CODEC(system_services_log_LogRecord)
 THEIA_DECLARE_REMOTE_CODEC(system_services_log_TraceRecord)
+
+// FC-wide enum aliases — the enum TYPE and each VALUE inside the FC namespace, so
+// impl code writes the readable `TraceKind` / `OTHER`
+// instead of nanopb's double-prefixed name
+// (system_services_log_<Enum>_<Enum>_<VALUE>). Emitted ONCE here (this header
+// is #pragma once + included by every node header) — NOT per-node, so two node
+// headers in one TU don't redefine them.
+namespace ara::log {
+using TraceKind = system_services_log_TraceKind;
+inline constexpr TraceKind OTHER = system_services_log_TraceKind_TraceKind_OTHER;
+inline constexpr TraceKind CAST_OUT = system_services_log_TraceKind_TraceKind_CAST_OUT;
+inline constexpr TraceKind CAST_IN = system_services_log_TraceKind_TraceKind_CAST_IN;
+inline constexpr TraceKind CALL_OUT = system_services_log_TraceKind_TraceKind_CALL_OUT;
+inline constexpr TraceKind CALL_IN = system_services_log_TraceKind_TraceKind_CALL_IN;
+inline constexpr TraceKind STATEM = system_services_log_TraceKind_TraceKind_STATEM;
+inline constexpr TraceKind SECURITY = system_services_log_TraceKind_TraceKind_SECURITY;
+using LogLevel = system_services_log_LogLevel;
+inline constexpr LogLevel VERBOSE = system_services_log_LogLevel_LogLevel_VERBOSE;
+inline constexpr LogLevel DEBUG = system_services_log_LogLevel_LogLevel_DEBUG;
+inline constexpr LogLevel INFO = system_services_log_LogLevel_LogLevel_INFO;
+inline constexpr LogLevel WARNING = system_services_log_LogLevel_LogLevel_WARNING;
+inline constexpr LogLevel ERROR = system_services_log_LogLevel_LogLevel_ERROR;
+inline constexpr LogLevel FATAL = system_services_log_LogLevel_LogLevel_FATAL;
+}  // namespace ara::log

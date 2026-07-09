@@ -50,3 +50,25 @@ THEIA_DECLARE_REMOTE_CODEC(system_services_sm_UpdateRequest)
 THEIA_DECLARE_REMOTE_CODEC(system_services_sm_UpdateComplete)
 THEIA_DECLARE_REMOTE_CODEC(system_services_sm_RetryStartup)
 THEIA_DECLARE_REMOTE_CODEC(system_services_sm_PowerOff)
+
+// FC-wide enum aliases — the enum TYPE and each VALUE inside the FC namespace, so
+// impl code writes the readable `SmState` / `OFF`
+// instead of nanopb's double-prefixed name
+// (system_services_sm_<Enum>_<Enum>_<VALUE>). Emitted ONCE here (this header
+// is #pragma once + included by every node header) — NOT per-node, so two node
+// headers in one TU don't redefine them.
+namespace ara::sm {
+using SmState = system_services_sm_SmState;
+inline constexpr SmState OFF = system_services_sm_SmState_SmState_OFF;
+inline constexpr SmState STARTING = system_services_sm_SmState_SmState_STARTING;
+inline constexpr SmState RUNNING = system_services_sm_SmState_SmState_RUNNING;
+inline constexpr SmState DEGRADED = system_services_sm_SmState_SmState_DEGRADED;
+inline constexpr SmState UPDATE = system_services_sm_SmState_SmState_UPDATE;
+inline constexpr SmState SHUTDOWN = system_services_sm_SmState_SmState_SHUTDOWN;
+using FgState = system_services_sm_FgState;
+inline constexpr FgState FG_OFF = system_services_sm_FgState_FgState_FG_OFF;
+inline constexpr FgState FG_STARTUP = system_services_sm_FgState_FgState_FG_STARTUP;
+inline constexpr FgState FG_RUNNING = system_services_sm_FgState_FgState_FG_RUNNING;
+inline constexpr FgState FG_SHUTDOWN = system_services_sm_FgState_FgState_FG_SHUTDOWN;
+inline constexpr FgState FG_RESTART = system_services_sm_FgState_FgState_FG_RESTART;
+}  // namespace ara::sm

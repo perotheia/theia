@@ -114,27 +114,45 @@ int main(int argc, char** argv) {
         ::theia::runtime::set_process_logger(per_client_log);
         per_client.set_logger(std::move(per_client_log));
     }
-    per_client.start();
-    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (the supervisor
-    // sets it from the rig's NodeToCPUMapping). No-op when unset / no entry for
-    // this node; soft-fails (logs) on EPERM. Applied AFTER start() — the thread
-    // exists now.
-    ::theia::runtime::apply_node_affinity(per_client.native_handle(),
-        PerClient::kNodeName, std::getenv("THEIA_NODE_CFG"));
     // Resolve this node's TIPC address from the --tipc arg the supervisor built
     // from executor.json (per node, instance machine-shifted), so the BINARY is
     // address-agnostic — same binary on every machine. Falls back to the compiled
-    // kTipcType/kTipcInstance (the .art instance) for a standalone run.
+    // kTipcType/kTipcInstance (the .art instance) for a standalone run. Done BEFORE
+    // start() so the node's init() — which runs on the node thread right after
+    // start() — sees its own instance via tipc_instance() (a clone that keys its
+    // per-instance config in init() would otherwise race and read 0).
     uint32_t per_client_type, per_client_inst;
     ::theia::runtime::resolve_node_tipc(PerClient::kNodeName,
         PerClient::kTipcType, PerClient::kTipcInstance,
         per_client_type, per_client_inst);
-    {
-        char _tipc[64];
-        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
-                      per_client_type, per_client_inst);
-        per_client.log().info(_tipc);
-    }
+    // set_tipc_instance() is a GenServer/GenStateM method — only atomic + statem
+    // nodes have it. A `node runnable` (GenRunnable) resolves its own instance in
+    // do_start via resolve_node_tipc; a `node prebuilt` (also a GenRunnable
+    // subclass, wrapping a 3rd-party child) likewise has no such method. Emit the
+    // call ONLY for gen_server/statem nodes so init() sees its instance before
+    // start(); a runnable/prebuilt would fail to compile (no member).
+    per_client.set_tipc_instance(per_client_inst);
+    // Generic node params (read via the static-deploy ParamsConfig, overridable
+    // per-rig in config/<fc>.json under this node's section — same mechanism as
+    // tsync's prebuilt `enabled`):
+    //   enabled          (default true)  — boot gate; a disabled node does NOT
+    //                     start, freeing its TIPC slot (e.g. a probe replaces it).
+    //   start_delay_ms   (default 0)     — deterministic intra-executable ordering.
+    // A node section may be absent entirely → all defaults apply (start normally).
+    const auto per_client_params =
+        ::theia::runtime::get_config().node(PerClient::kNodeName);
+    // Boot gate — recomputed identically in the START pass below (cheap param
+    // read). PASS 1 (here): wire the mux (bind_node + register_* + pg_attach)
+    // BEFORE config_mux.start() and BEFORE the node thread runs. PASS 2 (after
+    // the mux is pumping): node.start() — so init()'s OWN pg_join/pg_watch (a
+    // BLOCKING CALL to the supervisor's PG allocator) gets its reply pumped. If
+    // start() ran here (before config_mux.start()), a pg_join in init() would
+    // deadlock, the node would never beat, and the watchdog would SIGTERM it.
+    const bool per_client_enabled = per_client_params.boolean("enabled", true);
+    if (!per_client_enabled) {
+        per_client.log().info("node disabled (params.enabled=false) — not "
+            "started; its TIPC address is free for a test/probe to bind");
+    } else {
 
     if (auto* per_client_cfg = config_mux.bind_node(
             per_client, per_client_type,
@@ -144,11 +162,6 @@ int main(int argc, char** argv) {
         // Trace control (#403): supervisor pushes TraceControlPush to flip
         // this node's Tracer kind filter — same path as LogLevelPush.
         config_mux.register_cast<platform_runtime_TraceControlPush>(
-            per_client_cfg, per_client);
-        // Config update: services/per casts ConfigUpdated when a watched
-        // config changes — same framework path; GenServer base handle_cast
-        // applies it (decode + on_config_update hook).
-        config_mux.register_cast<platform_runtime_ConfigUpdated>(
             per_client_cfg, per_client);
         // Receiver ports (#387): register the node's declared inbound
         // types so a real peer — or a robot-test inject via services/com
@@ -176,23 +189,7 @@ int main(int argc, char** argv) {
     }
 
 
-
-    // Liveness beat to the supervisor watchdog (#PHM). A reporting node — of
-    // EITHER base — must beat or the watchdog SIGTERMs it after K missed
-    // deadlines. One publisher per node, own timer thread; period TODO from the
-    // manifest (1s default matches the supervisor's check cadence).
-    {
-        auto per_client_hb = std::make_unique<
-            ::theia::runtime::HeartbeatPublisher>(PerClient::kNodeName);
-        if (per_client_hb->open()) {
-            per_client_hb->start(/*period_ms=*/1000);
-            heartbeats.push_back(std::move(per_client_hb));
-        } else {
-            per_client.log().warn("heartbeat publisher open failed; "
-                                     "supervisor watchdog will not see beats");
-        }
-    }
-
+    }  // end if (per_client_enabled) — PASS 1 (mux wiring)
 
     PerManager per_manager;
     // Per-node logger: tagged [#per_manager] (kNodeName, matches `tdb ps`),
@@ -204,27 +201,45 @@ int main(int argc, char** argv) {
         per_manager_log->set_level(boot_level);
         per_manager.set_logger(std::move(per_manager_log));
     }
-    per_manager.start();
-    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (the supervisor
-    // sets it from the rig's NodeToCPUMapping). No-op when unset / no entry for
-    // this node; soft-fails (logs) on EPERM. Applied AFTER start() — the thread
-    // exists now.
-    ::theia::runtime::apply_node_affinity(per_manager.native_handle(),
-        PerManager::kNodeName, std::getenv("THEIA_NODE_CFG"));
     // Resolve this node's TIPC address from the --tipc arg the supervisor built
     // from executor.json (per node, instance machine-shifted), so the BINARY is
     // address-agnostic — same binary on every machine. Falls back to the compiled
-    // kTipcType/kTipcInstance (the .art instance) for a standalone run.
+    // kTipcType/kTipcInstance (the .art instance) for a standalone run. Done BEFORE
+    // start() so the node's init() — which runs on the node thread right after
+    // start() — sees its own instance via tipc_instance() (a clone that keys its
+    // per-instance config in init() would otherwise race and read 0).
     uint32_t per_manager_type, per_manager_inst;
     ::theia::runtime::resolve_node_tipc(PerManager::kNodeName,
         PerManager::kTipcType, PerManager::kTipcInstance,
         per_manager_type, per_manager_inst);
-    {
-        char _tipc[64];
-        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
-                      per_manager_type, per_manager_inst);
-        per_manager.log().info(_tipc);
-    }
+    // set_tipc_instance() is a GenServer/GenStateM method — only atomic + statem
+    // nodes have it. A `node runnable` (GenRunnable) resolves its own instance in
+    // do_start via resolve_node_tipc; a `node prebuilt` (also a GenRunnable
+    // subclass, wrapping a 3rd-party child) likewise has no such method. Emit the
+    // call ONLY for gen_server/statem nodes so init() sees its instance before
+    // start(); a runnable/prebuilt would fail to compile (no member).
+    per_manager.set_tipc_instance(per_manager_inst);
+    // Generic node params (read via the static-deploy ParamsConfig, overridable
+    // per-rig in config/<fc>.json under this node's section — same mechanism as
+    // tsync's prebuilt `enabled`):
+    //   enabled          (default true)  — boot gate; a disabled node does NOT
+    //                     start, freeing its TIPC slot (e.g. a probe replaces it).
+    //   start_delay_ms   (default 0)     — deterministic intra-executable ordering.
+    // A node section may be absent entirely → all defaults apply (start normally).
+    const auto per_manager_params =
+        ::theia::runtime::get_config().node(PerManager::kNodeName);
+    // Boot gate — recomputed identically in the START pass below (cheap param
+    // read). PASS 1 (here): wire the mux (bind_node + register_* + pg_attach)
+    // BEFORE config_mux.start() and BEFORE the node thread runs. PASS 2 (after
+    // the mux is pumping): node.start() — so init()'s OWN pg_join/pg_watch (a
+    // BLOCKING CALL to the supervisor's PG allocator) gets its reply pumped. If
+    // start() ran here (before config_mux.start()), a pg_join in init() would
+    // deadlock, the node would never beat, and the watchdog would SIGTERM it.
+    const bool per_manager_enabled = per_manager_params.boolean("enabled", true);
+    if (!per_manager_enabled) {
+        per_manager.log().info("node disabled (params.enabled=false) — not "
+            "started; its TIPC address is free for a test/probe to bind");
+    } else {
 
     if (auto* per_manager_cfg = config_mux.bind_node(
             per_manager, per_manager_type,
@@ -234,11 +249,6 @@ int main(int argc, char** argv) {
         // Trace control (#403): supervisor pushes TraceControlPush to flip
         // this node's Tracer kind filter — same path as LogLevelPush.
         config_mux.register_cast<platform_runtime_TraceControlPush>(
-            per_manager_cfg, per_manager);
-        // Config update: services/per casts ConfigUpdated when a watched
-        // config changes — same framework path; GenServer base handle_cast
-        // applies it (decode + on_config_update hook).
-        config_mux.register_cast<platform_runtime_ConfigUpdated>(
             per_manager_cfg, per_manager);
         // Receiver ports (#387): register the node's declared inbound
         // types so a real peer — or a robot-test inject via services/com
@@ -272,11 +282,70 @@ int main(int argc, char** argv) {
     }
 
 
+    }  // end if (per_manager_enabled) — PASS 1 (mux wiring)
 
-    // Liveness beat to the supervisor watchdog (#PHM). A reporting node — of
-    // EITHER base — must beat or the watchdog SIGTERMs it after K missed
-    // deadlines. One publisher per node, own timer thread; period TODO from the
-    // manifest (1s default matches the supervisor's check cadence).
+
+    // The mux is now WIRED for every node (bind_node + register_* + pg_attach)
+    // but no node thread runs yet. Start pumping BEFORE any node.start() so a
+    // node's init()/1 can issue blocking pg_join / pg_watch / supervisor CALLs
+    // and get the reply pumped — init() runs on a fully-live stack, OTP-style.
+    config_mux.start();
+
+
+    // PASS 2 — start the node thread (runs init()/1) now that the mux pumps,
+    // then apply post-start settings (affinity) + the liveness heartbeat.
+    if (per_client_params.boolean("enabled", true)) {
+    if (auto per_client_delay = per_client_params.u32("start_delay_ms", 0))
+        std::this_thread::sleep_for(std::chrono::milliseconds(per_client_delay));
+    per_client.start();
+    {
+        char _tipc[64];
+        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
+                      per_client_type, per_client_inst);
+        per_client.log().info(_tipc);
+    }
+    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG. Applied AFTER
+    // start() — the thread exists now. No-op when unset; soft-fails on EPERM.
+    ::theia::runtime::apply_node_affinity(per_client.native_handle(),
+        PerClient::kNodeName, std::getenv("THEIA_NODE_CFG"));
+
+    // Liveness beat to the supervisor watchdog (#PHM). A reporting node must beat
+    // or the watchdog SIGTERMs it after K missed deadlines. One publisher per
+    // node, own timer thread; 1s default matches the supervisor's check cadence.
+    {
+        auto per_client_hb = std::make_unique<
+            ::theia::runtime::HeartbeatPublisher>(PerClient::kNodeName);
+        if (per_client_hb->open()) {
+            per_client_hb->start(/*period_ms=*/1000);
+            heartbeats.push_back(std::move(per_client_hb));
+        } else {
+            per_client.log().warn("heartbeat publisher open failed; "
+                                     "supervisor watchdog will not see beats");
+        }
+    }
+
+    }  // end if (per_client_enabled) — PASS 2 (start + heartbeat)
+
+    // PASS 2 — start the node thread (runs init()/1) now that the mux pumps,
+    // then apply post-start settings (affinity) + the liveness heartbeat.
+    if (per_manager_params.boolean("enabled", true)) {
+    if (auto per_manager_delay = per_manager_params.u32("start_delay_ms", 0))
+        std::this_thread::sleep_for(std::chrono::milliseconds(per_manager_delay));
+    per_manager.start();
+    {
+        char _tipc[64];
+        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
+                      per_manager_type, per_manager_inst);
+        per_manager.log().info(_tipc);
+    }
+    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG. Applied AFTER
+    // start() — the thread exists now. No-op when unset; soft-fails on EPERM.
+    ::theia::runtime::apply_node_affinity(per_manager.native_handle(),
+        PerManager::kNodeName, std::getenv("THEIA_NODE_CFG"));
+
+    // Liveness beat to the supervisor watchdog (#PHM). A reporting node must beat
+    // or the watchdog SIGTERMs it after K missed deadlines. One publisher per
+    // node, own timer thread; 1s default matches the supervisor's check cadence.
     {
         auto per_manager_hb = std::make_unique<
             ::theia::runtime::HeartbeatPublisher>(PerManager::kNodeName);
@@ -289,9 +358,7 @@ int main(int argc, char** argv) {
         }
     }
 
-
-
-    config_mux.start();
+    }  // end if (per_manager_enabled) — PASS 2 (start + heartbeat)
 
 
     while (g_running.load()) {

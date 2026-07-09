@@ -99,15 +99,18 @@ int main(int argc, char** argv) {
         ::theia::runtime::set_process_logger(nm_daemon_log);
         nm_daemon.set_logger(std::move(nm_daemon_log));
     }
-    nm_daemon.start_statem(timers);
     // Resolve this node’s TIPC address from the --tipc arg (the supervisor built
     // it per node from executor.json, instance machine-shifted) so the binary is
     // address-agnostic. Falls back to the compiled kTipcType/kTipcInstance for a
-    // standalone run.
+    // standalone run. Done + set_tipc_instance BEFORE start so init()/on_enter (run
+    // on the node thread right after start) see this node's own instance — a clone
+    // keying per-instance config in init() would otherwise race and read 0.
     uint32_t nm_daemon_type, nm_daemon_inst;
     ::theia::runtime::resolve_node_tipc(NmDaemon::kNodeName,
         NmDaemon::kTipcType, NmDaemon::kTipcInstance,
         nm_daemon_type, nm_daemon_inst);
+    nm_daemon.set_tipc_instance(nm_daemon_inst);
+    nm_daemon.start_statem(timers);
     {
         char _tipc[96];
         std::snprintf(_tipc, sizeof(_tipc),
@@ -179,15 +182,18 @@ int main(int argc, char** argv) {
         nm_poller_log->set_level(boot_level);
         nm_poller.set_logger(std::move(nm_poller_log));
     }
-    nm_poller.start();
     // Resolve this node’s TIPC address from the --tipc arg (the supervisor built
     // it per node from executor.json, instance machine-shifted) so the binary is
     // address-agnostic. Falls back to the compiled kTipcType/kTipcInstance for a
-    // standalone run.
+    // standalone run. Done + set_tipc_instance BEFORE start so init()/on_enter (run
+    // on the node thread right after start) see this node's own instance — a clone
+    // keying per-instance config in init() would otherwise race and read 0.
     uint32_t nm_poller_type, nm_poller_inst;
     ::theia::runtime::resolve_node_tipc(NmPoller::kNodeName,
         NmPoller::kTipcType, NmPoller::kTipcInstance,
         nm_poller_type, nm_poller_inst);
+    nm_poller.set_tipc_instance(nm_poller_inst);
+    nm_poller.start();
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
@@ -252,15 +258,18 @@ int main(int argc, char** argv) {
         nm_cfg_gate_log->set_level(boot_level);
         nm_cfg_gate.set_logger(std::move(nm_cfg_gate_log));
     }
-    nm_cfg_gate.start();
     // Resolve this node’s TIPC address from the --tipc arg (the supervisor built
     // it per node from executor.json, instance machine-shifted) so the binary is
     // address-agnostic. Falls back to the compiled kTipcType/kTipcInstance for a
-    // standalone run.
+    // standalone run. Done + set_tipc_instance BEFORE start so init()/on_enter (run
+    // on the node thread right after start) see this node's own instance — a clone
+    // keying per-instance config in init() would otherwise race and read 0.
     uint32_t nm_cfg_gate_type, nm_cfg_gate_inst;
     ::theia::runtime::resolve_node_tipc(NmCfgGate::kNodeName,
         NmCfgGate::kTipcType, NmCfgGate::kTipcInstance,
         nm_cfg_gate_type, nm_cfg_gate_inst);
+    nm_cfg_gate.set_tipc_instance(nm_cfg_gate_inst);
+    nm_cfg_gate.start();
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
@@ -344,15 +353,18 @@ int main(int argc, char** argv) {
         nm_cfg_txn_log->set_level(boot_level);
         nm_cfg_txn.set_logger(std::move(nm_cfg_txn_log));
     }
-    nm_cfg_txn.start_statem(timers);
     // Resolve this node’s TIPC address from the --tipc arg (the supervisor built
     // it per node from executor.json, instance machine-shifted) so the binary is
     // address-agnostic. Falls back to the compiled kTipcType/kTipcInstance for a
-    // standalone run.
+    // standalone run. Done + set_tipc_instance BEFORE start so init()/on_enter (run
+    // on the node thread right after start) see this node's own instance — a clone
+    // keying per-instance config in init() would otherwise race and read 0.
     uint32_t nm_cfg_txn_type, nm_cfg_txn_inst;
     ::theia::runtime::resolve_node_tipc(NmCfgTxn::kNodeName,
         NmCfgTxn::kTipcType, NmCfgTxn::kTipcInstance,
         nm_cfg_txn_type, nm_cfg_txn_inst);
+    nm_cfg_txn.set_tipc_instance(nm_cfg_txn_inst);
+    nm_cfg_txn.start_statem(timers);
     {
         char _tipc[96];
         std::snprintf(_tipc, sizeof(_tipc),

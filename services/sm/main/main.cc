@@ -99,15 +99,18 @@ int main(int argc, char** argv) {
         ::theia::runtime::set_process_logger(sm_daemon_log);
         sm_daemon.set_logger(std::move(sm_daemon_log));
     }
-    sm_daemon.start_statem(timers);
     // Resolve this node’s TIPC address from the --tipc arg (the supervisor built
     // it per node from executor.json, instance machine-shifted) so the binary is
     // address-agnostic. Falls back to the compiled kTipcType/kTipcInstance for a
-    // standalone run.
+    // standalone run. Done + set_tipc_instance BEFORE start so init()/on_enter (run
+    // on the node thread right after start) see this node's own instance — a clone
+    // keying per-instance config in init() would otherwise race and read 0.
     uint32_t sm_daemon_type, sm_daemon_inst;
     ::theia::runtime::resolve_node_tipc(SmDaemon::kNodeName,
         SmDaemon::kTipcType, SmDaemon::kTipcInstance,
         sm_daemon_type, sm_daemon_inst);
+    sm_daemon.set_tipc_instance(sm_daemon_inst);
+    sm_daemon.start_statem(timers);
     {
         char _tipc[96];
         std::snprintf(_tipc, sizeof(_tipc),
@@ -175,15 +178,18 @@ int main(int argc, char** argv) {
         fg_sm_log->set_level(boot_level);
         fg_sm.set_logger(std::move(fg_sm_log));
     }
-    fg_sm.start_statem(timers);
     // Resolve this node’s TIPC address from the --tipc arg (the supervisor built
     // it per node from executor.json, instance machine-shifted) so the binary is
     // address-agnostic. Falls back to the compiled kTipcType/kTipcInstance for a
-    // standalone run.
+    // standalone run. Done + set_tipc_instance BEFORE start so init()/on_enter (run
+    // on the node thread right after start) see this node's own instance — a clone
+    // keying per-instance config in init() would otherwise race and read 0.
     uint32_t fg_sm_type, fg_sm_inst;
     ::theia::runtime::resolve_node_tipc(FunctionGroupSm::kNodeName,
         FunctionGroupSm::kTipcType, FunctionGroupSm::kTipcInstance,
         fg_sm_type, fg_sm_inst);
+    fg_sm.set_tipc_instance(fg_sm_inst);
+    fg_sm.start_statem(timers);
     {
         char _tipc[96];
         std::snprintf(_tipc, sizeof(_tipc),
@@ -249,15 +255,18 @@ int main(int argc, char** argv) {
         fg_gate_log->set_level(boot_level);
         fg_gate.set_logger(std::move(fg_gate_log));
     }
-    fg_gate.start();
     // Resolve this node’s TIPC address from the --tipc arg (the supervisor built
     // it per node from executor.json, instance machine-shifted) so the binary is
     // address-agnostic. Falls back to the compiled kTipcType/kTipcInstance for a
-    // standalone run.
+    // standalone run. Done + set_tipc_instance BEFORE start so init()/on_enter (run
+    // on the node thread right after start) see this node's own instance — a clone
+    // keying per-instance config in init() would otherwise race and read 0.
     uint32_t fg_gate_type, fg_gate_inst;
     ::theia::runtime::resolve_node_tipc(FgGate::kNodeName,
         FgGate::kTipcType, FgGate::kTipcInstance,
         fg_gate_type, fg_gate_inst);
+    fg_gate.set_tipc_instance(fg_gate_inst);
+    fg_gate.start();
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
@@ -330,15 +339,18 @@ int main(int argc, char** argv) {
         sm_gate_log->set_level(boot_level);
         sm_gate.set_logger(std::move(sm_gate_log));
     }
-    sm_gate.start();
     // Resolve this node’s TIPC address from the --tipc arg (the supervisor built
     // it per node from executor.json, instance machine-shifted) so the binary is
     // address-agnostic. Falls back to the compiled kTipcType/kTipcInstance for a
-    // standalone run.
+    // standalone run. Done + set_tipc_instance BEFORE start so init()/on_enter (run
+    // on the node thread right after start) see this node's own instance — a clone
+    // keying per-instance config in init() would otherwise race and read 0.
     uint32_t sm_gate_type, sm_gate_inst;
     ::theia::runtime::resolve_node_tipc(SmGate::kNodeName,
         SmGate::kTipcType, SmGate::kTipcInstance,
         sm_gate_type, sm_gate_inst);
+    sm_gate.set_tipc_instance(sm_gate_inst);
+    sm_gate.start();
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",

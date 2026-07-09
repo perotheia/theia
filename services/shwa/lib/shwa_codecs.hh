@@ -34,3 +34,17 @@ THEIA_DECLARE_REMOTE_CODEC(system_services_shwa_AccelSample)
 THEIA_DECLARE_REMOTE_CODEC(system_services_shwa_PowerModeReq)
 THEIA_DECLARE_REMOTE_CODEC(system_services_shwa_PowerModeReply)
 THEIA_DECLARE_REMOTE_CODEC(system_services_shwa_ShwaExcursionEvent)
+
+// FC-wide enum aliases — the enum TYPE and each VALUE inside the FC namespace, so
+// impl code writes the readable `PowerMode` / `MODE_UNKNOWN`
+// instead of nanopb's double-prefixed name
+// (system_services_shwa_<Enum>_<Enum>_<VALUE>). Emitted ONCE here (this header
+// is #pragma once + included by every node header) — NOT per-node, so two node
+// headers in one TU don't redefine them.
+namespace ara::shwa {
+using PowerMode = system_services_shwa_PowerMode;
+inline constexpr PowerMode MODE_UNKNOWN = system_services_shwa_PowerMode_PowerMode_MODE_UNKNOWN;
+inline constexpr PowerMode MODE_MAXN = system_services_shwa_PowerMode_PowerMode_MODE_MAXN;
+inline constexpr PowerMode MODE_BALANCED = system_services_shwa_PowerMode_PowerMode_MODE_BALANCED;
+inline constexpr PowerMode MODE_LOW = system_services_shwa_PowerMode_PowerMode_MODE_LOW;
+}  // namespace ara::shwa

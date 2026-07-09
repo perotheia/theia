@@ -98,15 +98,18 @@ int main(int argc, char** argv) {
         ::theia::runtime::set_process_logger(ucm_fsm_log);
         ucm_fsm.set_logger(std::move(ucm_fsm_log));
     }
-    ucm_fsm.start_statem(timers);
     // Resolve this node’s TIPC address from the --tipc arg (the supervisor built
     // it per node from executor.json, instance machine-shifted) so the binary is
     // address-agnostic. Falls back to the compiled kTipcType/kTipcInstance for a
-    // standalone run.
+    // standalone run. Done + set_tipc_instance BEFORE start so init()/on_enter (run
+    // on the node thread right after start) see this node's own instance — a clone
+    // keying per-instance config in init() would otherwise race and read 0.
     uint32_t ucm_fsm_type, ucm_fsm_inst;
     ::theia::runtime::resolve_node_tipc(UcmFsm::kNodeName,
         UcmFsm::kTipcType, UcmFsm::kTipcInstance,
         ucm_fsm_type, ucm_fsm_inst);
+    ucm_fsm.set_tipc_instance(ucm_fsm_inst);
+    ucm_fsm.start_statem(timers);
     {
         char _tipc[96];
         std::snprintf(_tipc, sizeof(_tipc),
@@ -172,15 +175,18 @@ int main(int argc, char** argv) {
         ucm_gate_log->set_level(boot_level);
         ucm_gate.set_logger(std::move(ucm_gate_log));
     }
-    ucm_gate.start();
     // Resolve this node’s TIPC address from the --tipc arg (the supervisor built
     // it per node from executor.json, instance machine-shifted) so the binary is
     // address-agnostic. Falls back to the compiled kTipcType/kTipcInstance for a
-    // standalone run.
+    // standalone run. Done + set_tipc_instance BEFORE start so init()/on_enter (run
+    // on the node thread right after start) see this node's own instance — a clone
+    // keying per-instance config in init() would otherwise race and read 0.
     uint32_t ucm_gate_type, ucm_gate_inst;
     ::theia::runtime::resolve_node_tipc(UcmGate::kNodeName,
         UcmGate::kTipcType, UcmGate::kTipcInstance,
         ucm_gate_type, ucm_gate_inst);
+    ucm_gate.set_tipc_instance(ucm_gate_inst);
+    ucm_gate.start();
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
@@ -257,15 +263,18 @@ int main(int argc, char** argv) {
         ucm_daemon_log->set_level(boot_level);
         ucm_daemon.set_logger(std::move(ucm_daemon_log));
     }
-    ucm_daemon.start();
     // Resolve this node’s TIPC address from the --tipc arg (the supervisor built
     // it per node from executor.json, instance machine-shifted) so the binary is
     // address-agnostic. Falls back to the compiled kTipcType/kTipcInstance for a
-    // standalone run.
+    // standalone run. Done + set_tipc_instance BEFORE start so init()/on_enter (run
+    // on the node thread right after start) see this node's own instance — a clone
+    // keying per-instance config in init() would otherwise race and read 0.
     uint32_t ucm_daemon_type, ucm_daemon_inst;
     ::theia::runtime::resolve_node_tipc(UcmDaemon::kNodeName,
         UcmDaemon::kTipcType, UcmDaemon::kTipcInstance,
         ucm_daemon_type, ucm_daemon_inst);
+    ucm_daemon.set_tipc_instance(ucm_daemon_inst);
+    ucm_daemon.start();
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",

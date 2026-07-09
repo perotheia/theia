@@ -45,3 +45,21 @@ THEIA_DECLARE_REMOTE_CODEC(system_services_tsync_GrandmasterReply)
 THEIA_DECLARE_REMOTE_CODEC(platform_msgs_nav_GnssSolution)
 THEIA_DECLARE_REMOTE_CODEC(platform_msgs_sensor_Imu)
 THEIA_DECLARE_REMOTE_CODEC(system_services_phm_FcHealthReport)
+
+// FC-wide enum aliases — the enum TYPE and each VALUE inside the FC namespace, so
+// impl code writes the readable `SyncState` / `UNAVAILABLE`
+// instead of nanopb's double-prefixed name
+// (system_services_tsync_<Enum>_<Enum>_<VALUE>). Emitted ONCE here (this header
+// is #pragma once + included by every node header) — NOT per-node, so two node
+// headers in one TU don't redefine them.
+namespace ara::tsync {
+using SyncState = system_services_tsync_SyncState;
+inline constexpr SyncState UNAVAILABLE = system_services_tsync_SyncState_SyncState_UNAVAILABLE;
+inline constexpr SyncState UNLOCKED = system_services_tsync_SyncState_SyncState_UNLOCKED;
+inline constexpr SyncState HOLDOVER = system_services_tsync_SyncState_SyncState_HOLDOVER;
+inline constexpr SyncState LOCKED = system_services_tsync_SyncState_SyncState_LOCKED;
+using TimeSource = system_services_tsync_TimeSource;
+inline constexpr TimeSource SYSTEM = system_services_tsync_TimeSource_TimeSource_SYSTEM;
+inline constexpr TimeSource PTP = system_services_tsync_TimeSource_TimeSource_PTP;
+inline constexpr TimeSource GPS = system_services_tsync_TimeSource_TimeSource_GPS;
+}  // namespace ara::tsync

@@ -6,7 +6,3 @@
 # Defaults: max_size 64, max_count 16;
 # override per field with an .art `[max_size:N]` / `[max_count:N]` option
 # (also: fixed_count, fixed_length, int_size, type:FT_*).
-
-system_services_log.LogRecord.node   max_size:64
-system_services_log.LogRecord.tag   max_size:64
-system_services_log.LogRecord.line   max_size:8192

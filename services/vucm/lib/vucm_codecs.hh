@@ -26,6 +26,8 @@
 #include "RemoteCodec.hh"   // THEIA_DECLARE_REMOTE_CODEC
 #include "system/services/vucm/vucm.pb.h"
 
+#include "system/services/ucm/ucm.pb.h"
+#include "system/services/per/per.pb.h"
 #include "system/services/sm/sm.pb.h"
 #include "system/services/phm/phm.pb.h"
 

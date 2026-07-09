@@ -35,3 +35,17 @@ THEIA_DECLARE_REMOTE_CODEC(system_services_fw_FwStatusMsg)
 THEIA_DECLARE_REMOTE_CODEC(system_services_fw_ReloadReq)
 THEIA_DECLARE_REMOTE_CODEC(system_services_fw_ReloadReply)
 THEIA_DECLARE_REMOTE_CODEC(system_services_phm_FcHealthReport)
+
+// FC-wide enum aliases — the enum TYPE and each VALUE inside the FC namespace, so
+// impl code writes the readable `FwState` / `FW_UNKNOWN`
+// instead of nanopb's double-prefixed name
+// (system_services_fw_<Enum>_<Enum>_<VALUE>). Emitted ONCE here (this header
+// is #pragma once + included by every node header) — NOT per-node, so two node
+// headers in one TU don't redefine them.
+namespace ara::fw {
+using FwState = system_services_fw_FwState;
+inline constexpr FwState FW_UNKNOWN = system_services_fw_FwState_FwState_FW_UNKNOWN;
+inline constexpr FwState FW_APPLIED = system_services_fw_FwState_FwState_FW_APPLIED;
+inline constexpr FwState FW_DEGRADED = system_services_fw_FwState_FwState_FW_DEGRADED;
+inline constexpr FwState FW_DISABLED = system_services_fw_FwState_FwState_FW_DISABLED;
+}  // namespace ara::fw

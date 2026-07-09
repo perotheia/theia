@@ -11,10 +11,10 @@ system_services_phm.PhmConfig.entity_policies   max_count:32
 system_services_phm.PhmEntityPolicy.entity   max_size:64
 system_services_phm.PhmCheckpoint.entity   max_size:64
 system_services_phm.PhmCheckpoint.checkpoint   max_size:64
+system_services_phm.FcHealthReport.entity   max_size:64
+system_services_phm.FcHealthReport.detail   max_size:128
 system_services_phm.PhmHealthStatus.entity   max_size:64
 system_services_phm.PhmHealthStatus.detail   max_size:128
 system_services_phm.PhmFaultEvent.entity   max_size:64
 system_services_phm.PhmFaultEvent.tombstone_path   max_size:128
 system_services_phm.PhmFaultEvent.detail   max_size:128
-system_services_phm.FcHealthReport.entity   max_size:64
-system_services_phm.FcHealthReport.detail   max_size:128

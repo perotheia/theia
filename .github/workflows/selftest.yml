@@ -180,7 +180,9 @@ jobs:
       - name: Install artheia + robotframework
         run: |
           python -m pip install --upgrade pip
-          pip install -e artheia/ robotframework
+          # [probe] pulls grpcio-tools/protobuf — `theia call` (the RF suites'
+          # request/reply probe) compiles .proto → _pb2 at runtime through it.
+          pip install -e "artheia/[probe]" robotframework
 
       - name: Load TIPC (live runtime phase; harness degrades if unavailable)
         run: sudo modprobe tipc || echo "tipc unavailable — harness runs NO_LIVE"

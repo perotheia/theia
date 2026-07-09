@@ -3842,8 +3842,8 @@ def cmd_init(args: list[str]) -> int:
       - manifest/<name>/rig.py — the one-machine deploy rig, addressable as
         `theia manifest <name>`; imports the generated app manifest (gen-manifest
         writes manifest/<name>/manifest.py).
-      - <name>/, proto/     — homes for the GENERATED C++ (gen-app --out <name>)
-        and proto (gen-app --proto-out proto); never mixed with the framework.
+      - apps/, proto/       — homes for the GENERATED C++ (gen-app --out apps →
+        //apps/<Comp>/main) and proto (--proto-out proto); never mixed with the fwk.
       - .theia               — records THEIA_ROOT (the source it's bound to).
 
     Re-runnable: `theia init` is idempotent — it never overwrites your files
@@ -4003,17 +4003,18 @@ def cmd_init(args: list[str]) -> int:
     # The app is named after --name: system/<name> is the REAL, canonical app
     # source (FQN system.<name> maps to the dir 1:1 — no indirection, no symlink)
     # and <name> is this workspace's SWP/app name. The user edits these; gen-app
-    # emits the C++ to <name>/ and the proto to proto/, gen-manifest writes the
-    # Python sidecar to manifest/<name>/ — all SEPARATE from this source dir.
-    # (`slug` = a py/bazel-safe form of --name for dir + module + label use.)
+    # emits the C++ to apps/<Composition>/ (gen-app --out apps → //apps/<Comp>/main,
+    # the demo convention) and the proto to proto/, gen-manifest writes the Python
+    # sidecar to manifest/<name>/ — all SEPARATE from this source dir. (`slug` = a
+    # py/bazel-safe form of --name for dir + module + label use.)
     _write(f"system/{slug}/package.art", _sub(_INIT_APPS_PACKAGE_ART))
     _write(f"system/{slug}/component.art", _sub(_INIT_APPS_COMPONENT_ART))
-    # Python package marker for the generated C++ tree (<name>/). NOTE: `manifest/`
+    # Python package marker for the generated C++ tree (apps/). NOTE: `manifest/`
     # here is the WORKSPACE's own manifest package (manifest.<name> / the rig),
     # local to this dir. The framework's services manifest is NOT part of this
     # package — the rig loads it by path from $THEIA_ROOT/manifest/ — so there's no
     # cross-root namespace-package coupling to preserve.
-    _write(f"{slug}/__init__.py", "")
+    _write("apps/__init__.py", "")
 
     sys_art = (_INIT_SYSTEM_ART_SERVICES if with_services else _INIT_SYSTEM_ART)
     rig_py = (_INIT_RIG_PY_SERVICES if with_services else _INIT_RIG_PY)
@@ -4101,8 +4102,8 @@ def cmd_init(args: list[str]) -> int:
           f"\nThen add a composition to system/{slug}/component.art and "
           "generate + build its C++:\n"
           f"  artheia gen-app --kind fc system/{slug}/component.art "
-          f"--out {slug} --proto-out proto\n"
-          f"  bazel build //{slug}/...        # compiles against @pero_theia",
+          f"--out apps --proto-out proto\n"
+          f"  bazel build //apps/...        # compiles against @pero_theia",
           file=sys.stderr)
     return 0
 
@@ -4300,10 +4301,10 @@ _INIT_APPS_COMPONENT_ART = '''\
 //   1. declare a node in package.art
 //   2. `composition MyApp { prototype MyNode my_node }`  (here)
 //   3. `cluster Applications { composition MyApp my_app }`  (here)
-//   4. `artheia gen-app --kind fc system/@NAME@/component.art --out @NAME@
-//       --proto-out proto [--composition MyApp]` to emit the C++
-//       (--proto-out lands @NAME@.proto where proto/'s BUILD expects it),
-//       then `bazel build //@NAME@/...` (compiles against @pero_theia).
+//   4. `artheia gen-app --kind fc system/@NAME@/component.art --out apps
+//       --proto-out proto [--composition MyApp]` to emit the C++ under
+//       apps/<Composition>/ (--proto-out lands @NAME@.proto where proto/'s BUILD
+//       expects it), then `bazel build //apps/...` (compiles against @pero_theia).
 
 package system.@NAME@
 

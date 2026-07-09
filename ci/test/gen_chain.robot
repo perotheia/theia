@@ -110,25 +110,22 @@ Stage 3 — gen-netgraph JSON
     Netgraph Has Nodes    ${netgraph}    ObserverNode  IncrementerNode
 
 
-Stage 4 — gen-routing per-process headers (KNOWN BROKEN, #378)
-    [Documentation]    Each composition (P1/P2/P3) gets a
-    ...                Demo3Way__<P>_refs.hh with LocalRef +
-    ...                RemoteRef wiring. The header is what the
-    ...                hand-written node main.cc binds against.
+Stage 4 — gen-routing per-process headers
+    [Documentation]    Each composition gets a <Comp>__<P>_refs.hh
+    ...                with LocalRef + RemoteRef wiring. The header is
+    ...                what a hand-written node main.cc binds against.
     ...
-    ...                Currently broken: gen-routing uses raw
-    ...                textx.metamodel_from_file and doesn't resolve
-    ...                sibling .art files in the same package — fails
-    ...                with `Unknown object "CounterNode"`. Tracked
-    ...                in task #378. Test asserts the EXPECTED-FAIL
-    ...                error message so we get a green when the bug
-    ...                is fixed and the assertion swaps to "header
-    ...                exists".
+    ...                Was #378 (KNOWN BROKEN): gen-routing used raw
+    ...                textx.metamodel_from_file and couldn't resolve
+    ...                sibling .art files in the same package — died
+    ...                with `Unknown object "CounterNode"`. Fixed by
+    ...                switching to the canonical parse_file loader
+    ...                (sibling merge + imports + inheritance); this
+    ...                case now asserts the header actually emits.
     [Tags]    gen-chain    hermetic    selftest    stage-4
-    ...      known-broken
 
-    Run Keyword And Expect Error    *Unknown object "CounterNode"*
-    ...    Stage 4 Gen Routing    Demo3WayP1
+    ${out}=    Stage 4 Gen Routing    Demo3WayP1
+    Routing Header Exists    ${out}    Demo3WayP1    P1
 
 
 Stage 5 — gen-app per-process skeleton

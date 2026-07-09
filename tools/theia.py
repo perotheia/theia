@@ -3922,13 +3922,15 @@ def cmd_init(args: list[str]) -> int:
 
     created: list[str] = []
     # --name drives the app's identity end-to-end: the SWP name, the source
-    # package (system/<slug>, FQN system.<slug>), the deploy dir (gen-app --out
-    # <slug> → //<slug>/…), and the rig/manifest target (manifest/<slug> →
-    # `theia manifest <slug>`). `slug` = a py/bazel-safe form of --name.
+    # package (system/<slug>, FQN system.<slug>), the manifest/rig target
+    # (manifest/<slug> → `theia manifest <slug>`), and the composition name
+    # (<Cls>, CamelCase → apps/<Cls>/main). `slug` = py/bazel-safe form of --name;
+    # `Cls` = CamelCase for the composition + node class.
     slug = _py_ident_safe(name)
+    Cls = "".join(p.capitalize() for p in name.replace("-", "_").split("_"))
 
     def _sub(t: str) -> str:
-        return t.replace("@NAME@", slug)
+        return t.replace("@NAME@", slug).replace("@CLS@", Cls)
 
     def _write(rel: str, content: str) -> None:
         p = ws / rel
@@ -4095,15 +4097,18 @@ def cmd_init(args: list[str]) -> int:
         print(f"  + {c}", file=sys.stderr)
     extra = ("\n  (the ARA services com/log/per/sm/ucm/shwa come up under the "
              "supervisor)" if with_services else "")
-    print(f"\nVerify the toolchain before adding apps (the '{slug}' rig):\n"
+    print(f"\nThe scaffold ships a runnable placeholder app ('{Cls}'). Run the "
+          f"toolchain end to end:\n"
+          f"  # 1. generate the app C++ (→ apps/{Cls}/) + proto:\n"
+          f"  artheia gen-app --kind fc system/{slug}/component.art "
+          f"--out apps --proto-out proto\n"
+          f"  # 2. manifest + install + run (theia manifest <{slug}>, the rig):\n"
           f"  artheia gen-manifest system/{slug}/component.art "
           f"manifest/{slug}/manifest.py\n"
           f"  theia manifest {slug} && theia install {slug} && theia start{extra}\n"
-          f"\nThen add a composition to system/{slug}/component.art and "
-          "generate + build its C++:\n"
-          f"  artheia gen-app --kind fc system/{slug}/component.art "
-          f"--out apps --proto-out proto\n"
-          f"  bazel build //apps/...        # compiles against @pero_theia",
+          f"  bazel build //apps/...        # (or let theia install build it)\n"
+          f"\nThen edit system/{slug}/package.art (your nodes) + the write-once "
+          f"apps/{Cls}/impl/{Cls}Node_handlers.cc (your handler bodies).",
           file=sys.stderr)
     return 0
 
@@ -4276,39 +4281,61 @@ cluster Applications { }     // empty until you add a composition in system/@NAM
 '''
 
 _INIT_APPS_PACKAGE_ART = '''\
-// @NAME@ — message + node declarations for this workspace's application (the SWP
-// named @NAME@). The package is `system.@NAME@`, sourced at system/@NAME@/ (FQN ↔
-// dir 1:1).
+// @NAME@ — messages + interfaces + node(s) for this workspace's application (the
+// SWP named @NAME@). The package is `system.@NAME@`, sourced at system/@NAME@/
+// (FQN ↔ dir 1:1). You EDIT this file: add your messages/interfaces/nodes.
 //
-// EMPTY scaffold. Declare your nodes here (messages, interfaces, `node atomic
-// <Name> { tipc ... ports { ... } }`), then prototype them in a composition in
-// the sibling component.art. Until then this package is valid-but-empty so the
-// toolchain (parse / gen-manifest / build / run a bare supervisor) works before
-// you write a single app.
+// It ships ONE placeholder node (@CLS@Node) so the toolchain runs end to end on a
+// fresh scaffold — parse → gen-app → build → install → start a real supervised
+// node. Rename it, add ports/messages, or add more nodes as your app grows.
 
 package system.@NAME@
+
+message @CLS@Empty { }
+
+// A tiny request/reply surface so the node has something to serve (and so a probe
+// / `theia call` can poke it). Replace with your real interface.
+interface clientServer @CLS@CtlIf {
+    operation Ping(in p: @CLS@Empty) returns @CLS@Empty
+}
+
+// The app's node. tipc 0xD0010001 (pick your own range as you add nodes). A
+// GenServer serving @CLS@CtlIf; the impl body is the write-once
+// apps/@CLS@/impl/@CLS@Node_handlers.cc after gen-app.
+node atomic @CLS@Node {
+    tipc type=0xD0010001 instance=0
+    reporting = true
+    tag = "@CLS@"
+    ports {
+        server ctl provides @CLS@CtlIf
+    }
+}
 '''
 
 _INIT_APPS_COMPONENT_ART = '''\
 // @NAME@ — composition + cluster wiring for this workspace's app (SWP @NAME@).
 //
-// EMPTY scaffold: `cluster Applications { }` with no members. gen-manifest
-// emits an empty app manifest + executor sidecar from this, which the rig
-// imports as-is — so `theia manifest`/`install`/`start` all run on an empty
-// workspace (bare supervisor, no app children).
+// It ships ONE composition (@CLS@) prototyping the placeholder @CLS@Node, and the
+// `cluster Applications` member that deploys it — so `gen-app --kind fc … --out
+// apps` emits apps/@CLS@/main (→ //apps/@CLS@/main), and manifest/install/start run
+// a real supervised node on a fresh scaffold.
 //
-// To add an app:
-//   1. declare a node in package.art
-//   2. `composition MyApp { prototype MyNode my_node }`  (here)
-//   3. `cluster Applications { composition MyApp my_app }`  (here)
-//   4. `artheia gen-app --kind fc system/@NAME@/component.art --out apps
-//       --proto-out proto [--composition MyApp]` to emit the C++ under
-//       apps/<Composition>/ (--proto-out lands @NAME@.proto where proto/'s BUILD
-//       expects it), then `bazel build //apps/...` (compiles against @pero_theia).
+// To add another app: declare a node in package.art, then here:
+//   composition MyApp   { prototype MyNode my_node }
+//   cluster Applications { composition MyApp my_app }   (add the member)
+// then re-run `artheia gen-app --kind fc system/@NAME@/component.art --out apps
+// --proto-out proto` (--proto-out lands @NAME@.proto where proto/'s BUILD expects
+// it) and `bazel build //apps/...` (compiles against @pero_theia).
 
 package system.@NAME@
 
-cluster Applications { }
+composition @CLS@ {
+    prototype @CLS@Node @NAME@
+}
+
+cluster Applications {
+    composition @CLS@ app
+}
 '''
 
 _INIT_RIG_PY = '''\

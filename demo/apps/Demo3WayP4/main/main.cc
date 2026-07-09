@@ -88,24 +88,28 @@ int main(int argc, char** argv) {
 
 
     DemoFsm demo_fsm;
-    // Per-node logger: tagged [#demo_fsm] (kNodeName, matches `tdb ps`),
+    // Per-node logger: tagged [#demo_fsm] (the PROTOTYPE name — the runtime
+    // node identity, matching executor.json/--tipc/config keys + `tdb ps`),
     // sink chosen by $THEIA_LOGGER. Installed BEFORE start so init/do_* log
     // through it; the FIRST node's logger also backs process_logger().
     {
-        auto demo_fsm_log = MakeContextLogger(DemoFsm::kNodeName);
+        auto demo_fsm_log = MakeContextLogger("demo_fsm");
         demo_fsm_log->set_level(boot_level);
         ::theia::runtime::set_process_logger(demo_fsm_log);
         demo_fsm.set_logger(std::move(demo_fsm_log));
     }
-    demo_fsm.start_statem(timers);
     // Resolve this node’s TIPC address from the --tipc arg (the supervisor built
     // it per node from executor.json, instance machine-shifted) so the binary is
     // address-agnostic. Falls back to the compiled kTipcType/kTipcInstance for a
-    // standalone run.
+    // standalone run. Done + set_tipc_instance BEFORE start so init()/on_enter (run
+    // on the node thread right after start) see this node's own instance — a clone
+    // keying per-instance config in init() would otherwise race and read 0.
     uint32_t demo_fsm_type, demo_fsm_inst;
-    ::theia::runtime::resolve_node_tipc(DemoFsm::kNodeName,
+    ::theia::runtime::resolve_node_tipc("demo_fsm",
         DemoFsm::kTipcType, DemoFsm::kTipcInstance,
         demo_fsm_type, demo_fsm_inst);
+    demo_fsm.set_tipc_instance(demo_fsm_inst);
+    demo_fsm.start_statem(timers);
     {
         char _tipc[96];
         std::snprintf(_tipc, sizeof(_tipc),
@@ -116,7 +120,7 @@ int main(int argc, char** argv) {
     // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (supervisor sets it
     // from the rig's NodeToCPUMapping). No-op when unset; soft-fails on EPERM.
     ::theia::runtime::apply_node_affinity(demo_fsm.native_handle(),
-        DemoFsm::kNodeName, std::getenv("THEIA_NODE_CFG"));
+        "demo_fsm", std::getenv("THEIA_NODE_CFG"));
 
     if (auto* demo_fsm_cfg = config_mux.bind_node(
             demo_fsm, demo_fsm_type,
@@ -136,6 +140,12 @@ int main(int argc, char** argv) {
         // types so a real peer — or a robot-test inject via services/com
         // — lands on the same handle_call / handle_cast path. clientServer
         // ops → register_call; senderReceiver `in` data → register_cast.
+        // PG (manual pub/sub, OTP shape): attach this statem node's PgClient to
+        // its demux binding (joined-group frames + PgMembership pushes route into
+        // handle_cast) + pass its bound addr as the watcher address (where the
+        // supervisor casts PgMembership when this node pg_watch'es a group).
+        demo_fsm.pg_attach("demo_fsm", demo_fsm_cfg,
+                                demo_fsm_type, demo_fsm_inst);
     } else {
         demo_fsm.log().warn("config service bind failed; live log-level "
                                  "push + signal inject disabled");
@@ -145,7 +155,7 @@ int main(int argc, char** argv) {
     // per node, own timer thread (1s default = the supervisor's check cadence).
     {
         auto demo_fsm_hb = std::make_unique<
-            ::theia::runtime::HeartbeatPublisher>(DemoFsm::kNodeName);
+            ::theia::runtime::HeartbeatPublisher>("demo_fsm");
         if (demo_fsm_hb->open()) {
             demo_fsm_hb->start(/*period_ms=*/1000);
             heartbeats.push_back(std::move(demo_fsm_hb));
@@ -157,23 +167,27 @@ int main(int argc, char** argv) {
 
 
     DemoFsmGate demo_gate;
-    // Per-node logger: tagged [#demo_gate] (kNodeName, matches `tdb ps`),
+    // Per-node logger: tagged [#demo_gate] (the PROTOTYPE name — the runtime
+    // node identity, matching executor.json/--tipc/config keys + `tdb ps`),
     // sink chosen by $THEIA_LOGGER. Installed BEFORE start so init/do_* log
     // through it; the FIRST node's logger also backs process_logger().
     {
-        auto demo_gate_log = MakeContextLogger(DemoFsmGate::kNodeName);
+        auto demo_gate_log = MakeContextLogger("demo_gate");
         demo_gate_log->set_level(boot_level);
         demo_gate.set_logger(std::move(demo_gate_log));
     }
-    demo_gate.start();
     // Resolve this node’s TIPC address from the --tipc arg (the supervisor built
     // it per node from executor.json, instance machine-shifted) so the binary is
     // address-agnostic. Falls back to the compiled kTipcType/kTipcInstance for a
-    // standalone run.
+    // standalone run. Done + set_tipc_instance BEFORE start so init()/on_enter (run
+    // on the node thread right after start) see this node's own instance — a clone
+    // keying per-instance config in init() would otherwise race and read 0.
     uint32_t demo_gate_type, demo_gate_inst;
-    ::theia::runtime::resolve_node_tipc(DemoFsmGate::kNodeName,
+    ::theia::runtime::resolve_node_tipc("demo_gate",
         DemoFsmGate::kTipcType, DemoFsmGate::kTipcInstance,
         demo_gate_type, demo_gate_inst);
+    demo_gate.set_tipc_instance(demo_gate_inst);
+    demo_gate.start();
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
@@ -183,7 +197,7 @@ int main(int argc, char** argv) {
     // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (supervisor sets it
     // from the rig's NodeToCPUMapping). No-op when unset; soft-fails on EPERM.
     ::theia::runtime::apply_node_affinity(demo_gate.native_handle(),
-        DemoFsmGate::kNodeName, std::getenv("THEIA_NODE_CFG"));
+        "demo_gate", std::getenv("THEIA_NODE_CFG"));
 
     if (auto* demo_gate_cfg = config_mux.bind_node(
             demo_gate, demo_gate_type,
@@ -206,6 +220,12 @@ int main(int argc, char** argv) {
         config_mux.register_cast<DemoStart>(demo_gate_cfg, demo_gate);
         config_mux.register_cast<DemoFinish>(demo_gate_cfg, demo_gate);
         config_mux.register_cast<DemoReset>(demo_gate_cfg, demo_gate);
+        // PG (manual pub/sub, OTP shape): attach this statem node's PgClient to
+        // its demux binding (joined-group frames + PgMembership pushes route into
+        // handle_cast) + pass its bound addr as the watcher address (where the
+        // supervisor casts PgMembership when this node pg_watch'es a group).
+        demo_gate.pg_attach("demo_gate", demo_gate_cfg,
+                                demo_gate_type, demo_gate_inst);
     } else {
         demo_gate.log().warn("config service bind failed; live log-level "
                                  "push + signal inject disabled");
@@ -215,7 +235,7 @@ int main(int argc, char** argv) {
     // per node, own timer thread (1s default = the supervisor's check cadence).
     {
         auto demo_gate_hb = std::make_unique<
-            ::theia::runtime::HeartbeatPublisher>(DemoFsmGate::kNodeName);
+            ::theia::runtime::HeartbeatPublisher>("demo_gate");
         if (demo_gate_hb->open()) {
             demo_gate_hb->start(/*period_ms=*/1000);
             heartbeats.push_back(std::move(demo_gate_hb));

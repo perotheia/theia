@@ -3,6 +3,15 @@
 # ── Common ────────────────────────────────────────────────────────────────
 build --enable_bzlmod
 build --incompatible_enable_cc_toolchain_resolution
+# OPTIMIZED by default. Bazel's stock `fastbuild` is -O0 — unsafe for this stack:
+# real-time nodes miss their deadlines at -O0 (observed in the field: a 20 Hz
+# corridor feed vs ~4 Hz -O0 planning → decisions lagged reality by ~2 s and the
+# brake landed after contact). This also makes `theia release`/`dist` ship
+# optimized binaries in the debs (previously fastbuild). Keep frame pointers so
+# libtombstone crash backtraces stay walkable at -O2. Debug builds are explicit:
+# `bazel build -c dbg //...`.
+build -c opt
+build --copt=-fno-omit-frame-pointer
 # Default aarch64 ABI = rpi4 (bookworm sysroot). Both rpi4 + jetson are
 # cpu:aarch64, so //rules/config:{arm64_cross,target_jetson} disambiguate on this
 # define. Setting it here makes "no explicit define" resolve to the rpi4

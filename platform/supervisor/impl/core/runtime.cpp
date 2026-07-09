@@ -902,6 +902,14 @@ void Supervisor::start_worker(WorkerNode& w) {
         for (const auto& kv : w.env) {
             setenv(kv.first.c_str(), kv.second.c_str(), 1);
         }
+        // THEIA_PROCESS_NAME — the child's PROCESS identity (executor.json worker
+        // name, e.g. "app"/"p1"). serialize-manifest stages static params PER
+        // PROCESS (config/<process>.json — one composition binary can run as
+        // several processes with different params), so init_config() in the child
+        // keys the config FILE on this, not on its compiled package leaf (which
+        // can't know the deploy-time process name). Set AFTER w.env so a manifest
+        // can't accidentally shadow the authoritative identity.
+        setenv("THEIA_PROCESS_NAME", w.name.c_str(), 1);
         // Tombstone output dir for the child's libtombstone handler.
         if (!tombstone_dir.empty())
             setenv("THEIA_TOMBSTONE_DIR", tombstone_dir.c_str(), 1);

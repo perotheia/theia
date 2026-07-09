@@ -106,12 +106,21 @@ int main(int argc, char** argv) {
 
 
     OsiCtl osi_ctl;
-    // Per-node logger: tagged [#osi_ctl] (kNodeName, matches `tdb ps`),
-    // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so do_start/init
-    // log through it. The FIRST node's logger also backs process_logger() — the
-    // ConfigureLogLevel-push fallback target + any process_logger() caller.
+    // RUNTIME NODE IDENTITY = the PROTOTYPE name ("osi_ctl") — the name the
+    // manifest/supervisor domain uses everywhere (executor.json art_nodes, the
+    // --tipc arg keys, config/<proc>.json `nodes` sections, `tdb ps` rows). For a
+    // LOCAL node this equals OsiCtl::kNodeName; for an IMPORTED package node it
+    // does NOT (the package lib was compiled without a composition, so its
+    // kNodeName is the snake'd node TYPE, e.g. osi_v2v vs prototype v2v). Keying
+    // main's identity calls on kNodeName made an imported node's --tipc lookup
+    // MISS (silent fallback to the compiled address — machine-shift/clones broken)
+    // and its params section unmatched (silent defaults). Use the prototype name.
+    // Per-node logger: tagged [#osi_ctl] (matches `tdb ps`), sink chosen by
+    // $THEIA_LOGGER. Installed BEFORE start() so do_start/init log through it. The
+    // FIRST node's logger also backs process_logger() — the ConfigureLogLevel-push
+    // fallback target + any process_logger() caller.
     {
-        auto osi_ctl_log = MakeContextLogger(OsiCtl::kNodeName);
+        auto osi_ctl_log = MakeContextLogger("osi_ctl");
         osi_ctl_log->set_level(boot_level);
         ::theia::runtime::set_process_logger(osi_ctl_log);
         osi_ctl.set_logger(std::move(osi_ctl_log));
@@ -124,7 +133,7 @@ int main(int argc, char** argv) {
     // start() — sees its own instance via tipc_instance() (a clone that keys its
     // per-instance config in init() would otherwise race and read 0).
     uint32_t osi_ctl_type, osi_ctl_inst;
-    ::theia::runtime::resolve_node_tipc(OsiCtl::kNodeName,
+    ::theia::runtime::resolve_node_tipc("osi_ctl",
         OsiCtl::kTipcType, OsiCtl::kTipcInstance,
         osi_ctl_type, osi_ctl_inst);
     // set_tipc_instance() is a GenServer/GenStateM method — only atomic + statem
@@ -142,7 +151,7 @@ int main(int argc, char** argv) {
     //   start_delay_ms   (default 0)     — deterministic intra-executable ordering.
     // A node section may be absent entirely → all defaults apply (start normally).
     const auto osi_ctl_params =
-        ::theia::runtime::get_config().node(OsiCtl::kNodeName);
+        ::theia::runtime::get_config().node("osi_ctl");
     // Boot gate — recomputed identically in the START pass below (cheap param
     // read). PASS 1 (here): wire the mux (bind_node + register_* + pg_attach)
     // BEFORE config_mux.start() and BEFORE the node thread runs. PASS 2 (after
@@ -189,7 +198,7 @@ int main(int argc, char** argv) {
         // supervisor's PgMembership pushes route into handle_cast) and pass its
         // BOUND ADDRESS as the watcher address — where the supervisor casts
         // PgMembership when this node pg_watch'es a group it produces to.
-        osi_ctl.pg_attach(OsiCtl::kNodeName, osi_ctl_cfg,
+        osi_ctl.pg_attach("osi_ctl", osi_ctl_cfg,
                                 osi_ctl_type, osi_ctl_inst);
     } else {
         osi_ctl.log().warn("config service bind failed; live log-level "
@@ -222,14 +231,14 @@ int main(int argc, char** argv) {
     // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG. Applied AFTER
     // start() — the thread exists now. No-op when unset; soft-fails on EPERM.
     ::theia::runtime::apply_node_affinity(osi_ctl.native_handle(),
-        OsiCtl::kNodeName, std::getenv("THEIA_NODE_CFG"));
+        "osi_ctl", std::getenv("THEIA_NODE_CFG"));
 
     // Liveness beat to the supervisor watchdog (#PHM). A reporting node must beat
     // or the watchdog SIGTERMs it after K missed deadlines. One publisher per
     // node, own timer thread; 1s default matches the supervisor's check cadence.
     {
         auto osi_ctl_hb = std::make_unique<
-            ::theia::runtime::HeartbeatPublisher>(OsiCtl::kNodeName);
+            ::theia::runtime::HeartbeatPublisher>("osi_ctl");
         if (osi_ctl_hb->open()) {
             osi_ctl_hb->start(/*period_ms=*/1000);
             heartbeats.push_back(std::move(osi_ctl_hb));

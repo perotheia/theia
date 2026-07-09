@@ -108,12 +108,21 @@ int main(int argc, char** argv) {
 
 
     Ptp4lProvider ptp4l;
-    // Per-node logger: tagged [#ptp4l] (kNodeName, matches `tdb ps`),
-    // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so do_start/init
-    // log through it. The FIRST node's logger also backs process_logger() — the
-    // ConfigureLogLevel-push fallback target + any process_logger() caller.
+    // RUNTIME NODE IDENTITY = the PROTOTYPE name ("ptp4l") — the name the
+    // manifest/supervisor domain uses everywhere (executor.json art_nodes, the
+    // --tipc arg keys, config/<proc>.json `nodes` sections, `tdb ps` rows). For a
+    // LOCAL node this equals Ptp4lProvider::kNodeName; for an IMPORTED package node it
+    // does NOT (the package lib was compiled without a composition, so its
+    // kNodeName is the snake'd node TYPE, e.g. osi_v2v vs prototype v2v). Keying
+    // main's identity calls on kNodeName made an imported node's --tipc lookup
+    // MISS (silent fallback to the compiled address — machine-shift/clones broken)
+    // and its params section unmatched (silent defaults). Use the prototype name.
+    // Per-node logger: tagged [#ptp4l] (matches `tdb ps`), sink chosen by
+    // $THEIA_LOGGER. Installed BEFORE start() so do_start/init log through it. The
+    // FIRST node's logger also backs process_logger() — the ConfigureLogLevel-push
+    // fallback target + any process_logger() caller.
     {
-        auto ptp4l_log = MakeContextLogger(Ptp4lProvider::kNodeName);
+        auto ptp4l_log = MakeContextLogger("ptp4l");
         ptp4l_log->set_level(boot_level);
         ::theia::runtime::set_process_logger(ptp4l_log);
         ptp4l.set_logger(std::move(ptp4l_log));
@@ -126,7 +135,7 @@ int main(int argc, char** argv) {
     // start() — sees its own instance via tipc_instance() (a clone that keys its
     // per-instance config in init() would otherwise race and read 0).
     uint32_t ptp4l_type, ptp4l_inst;
-    ::theia::runtime::resolve_node_tipc(Ptp4lProvider::kNodeName,
+    ::theia::runtime::resolve_node_tipc("ptp4l",
         Ptp4lProvider::kTipcType, Ptp4lProvider::kTipcInstance,
         ptp4l_type, ptp4l_inst);
     // Generic node params (read via the static-deploy ParamsConfig, overridable
@@ -137,7 +146,7 @@ int main(int argc, char** argv) {
     //   start_delay_ms   (default 0)     — deterministic intra-executable ordering.
     // A node section may be absent entirely → all defaults apply (start normally).
     const auto ptp4l_params =
-        ::theia::runtime::get_config().node(Ptp4lProvider::kNodeName);
+        ::theia::runtime::get_config().node("ptp4l");
     // Boot gate — recomputed identically in the START pass below (cheap param
     // read). PASS 1 (here): wire the mux (bind_node + register_* + pg_attach)
     // BEFORE config_mux.start() and BEFORE the node thread runs. PASS 2 (after
@@ -155,12 +164,21 @@ int main(int argc, char** argv) {
     }  // end if (ptp4l_enabled) — PASS 1 (mux wiring)
 
     Phc2sysProvider phc2sys;
-    // Per-node logger: tagged [#phc2sys] (kNodeName, matches `tdb ps`),
-    // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so do_start/init
-    // log through it. The FIRST node's logger also backs process_logger() — the
-    // ConfigureLogLevel-push fallback target + any process_logger() caller.
+    // RUNTIME NODE IDENTITY = the PROTOTYPE name ("phc2sys") — the name the
+    // manifest/supervisor domain uses everywhere (executor.json art_nodes, the
+    // --tipc arg keys, config/<proc>.json `nodes` sections, `tdb ps` rows). For a
+    // LOCAL node this equals Phc2sysProvider::kNodeName; for an IMPORTED package node it
+    // does NOT (the package lib was compiled without a composition, so its
+    // kNodeName is the snake'd node TYPE, e.g. osi_v2v vs prototype v2v). Keying
+    // main's identity calls on kNodeName made an imported node's --tipc lookup
+    // MISS (silent fallback to the compiled address — machine-shift/clones broken)
+    // and its params section unmatched (silent defaults). Use the prototype name.
+    // Per-node logger: tagged [#phc2sys] (matches `tdb ps`), sink chosen by
+    // $THEIA_LOGGER. Installed BEFORE start() so do_start/init log through it. The
+    // FIRST node's logger also backs process_logger() — the ConfigureLogLevel-push
+    // fallback target + any process_logger() caller.
     {
-        auto phc2sys_log = MakeContextLogger(Phc2sysProvider::kNodeName);
+        auto phc2sys_log = MakeContextLogger("phc2sys");
         phc2sys_log->set_level(boot_level);
         phc2sys.set_logger(std::move(phc2sys_log));
     }
@@ -172,7 +190,7 @@ int main(int argc, char** argv) {
     // start() — sees its own instance via tipc_instance() (a clone that keys its
     // per-instance config in init() would otherwise race and read 0).
     uint32_t phc2sys_type, phc2sys_inst;
-    ::theia::runtime::resolve_node_tipc(Phc2sysProvider::kNodeName,
+    ::theia::runtime::resolve_node_tipc("phc2sys",
         Phc2sysProvider::kTipcType, Phc2sysProvider::kTipcInstance,
         phc2sys_type, phc2sys_inst);
     // Generic node params (read via the static-deploy ParamsConfig, overridable
@@ -183,7 +201,7 @@ int main(int argc, char** argv) {
     //   start_delay_ms   (default 0)     — deterministic intra-executable ordering.
     // A node section may be absent entirely → all defaults apply (start normally).
     const auto phc2sys_params =
-        ::theia::runtime::get_config().node(Phc2sysProvider::kNodeName);
+        ::theia::runtime::get_config().node("phc2sys");
     // Boot gate — recomputed identically in the START pass below (cheap param
     // read). PASS 1 (here): wire the mux (bind_node + register_* + pg_attach)
     // BEFORE config_mux.start() and BEFORE the node thread runs. PASS 2 (after
@@ -201,12 +219,21 @@ int main(int argc, char** argv) {
     }  // end if (phc2sys_enabled) — PASS 1 (mux wiring)
 
     TsyncCtl tsync_ctl;
-    // Per-node logger: tagged [#tsync_ctl] (kNodeName, matches `tdb ps`),
-    // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so do_start/init
-    // log through it. The FIRST node's logger also backs process_logger() — the
-    // ConfigureLogLevel-push fallback target + any process_logger() caller.
+    // RUNTIME NODE IDENTITY = the PROTOTYPE name ("tsync_ctl") — the name the
+    // manifest/supervisor domain uses everywhere (executor.json art_nodes, the
+    // --tipc arg keys, config/<proc>.json `nodes` sections, `tdb ps` rows). For a
+    // LOCAL node this equals TsyncCtl::kNodeName; for an IMPORTED package node it
+    // does NOT (the package lib was compiled without a composition, so its
+    // kNodeName is the snake'd node TYPE, e.g. osi_v2v vs prototype v2v). Keying
+    // main's identity calls on kNodeName made an imported node's --tipc lookup
+    // MISS (silent fallback to the compiled address — machine-shift/clones broken)
+    // and its params section unmatched (silent defaults). Use the prototype name.
+    // Per-node logger: tagged [#tsync_ctl] (matches `tdb ps`), sink chosen by
+    // $THEIA_LOGGER. Installed BEFORE start() so do_start/init log through it. The
+    // FIRST node's logger also backs process_logger() — the ConfigureLogLevel-push
+    // fallback target + any process_logger() caller.
     {
-        auto tsync_ctl_log = MakeContextLogger(TsyncCtl::kNodeName);
+        auto tsync_ctl_log = MakeContextLogger("tsync_ctl");
         tsync_ctl_log->set_level(boot_level);
         tsync_ctl.set_logger(std::move(tsync_ctl_log));
     }
@@ -218,7 +245,7 @@ int main(int argc, char** argv) {
     // start() — sees its own instance via tipc_instance() (a clone that keys its
     // per-instance config in init() would otherwise race and read 0).
     uint32_t tsync_ctl_type, tsync_ctl_inst;
-    ::theia::runtime::resolve_node_tipc(TsyncCtl::kNodeName,
+    ::theia::runtime::resolve_node_tipc("tsync_ctl",
         TsyncCtl::kTipcType, TsyncCtl::kTipcInstance,
         tsync_ctl_type, tsync_ctl_inst);
     // set_tipc_instance() is a GenServer/GenStateM method — only atomic + statem
@@ -236,7 +263,7 @@ int main(int argc, char** argv) {
     //   start_delay_ms   (default 0)     — deterministic intra-executable ordering.
     // A node section may be absent entirely → all defaults apply (start normally).
     const auto tsync_ctl_params =
-        ::theia::runtime::get_config().node(TsyncCtl::kNodeName);
+        ::theia::runtime::get_config().node("tsync_ctl");
     // Boot gate — recomputed identically in the START pass below (cheap param
     // read). PASS 1 (here): wire the mux (bind_node + register_* + pg_attach)
     // BEFORE config_mux.start() and BEFORE the node thread runs. PASS 2 (after
@@ -289,7 +316,7 @@ int main(int argc, char** argv) {
         // supervisor's PgMembership pushes route into handle_cast) and pass its
         // BOUND ADDRESS as the watcher address — where the supervisor casts
         // PgMembership when this node pg_watch'es a group it produces to.
-        tsync_ctl.pg_attach(TsyncCtl::kNodeName, tsync_ctl_cfg,
+        tsync_ctl.pg_attach("tsync_ctl", tsync_ctl_cfg,
                                 tsync_ctl_type, tsync_ctl_inst);
     } else {
         tsync_ctl.log().warn("config service bind failed; live log-level "
@@ -322,7 +349,7 @@ int main(int argc, char** argv) {
     // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG. Applied AFTER
     // start() — the thread exists now. No-op when unset; soft-fails on EPERM.
     ::theia::runtime::apply_node_affinity(ptp4l.native_handle(),
-        Ptp4lProvider::kNodeName, std::getenv("THEIA_NODE_CFG"));
+        "ptp4l", std::getenv("THEIA_NODE_CFG"));
 
     }  // end if (ptp4l_enabled) — PASS 2 (start + heartbeat)
 
@@ -341,7 +368,7 @@ int main(int argc, char** argv) {
     // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG. Applied AFTER
     // start() — the thread exists now. No-op when unset; soft-fails on EPERM.
     ::theia::runtime::apply_node_affinity(phc2sys.native_handle(),
-        Phc2sysProvider::kNodeName, std::getenv("THEIA_NODE_CFG"));
+        "phc2sys", std::getenv("THEIA_NODE_CFG"));
 
     }  // end if (phc2sys_enabled) — PASS 2 (start + heartbeat)
 
@@ -360,14 +387,14 @@ int main(int argc, char** argv) {
     // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG. Applied AFTER
     // start() — the thread exists now. No-op when unset; soft-fails on EPERM.
     ::theia::runtime::apply_node_affinity(tsync_ctl.native_handle(),
-        TsyncCtl::kNodeName, std::getenv("THEIA_NODE_CFG"));
+        "tsync_ctl", std::getenv("THEIA_NODE_CFG"));
 
     // Liveness beat to the supervisor watchdog (#PHM). A reporting node must beat
     // or the watchdog SIGTERMs it after K missed deadlines. One publisher per
     // node, own timer thread; 1s default matches the supervisor's check cadence.
     {
         auto tsync_ctl_hb = std::make_unique<
-            ::theia::runtime::HeartbeatPublisher>(TsyncCtl::kNodeName);
+            ::theia::runtime::HeartbeatPublisher>("tsync_ctl");
         if (tsync_ctl_hb->open()) {
             tsync_ctl_hb->start(/*period_ms=*/1000);
             heartbeats.push_back(std::move(tsync_ctl_hb));

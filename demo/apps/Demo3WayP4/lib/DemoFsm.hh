@@ -14,6 +14,8 @@
 #pragma once
 
 #include "GenStateM.hh"
+#include "NodeRef.hh"   // TipcAddr (PG plumbing)
+#include "PgClient.hh"  // OTP-pg broadcast fan-out (sender-port broadcast_*)
 #include "Log.hh"      // sibling — per-FC ContextLogger + kLogTag
 #include "apps_codecs.hh"   // FC-wide inbound RemoteCodecs (#387)
 #include "system/apps/apps.pb.h"
@@ -23,6 +25,7 @@
 #include <cstdio>
 #include <functional>
 #include <map>
+#include <set>
 #include <mutex>
 #include <string>
 #include <utility>
@@ -56,10 +59,9 @@ using DemoReset = system_apps_DemoReset;
 
 using DemoFsmData = DemoFsmData;
 
-// Subscribers (one type per sender-port data element). Free-functions
-// so the daemon stays delivery-flavor agnostic. on_enter — declared
-// in impl — typically broadcasts the new state to these.
-
+// (Subscriber-list / gen_event RETIRED — on_enter broadcasts the new state via
+// the sender-port broadcast_*(), which is PURE PG multicast. Consumers pg_join
+// the state message's group.)
 
 // Forward-declare the user-facing daemon so the GenStateM template
 // can be instantiated below (CRTP).
@@ -119,6 +121,44 @@ public:
     }
     void trace_clear_all() {
         ::theia::runtime::tracer_for(kNodeName).trace_clear_all();
+    }
+
+    // ---- process groups (pg): MANUAL pub/sub over TIPC nameseq multicast ----
+    // Same model as the non-statem Daemon template: group identity =
+    // msg_type_name<T>() (the .art wire name); the supervisor allocates the
+    // group's TIPC type + a unique instance; broadcast_*() multicasts ONE
+    // datagram to the whole group. A consumer pg_join<T>()s from init(); a
+    // broadcaster pg_resolve<T>()s the type (cached). See [[project-pg-broadcast-model]].
+    void pg_attach(const char* node_name, ::theia::runtime::NodeBinding* b,
+                   uint32_t self_type = 0, uint32_t self_instance = 0) {
+        pg_.attach(node_name, b);
+        pg_self_type_ = self_type; pg_self_instance_ = self_instance;
+    }
+    template <typename T> ::theia::runtime::PgClient::Group pg_join() {
+        return pg_.join<T>();
+    }
+    template <typename T>
+    ::theia::runtime::PgClient::Group pg_watch(std::function<void()> on_change = {}) {
+        uint16_t _sid = ::theia::runtime::RemoteCodec<T>::service_id;
+        if (!pg_watched_.count(_sid)) {
+            pg_watched_.insert(_sid);
+            return pg_.watch<T>(pg_self_type_, pg_self_instance_, std::move(on_change));
+        }
+        return {true, 0, 0};
+    }
+    template <typename T>
+    std::vector<::theia::runtime::PgClient::Member> pg_members() {
+        return pg_.members<T>();
+    }
+    template <typename T> void pg_leave() { pg_.leave<T>(); }
+    template <typename T>
+    void pg_broadcast(uint32_t group_type, const T& msg) {   // allocator escape hatch
+        uint8_t _buf[8192];
+        pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
+        if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<T>::fields(), &msg))
+            return;
+        pg_.broadcast<T>(group_type, _buf,
+                         static_cast<uint16_t>(_os.bytes_written));
     }
 
     // Keep the framework's config-service handler
@@ -203,7 +243,7 @@ public:
     void on_config_update(const platform_runtime_ConfigUpdated& cfg,
                           ::theia::runtime::GenStateMHolder<DemoFsmState, DemoFsmData>& h);
 
-    // ---- Subscriber registration (per sender-port data element) --------
+    // ---- Broadcast senders (per sender-port data element) — PG multicast --
 
 
     // ---- Server-port operations (one per unique handler signature) — impl
@@ -215,11 +255,15 @@ public:
 
 
 private:
-
+    // The node's PG client + watch state (see the non-statem Daemon template).
+    ::theia::runtime::PgClient pg_;
+    std::set<uint16_t> pg_watched_;
+    uint32_t pg_self_type_{0};
+    uint32_t pg_self_instance_{0};
 };
 
-// Subscriber + broadcast inline impls — pure boilerplate; kept in
-// lib because they're per-instance bookkeeping with no policy.
+// Broadcast fan-out — OTP `[Pid ! Msg || Pid <- pg:get_members(group)]`. Kept in
+// lib (auto-generated); the user touches on_enter/handle_* only.
 
 
 

@@ -89,11 +89,12 @@ int main(int argc, char** argv) {
 
 
     UcmFsm ucm_fsm;
-    // Per-node logger: tagged [#ucm_fsm] (kNodeName, matches `tdb ps`),
+    // Per-node logger: tagged [#ucm_fsm] (the PROTOTYPE name — the runtime
+    // node identity, matching executor.json/--tipc/config keys + `tdb ps`),
     // sink chosen by $THEIA_LOGGER. Installed BEFORE start so init/do_* log
     // through it; the FIRST node's logger also backs process_logger().
     {
-        auto ucm_fsm_log = MakeContextLogger(UcmFsm::kNodeName);
+        auto ucm_fsm_log = MakeContextLogger("ucm_fsm");
         ucm_fsm_log->set_level(boot_level);
         ::theia::runtime::set_process_logger(ucm_fsm_log);
         ucm_fsm.set_logger(std::move(ucm_fsm_log));
@@ -105,7 +106,7 @@ int main(int argc, char** argv) {
     // on the node thread right after start) see this node's own instance — a clone
     // keying per-instance config in init() would otherwise race and read 0.
     uint32_t ucm_fsm_type, ucm_fsm_inst;
-    ::theia::runtime::resolve_node_tipc(UcmFsm::kNodeName,
+    ::theia::runtime::resolve_node_tipc("ucm_fsm",
         UcmFsm::kTipcType, UcmFsm::kTipcInstance,
         ucm_fsm_type, ucm_fsm_inst);
     ucm_fsm.set_tipc_instance(ucm_fsm_inst);
@@ -120,7 +121,7 @@ int main(int argc, char** argv) {
     // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (supervisor sets it
     // from the rig's NodeToCPUMapping). No-op when unset; soft-fails on EPERM.
     ::theia::runtime::apply_node_affinity(ucm_fsm.native_handle(),
-        UcmFsm::kNodeName, std::getenv("THEIA_NODE_CFG"));
+        "ucm_fsm", std::getenv("THEIA_NODE_CFG"));
 
     if (auto* ucm_fsm_cfg = config_mux.bind_node(
             ucm_fsm, ucm_fsm_type,
@@ -144,7 +145,7 @@ int main(int argc, char** argv) {
         // its demux binding (joined-group frames + PgMembership pushes route into
         // handle_cast) + pass its bound addr as the watcher address (where the
         // supervisor casts PgMembership when this node pg_watch'es a group).
-        ucm_fsm.pg_attach(UcmFsm::kNodeName, ucm_fsm_cfg,
+        ucm_fsm.pg_attach("ucm_fsm", ucm_fsm_cfg,
                                 ucm_fsm_type, ucm_fsm_inst);
     } else {
         ucm_fsm.log().warn("config service bind failed; live log-level "
@@ -155,7 +156,7 @@ int main(int argc, char** argv) {
     // per node, own timer thread (1s default = the supervisor's check cadence).
     {
         auto ucm_fsm_hb = std::make_unique<
-            ::theia::runtime::HeartbeatPublisher>(UcmFsm::kNodeName);
+            ::theia::runtime::HeartbeatPublisher>("ucm_fsm");
         if (ucm_fsm_hb->open()) {
             ucm_fsm_hb->start(/*period_ms=*/1000);
             heartbeats.push_back(std::move(ucm_fsm_hb));
@@ -167,11 +168,12 @@ int main(int argc, char** argv) {
 
 
     UcmGate ucm_gate;
-    // Per-node logger: tagged [#ucm_gate] (kNodeName, matches `tdb ps`),
+    // Per-node logger: tagged [#ucm_gate] (the PROTOTYPE name — the runtime
+    // node identity, matching executor.json/--tipc/config keys + `tdb ps`),
     // sink chosen by $THEIA_LOGGER. Installed BEFORE start so init/do_* log
     // through it; the FIRST node's logger also backs process_logger().
     {
-        auto ucm_gate_log = MakeContextLogger(UcmGate::kNodeName);
+        auto ucm_gate_log = MakeContextLogger("ucm_gate");
         ucm_gate_log->set_level(boot_level);
         ucm_gate.set_logger(std::move(ucm_gate_log));
     }
@@ -182,7 +184,7 @@ int main(int argc, char** argv) {
     // on the node thread right after start) see this node's own instance — a clone
     // keying per-instance config in init() would otherwise race and read 0.
     uint32_t ucm_gate_type, ucm_gate_inst;
-    ::theia::runtime::resolve_node_tipc(UcmGate::kNodeName,
+    ::theia::runtime::resolve_node_tipc("ucm_gate",
         UcmGate::kTipcType, UcmGate::kTipcInstance,
         ucm_gate_type, ucm_gate_inst);
     ucm_gate.set_tipc_instance(ucm_gate_inst);
@@ -196,7 +198,7 @@ int main(int argc, char** argv) {
     // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (supervisor sets it
     // from the rig's NodeToCPUMapping). No-op when unset; soft-fails on EPERM.
     ::theia::runtime::apply_node_affinity(ucm_gate.native_handle(),
-        UcmGate::kNodeName, std::getenv("THEIA_NODE_CFG"));
+        "ucm_gate", std::getenv("THEIA_NODE_CFG"));
 
     if (auto* ucm_gate_cfg = config_mux.bind_node(
             ucm_gate, ucm_gate_type,
@@ -232,7 +234,7 @@ int main(int argc, char** argv) {
         // its demux binding (joined-group frames + PgMembership pushes route into
         // handle_cast) + pass its bound addr as the watcher address (where the
         // supervisor casts PgMembership when this node pg_watch'es a group).
-        ucm_gate.pg_attach(UcmGate::kNodeName, ucm_gate_cfg,
+        ucm_gate.pg_attach("ucm_gate", ucm_gate_cfg,
                                 ucm_gate_type, ucm_gate_inst);
     } else {
         ucm_gate.log().warn("config service bind failed; live log-level "
@@ -243,7 +245,7 @@ int main(int argc, char** argv) {
     // per node, own timer thread (1s default = the supervisor's check cadence).
     {
         auto ucm_gate_hb = std::make_unique<
-            ::theia::runtime::HeartbeatPublisher>(UcmGate::kNodeName);
+            ::theia::runtime::HeartbeatPublisher>("ucm_gate");
         if (ucm_gate_hb->open()) {
             ucm_gate_hb->start(/*period_ms=*/1000);
             heartbeats.push_back(std::move(ucm_gate_hb));
@@ -255,11 +257,12 @@ int main(int argc, char** argv) {
 
 
     UcmDaemon ucm_daemon;
-    // Per-node logger: tagged [#ucm_daemon] (kNodeName, matches `tdb ps`),
+    // Per-node logger: tagged [#ucm_daemon] (the PROTOTYPE name — the runtime
+    // node identity, matching executor.json/--tipc/config keys + `tdb ps`),
     // sink chosen by $THEIA_LOGGER. Installed BEFORE start so init/do_* log
     // through it; the FIRST node's logger also backs process_logger().
     {
-        auto ucm_daemon_log = MakeContextLogger(UcmDaemon::kNodeName);
+        auto ucm_daemon_log = MakeContextLogger("ucm_daemon");
         ucm_daemon_log->set_level(boot_level);
         ucm_daemon.set_logger(std::move(ucm_daemon_log));
     }
@@ -270,7 +273,7 @@ int main(int argc, char** argv) {
     // on the node thread right after start) see this node's own instance — a clone
     // keying per-instance config in init() would otherwise race and read 0.
     uint32_t ucm_daemon_type, ucm_daemon_inst;
-    ::theia::runtime::resolve_node_tipc(UcmDaemon::kNodeName,
+    ::theia::runtime::resolve_node_tipc("ucm_daemon",
         UcmDaemon::kTipcType, UcmDaemon::kTipcInstance,
         ucm_daemon_type, ucm_daemon_inst);
     ucm_daemon.set_tipc_instance(ucm_daemon_inst);
@@ -284,7 +287,7 @@ int main(int argc, char** argv) {
     // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (supervisor sets it
     // from the rig's NodeToCPUMapping). No-op when unset; soft-fails on EPERM.
     ::theia::runtime::apply_node_affinity(ucm_daemon.native_handle(),
-        UcmDaemon::kNodeName, std::getenv("THEIA_NODE_CFG"));
+        "ucm_daemon", std::getenv("THEIA_NODE_CFG"));
 
     if (auto* ucm_daemon_cfg = config_mux.bind_node(
             ucm_daemon, ucm_daemon_type,
@@ -314,7 +317,7 @@ int main(int argc, char** argv) {
         // its demux binding (joined-group frames + PgMembership pushes route into
         // handle_cast) + pass its bound addr as the watcher address (where the
         // supervisor casts PgMembership when this node pg_watch'es a group).
-        ucm_daemon.pg_attach(UcmDaemon::kNodeName, ucm_daemon_cfg,
+        ucm_daemon.pg_attach("ucm_daemon", ucm_daemon_cfg,
                                 ucm_daemon_type, ucm_daemon_inst);
     } else {
         ucm_daemon.log().warn("config service bind failed; live log-level "
@@ -325,7 +328,7 @@ int main(int argc, char** argv) {
     // per node, own timer thread (1s default = the supervisor's check cadence).
     {
         auto ucm_daemon_hb = std::make_unique<
-            ::theia::runtime::HeartbeatPublisher>(UcmDaemon::kNodeName);
+            ::theia::runtime::HeartbeatPublisher>("ucm_daemon");
         if (ucm_daemon_hb->open()) {
             ucm_daemon_hb->start(/*period_ms=*/1000);
             heartbeats.push_back(std::move(ucm_daemon_hb));

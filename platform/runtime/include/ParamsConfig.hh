@@ -202,11 +202,22 @@ private:
 
 // ---- Free-function API the generated main.cc + node code uses ---------------
 
-// Resolve the per-FC config path and load it once. main.cc calls this early in
-// boot, passing its FC leaf name (the .art package leaf). Path precedence:
+// Resolve the per-PROCESS config path and load it once. main.cc calls this early
+// in boot, passing its FC leaf name (the .art package leaf) as the FALLBACK.
+// Filename precedence:
+//   $THEIA_PROCESS_NAME.json — the SUPERVISED case. serialize-manifest stages
+//     config per PROCESS (config/<process>.json, e.g. app.json — one composition
+//     binary can run as several processes, each with its own params), and the
+//     supervisor exports THEIA_PROCESS_NAME to every child it forks. The compiled
+//     fc leaf CANNOT know the process name (a deploy-time identity) — keying the
+//     file on the leaf made every supervised app's params silently default (the
+//     staged file was app.json; the binary looked for <leaf>.json; services never
+//     noticed because their leaf == process name, e.g. sm/sm.json).
+//   <fc_name>.json           — bare/unsupervised runs (host dev, tests).
+// Path precedence (unchanged):
 //   $THEIA_CONFIG  (full path override, for tests)         -> use verbatim
-//   $THEIA_CONFIG_DIR/<fc>.json                            -> dir + fc
-//   ./config/<fc>.json                                     -> CWD default
+//   $THEIA_CONFIG_DIR/<name>.json                          -> dir + name
+//   ./config/<name>.json                                   -> CWD default
 // A missing file is fine (every lookup returns its default).
 //
 // THEIA_CONFIG_DIR is "config" (RELATIVE) in the executor env. But the supervisor
@@ -219,6 +230,9 @@ inline bool init_config(const std::string& fc_name) {
     if (const char* full = std::getenv("THEIA_CONFIG")) {
         return ParamsConfig::instance().load(full);
     }
+    std::string name = fc_name;
+    if (const char* pn = std::getenv("THEIA_PROCESS_NAME"); pn && *pn)
+        name = pn;                       // supervised: the per-process file wins
     std::string dir = "config";
     if (const char* d = std::getenv("THEIA_CONFIG_DIR")) dir = d;
     // Relative dir + a deployed root → anchor to the root (config/ is at
@@ -227,7 +241,7 @@ inline bool init_config(const std::string& fc_name) {
         if (const char* root = std::getenv("THEIA_ROOT_DIR"); root && *root)
             dir = std::string(root) + "/" + dir;
     }
-    return ParamsConfig::instance().load(dir + "/" + fc_name + ".json");
+    return ParamsConfig::instance().load(dir + "/" + name + ".json");
 }
 
 // The process config singleton — nodes call get_config().node(kNodeName)....

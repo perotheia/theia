@@ -106,12 +106,21 @@ int main(int argc, char** argv) {
 
 
     IdsmDaemon idsm_daemon;
-    // Per-node logger: tagged [#idsm_daemon] (kNodeName, matches `tdb ps`),
-    // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so do_start/init
-    // log through it. The FIRST node's logger also backs process_logger() — the
-    // ConfigureLogLevel-push fallback target + any process_logger() caller.
+    // RUNTIME NODE IDENTITY = the PROTOTYPE name ("idsm_daemon") — the name the
+    // manifest/supervisor domain uses everywhere (executor.json art_nodes, the
+    // --tipc arg keys, config/<proc>.json `nodes` sections, `tdb ps` rows). For a
+    // LOCAL node this equals IdsmDaemon::kNodeName; for an IMPORTED package node it
+    // does NOT (the package lib was compiled without a composition, so its
+    // kNodeName is the snake'd node TYPE, e.g. osi_v2v vs prototype v2v). Keying
+    // main's identity calls on kNodeName made an imported node's --tipc lookup
+    // MISS (silent fallback to the compiled address — machine-shift/clones broken)
+    // and its params section unmatched (silent defaults). Use the prototype name.
+    // Per-node logger: tagged [#idsm_daemon] (matches `tdb ps`), sink chosen by
+    // $THEIA_LOGGER. Installed BEFORE start() so do_start/init log through it. The
+    // FIRST node's logger also backs process_logger() — the ConfigureLogLevel-push
+    // fallback target + any process_logger() caller.
     {
-        auto idsm_daemon_log = MakeContextLogger(IdsmDaemon::kNodeName);
+        auto idsm_daemon_log = MakeContextLogger("idsm_daemon");
         idsm_daemon_log->set_level(boot_level);
         ::theia::runtime::set_process_logger(idsm_daemon_log);
         idsm_daemon.set_logger(std::move(idsm_daemon_log));
@@ -124,7 +133,7 @@ int main(int argc, char** argv) {
     // start() — sees its own instance via tipc_instance() (a clone that keys its
     // per-instance config in init() would otherwise race and read 0).
     uint32_t idsm_daemon_type, idsm_daemon_inst;
-    ::theia::runtime::resolve_node_tipc(IdsmDaemon::kNodeName,
+    ::theia::runtime::resolve_node_tipc("idsm_daemon",
         IdsmDaemon::kTipcType, IdsmDaemon::kTipcInstance,
         idsm_daemon_type, idsm_daemon_inst);
     // set_tipc_instance() is a GenServer/GenStateM method — only atomic + statem
@@ -142,7 +151,7 @@ int main(int argc, char** argv) {
     //   start_delay_ms   (default 0)     — deterministic intra-executable ordering.
     // A node section may be absent entirely → all defaults apply (start normally).
     const auto idsm_daemon_params =
-        ::theia::runtime::get_config().node(IdsmDaemon::kNodeName);
+        ::theia::runtime::get_config().node("idsm_daemon");
     // Boot gate — recomputed identically in the START pass below (cheap param
     // read). PASS 1 (here): wire the mux (bind_node + register_* + pg_attach)
     // BEFORE config_mux.start() and BEFORE the node thread runs. PASS 2 (after
@@ -188,7 +197,7 @@ int main(int argc, char** argv) {
         // supervisor's PgMembership pushes route into handle_cast) and pass its
         // BOUND ADDRESS as the watcher address — where the supervisor casts
         // PgMembership when this node pg_watch'es a group it produces to.
-        idsm_daemon.pg_attach(IdsmDaemon::kNodeName, idsm_daemon_cfg,
+        idsm_daemon.pg_attach("idsm_daemon", idsm_daemon_cfg,
                                 idsm_daemon_type, idsm_daemon_inst);
     } else {
         idsm_daemon.log().warn("config service bind failed; live log-level "
@@ -221,14 +230,14 @@ int main(int argc, char** argv) {
     // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG. Applied AFTER
     // start() — the thread exists now. No-op when unset; soft-fails on EPERM.
     ::theia::runtime::apply_node_affinity(idsm_daemon.native_handle(),
-        IdsmDaemon::kNodeName, std::getenv("THEIA_NODE_CFG"));
+        "idsm_daemon", std::getenv("THEIA_NODE_CFG"));
 
     // Liveness beat to the supervisor watchdog (#PHM). A reporting node must beat
     // or the watchdog SIGTERMs it after K missed deadlines. One publisher per
     // node, own timer thread; 1s default matches the supervisor's check cadence.
     {
         auto idsm_daemon_hb = std::make_unique<
-            ::theia::runtime::HeartbeatPublisher>(IdsmDaemon::kNodeName);
+            ::theia::runtime::HeartbeatPublisher>("idsm_daemon");
         if (idsm_daemon_hb->open()) {
             idsm_daemon_hb->start(/*period_ms=*/1000);
             heartbeats.push_back(std::move(idsm_daemon_hb));

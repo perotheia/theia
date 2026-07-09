@@ -22,6 +22,7 @@
                          // reporting runnables use bind_listener +
                          // register_cast_inline (no mailbox).
 #include "HeartbeatPublisher.hh"  // periodic liveness beat to the supervisor
+#include "PgClient.hh"            // process-group join/watch (broadcast fan-out)
                          // watchdog — every reporting node (GenServer AND
                          // runnable). Hand-framed cast, no supervisor-proto dep.
 #include <memory>
@@ -107,37 +108,64 @@ int main(int argc, char** argv) {
 
 
     CounterNode counter;
-    // Per-node logger: tagged [#counter] (kNodeName, matches `tdb ps`),
-    // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so do_start/init
-    // log through it. The FIRST node's logger also backs process_logger() — the
-    // ConfigureLogLevel-push fallback target + any process_logger() caller.
+    // RUNTIME NODE IDENTITY = the PROTOTYPE name ("counter") — the name the
+    // manifest/supervisor domain uses everywhere (executor.json art_nodes, the
+    // --tipc arg keys, config/<proc>.json `nodes` sections, `tdb ps` rows). For a
+    // LOCAL node this equals CounterNode::kNodeName; for an IMPORTED package node it
+    // does NOT (the package lib was compiled without a composition, so its
+    // kNodeName is the snake'd node TYPE, e.g. osi_v2v vs prototype v2v). Keying
+    // main's identity calls on kNodeName made an imported node's --tipc lookup
+    // MISS (silent fallback to the compiled address — machine-shift/clones broken)
+    // and its params section unmatched (silent defaults). Use the prototype name.
+    // Per-node logger: tagged [#counter] (matches `tdb ps`), sink chosen by
+    // $THEIA_LOGGER. Installed BEFORE start() so do_start/init log through it. The
+    // FIRST node's logger also backs process_logger() — the ConfigureLogLevel-push
+    // fallback target + any process_logger() caller.
     {
-        auto counter_log = MakeContextLogger(CounterNode::kNodeName);
+        auto counter_log = MakeContextLogger("counter");
         counter_log->set_level(boot_level);
         ::theia::runtime::set_process_logger(counter_log);
         counter.set_logger(std::move(counter_log));
     }
-    counter.start();
-    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (the supervisor
-    // sets it from the rig's NodeToCPUMapping). No-op when unset / no entry for
-    // this node; soft-fails (logs) on EPERM. Applied AFTER start() — the thread
-    // exists now.
-    ::theia::runtime::apply_node_affinity(counter.native_handle(),
-        CounterNode::kNodeName, std::getenv("THEIA_NODE_CFG"));
     // Resolve this node's TIPC address from the --tipc arg the supervisor built
     // from executor.json (per node, instance machine-shifted), so the BINARY is
     // address-agnostic — same binary on every machine. Falls back to the compiled
-    // kTipcType/kTipcInstance (the .art instance) for a standalone run.
+    // kTipcType/kTipcInstance (the .art instance) for a standalone run. Done BEFORE
+    // start() so the node's init() — which runs on the node thread right after
+    // start() — sees its own instance via tipc_instance() (a clone that keys its
+    // per-instance config in init() would otherwise race and read 0).
     uint32_t counter_type, counter_inst;
-    ::theia::runtime::resolve_node_tipc(CounterNode::kNodeName,
+    ::theia::runtime::resolve_node_tipc("counter",
         CounterNode::kTipcType, CounterNode::kTipcInstance,
         counter_type, counter_inst);
-    {
-        char _tipc[64];
-        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
-                      counter_type, counter_inst);
-        counter.log().info(_tipc);
-    }
+    // set_tipc_instance() is a GenServer/GenStateM method — only atomic + statem
+    // nodes have it. A `node runnable` (GenRunnable) resolves its own instance in
+    // do_start via resolve_node_tipc; a `node prebuilt` (also a GenRunnable
+    // subclass, wrapping a 3rd-party child) likewise has no such method. Emit the
+    // call ONLY for gen_server/statem nodes so init() sees its instance before
+    // start(); a runnable/prebuilt would fail to compile (no member).
+    counter.set_tipc_instance(counter_inst);
+    // Generic node params (read via the static-deploy ParamsConfig, overridable
+    // per-rig in config/<fc>.json under this node's section — same mechanism as
+    // tsync's prebuilt `enabled`):
+    //   enabled          (default true)  — boot gate; a disabled node does NOT
+    //                     start, freeing its TIPC slot (e.g. a probe replaces it).
+    //   start_delay_ms   (default 0)     — deterministic intra-executable ordering.
+    // A node section may be absent entirely → all defaults apply (start normally).
+    const auto counter_params =
+        ::theia::runtime::get_config().node("counter");
+    // Boot gate — recomputed identically in the START pass below (cheap param
+    // read). PASS 1 (here): wire the mux (bind_node + register_* + pg_attach)
+    // BEFORE config_mux.start() and BEFORE the node thread runs. PASS 2 (after
+    // the mux is pumping): node.start() — so init()'s OWN pg_join/pg_watch (a
+    // BLOCKING CALL to the supervisor's PG allocator) gets its reply pumped. If
+    // start() ran here (before config_mux.start()), a pg_join in init() would
+    // deadlock, the node would never beat, and the watchdog would SIGTERM it.
+    const bool counter_enabled = counter_params.boolean("enabled", true);
+    if (!counter_enabled) {
+        counter.log().info("node disabled (params.enabled=false) — not "
+            "started; its TIPC address is free for a test/probe to bind");
+    } else {
 
     if (auto* counter_cfg = config_mux.bind_node(
             counter, counter_type,
@@ -150,7 +178,10 @@ int main(int argc, char** argv) {
             counter_cfg, counter);
         // Config update: services/per casts ConfigUpdated when a watched
         // config changes — same framework path; GenServer base handle_cast
-        // applies it (decode + on_config_update hook).
+        // decodes + dispatches to this node's on_config_update hook (emitted in
+        // Daemon.hh only when the node binds `config <Msg>`). A node with NO
+        // `config {}` declaration does NOT register this — it neither reads nor
+        // observes etcd-backed config, so per never casts to it.
         config_mux.register_cast<platform_runtime_ConfigUpdated>(
             counter_cfg, counter);
         // Receiver ports (#387): register the node's declared inbound
@@ -160,61 +191,82 @@ int main(int argc, char** argv) {
         config_mux.register_call<Get, GetReply>(
             counter_cfg, counter);
         config_mux.register_cast<Inc>(counter_cfg, counter);
+        // ---- process groups (pg): MANUAL pub/sub control (OTP pg shape) ----
+        // The node OWNS its membership: pg_join<T>() to CONSUME a group,
+        // pg_watch<T>()/broadcast_*() to PRODUCE, pg_leave<T>() to stop — from its
+        // OWN logic (init()/handlers), never automatically here. We ATTACH the
+        // node's PgClient to its demux binding (so a joined group's frames + the
+        // supervisor's PgMembership pushes route into handle_cast) and pass its
+        // BOUND ADDRESS as the watcher address — where the supervisor casts
+        // PgMembership when this node pg_watch'es a group it produces to.
+        counter.pg_attach("counter", counter_cfg,
+                                counter_type, counter_inst);
     } else {
         counter.log().warn("config service bind failed; live log-level "
                                  "push + signal inject disabled");
     }
 
 
-
-    // Liveness beat to the supervisor watchdog (#PHM). A reporting node — of
-    // EITHER base — must beat or the watchdog SIGTERMs it after K missed
-    // deadlines. One publisher per node, own timer thread; period TODO from the
-    // manifest (1s default matches the supervisor's check cadence).
-    {
-        auto counter_hb = std::make_unique<
-            ::theia::runtime::HeartbeatPublisher>(CounterNode::kNodeName);
-        if (counter_hb->open()) {
-            counter_hb->start(/*period_ms=*/1000);
-            heartbeats.push_back(std::move(counter_hb));
-        } else {
-            counter.log().warn("heartbeat publisher open failed; "
-                                     "supervisor watchdog will not see beats");
-        }
-    }
-
+    }  // end if (counter_enabled) — PASS 1 (mux wiring)
 
     DriverNode driver;
-    // Per-node logger: tagged [#driver] (kNodeName, matches `tdb ps`),
-    // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so do_start/init
-    // log through it. The FIRST node's logger also backs process_logger() — the
-    // ConfigureLogLevel-push fallback target + any process_logger() caller.
+    // RUNTIME NODE IDENTITY = the PROTOTYPE name ("driver") — the name the
+    // manifest/supervisor domain uses everywhere (executor.json art_nodes, the
+    // --tipc arg keys, config/<proc>.json `nodes` sections, `tdb ps` rows). For a
+    // LOCAL node this equals DriverNode::kNodeName; for an IMPORTED package node it
+    // does NOT (the package lib was compiled without a composition, so its
+    // kNodeName is the snake'd node TYPE, e.g. osi_v2v vs prototype v2v). Keying
+    // main's identity calls on kNodeName made an imported node's --tipc lookup
+    // MISS (silent fallback to the compiled address — machine-shift/clones broken)
+    // and its params section unmatched (silent defaults). Use the prototype name.
+    // Per-node logger: tagged [#driver] (matches `tdb ps`), sink chosen by
+    // $THEIA_LOGGER. Installed BEFORE start() so do_start/init log through it. The
+    // FIRST node's logger also backs process_logger() — the ConfigureLogLevel-push
+    // fallback target + any process_logger() caller.
     {
-        auto driver_log = MakeContextLogger(DriverNode::kNodeName);
+        auto driver_log = MakeContextLogger("driver");
         driver_log->set_level(boot_level);
         driver.set_logger(std::move(driver_log));
     }
-    driver.start();
-    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (the supervisor
-    // sets it from the rig's NodeToCPUMapping). No-op when unset / no entry for
-    // this node; soft-fails (logs) on EPERM. Applied AFTER start() — the thread
-    // exists now.
-    ::theia::runtime::apply_node_affinity(driver.native_handle(),
-        DriverNode::kNodeName, std::getenv("THEIA_NODE_CFG"));
     // Resolve this node's TIPC address from the --tipc arg the supervisor built
     // from executor.json (per node, instance machine-shifted), so the BINARY is
     // address-agnostic — same binary on every machine. Falls back to the compiled
-    // kTipcType/kTipcInstance (the .art instance) for a standalone run.
+    // kTipcType/kTipcInstance (the .art instance) for a standalone run. Done BEFORE
+    // start() so the node's init() — which runs on the node thread right after
+    // start() — sees its own instance via tipc_instance() (a clone that keys its
+    // per-instance config in init() would otherwise race and read 0).
     uint32_t driver_type, driver_inst;
-    ::theia::runtime::resolve_node_tipc(DriverNode::kNodeName,
+    ::theia::runtime::resolve_node_tipc("driver",
         DriverNode::kTipcType, DriverNode::kTipcInstance,
         driver_type, driver_inst);
-    {
-        char _tipc[64];
-        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
-                      driver_type, driver_inst);
-        driver.log().info(_tipc);
-    }
+    // set_tipc_instance() is a GenServer/GenStateM method — only atomic + statem
+    // nodes have it. A `node runnable` (GenRunnable) resolves its own instance in
+    // do_start via resolve_node_tipc; a `node prebuilt` (also a GenRunnable
+    // subclass, wrapping a 3rd-party child) likewise has no such method. Emit the
+    // call ONLY for gen_server/statem nodes so init() sees its instance before
+    // start(); a runnable/prebuilt would fail to compile (no member).
+    driver.set_tipc_instance(driver_inst);
+    // Generic node params (read via the static-deploy ParamsConfig, overridable
+    // per-rig in config/<fc>.json under this node's section — same mechanism as
+    // tsync's prebuilt `enabled`):
+    //   enabled          (default true)  — boot gate; a disabled node does NOT
+    //                     start, freeing its TIPC slot (e.g. a probe replaces it).
+    //   start_delay_ms   (default 0)     — deterministic intra-executable ordering.
+    // A node section may be absent entirely → all defaults apply (start normally).
+    const auto driver_params =
+        ::theia::runtime::get_config().node("driver");
+    // Boot gate — recomputed identically in the START pass below (cheap param
+    // read). PASS 1 (here): wire the mux (bind_node + register_* + pg_attach)
+    // BEFORE config_mux.start() and BEFORE the node thread runs. PASS 2 (after
+    // the mux is pumping): node.start() — so init()'s OWN pg_join/pg_watch (a
+    // BLOCKING CALL to the supervisor's PG allocator) gets its reply pumped. If
+    // start() ran here (before config_mux.start()), a pg_join in init() would
+    // deadlock, the node would never beat, and the watchdog would SIGTERM it.
+    const bool driver_enabled = driver_params.boolean("enabled", true);
+    if (!driver_enabled) {
+        driver.log().info("node disabled (params.enabled=false) — not "
+            "started; its TIPC address is free for a test/probe to bind");
+    } else {
 
     if (auto* driver_cfg = config_mux.bind_node(
             driver, driver_type,
@@ -225,70 +277,86 @@ int main(int argc, char** argv) {
         // this node's Tracer kind filter — same path as LogLevelPush.
         config_mux.register_cast<platform_runtime_TraceControlPush>(
             driver_cfg, driver);
-        // Config update: services/per casts ConfigUpdated when a watched
-        // config changes — same framework path; GenServer base handle_cast
-        // applies it (decode + on_config_update hook).
-        config_mux.register_cast<platform_runtime_ConfigUpdated>(
-            driver_cfg, driver);
         // Receiver ports (#387): register the node's declared inbound
         // types so a real peer — or a robot-test inject via services/com
         // — lands on the same handle_call / handle_cast path. clientServer
         // ops → register_call; senderReceiver `in` data → register_cast.
+        // ---- process groups (pg): MANUAL pub/sub control (OTP pg shape) ----
+        // The node OWNS its membership: pg_join<T>() to CONSUME a group,
+        // pg_watch<T>()/broadcast_*() to PRODUCE, pg_leave<T>() to stop — from its
+        // OWN logic (init()/handlers), never automatically here. We ATTACH the
+        // node's PgClient to its demux binding (so a joined group's frames + the
+        // supervisor's PgMembership pushes route into handle_cast) and pass its
+        // BOUND ADDRESS as the watcher address — where the supervisor casts
+        // PgMembership when this node pg_watch'es a group it produces to.
+        driver.pg_attach("driver", driver_cfg,
+                                driver_type, driver_inst);
     } else {
         driver.log().warn("config service bind failed; live log-level "
                                  "push + signal inject disabled");
     }
 
 
-
-    // Liveness beat to the supervisor watchdog (#PHM). A reporting node — of
-    // EITHER base — must beat or the watchdog SIGTERMs it after K missed
-    // deadlines. One publisher per node, own timer thread; period TODO from the
-    // manifest (1s default matches the supervisor's check cadence).
-    {
-        auto driver_hb = std::make_unique<
-            ::theia::runtime::HeartbeatPublisher>(DriverNode::kNodeName);
-        if (driver_hb->open()) {
-            driver_hb->start(/*period_ms=*/1000);
-            heartbeats.push_back(std::move(driver_hb));
-        } else {
-            driver.log().warn("heartbeat publisher open failed; "
-                                     "supervisor watchdog will not see beats");
-        }
-    }
-
+    }  // end if (driver_enabled) — PASS 1 (mux wiring)
 
     TickerNode ticker;
-    // Per-node logger: tagged [#ticker] (kNodeName, matches `tdb ps`),
-    // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so do_start/init
-    // log through it. The FIRST node's logger also backs process_logger() — the
-    // ConfigureLogLevel-push fallback target + any process_logger() caller.
+    // RUNTIME NODE IDENTITY = the PROTOTYPE name ("ticker") — the name the
+    // manifest/supervisor domain uses everywhere (executor.json art_nodes, the
+    // --tipc arg keys, config/<proc>.json `nodes` sections, `tdb ps` rows). For a
+    // LOCAL node this equals TickerNode::kNodeName; for an IMPORTED package node it
+    // does NOT (the package lib was compiled without a composition, so its
+    // kNodeName is the snake'd node TYPE, e.g. osi_v2v vs prototype v2v). Keying
+    // main's identity calls on kNodeName made an imported node's --tipc lookup
+    // MISS (silent fallback to the compiled address — machine-shift/clones broken)
+    // and its params section unmatched (silent defaults). Use the prototype name.
+    // Per-node logger: tagged [#ticker] (matches `tdb ps`), sink chosen by
+    // $THEIA_LOGGER. Installed BEFORE start() so do_start/init log through it. The
+    // FIRST node's logger also backs process_logger() — the ConfigureLogLevel-push
+    // fallback target + any process_logger() caller.
     {
-        auto ticker_log = MakeContextLogger(TickerNode::kNodeName);
+        auto ticker_log = MakeContextLogger("ticker");
         ticker_log->set_level(boot_level);
         ticker.set_logger(std::move(ticker_log));
     }
-    ticker.start();
-    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (the supervisor
-    // sets it from the rig's NodeToCPUMapping). No-op when unset / no entry for
-    // this node; soft-fails (logs) on EPERM. Applied AFTER start() — the thread
-    // exists now.
-    ::theia::runtime::apply_node_affinity(ticker.native_handle(),
-        TickerNode::kNodeName, std::getenv("THEIA_NODE_CFG"));
     // Resolve this node's TIPC address from the --tipc arg the supervisor built
     // from executor.json (per node, instance machine-shifted), so the BINARY is
     // address-agnostic — same binary on every machine. Falls back to the compiled
-    // kTipcType/kTipcInstance (the .art instance) for a standalone run.
+    // kTipcType/kTipcInstance (the .art instance) for a standalone run. Done BEFORE
+    // start() so the node's init() — which runs on the node thread right after
+    // start() — sees its own instance via tipc_instance() (a clone that keys its
+    // per-instance config in init() would otherwise race and read 0).
     uint32_t ticker_type, ticker_inst;
-    ::theia::runtime::resolve_node_tipc(TickerNode::kNodeName,
+    ::theia::runtime::resolve_node_tipc("ticker",
         TickerNode::kTipcType, TickerNode::kTipcInstance,
         ticker_type, ticker_inst);
-    {
-        char _tipc[64];
-        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
-                      ticker_type, ticker_inst);
-        ticker.log().info(_tipc);
-    }
+    // set_tipc_instance() is a GenServer/GenStateM method — only atomic + statem
+    // nodes have it. A `node runnable` (GenRunnable) resolves its own instance in
+    // do_start via resolve_node_tipc; a `node prebuilt` (also a GenRunnable
+    // subclass, wrapping a 3rd-party child) likewise has no such method. Emit the
+    // call ONLY for gen_server/statem nodes so init() sees its instance before
+    // start(); a runnable/prebuilt would fail to compile (no member).
+    ticker.set_tipc_instance(ticker_inst);
+    // Generic node params (read via the static-deploy ParamsConfig, overridable
+    // per-rig in config/<fc>.json under this node's section — same mechanism as
+    // tsync's prebuilt `enabled`):
+    //   enabled          (default true)  — boot gate; a disabled node does NOT
+    //                     start, freeing its TIPC slot (e.g. a probe replaces it).
+    //   start_delay_ms   (default 0)     — deterministic intra-executable ordering.
+    // A node section may be absent entirely → all defaults apply (start normally).
+    const auto ticker_params =
+        ::theia::runtime::get_config().node("ticker");
+    // Boot gate — recomputed identically in the START pass below (cheap param
+    // read). PASS 1 (here): wire the mux (bind_node + register_* + pg_attach)
+    // BEFORE config_mux.start() and BEFORE the node thread runs. PASS 2 (after
+    // the mux is pumping): node.start() — so init()'s OWN pg_join/pg_watch (a
+    // BLOCKING CALL to the supervisor's PG allocator) gets its reply pumped. If
+    // start() ran here (before config_mux.start()), a pg_join in init() would
+    // deadlock, the node would never beat, and the watchdog would SIGTERM it.
+    const bool ticker_enabled = ticker_params.boolean("enabled", true);
+    if (!ticker_enabled) {
+        ticker.log().info("node disabled (params.enabled=false) — not "
+            "started; its TIPC address is free for a test/probe to bind");
+    } else {
 
     if (auto* ticker_cfg = config_mux.bind_node(
             ticker, ticker_type,
@@ -299,29 +367,127 @@ int main(int argc, char** argv) {
         // this node's Tracer kind filter — same path as LogLevelPush.
         config_mux.register_cast<platform_runtime_TraceControlPush>(
             ticker_cfg, ticker);
-        // Config update: services/per casts ConfigUpdated when a watched
-        // config changes — same framework path; GenServer base handle_cast
-        // applies it (decode + on_config_update hook).
-        config_mux.register_cast<platform_runtime_ConfigUpdated>(
-            ticker_cfg, ticker);
         // Receiver ports (#387): register the node's declared inbound
         // types so a real peer — or a robot-test inject via services/com
         // — lands on the same handle_call / handle_cast path. clientServer
         // ops → register_call; senderReceiver `in` data → register_cast.
+        // ---- process groups (pg): MANUAL pub/sub control (OTP pg shape) ----
+        // The node OWNS its membership: pg_join<T>() to CONSUME a group,
+        // pg_watch<T>()/broadcast_*() to PRODUCE, pg_leave<T>() to stop — from its
+        // OWN logic (init()/handlers), never automatically here. We ATTACH the
+        // node's PgClient to its demux binding (so a joined group's frames + the
+        // supervisor's PgMembership pushes route into handle_cast) and pass its
+        // BOUND ADDRESS as the watcher address — where the supervisor casts
+        // PgMembership when this node pg_watch'es a group it produces to.
+        ticker.pg_attach("ticker", ticker_cfg,
+                                ticker_type, ticker_inst);
     } else {
         ticker.log().warn("config service bind failed; live log-level "
                                  "push + signal inject disabled");
     }
 
 
+    }  // end if (ticker_enabled) — PASS 1 (mux wiring)
 
-    // Liveness beat to the supervisor watchdog (#PHM). A reporting node — of
-    // EITHER base — must beat or the watchdog SIGTERMs it after K missed
-    // deadlines. One publisher per node, own timer thread; period TODO from the
-    // manifest (1s default matches the supervisor's check cadence).
+
+    // The mux is now WIRED for every node (bind_node + register_* + pg_attach)
+    // but no node thread runs yet. Start pumping BEFORE any node.start() so a
+    // node's init()/1 can issue blocking pg_join / pg_watch / supervisor CALLs
+    // and get the reply pumped — init() runs on a fully-live stack, OTP-style.
+    config_mux.start();
+
+
+    // PASS 2 — start the node thread (runs init()/1) now that the mux pumps,
+    // then apply post-start settings (affinity) + the liveness heartbeat.
+    if (counter_params.boolean("enabled", true)) {
+    if (auto counter_delay = counter_params.u32("start_delay_ms", 0))
+        std::this_thread::sleep_for(std::chrono::milliseconds(counter_delay));
+    counter.start();
+    {
+        char _tipc[64];
+        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
+                      counter_type, counter_inst);
+        counter.log().info(_tipc);
+    }
+    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG. Applied AFTER
+    // start() — the thread exists now. No-op when unset; soft-fails on EPERM.
+    ::theia::runtime::apply_node_affinity(counter.native_handle(),
+        "counter", std::getenv("THEIA_NODE_CFG"));
+
+    // Liveness beat to the supervisor watchdog (#PHM). A reporting node must beat
+    // or the watchdog SIGTERMs it after K missed deadlines. One publisher per
+    // node, own timer thread; 1s default matches the supervisor's check cadence.
+    {
+        auto counter_hb = std::make_unique<
+            ::theia::runtime::HeartbeatPublisher>("counter");
+        if (counter_hb->open()) {
+            counter_hb->start(/*period_ms=*/1000);
+            heartbeats.push_back(std::move(counter_hb));
+        } else {
+            counter.log().warn("heartbeat publisher open failed; "
+                                     "supervisor watchdog will not see beats");
+        }
+    }
+
+    }  // end if (counter_enabled) — PASS 2 (start + heartbeat)
+
+    // PASS 2 — start the node thread (runs init()/1) now that the mux pumps,
+    // then apply post-start settings (affinity) + the liveness heartbeat.
+    if (driver_params.boolean("enabled", true)) {
+    if (auto driver_delay = driver_params.u32("start_delay_ms", 0))
+        std::this_thread::sleep_for(std::chrono::milliseconds(driver_delay));
+    driver.start();
+    {
+        char _tipc[64];
+        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
+                      driver_type, driver_inst);
+        driver.log().info(_tipc);
+    }
+    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG. Applied AFTER
+    // start() — the thread exists now. No-op when unset; soft-fails on EPERM.
+    ::theia::runtime::apply_node_affinity(driver.native_handle(),
+        "driver", std::getenv("THEIA_NODE_CFG"));
+
+    // Liveness beat to the supervisor watchdog (#PHM). A reporting node must beat
+    // or the watchdog SIGTERMs it after K missed deadlines. One publisher per
+    // node, own timer thread; 1s default matches the supervisor's check cadence.
+    {
+        auto driver_hb = std::make_unique<
+            ::theia::runtime::HeartbeatPublisher>("driver");
+        if (driver_hb->open()) {
+            driver_hb->start(/*period_ms=*/1000);
+            heartbeats.push_back(std::move(driver_hb));
+        } else {
+            driver.log().warn("heartbeat publisher open failed; "
+                                     "supervisor watchdog will not see beats");
+        }
+    }
+
+    }  // end if (driver_enabled) — PASS 2 (start + heartbeat)
+
+    // PASS 2 — start the node thread (runs init()/1) now that the mux pumps,
+    // then apply post-start settings (affinity) + the liveness heartbeat.
+    if (ticker_params.boolean("enabled", true)) {
+    if (auto ticker_delay = ticker_params.u32("start_delay_ms", 0))
+        std::this_thread::sleep_for(std::chrono::milliseconds(ticker_delay));
+    ticker.start();
+    {
+        char _tipc[64];
+        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
+                      ticker_type, ticker_inst);
+        ticker.log().info(_tipc);
+    }
+    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG. Applied AFTER
+    // start() — the thread exists now. No-op when unset; soft-fails on EPERM.
+    ::theia::runtime::apply_node_affinity(ticker.native_handle(),
+        "ticker", std::getenv("THEIA_NODE_CFG"));
+
+    // Liveness beat to the supervisor watchdog (#PHM). A reporting node must beat
+    // or the watchdog SIGTERMs it after K missed deadlines. One publisher per
+    // node, own timer thread; 1s default matches the supervisor's check cadence.
     {
         auto ticker_hb = std::make_unique<
-            ::theia::runtime::HeartbeatPublisher>(TickerNode::kNodeName);
+            ::theia::runtime::HeartbeatPublisher>("ticker");
         if (ticker_hb->open()) {
             ticker_hb->start(/*period_ms=*/1000);
             heartbeats.push_back(std::move(ticker_hb));
@@ -331,9 +497,7 @@ int main(int argc, char** argv) {
         }
     }
 
-
-
-    config_mux.start();
+    }  // end if (ticker_enabled) — PASS 2 (start + heartbeat)
 
 
     while (g_running.load()) {

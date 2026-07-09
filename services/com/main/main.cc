@@ -106,12 +106,21 @@ int main(int argc, char** argv) {
 
 
     ComDaemon com_daemon;
-    // Per-node logger: tagged [#com_daemon] (kNodeName, matches `tdb ps`),
-    // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so do_start/init
-    // log through it. The FIRST node's logger also backs process_logger() — the
-    // ConfigureLogLevel-push fallback target + any process_logger() caller.
+    // RUNTIME NODE IDENTITY = the PROTOTYPE name ("com_daemon") — the name the
+    // manifest/supervisor domain uses everywhere (executor.json art_nodes, the
+    // --tipc arg keys, config/<proc>.json `nodes` sections, `tdb ps` rows). For a
+    // LOCAL node this equals ComDaemon::kNodeName; for an IMPORTED package node it
+    // does NOT (the package lib was compiled without a composition, so its
+    // kNodeName is the snake'd node TYPE, e.g. osi_v2v vs prototype v2v). Keying
+    // main's identity calls on kNodeName made an imported node's --tipc lookup
+    // MISS (silent fallback to the compiled address — machine-shift/clones broken)
+    // and its params section unmatched (silent defaults). Use the prototype name.
+    // Per-node logger: tagged [#com_daemon] (matches `tdb ps`), sink chosen by
+    // $THEIA_LOGGER. Installed BEFORE start() so do_start/init log through it. The
+    // FIRST node's logger also backs process_logger() — the ConfigureLogLevel-push
+    // fallback target + any process_logger() caller.
     {
-        auto com_daemon_log = MakeContextLogger(ComDaemon::kNodeName);
+        auto com_daemon_log = MakeContextLogger("com_daemon");
         com_daemon_log->set_level(boot_level);
         ::theia::runtime::set_process_logger(com_daemon_log);
         com_daemon.set_logger(std::move(com_daemon_log));
@@ -124,7 +133,7 @@ int main(int argc, char** argv) {
     // start() — sees its own instance via tipc_instance() (a clone that keys its
     // per-instance config in init() would otherwise race and read 0).
     uint32_t com_daemon_type, com_daemon_inst;
-    ::theia::runtime::resolve_node_tipc(ComDaemon::kNodeName,
+    ::theia::runtime::resolve_node_tipc("com_daemon",
         ComDaemon::kTipcType, ComDaemon::kTipcInstance,
         com_daemon_type, com_daemon_inst);
     // set_tipc_instance() is a GenServer/GenStateM method — only atomic + statem
@@ -142,7 +151,7 @@ int main(int argc, char** argv) {
     //   start_delay_ms   (default 0)     — deterministic intra-executable ordering.
     // A node section may be absent entirely → all defaults apply (start normally).
     const auto com_daemon_params =
-        ::theia::runtime::get_config().node(ComDaemon::kNodeName);
+        ::theia::runtime::get_config().node("com_daemon");
     // Boot gate — recomputed identically in the START pass below (cheap param
     // read). PASS 1 (here): wire the mux (bind_node + register_* + pg_attach)
     // BEFORE config_mux.start() and BEFORE the node thread runs. PASS 2 (after
@@ -181,7 +190,7 @@ int main(int argc, char** argv) {
         // supervisor's PgMembership pushes route into handle_cast) and pass its
         // BOUND ADDRESS as the watcher address — where the supervisor casts
         // PgMembership when this node pg_watch'es a group it produces to.
-        com_daemon.pg_attach(ComDaemon::kNodeName, com_daemon_cfg,
+        com_daemon.pg_attach("com_daemon", com_daemon_cfg,
                                 com_daemon_type, com_daemon_inst);
     } else {
         com_daemon.log().warn("config service bind failed; live log-level "
@@ -192,12 +201,21 @@ int main(int argc, char** argv) {
     }  // end if (com_daemon_enabled) — PASS 1 (mux wiring)
 
     ComGrpcProxy com_grpc_proxy;
-    // Per-node logger: tagged [#com_grpc_proxy] (kNodeName, matches `tdb ps`),
-    // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so do_start/init
-    // log through it. The FIRST node's logger also backs process_logger() — the
-    // ConfigureLogLevel-push fallback target + any process_logger() caller.
+    // RUNTIME NODE IDENTITY = the PROTOTYPE name ("com_grpc_proxy") — the name the
+    // manifest/supervisor domain uses everywhere (executor.json art_nodes, the
+    // --tipc arg keys, config/<proc>.json `nodes` sections, `tdb ps` rows). For a
+    // LOCAL node this equals ComGrpcProxy::kNodeName; for an IMPORTED package node it
+    // does NOT (the package lib was compiled without a composition, so its
+    // kNodeName is the snake'd node TYPE, e.g. osi_v2v vs prototype v2v). Keying
+    // main's identity calls on kNodeName made an imported node's --tipc lookup
+    // MISS (silent fallback to the compiled address — machine-shift/clones broken)
+    // and its params section unmatched (silent defaults). Use the prototype name.
+    // Per-node logger: tagged [#com_grpc_proxy] (matches `tdb ps`), sink chosen by
+    // $THEIA_LOGGER. Installed BEFORE start() so do_start/init log through it. The
+    // FIRST node's logger also backs process_logger() — the ConfigureLogLevel-push
+    // fallback target + any process_logger() caller.
     {
-        auto com_grpc_proxy_log = MakeContextLogger(ComGrpcProxy::kNodeName);
+        auto com_grpc_proxy_log = MakeContextLogger("com_grpc_proxy");
         com_grpc_proxy_log->set_level(boot_level);
         com_grpc_proxy.set_logger(std::move(com_grpc_proxy_log));
     }
@@ -209,7 +227,7 @@ int main(int argc, char** argv) {
     // start() — sees its own instance via tipc_instance() (a clone that keys its
     // per-instance config in init() would otherwise race and read 0).
     uint32_t com_grpc_proxy_type, com_grpc_proxy_inst;
-    ::theia::runtime::resolve_node_tipc(ComGrpcProxy::kNodeName,
+    ::theia::runtime::resolve_node_tipc("com_grpc_proxy",
         ComGrpcProxy::kTipcType, ComGrpcProxy::kTipcInstance,
         com_grpc_proxy_type, com_grpc_proxy_inst);
     // Generic node params (read via the static-deploy ParamsConfig, overridable
@@ -220,7 +238,7 @@ int main(int argc, char** argv) {
     //   start_delay_ms   (default 0)     — deterministic intra-executable ordering.
     // A node section may be absent entirely → all defaults apply (start normally).
     const auto com_grpc_proxy_params =
-        ::theia::runtime::get_config().node(ComGrpcProxy::kNodeName);
+        ::theia::runtime::get_config().node("com_grpc_proxy");
     // Boot gate — recomputed identically in the START pass below (cheap param
     // read). PASS 1 (here): wire the mux (bind_node + register_* + pg_attach)
     // BEFORE config_mux.start() and BEFORE the node thread runs. PASS 2 (after
@@ -238,12 +256,21 @@ int main(int argc, char** argv) {
     }  // end if (com_grpc_proxy_enabled) — PASS 1 (mux wiring)
 
     TraceForwarder trace_forwarder;
-    // Per-node logger: tagged [#trace_forwarder] (kNodeName, matches `tdb ps`),
-    // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so do_start/init
-    // log through it. The FIRST node's logger also backs process_logger() — the
-    // ConfigureLogLevel-push fallback target + any process_logger() caller.
+    // RUNTIME NODE IDENTITY = the PROTOTYPE name ("trace_forwarder") — the name the
+    // manifest/supervisor domain uses everywhere (executor.json art_nodes, the
+    // --tipc arg keys, config/<proc>.json `nodes` sections, `tdb ps` rows). For a
+    // LOCAL node this equals TraceForwarder::kNodeName; for an IMPORTED package node it
+    // does NOT (the package lib was compiled without a composition, so its
+    // kNodeName is the snake'd node TYPE, e.g. osi_v2v vs prototype v2v). Keying
+    // main's identity calls on kNodeName made an imported node's --tipc lookup
+    // MISS (silent fallback to the compiled address — machine-shift/clones broken)
+    // and its params section unmatched (silent defaults). Use the prototype name.
+    // Per-node logger: tagged [#trace_forwarder] (matches `tdb ps`), sink chosen by
+    // $THEIA_LOGGER. Installed BEFORE start() so do_start/init log through it. The
+    // FIRST node's logger also backs process_logger() — the ConfigureLogLevel-push
+    // fallback target + any process_logger() caller.
     {
-        auto trace_forwarder_log = MakeContextLogger(TraceForwarder::kNodeName);
+        auto trace_forwarder_log = MakeContextLogger("trace_forwarder");
         trace_forwarder_log->set_level(boot_level);
         trace_forwarder.set_logger(std::move(trace_forwarder_log));
     }
@@ -255,7 +282,7 @@ int main(int argc, char** argv) {
     // start() — sees its own instance via tipc_instance() (a clone that keys its
     // per-instance config in init() would otherwise race and read 0).
     uint32_t trace_forwarder_type, trace_forwarder_inst;
-    ::theia::runtime::resolve_node_tipc(TraceForwarder::kNodeName,
+    ::theia::runtime::resolve_node_tipc("trace_forwarder",
         TraceForwarder::kTipcType, TraceForwarder::kTipcInstance,
         trace_forwarder_type, trace_forwarder_inst);
     // Generic node params (read via the static-deploy ParamsConfig, overridable
@@ -266,7 +293,7 @@ int main(int argc, char** argv) {
     //   start_delay_ms   (default 0)     — deterministic intra-executable ordering.
     // A node section may be absent entirely → all defaults apply (start normally).
     const auto trace_forwarder_params =
-        ::theia::runtime::get_config().node(TraceForwarder::kNodeName);
+        ::theia::runtime::get_config().node("trace_forwarder");
     // Boot gate — recomputed identically in the START pass below (cheap param
     // read). PASS 1 (here): wire the mux (bind_node + register_* + pg_attach)
     // BEFORE config_mux.start() and BEFORE the node thread runs. PASS 2 (after
@@ -284,12 +311,21 @@ int main(int argc, char** argv) {
     }  // end if (trace_forwarder_enabled) — PASS 1 (mux wiring)
 
     LogForwarder log_forwarder;
-    // Per-node logger: tagged [#log_forwarder] (kNodeName, matches `tdb ps`),
-    // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so do_start/init
-    // log through it. The FIRST node's logger also backs process_logger() — the
-    // ConfigureLogLevel-push fallback target + any process_logger() caller.
+    // RUNTIME NODE IDENTITY = the PROTOTYPE name ("log_forwarder") — the name the
+    // manifest/supervisor domain uses everywhere (executor.json art_nodes, the
+    // --tipc arg keys, config/<proc>.json `nodes` sections, `tdb ps` rows). For a
+    // LOCAL node this equals LogForwarder::kNodeName; for an IMPORTED package node it
+    // does NOT (the package lib was compiled without a composition, so its
+    // kNodeName is the snake'd node TYPE, e.g. osi_v2v vs prototype v2v). Keying
+    // main's identity calls on kNodeName made an imported node's --tipc lookup
+    // MISS (silent fallback to the compiled address — machine-shift/clones broken)
+    // and its params section unmatched (silent defaults). Use the prototype name.
+    // Per-node logger: tagged [#log_forwarder] (matches `tdb ps`), sink chosen by
+    // $THEIA_LOGGER. Installed BEFORE start() so do_start/init log through it. The
+    // FIRST node's logger also backs process_logger() — the ConfigureLogLevel-push
+    // fallback target + any process_logger() caller.
     {
-        auto log_forwarder_log = MakeContextLogger(LogForwarder::kNodeName);
+        auto log_forwarder_log = MakeContextLogger("log_forwarder");
         log_forwarder_log->set_level(boot_level);
         log_forwarder.set_logger(std::move(log_forwarder_log));
     }
@@ -301,7 +337,7 @@ int main(int argc, char** argv) {
     // start() — sees its own instance via tipc_instance() (a clone that keys its
     // per-instance config in init() would otherwise race and read 0).
     uint32_t log_forwarder_type, log_forwarder_inst;
-    ::theia::runtime::resolve_node_tipc(LogForwarder::kNodeName,
+    ::theia::runtime::resolve_node_tipc("log_forwarder",
         LogForwarder::kTipcType, LogForwarder::kTipcInstance,
         log_forwarder_type, log_forwarder_inst);
     // Generic node params (read via the static-deploy ParamsConfig, overridable
@@ -312,7 +348,7 @@ int main(int argc, char** argv) {
     //   start_delay_ms   (default 0)     — deterministic intra-executable ordering.
     // A node section may be absent entirely → all defaults apply (start normally).
     const auto log_forwarder_params =
-        ::theia::runtime::get_config().node(LogForwarder::kNodeName);
+        ::theia::runtime::get_config().node("log_forwarder");
     // Boot gate — recomputed identically in the START pass below (cheap param
     // read). PASS 1 (here): wire the mux (bind_node + register_* + pg_attach)
     // BEFORE config_mux.start() and BEFORE the node thread runs. PASS 2 (after
@@ -352,14 +388,14 @@ int main(int argc, char** argv) {
     // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG. Applied AFTER
     // start() — the thread exists now. No-op when unset; soft-fails on EPERM.
     ::theia::runtime::apply_node_affinity(com_daemon.native_handle(),
-        ComDaemon::kNodeName, std::getenv("THEIA_NODE_CFG"));
+        "com_daemon", std::getenv("THEIA_NODE_CFG"));
 
     // Liveness beat to the supervisor watchdog (#PHM). A reporting node must beat
     // or the watchdog SIGTERMs it after K missed deadlines. One publisher per
     // node, own timer thread; 1s default matches the supervisor's check cadence.
     {
         auto com_daemon_hb = std::make_unique<
-            ::theia::runtime::HeartbeatPublisher>(ComDaemon::kNodeName);
+            ::theia::runtime::HeartbeatPublisher>("com_daemon");
         if (com_daemon_hb->open()) {
             com_daemon_hb->start(/*period_ms=*/1000);
             heartbeats.push_back(std::move(com_daemon_hb));
@@ -386,7 +422,7 @@ int main(int argc, char** argv) {
     // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG. Applied AFTER
     // start() — the thread exists now. No-op when unset; soft-fails on EPERM.
     ::theia::runtime::apply_node_affinity(com_grpc_proxy.native_handle(),
-        ComGrpcProxy::kNodeName, std::getenv("THEIA_NODE_CFG"));
+        "com_grpc_proxy", std::getenv("THEIA_NODE_CFG"));
 
     }  // end if (com_grpc_proxy_enabled) — PASS 2 (start + heartbeat)
 
@@ -405,7 +441,7 @@ int main(int argc, char** argv) {
     // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG. Applied AFTER
     // start() — the thread exists now. No-op when unset; soft-fails on EPERM.
     ::theia::runtime::apply_node_affinity(trace_forwarder.native_handle(),
-        TraceForwarder::kNodeName, std::getenv("THEIA_NODE_CFG"));
+        "trace_forwarder", std::getenv("THEIA_NODE_CFG"));
 
     }  // end if (trace_forwarder_enabled) — PASS 2 (start + heartbeat)
 
@@ -424,7 +460,7 @@ int main(int argc, char** argv) {
     // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG. Applied AFTER
     // start() — the thread exists now. No-op when unset; soft-fails on EPERM.
     ::theia::runtime::apply_node_affinity(log_forwarder.native_handle(),
-        LogForwarder::kNodeName, std::getenv("THEIA_NODE_CFG"));
+        "log_forwarder", std::getenv("THEIA_NODE_CFG"));
 
     }  // end if (log_forwarder_enabled) — PASS 2 (start + heartbeat)
 

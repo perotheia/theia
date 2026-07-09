@@ -88,11 +88,12 @@ int main(int argc, char** argv) {
 
 
     VucmCampaign vucm_campaign;
-    // Per-node logger: tagged [#vucm_campaign] (kNodeName, matches `tdb ps`),
+    // Per-node logger: tagged [#vucm_campaign] (the PROTOTYPE name — the runtime
+    // node identity, matching executor.json/--tipc/config keys + `tdb ps`),
     // sink chosen by $THEIA_LOGGER. Installed BEFORE start so init/do_* log
     // through it; the FIRST node's logger also backs process_logger().
     {
-        auto vucm_campaign_log = MakeContextLogger(VucmCampaign::kNodeName);
+        auto vucm_campaign_log = MakeContextLogger("vucm_campaign");
         vucm_campaign_log->set_level(boot_level);
         ::theia::runtime::set_process_logger(vucm_campaign_log);
         vucm_campaign.set_logger(std::move(vucm_campaign_log));
@@ -104,7 +105,7 @@ int main(int argc, char** argv) {
     // on the node thread right after start) see this node's own instance — a clone
     // keying per-instance config in init() would otherwise race and read 0.
     uint32_t vucm_campaign_type, vucm_campaign_inst;
-    ::theia::runtime::resolve_node_tipc(VucmCampaign::kNodeName,
+    ::theia::runtime::resolve_node_tipc("vucm_campaign",
         VucmCampaign::kTipcType, VucmCampaign::kTipcInstance,
         vucm_campaign_type, vucm_campaign_inst);
     vucm_campaign.set_tipc_instance(vucm_campaign_inst);
@@ -119,7 +120,7 @@ int main(int argc, char** argv) {
     // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (supervisor sets it
     // from the rig's NodeToCPUMapping). No-op when unset; soft-fails on EPERM.
     ::theia::runtime::apply_node_affinity(vucm_campaign.native_handle(),
-        VucmCampaign::kNodeName, std::getenv("THEIA_NODE_CFG"));
+        "vucm_campaign", std::getenv("THEIA_NODE_CFG"));
 
     if (auto* vucm_campaign_cfg = config_mux.bind_node(
             vucm_campaign, vucm_campaign_type,
@@ -143,7 +144,7 @@ int main(int argc, char** argv) {
         // its demux binding (joined-group frames + PgMembership pushes route into
         // handle_cast) + pass its bound addr as the watcher address (where the
         // supervisor casts PgMembership when this node pg_watch'es a group).
-        vucm_campaign.pg_attach(VucmCampaign::kNodeName, vucm_campaign_cfg,
+        vucm_campaign.pg_attach("vucm_campaign", vucm_campaign_cfg,
                                 vucm_campaign_type, vucm_campaign_inst);
     } else {
         vucm_campaign.log().warn("config service bind failed; live log-level "
@@ -154,7 +155,7 @@ int main(int argc, char** argv) {
     // per node, own timer thread (1s default = the supervisor's check cadence).
     {
         auto vucm_campaign_hb = std::make_unique<
-            ::theia::runtime::HeartbeatPublisher>(VucmCampaign::kNodeName);
+            ::theia::runtime::HeartbeatPublisher>("vucm_campaign");
         if (vucm_campaign_hb->open()) {
             vucm_campaign_hb->start(/*period_ms=*/1000);
             heartbeats.push_back(std::move(vucm_campaign_hb));
@@ -166,11 +167,12 @@ int main(int argc, char** argv) {
 
 
     VucmGate vucm_gate;
-    // Per-node logger: tagged [#vucm_gate] (kNodeName, matches `tdb ps`),
+    // Per-node logger: tagged [#vucm_gate] (the PROTOTYPE name — the runtime
+    // node identity, matching executor.json/--tipc/config keys + `tdb ps`),
     // sink chosen by $THEIA_LOGGER. Installed BEFORE start so init/do_* log
     // through it; the FIRST node's logger also backs process_logger().
     {
-        auto vucm_gate_log = MakeContextLogger(VucmGate::kNodeName);
+        auto vucm_gate_log = MakeContextLogger("vucm_gate");
         vucm_gate_log->set_level(boot_level);
         vucm_gate.set_logger(std::move(vucm_gate_log));
     }
@@ -181,7 +183,7 @@ int main(int argc, char** argv) {
     // on the node thread right after start) see this node's own instance — a clone
     // keying per-instance config in init() would otherwise race and read 0.
     uint32_t vucm_gate_type, vucm_gate_inst;
-    ::theia::runtime::resolve_node_tipc(VucmGate::kNodeName,
+    ::theia::runtime::resolve_node_tipc("vucm_gate",
         VucmGate::kTipcType, VucmGate::kTipcInstance,
         vucm_gate_type, vucm_gate_inst);
     vucm_gate.set_tipc_instance(vucm_gate_inst);
@@ -195,7 +197,7 @@ int main(int argc, char** argv) {
     // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (supervisor sets it
     // from the rig's NodeToCPUMapping). No-op when unset; soft-fails on EPERM.
     ::theia::runtime::apply_node_affinity(vucm_gate.native_handle(),
-        VucmGate::kNodeName, std::getenv("THEIA_NODE_CFG"));
+        "vucm_gate", std::getenv("THEIA_NODE_CFG"));
 
     if (auto* vucm_gate_cfg = config_mux.bind_node(
             vucm_gate, vucm_gate_type,
@@ -238,7 +240,7 @@ int main(int argc, char** argv) {
         // its demux binding (joined-group frames + PgMembership pushes route into
         // handle_cast) + pass its bound addr as the watcher address (where the
         // supervisor casts PgMembership when this node pg_watch'es a group).
-        vucm_gate.pg_attach(VucmGate::kNodeName, vucm_gate_cfg,
+        vucm_gate.pg_attach("vucm_gate", vucm_gate_cfg,
                                 vucm_gate_type, vucm_gate_inst);
     } else {
         vucm_gate.log().warn("config service bind failed; live log-level "
@@ -249,7 +251,7 @@ int main(int argc, char** argv) {
     // per node, own timer thread (1s default = the supervisor's check cadence).
     {
         auto vucm_gate_hb = std::make_unique<
-            ::theia::runtime::HeartbeatPublisher>(VucmGate::kNodeName);
+            ::theia::runtime::HeartbeatPublisher>("vucm_gate");
         if (vucm_gate_hb->open()) {
             vucm_gate_hb->start(/*period_ms=*/1000);
             heartbeats.push_back(std::move(vucm_gate_hb));

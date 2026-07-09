@@ -90,11 +90,12 @@ int main(int argc, char** argv) {
 
 
     SmDaemon sm_daemon;
-    // Per-node logger: tagged [#sm_daemon] (kNodeName, matches `tdb ps`),
+    // Per-node logger: tagged [#sm_daemon] (the PROTOTYPE name — the runtime
+    // node identity, matching executor.json/--tipc/config keys + `tdb ps`),
     // sink chosen by $THEIA_LOGGER. Installed BEFORE start so init/do_* log
     // through it; the FIRST node's logger also backs process_logger().
     {
-        auto sm_daemon_log = MakeContextLogger(SmDaemon::kNodeName);
+        auto sm_daemon_log = MakeContextLogger("sm_daemon");
         sm_daemon_log->set_level(boot_level);
         ::theia::runtime::set_process_logger(sm_daemon_log);
         sm_daemon.set_logger(std::move(sm_daemon_log));
@@ -106,7 +107,7 @@ int main(int argc, char** argv) {
     // on the node thread right after start) see this node's own instance — a clone
     // keying per-instance config in init() would otherwise race and read 0.
     uint32_t sm_daemon_type, sm_daemon_inst;
-    ::theia::runtime::resolve_node_tipc(SmDaemon::kNodeName,
+    ::theia::runtime::resolve_node_tipc("sm_daemon",
         SmDaemon::kTipcType, SmDaemon::kTipcInstance,
         sm_daemon_type, sm_daemon_inst);
     sm_daemon.set_tipc_instance(sm_daemon_inst);
@@ -121,7 +122,7 @@ int main(int argc, char** argv) {
     // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (supervisor sets it
     // from the rig's NodeToCPUMapping). No-op when unset; soft-fails on EPERM.
     ::theia::runtime::apply_node_affinity(sm_daemon.native_handle(),
-        SmDaemon::kNodeName, std::getenv("THEIA_NODE_CFG"));
+        "sm_daemon", std::getenv("THEIA_NODE_CFG"));
 
     if (auto* sm_daemon_cfg = config_mux.bind_node(
             sm_daemon, sm_daemon_type,
@@ -147,7 +148,7 @@ int main(int argc, char** argv) {
         // its demux binding (joined-group frames + PgMembership pushes route into
         // handle_cast) + pass its bound addr as the watcher address (where the
         // supervisor casts PgMembership when this node pg_watch'es a group).
-        sm_daemon.pg_attach(SmDaemon::kNodeName, sm_daemon_cfg,
+        sm_daemon.pg_attach("sm_daemon", sm_daemon_cfg,
                                 sm_daemon_type, sm_daemon_inst);
     } else {
         sm_daemon.log().warn("config service bind failed; live log-level "
@@ -158,7 +159,7 @@ int main(int argc, char** argv) {
     // per node, own timer thread (1s default = the supervisor's check cadence).
     {
         auto sm_daemon_hb = std::make_unique<
-            ::theia::runtime::HeartbeatPublisher>(SmDaemon::kNodeName);
+            ::theia::runtime::HeartbeatPublisher>("sm_daemon");
         if (sm_daemon_hb->open()) {
             sm_daemon_hb->start(/*period_ms=*/1000);
             heartbeats.push_back(std::move(sm_daemon_hb));
@@ -170,11 +171,12 @@ int main(int argc, char** argv) {
 
 
     FunctionGroupSm fg_sm;
-    // Per-node logger: tagged [#fg_sm] (kNodeName, matches `tdb ps`),
+    // Per-node logger: tagged [#fg_sm] (the PROTOTYPE name — the runtime
+    // node identity, matching executor.json/--tipc/config keys + `tdb ps`),
     // sink chosen by $THEIA_LOGGER. Installed BEFORE start so init/do_* log
     // through it; the FIRST node's logger also backs process_logger().
     {
-        auto fg_sm_log = MakeContextLogger(FunctionGroupSm::kNodeName);
+        auto fg_sm_log = MakeContextLogger("fg_sm");
         fg_sm_log->set_level(boot_level);
         fg_sm.set_logger(std::move(fg_sm_log));
     }
@@ -185,7 +187,7 @@ int main(int argc, char** argv) {
     // on the node thread right after start) see this node's own instance — a clone
     // keying per-instance config in init() would otherwise race and read 0.
     uint32_t fg_sm_type, fg_sm_inst;
-    ::theia::runtime::resolve_node_tipc(FunctionGroupSm::kNodeName,
+    ::theia::runtime::resolve_node_tipc("fg_sm",
         FunctionGroupSm::kTipcType, FunctionGroupSm::kTipcInstance,
         fg_sm_type, fg_sm_inst);
     fg_sm.set_tipc_instance(fg_sm_inst);
@@ -200,7 +202,7 @@ int main(int argc, char** argv) {
     // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (supervisor sets it
     // from the rig's NodeToCPUMapping). No-op when unset; soft-fails on EPERM.
     ::theia::runtime::apply_node_affinity(fg_sm.native_handle(),
-        FunctionGroupSm::kNodeName, std::getenv("THEIA_NODE_CFG"));
+        "fg_sm", std::getenv("THEIA_NODE_CFG"));
 
     if (auto* fg_sm_cfg = config_mux.bind_node(
             fg_sm, fg_sm_type,
@@ -224,7 +226,7 @@ int main(int argc, char** argv) {
         // its demux binding (joined-group frames + PgMembership pushes route into
         // handle_cast) + pass its bound addr as the watcher address (where the
         // supervisor casts PgMembership when this node pg_watch'es a group).
-        fg_sm.pg_attach(FunctionGroupSm::kNodeName, fg_sm_cfg,
+        fg_sm.pg_attach("fg_sm", fg_sm_cfg,
                                 fg_sm_type, fg_sm_inst);
     } else {
         fg_sm.log().warn("config service bind failed; live log-level "
@@ -235,7 +237,7 @@ int main(int argc, char** argv) {
     // per node, own timer thread (1s default = the supervisor's check cadence).
     {
         auto fg_sm_hb = std::make_unique<
-            ::theia::runtime::HeartbeatPublisher>(FunctionGroupSm::kNodeName);
+            ::theia::runtime::HeartbeatPublisher>("fg_sm");
         if (fg_sm_hb->open()) {
             fg_sm_hb->start(/*period_ms=*/1000);
             heartbeats.push_back(std::move(fg_sm_hb));
@@ -247,11 +249,12 @@ int main(int argc, char** argv) {
 
 
     FgGate fg_gate;
-    // Per-node logger: tagged [#fg_gate] (kNodeName, matches `tdb ps`),
+    // Per-node logger: tagged [#fg_gate] (the PROTOTYPE name — the runtime
+    // node identity, matching executor.json/--tipc/config keys + `tdb ps`),
     // sink chosen by $THEIA_LOGGER. Installed BEFORE start so init/do_* log
     // through it; the FIRST node's logger also backs process_logger().
     {
-        auto fg_gate_log = MakeContextLogger(FgGate::kNodeName);
+        auto fg_gate_log = MakeContextLogger("fg_gate");
         fg_gate_log->set_level(boot_level);
         fg_gate.set_logger(std::move(fg_gate_log));
     }
@@ -262,7 +265,7 @@ int main(int argc, char** argv) {
     // on the node thread right after start) see this node's own instance — a clone
     // keying per-instance config in init() would otherwise race and read 0.
     uint32_t fg_gate_type, fg_gate_inst;
-    ::theia::runtime::resolve_node_tipc(FgGate::kNodeName,
+    ::theia::runtime::resolve_node_tipc("fg_gate",
         FgGate::kTipcType, FgGate::kTipcInstance,
         fg_gate_type, fg_gate_inst);
     fg_gate.set_tipc_instance(fg_gate_inst);
@@ -276,7 +279,7 @@ int main(int argc, char** argv) {
     // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (supervisor sets it
     // from the rig's NodeToCPUMapping). No-op when unset; soft-fails on EPERM.
     ::theia::runtime::apply_node_affinity(fg_gate.native_handle(),
-        FgGate::kNodeName, std::getenv("THEIA_NODE_CFG"));
+        "fg_gate", std::getenv("THEIA_NODE_CFG"));
 
     if (auto* fg_gate_cfg = config_mux.bind_node(
             fg_gate, fg_gate_type,
@@ -308,7 +311,7 @@ int main(int argc, char** argv) {
         // its demux binding (joined-group frames + PgMembership pushes route into
         // handle_cast) + pass its bound addr as the watcher address (where the
         // supervisor casts PgMembership when this node pg_watch'es a group).
-        fg_gate.pg_attach(FgGate::kNodeName, fg_gate_cfg,
+        fg_gate.pg_attach("fg_gate", fg_gate_cfg,
                                 fg_gate_type, fg_gate_inst);
     } else {
         fg_gate.log().warn("config service bind failed; live log-level "
@@ -319,7 +322,7 @@ int main(int argc, char** argv) {
     // per node, own timer thread (1s default = the supervisor's check cadence).
     {
         auto fg_gate_hb = std::make_unique<
-            ::theia::runtime::HeartbeatPublisher>(FgGate::kNodeName);
+            ::theia::runtime::HeartbeatPublisher>("fg_gate");
         if (fg_gate_hb->open()) {
             fg_gate_hb->start(/*period_ms=*/1000);
             heartbeats.push_back(std::move(fg_gate_hb));
@@ -331,11 +334,12 @@ int main(int argc, char** argv) {
 
 
     SmGate sm_gate;
-    // Per-node logger: tagged [#sm_gate] (kNodeName, matches `tdb ps`),
+    // Per-node logger: tagged [#sm_gate] (the PROTOTYPE name — the runtime
+    // node identity, matching executor.json/--tipc/config keys + `tdb ps`),
     // sink chosen by $THEIA_LOGGER. Installed BEFORE start so init/do_* log
     // through it; the FIRST node's logger also backs process_logger().
     {
-        auto sm_gate_log = MakeContextLogger(SmGate::kNodeName);
+        auto sm_gate_log = MakeContextLogger("sm_gate");
         sm_gate_log->set_level(boot_level);
         sm_gate.set_logger(std::move(sm_gate_log));
     }
@@ -346,7 +350,7 @@ int main(int argc, char** argv) {
     // on the node thread right after start) see this node's own instance — a clone
     // keying per-instance config in init() would otherwise race and read 0.
     uint32_t sm_gate_type, sm_gate_inst;
-    ::theia::runtime::resolve_node_tipc(SmGate::kNodeName,
+    ::theia::runtime::resolve_node_tipc("sm_gate",
         SmGate::kTipcType, SmGate::kTipcInstance,
         sm_gate_type, sm_gate_inst);
     sm_gate.set_tipc_instance(sm_gate_inst);
@@ -360,7 +364,7 @@ int main(int argc, char** argv) {
     // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG (supervisor sets it
     // from the rig's NodeToCPUMapping). No-op when unset; soft-fails on EPERM.
     ::theia::runtime::apply_node_affinity(sm_gate.native_handle(),
-        SmGate::kNodeName, std::getenv("THEIA_NODE_CFG"));
+        "sm_gate", std::getenv("THEIA_NODE_CFG"));
 
     if (auto* sm_gate_cfg = config_mux.bind_node(
             sm_gate, sm_gate_type,
@@ -391,7 +395,7 @@ int main(int argc, char** argv) {
         // its demux binding (joined-group frames + PgMembership pushes route into
         // handle_cast) + pass its bound addr as the watcher address (where the
         // supervisor casts PgMembership when this node pg_watch'es a group).
-        sm_gate.pg_attach(SmGate::kNodeName, sm_gate_cfg,
+        sm_gate.pg_attach("sm_gate", sm_gate_cfg,
                                 sm_gate_type, sm_gate_inst);
     } else {
         sm_gate.log().warn("config service bind failed; live log-level "
@@ -402,7 +406,7 @@ int main(int argc, char** argv) {
     // per node, own timer thread (1s default = the supervisor's check cadence).
     {
         auto sm_gate_hb = std::make_unique<
-            ::theia::runtime::HeartbeatPublisher>(SmGate::kNodeName);
+            ::theia::runtime::HeartbeatPublisher>("sm_gate");
         if (sm_gate_hb->open()) {
             sm_gate_hb->start(/*period_ms=*/1000);
             heartbeats.push_back(std::move(sm_gate_hb));

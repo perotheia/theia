@@ -105,12 +105,21 @@ int main(int argc, char** argv) {
 
 
     LogDaemon log_daemon;
-    // Per-node logger: tagged [#log_daemon] (kNodeName, matches `tdb ps`),
-    // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so do_start/init
-    // log through it. The FIRST node's logger also backs process_logger() — the
-    // ConfigureLogLevel-push fallback target + any process_logger() caller.
+    // RUNTIME NODE IDENTITY = the PROTOTYPE name ("log_daemon") — the name the
+    // manifest/supervisor domain uses everywhere (executor.json art_nodes, the
+    // --tipc arg keys, config/<proc>.json `nodes` sections, `tdb ps` rows). For a
+    // LOCAL node this equals LogDaemon::kNodeName; for an IMPORTED package node it
+    // does NOT (the package lib was compiled without a composition, so its
+    // kNodeName is the snake'd node TYPE, e.g. osi_v2v vs prototype v2v). Keying
+    // main's identity calls on kNodeName made an imported node's --tipc lookup
+    // MISS (silent fallback to the compiled address — machine-shift/clones broken)
+    // and its params section unmatched (silent defaults). Use the prototype name.
+    // Per-node logger: tagged [#log_daemon] (matches `tdb ps`), sink chosen by
+    // $THEIA_LOGGER. Installed BEFORE start() so do_start/init log through it. The
+    // FIRST node's logger also backs process_logger() — the ConfigureLogLevel-push
+    // fallback target + any process_logger() caller.
     {
-        auto log_daemon_log = MakeContextLogger(LogDaemon::kNodeName);
+        auto log_daemon_log = MakeContextLogger("log_daemon");
         log_daemon_log->set_level(boot_level);
         ::theia::runtime::set_process_logger(log_daemon_log);
         log_daemon.set_logger(std::move(log_daemon_log));
@@ -123,7 +132,7 @@ int main(int argc, char** argv) {
     // start() — sees its own instance via tipc_instance() (a clone that keys its
     // per-instance config in init() would otherwise race and read 0).
     uint32_t log_daemon_type, log_daemon_inst;
-    ::theia::runtime::resolve_node_tipc(LogDaemon::kNodeName,
+    ::theia::runtime::resolve_node_tipc("log_daemon",
         LogDaemon::kTipcType, LogDaemon::kTipcInstance,
         log_daemon_type, log_daemon_inst);
     // set_tipc_instance() is a GenServer/GenStateM method — only atomic + statem
@@ -141,7 +150,7 @@ int main(int argc, char** argv) {
     //   start_delay_ms   (default 0)     — deterministic intra-executable ordering.
     // A node section may be absent entirely → all defaults apply (start normally).
     const auto log_daemon_params =
-        ::theia::runtime::get_config().node(LogDaemon::kNodeName);
+        ::theia::runtime::get_config().node("log_daemon");
     // Boot gate — recomputed identically in the START pass below (cheap param
     // read). PASS 1 (here): wire the mux (bind_node + register_* + pg_attach)
     // BEFORE config_mux.start() and BEFORE the node thread runs. PASS 2 (after
@@ -176,7 +185,7 @@ int main(int argc, char** argv) {
         // supervisor's PgMembership pushes route into handle_cast) and pass its
         // BOUND ADDRESS as the watcher address — where the supervisor casts
         // PgMembership when this node pg_watch'es a group it produces to.
-        log_daemon.pg_attach(LogDaemon::kNodeName, log_daemon_cfg,
+        log_daemon.pg_attach("log_daemon", log_daemon_cfg,
                                 log_daemon_type, log_daemon_inst);
     } else {
         log_daemon.log().warn("config service bind failed; live log-level "
@@ -187,12 +196,21 @@ int main(int argc, char** argv) {
     }  // end if (log_daemon_enabled) — PASS 1 (mux wiring)
 
     LogStreamPump log_pump;
-    // Per-node logger: tagged [#log_pump] (kNodeName, matches `tdb ps`),
-    // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so do_start/init
-    // log through it. The FIRST node's logger also backs process_logger() — the
-    // ConfigureLogLevel-push fallback target + any process_logger() caller.
+    // RUNTIME NODE IDENTITY = the PROTOTYPE name ("log_pump") — the name the
+    // manifest/supervisor domain uses everywhere (executor.json art_nodes, the
+    // --tipc arg keys, config/<proc>.json `nodes` sections, `tdb ps` rows). For a
+    // LOCAL node this equals LogStreamPump::kNodeName; for an IMPORTED package node it
+    // does NOT (the package lib was compiled without a composition, so its
+    // kNodeName is the snake'd node TYPE, e.g. osi_v2v vs prototype v2v). Keying
+    // main's identity calls on kNodeName made an imported node's --tipc lookup
+    // MISS (silent fallback to the compiled address — machine-shift/clones broken)
+    // and its params section unmatched (silent defaults). Use the prototype name.
+    // Per-node logger: tagged [#log_pump] (matches `tdb ps`), sink chosen by
+    // $THEIA_LOGGER. Installed BEFORE start() so do_start/init log through it. The
+    // FIRST node's logger also backs process_logger() — the ConfigureLogLevel-push
+    // fallback target + any process_logger() caller.
     {
-        auto log_pump_log = MakeContextLogger(LogStreamPump::kNodeName);
+        auto log_pump_log = MakeContextLogger("log_pump");
         log_pump_log->set_level(boot_level);
         log_pump.set_logger(std::move(log_pump_log));
     }
@@ -204,7 +222,7 @@ int main(int argc, char** argv) {
     // start() — sees its own instance via tipc_instance() (a clone that keys its
     // per-instance config in init() would otherwise race and read 0).
     uint32_t log_pump_type, log_pump_inst;
-    ::theia::runtime::resolve_node_tipc(LogStreamPump::kNodeName,
+    ::theia::runtime::resolve_node_tipc("log_pump",
         LogStreamPump::kTipcType, LogStreamPump::kTipcInstance,
         log_pump_type, log_pump_inst);
     // Generic node params (read via the static-deploy ParamsConfig, overridable
@@ -215,7 +233,7 @@ int main(int argc, char** argv) {
     //   start_delay_ms   (default 0)     — deterministic intra-executable ordering.
     // A node section may be absent entirely → all defaults apply (start normally).
     const auto log_pump_params =
-        ::theia::runtime::get_config().node(LogStreamPump::kNodeName);
+        ::theia::runtime::get_config().node("log_pump");
     // Boot gate — recomputed identically in the START pass below (cheap param
     // read). PASS 1 (here): wire the mux (bind_node + register_* + pg_attach)
     // BEFORE config_mux.start() and BEFORE the node thread runs. PASS 2 (after
@@ -250,12 +268,21 @@ int main(int argc, char** argv) {
     }  // end if (log_pump_enabled) — PASS 1 (mux wiring)
 
     TraceStreamPump trace_pump;
-    // Per-node logger: tagged [#trace_pump] (kNodeName, matches `tdb ps`),
-    // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so do_start/init
-    // log through it. The FIRST node's logger also backs process_logger() — the
-    // ConfigureLogLevel-push fallback target + any process_logger() caller.
+    // RUNTIME NODE IDENTITY = the PROTOTYPE name ("trace_pump") — the name the
+    // manifest/supervisor domain uses everywhere (executor.json art_nodes, the
+    // --tipc arg keys, config/<proc>.json `nodes` sections, `tdb ps` rows). For a
+    // LOCAL node this equals TraceStreamPump::kNodeName; for an IMPORTED package node it
+    // does NOT (the package lib was compiled without a composition, so its
+    // kNodeName is the snake'd node TYPE, e.g. osi_v2v vs prototype v2v). Keying
+    // main's identity calls on kNodeName made an imported node's --tipc lookup
+    // MISS (silent fallback to the compiled address — machine-shift/clones broken)
+    // and its params section unmatched (silent defaults). Use the prototype name.
+    // Per-node logger: tagged [#trace_pump] (matches `tdb ps`), sink chosen by
+    // $THEIA_LOGGER. Installed BEFORE start() so do_start/init log through it. The
+    // FIRST node's logger also backs process_logger() — the ConfigureLogLevel-push
+    // fallback target + any process_logger() caller.
     {
-        auto trace_pump_log = MakeContextLogger(TraceStreamPump::kNodeName);
+        auto trace_pump_log = MakeContextLogger("trace_pump");
         trace_pump_log->set_level(boot_level);
         trace_pump.set_logger(std::move(trace_pump_log));
     }
@@ -267,7 +294,7 @@ int main(int argc, char** argv) {
     // start() — sees its own instance via tipc_instance() (a clone that keys its
     // per-instance config in init() would otherwise race and read 0).
     uint32_t trace_pump_type, trace_pump_inst;
-    ::theia::runtime::resolve_node_tipc(TraceStreamPump::kNodeName,
+    ::theia::runtime::resolve_node_tipc("trace_pump",
         TraceStreamPump::kTipcType, TraceStreamPump::kTipcInstance,
         trace_pump_type, trace_pump_inst);
     // Generic node params (read via the static-deploy ParamsConfig, overridable
@@ -278,7 +305,7 @@ int main(int argc, char** argv) {
     //   start_delay_ms   (default 0)     — deterministic intra-executable ordering.
     // A node section may be absent entirely → all defaults apply (start normally).
     const auto trace_pump_params =
-        ::theia::runtime::get_config().node(TraceStreamPump::kNodeName);
+        ::theia::runtime::get_config().node("trace_pump");
     // Boot gate — recomputed identically in the START pass below (cheap param
     // read). PASS 1 (here): wire the mux (bind_node + register_* + pg_attach)
     // BEFORE config_mux.start() and BEFORE the node thread runs. PASS 2 (after
@@ -335,14 +362,14 @@ int main(int argc, char** argv) {
     // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG. Applied AFTER
     // start() — the thread exists now. No-op when unset; soft-fails on EPERM.
     ::theia::runtime::apply_node_affinity(log_daemon.native_handle(),
-        LogDaemon::kNodeName, std::getenv("THEIA_NODE_CFG"));
+        "log_daemon", std::getenv("THEIA_NODE_CFG"));
 
     // Liveness beat to the supervisor watchdog (#PHM). A reporting node must beat
     // or the watchdog SIGTERMs it after K missed deadlines. One publisher per
     // node, own timer thread; 1s default matches the supervisor's check cadence.
     {
         auto log_daemon_hb = std::make_unique<
-            ::theia::runtime::HeartbeatPublisher>(LogDaemon::kNodeName);
+            ::theia::runtime::HeartbeatPublisher>("log_daemon");
         if (log_daemon_hb->open()) {
             log_daemon_hb->start(/*period_ms=*/1000);
             heartbeats.push_back(std::move(log_daemon_hb));
@@ -369,14 +396,14 @@ int main(int argc, char** argv) {
     // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG. Applied AFTER
     // start() — the thread exists now. No-op when unset; soft-fails on EPERM.
     ::theia::runtime::apply_node_affinity(log_pump.native_handle(),
-        LogStreamPump::kNodeName, std::getenv("THEIA_NODE_CFG"));
+        "log_pump", std::getenv("THEIA_NODE_CFG"));
 
     // Liveness beat to the supervisor watchdog (#PHM). A reporting node must beat
     // or the watchdog SIGTERMs it after K missed deadlines. One publisher per
     // node, own timer thread; 1s default matches the supervisor's check cadence.
     {
         auto log_pump_hb = std::make_unique<
-            ::theia::runtime::HeartbeatPublisher>(LogStreamPump::kNodeName);
+            ::theia::runtime::HeartbeatPublisher>("log_pump");
         if (log_pump_hb->open()) {
             log_pump_hb->start(/*period_ms=*/1000);
             heartbeats.push_back(std::move(log_pump_hb));
@@ -403,14 +430,14 @@ int main(int argc, char** argv) {
     // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG. Applied AFTER
     // start() — the thread exists now. No-op when unset; soft-fails on EPERM.
     ::theia::runtime::apply_node_affinity(trace_pump.native_handle(),
-        TraceStreamPump::kNodeName, std::getenv("THEIA_NODE_CFG"));
+        "trace_pump", std::getenv("THEIA_NODE_CFG"));
 
     // Liveness beat to the supervisor watchdog (#PHM). A reporting node must beat
     // or the watchdog SIGTERMs it after K missed deadlines. One publisher per
     // node, own timer thread; 1s default matches the supervisor's check cadence.
     {
         auto trace_pump_hb = std::make_unique<
-            ::theia::runtime::HeartbeatPublisher>(TraceStreamPump::kNodeName);
+            ::theia::runtime::HeartbeatPublisher>("trace_pump");
         if (trace_pump_hb->open()) {
             trace_pump_hb->start(/*period_ms=*/1000);
             heartbeats.push_back(std::move(trace_pump_hb));

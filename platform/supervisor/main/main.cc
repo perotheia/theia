@@ -104,12 +104,21 @@ int main(int argc, char** argv) {
 
 
     SupervisorCtl supervisor_ctl;
-    // Per-node logger: tagged [#supervisor_ctl] (kNodeName, matches `tdb ps`),
-    // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so do_start/init
-    // log through it. The FIRST node's logger also backs process_logger() — the
-    // ConfigureLogLevel-push fallback target + any process_logger() caller.
+    // RUNTIME NODE IDENTITY = the PROTOTYPE name ("supervisor_ctl") — the name the
+    // manifest/supervisor domain uses everywhere (executor.json art_nodes, the
+    // --tipc arg keys, config/<proc>.json `nodes` sections, `tdb ps` rows). For a
+    // LOCAL node this equals SupervisorCtl::kNodeName; for an IMPORTED package node it
+    // does NOT (the package lib was compiled without a composition, so its
+    // kNodeName is the snake'd node TYPE, e.g. osi_v2v vs prototype v2v). Keying
+    // main's identity calls on kNodeName made an imported node's --tipc lookup
+    // MISS (silent fallback to the compiled address — machine-shift/clones broken)
+    // and its params section unmatched (silent defaults). Use the prototype name.
+    // Per-node logger: tagged [#supervisor_ctl] (matches `tdb ps`), sink chosen by
+    // $THEIA_LOGGER. Installed BEFORE start() so do_start/init log through it. The
+    // FIRST node's logger also backs process_logger() — the ConfigureLogLevel-push
+    // fallback target + any process_logger() caller.
     {
-        auto supervisor_ctl_log = MakeContextLogger(SupervisorCtl::kNodeName);
+        auto supervisor_ctl_log = MakeContextLogger("supervisor_ctl");
         supervisor_ctl_log->set_level(boot_level);
         ::theia::runtime::set_process_logger(supervisor_ctl_log);
         supervisor_ctl.set_logger(std::move(supervisor_ctl_log));
@@ -122,12 +131,15 @@ int main(int argc, char** argv) {
     // start() — sees its own instance via tipc_instance() (a clone that keys its
     // per-instance config in init() would otherwise race and read 0).
     uint32_t supervisor_ctl_type, supervisor_ctl_inst;
-    ::theia::runtime::resolve_node_tipc(SupervisorCtl::kNodeName,
+    ::theia::runtime::resolve_node_tipc("supervisor_ctl",
         SupervisorCtl::kTipcType, SupervisorCtl::kTipcInstance,
         supervisor_ctl_type, supervisor_ctl_inst);
-    // set_tipc_instance() is a GenServer method (a runnable resolves its own
-    // instance in do_start via resolve_node_tipc); only emit it for gen_server/
-    // statem nodes so init() sees its instance before start().
+    // set_tipc_instance() is a GenServer/GenStateM method — only atomic + statem
+    // nodes have it. A `node runnable` (GenRunnable) resolves its own instance in
+    // do_start via resolve_node_tipc; a `node prebuilt` (also a GenRunnable
+    // subclass, wrapping a 3rd-party child) likewise has no such method. Emit the
+    // call ONLY for gen_server/statem nodes so init() sees its instance before
+    // start(); a runnable/prebuilt would fail to compile (no member).
     supervisor_ctl.set_tipc_instance(supervisor_ctl_inst);
     // Generic node params (read via the static-deploy ParamsConfig, overridable
     // per-rig in config/<fc>.json under this node's section — same mechanism as
@@ -137,7 +149,7 @@ int main(int argc, char** argv) {
     //   start_delay_ms   (default 0)     — deterministic intra-executable ordering.
     // A node section may be absent entirely → all defaults apply (start normally).
     const auto supervisor_ctl_params =
-        ::theia::runtime::get_config().node(SupervisorCtl::kNodeName);
+        ::theia::runtime::get_config().node("supervisor_ctl");
     // Boot gate — recomputed identically in the START pass below (cheap param
     // read). PASS 1 (here): wire the mux (bind_node + register_* + pg_attach)
     // BEFORE config_mux.start() and BEFORE the node thread runs. PASS 2 (after
@@ -208,7 +220,7 @@ int main(int argc, char** argv) {
         // supervisor's PgMembership pushes route into handle_cast) and pass its
         // BOUND ADDRESS as the watcher address — where the supervisor casts
         // PgMembership when this node pg_watch'es a group it produces to.
-        supervisor_ctl.pg_attach(SupervisorCtl::kNodeName, supervisor_ctl_cfg,
+        supervisor_ctl.pg_attach("supervisor_ctl", supervisor_ctl_cfg,
                                 supervisor_ctl_type, supervisor_ctl_inst);
     } else {
         supervisor_ctl.log().warn("config service bind failed; live log-level "
@@ -219,12 +231,21 @@ int main(int argc, char** argv) {
     }  // end if (supervisor_ctl_enabled) — PASS 1 (mux wiring)
 
     SupervisorWorker supervisor_worker;
-    // Per-node logger: tagged [#supervisor_worker] (kNodeName, matches `tdb ps`),
-    // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so do_start/init
-    // log through it. The FIRST node's logger also backs process_logger() — the
-    // ConfigureLogLevel-push fallback target + any process_logger() caller.
+    // RUNTIME NODE IDENTITY = the PROTOTYPE name ("supervisor_worker") — the name the
+    // manifest/supervisor domain uses everywhere (executor.json art_nodes, the
+    // --tipc arg keys, config/<proc>.json `nodes` sections, `tdb ps` rows). For a
+    // LOCAL node this equals SupervisorWorker::kNodeName; for an IMPORTED package node it
+    // does NOT (the package lib was compiled without a composition, so its
+    // kNodeName is the snake'd node TYPE, e.g. osi_v2v vs prototype v2v). Keying
+    // main's identity calls on kNodeName made an imported node's --tipc lookup
+    // MISS (silent fallback to the compiled address — machine-shift/clones broken)
+    // and its params section unmatched (silent defaults). Use the prototype name.
+    // Per-node logger: tagged [#supervisor_worker] (matches `tdb ps`), sink chosen by
+    // $THEIA_LOGGER. Installed BEFORE start() so do_start/init log through it. The
+    // FIRST node's logger also backs process_logger() — the ConfigureLogLevel-push
+    // fallback target + any process_logger() caller.
     {
-        auto supervisor_worker_log = MakeContextLogger(SupervisorWorker::kNodeName);
+        auto supervisor_worker_log = MakeContextLogger("supervisor_worker");
         supervisor_worker_log->set_level(boot_level);
         supervisor_worker.set_logger(std::move(supervisor_worker_log));
     }
@@ -236,7 +257,7 @@ int main(int argc, char** argv) {
     // start() — sees its own instance via tipc_instance() (a clone that keys its
     // per-instance config in init() would otherwise race and read 0).
     uint32_t supervisor_worker_type, supervisor_worker_inst;
-    ::theia::runtime::resolve_node_tipc(SupervisorWorker::kNodeName,
+    ::theia::runtime::resolve_node_tipc("supervisor_worker",
         SupervisorWorker::kTipcType, SupervisorWorker::kTipcInstance,
         supervisor_worker_type, supervisor_worker_inst);
     // Generic node params (read via the static-deploy ParamsConfig, overridable
@@ -247,7 +268,7 @@ int main(int argc, char** argv) {
     //   start_delay_ms   (default 0)     — deterministic intra-executable ordering.
     // A node section may be absent entirely → all defaults apply (start normally).
     const auto supervisor_worker_params =
-        ::theia::runtime::get_config().node(SupervisorWorker::kNodeName);
+        ::theia::runtime::get_config().node("supervisor_worker");
     // Boot gate — recomputed identically in the START pass below (cheap param
     // read). PASS 1 (here): wire the mux (bind_node + register_* + pg_attach)
     // BEFORE config_mux.start() and BEFORE the node thread runs. PASS 2 (after
@@ -304,14 +325,14 @@ int main(int argc, char** argv) {
     // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG. Applied AFTER
     // start() — the thread exists now. No-op when unset; soft-fails on EPERM.
     ::theia::runtime::apply_node_affinity(supervisor_ctl.native_handle(),
-        SupervisorCtl::kNodeName, std::getenv("THEIA_NODE_CFG"));
+        "supervisor_ctl", std::getenv("THEIA_NODE_CFG"));
 
     // Liveness beat to the supervisor watchdog (#PHM). A reporting node must beat
     // or the watchdog SIGTERMs it after K missed deadlines. One publisher per
     // node, own timer thread; 1s default matches the supervisor's check cadence.
     {
         auto supervisor_ctl_hb = std::make_unique<
-            ::theia::runtime::HeartbeatPublisher>(SupervisorCtl::kNodeName);
+            ::theia::runtime::HeartbeatPublisher>("supervisor_ctl");
         if (supervisor_ctl_hb->open()) {
             supervisor_ctl_hb->start(/*period_ms=*/1000);
             heartbeats.push_back(std::move(supervisor_ctl_hb));
@@ -338,14 +359,14 @@ int main(int argc, char** argv) {
     // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG. Applied AFTER
     // start() — the thread exists now. No-op when unset; soft-fails on EPERM.
     ::theia::runtime::apply_node_affinity(supervisor_worker.native_handle(),
-        SupervisorWorker::kNodeName, std::getenv("THEIA_NODE_CFG"));
+        "supervisor_worker", std::getenv("THEIA_NODE_CFG"));
 
     // Liveness beat to the supervisor watchdog (#PHM). A reporting node must beat
     // or the watchdog SIGTERMs it after K missed deadlines. One publisher per
     // node, own timer thread; 1s default matches the supervisor's check cadence.
     {
         auto supervisor_worker_hb = std::make_unique<
-            ::theia::runtime::HeartbeatPublisher>(SupervisorWorker::kNodeName);
+            ::theia::runtime::HeartbeatPublisher>("supervisor_worker");
         if (supervisor_worker_hb->open()) {
             supervisor_worker_hb->start(/*period_ms=*/1000);
             heartbeats.push_back(std::move(supervisor_worker_hb));

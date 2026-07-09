@@ -104,12 +104,21 @@ int main(int argc, char** argv) {
 
 
     PerClient per_client;
-    // Per-node logger: tagged [#per_client] (kNodeName, matches `tdb ps`),
-    // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so do_start/init
-    // log through it. The FIRST node's logger also backs process_logger() — the
-    // ConfigureLogLevel-push fallback target + any process_logger() caller.
+    // RUNTIME NODE IDENTITY = the PROTOTYPE name ("per_client") — the name the
+    // manifest/supervisor domain uses everywhere (executor.json art_nodes, the
+    // --tipc arg keys, config/<proc>.json `nodes` sections, `tdb ps` rows). For a
+    // LOCAL node this equals PerClient::kNodeName; for an IMPORTED package node it
+    // does NOT (the package lib was compiled without a composition, so its
+    // kNodeName is the snake'd node TYPE, e.g. osi_v2v vs prototype v2v). Keying
+    // main's identity calls on kNodeName made an imported node's --tipc lookup
+    // MISS (silent fallback to the compiled address — machine-shift/clones broken)
+    // and its params section unmatched (silent defaults). Use the prototype name.
+    // Per-node logger: tagged [#per_client] (matches `tdb ps`), sink chosen by
+    // $THEIA_LOGGER. Installed BEFORE start() so do_start/init log through it. The
+    // FIRST node's logger also backs process_logger() — the ConfigureLogLevel-push
+    // fallback target + any process_logger() caller.
     {
-        auto per_client_log = MakeContextLogger(PerClient::kNodeName);
+        auto per_client_log = MakeContextLogger("per_client");
         per_client_log->set_level(boot_level);
         ::theia::runtime::set_process_logger(per_client_log);
         per_client.set_logger(std::move(per_client_log));
@@ -122,7 +131,7 @@ int main(int argc, char** argv) {
     // start() — sees its own instance via tipc_instance() (a clone that keys its
     // per-instance config in init() would otherwise race and read 0).
     uint32_t per_client_type, per_client_inst;
-    ::theia::runtime::resolve_node_tipc(PerClient::kNodeName,
+    ::theia::runtime::resolve_node_tipc("per_client",
         PerClient::kTipcType, PerClient::kTipcInstance,
         per_client_type, per_client_inst);
     // set_tipc_instance() is a GenServer/GenStateM method — only atomic + statem
@@ -140,7 +149,7 @@ int main(int argc, char** argv) {
     //   start_delay_ms   (default 0)     — deterministic intra-executable ordering.
     // A node section may be absent entirely → all defaults apply (start normally).
     const auto per_client_params =
-        ::theia::runtime::get_config().node(PerClient::kNodeName);
+        ::theia::runtime::get_config().node("per_client");
     // Boot gate — recomputed identically in the START pass below (cheap param
     // read). PASS 1 (here): wire the mux (bind_node + register_* + pg_attach)
     // BEFORE config_mux.start() and BEFORE the node thread runs. PASS 2 (after
@@ -181,7 +190,7 @@ int main(int argc, char** argv) {
         // supervisor's PgMembership pushes route into handle_cast) and pass its
         // BOUND ADDRESS as the watcher address — where the supervisor casts
         // PgMembership when this node pg_watch'es a group it produces to.
-        per_client.pg_attach(PerClient::kNodeName, per_client_cfg,
+        per_client.pg_attach("per_client", per_client_cfg,
                                 per_client_type, per_client_inst);
     } else {
         per_client.log().warn("config service bind failed; live log-level "
@@ -192,12 +201,21 @@ int main(int argc, char** argv) {
     }  // end if (per_client_enabled) — PASS 1 (mux wiring)
 
     PerManager per_manager;
-    // Per-node logger: tagged [#per_manager] (kNodeName, matches `tdb ps`),
-    // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so do_start/init
-    // log through it. The FIRST node's logger also backs process_logger() — the
-    // ConfigureLogLevel-push fallback target + any process_logger() caller.
+    // RUNTIME NODE IDENTITY = the PROTOTYPE name ("per_manager") — the name the
+    // manifest/supervisor domain uses everywhere (executor.json art_nodes, the
+    // --tipc arg keys, config/<proc>.json `nodes` sections, `tdb ps` rows). For a
+    // LOCAL node this equals PerManager::kNodeName; for an IMPORTED package node it
+    // does NOT (the package lib was compiled without a composition, so its
+    // kNodeName is the snake'd node TYPE, e.g. osi_v2v vs prototype v2v). Keying
+    // main's identity calls on kNodeName made an imported node's --tipc lookup
+    // MISS (silent fallback to the compiled address — machine-shift/clones broken)
+    // and its params section unmatched (silent defaults). Use the prototype name.
+    // Per-node logger: tagged [#per_manager] (matches `tdb ps`), sink chosen by
+    // $THEIA_LOGGER. Installed BEFORE start() so do_start/init log through it. The
+    // FIRST node's logger also backs process_logger() — the ConfigureLogLevel-push
+    // fallback target + any process_logger() caller.
     {
-        auto per_manager_log = MakeContextLogger(PerManager::kNodeName);
+        auto per_manager_log = MakeContextLogger("per_manager");
         per_manager_log->set_level(boot_level);
         per_manager.set_logger(std::move(per_manager_log));
     }
@@ -209,7 +227,7 @@ int main(int argc, char** argv) {
     // start() — sees its own instance via tipc_instance() (a clone that keys its
     // per-instance config in init() would otherwise race and read 0).
     uint32_t per_manager_type, per_manager_inst;
-    ::theia::runtime::resolve_node_tipc(PerManager::kNodeName,
+    ::theia::runtime::resolve_node_tipc("per_manager",
         PerManager::kTipcType, PerManager::kTipcInstance,
         per_manager_type, per_manager_inst);
     // set_tipc_instance() is a GenServer/GenStateM method — only atomic + statem
@@ -227,7 +245,7 @@ int main(int argc, char** argv) {
     //   start_delay_ms   (default 0)     — deterministic intra-executable ordering.
     // A node section may be absent entirely → all defaults apply (start normally).
     const auto per_manager_params =
-        ::theia::runtime::get_config().node(PerManager::kNodeName);
+        ::theia::runtime::get_config().node("per_manager");
     // Boot gate — recomputed identically in the START pass below (cheap param
     // read). PASS 1 (here): wire the mux (bind_node + register_* + pg_attach)
     // BEFORE config_mux.start() and BEFORE the node thread runs. PASS 2 (after
@@ -274,7 +292,7 @@ int main(int argc, char** argv) {
         // supervisor's PgMembership pushes route into handle_cast) and pass its
         // BOUND ADDRESS as the watcher address — where the supervisor casts
         // PgMembership when this node pg_watch'es a group it produces to.
-        per_manager.pg_attach(PerManager::kNodeName, per_manager_cfg,
+        per_manager.pg_attach("per_manager", per_manager_cfg,
                                 per_manager_type, per_manager_inst);
     } else {
         per_manager.log().warn("config service bind failed; live log-level "
@@ -307,14 +325,14 @@ int main(int argc, char** argv) {
     // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG. Applied AFTER
     // start() — the thread exists now. No-op when unset; soft-fails on EPERM.
     ::theia::runtime::apply_node_affinity(per_client.native_handle(),
-        PerClient::kNodeName, std::getenv("THEIA_NODE_CFG"));
+        "per_client", std::getenv("THEIA_NODE_CFG"));
 
     // Liveness beat to the supervisor watchdog (#PHM). A reporting node must beat
     // or the watchdog SIGTERMs it after K missed deadlines. One publisher per
     // node, own timer thread; 1s default matches the supervisor's check cadence.
     {
         auto per_client_hb = std::make_unique<
-            ::theia::runtime::HeartbeatPublisher>(PerClient::kNodeName);
+            ::theia::runtime::HeartbeatPublisher>("per_client");
         if (per_client_hb->open()) {
             per_client_hb->start(/*period_ms=*/1000);
             heartbeats.push_back(std::move(per_client_hb));
@@ -341,14 +359,14 @@ int main(int argc, char** argv) {
     // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG. Applied AFTER
     // start() — the thread exists now. No-op when unset; soft-fails on EPERM.
     ::theia::runtime::apply_node_affinity(per_manager.native_handle(),
-        PerManager::kNodeName, std::getenv("THEIA_NODE_CFG"));
+        "per_manager", std::getenv("THEIA_NODE_CFG"));
 
     // Liveness beat to the supervisor watchdog (#PHM). A reporting node must beat
     // or the watchdog SIGTERMs it after K missed deadlines. One publisher per
     // node, own timer thread; 1s default matches the supervisor's check cadence.
     {
         auto per_manager_hb = std::make_unique<
-            ::theia::runtime::HeartbeatPublisher>(PerManager::kNodeName);
+            ::theia::runtime::HeartbeatPublisher>("per_manager");
         if (per_manager_hb->open()) {
             per_manager_hb->start(/*period_ms=*/1000);
             heartbeats.push_back(std::move(per_manager_hb));

@@ -36,6 +36,7 @@
                                   // circular).
 
 #include <cstdint>
+#include <cstdio>    // fprintf — LOUD oversized-cast drop diagnostics
 #include <cstring>
 #include <future>
 #include <memory>
@@ -189,7 +190,20 @@ public:
         using Codec = RemoteCodec<Msg>;
         uint8_t buf[256];
         pb_ostream_t os = pb_ostream_from_buffer(buf, sizeof(buf));
-        if (!pb_encode(&os, Codec::fields(), &msg)) return false;
+        if (!pb_encode(&os, Codec::fields(), &msg)) {
+            // LOUD: a cast is fire-and-forget, so this false return is routinely
+            // ignored — an oversized message (256 B encode buffer) would vanish
+            // SILENTLY otherwise (observed in the field: a large periodic feed
+            // cast that never arrived). Big payloads belong on the pg
+            // broadcast_* path, where the caller encodes into its own
+            // right-sized buffer.
+            std::fprintf(stderr,
+                         "[theia] cast<%s> DROPPED: pb_encode failed "
+                         "(payload > %zu-byte cast buffer? use pg broadcast_* "
+                         "for large feeds)\n",
+                         ::theia::runtime::msg_type_name<Msg>(), sizeof(buf));
+            return false;
+        }
         auto& tr = ::theia::runtime::tracer_for(NodeType::kNodeName);
         if (tr.enabled()) {
             tr.emit(::theia::runtime::TraceEvent::Send,
@@ -364,7 +378,19 @@ void cast(Daemon& /*self*/, const Msg& msg, TipcAddr addr,
 
     uint8_t buf[256];
     pb_ostream_t os = pb_ostream_from_buffer(buf, sizeof(buf));
-    if (!pb_encode(&os, Codec::fields(), &msg)) return;
+    if (!pb_encode(&os, Codec::fields(), &msg)) {
+        // LOUD: this path returns void — an oversized message (256 B encode
+        // buffer) would vanish with NO signal at all (observed in the field: a
+        // big netgraph-cast feed that never arrived; consumers starved
+        // silently). Big payloads belong on the pg broadcast_* path (the caller
+        // encodes into its own right-sized buffer, consumers pg_join in init()).
+        std::fprintf(stderr,
+                     "[theia] netgraph cast<%s> DROPPED: pb_encode failed "
+                     "(payload > %zu-byte cast buffer? use pg broadcast_* for "
+                     "large feeds)\n",
+                     ::theia::runtime::msg_type_name<Msg>(), sizeof(buf));
+        return;
+    }
 
     // Here Daemon::kNodeName is the SENDER (self) — the correct src for this
     // netgraph-addressed path — and the peer name comes from the TipcAddr the

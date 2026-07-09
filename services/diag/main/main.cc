@@ -108,12 +108,21 @@ int main(int argc, char** argv) {
 
 
     DoipServer doip_server;
-    // Per-node logger: tagged [#doip_server] (kNodeName, matches `tdb ps`),
-    // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so do_start/init
-    // log through it. The FIRST node's logger also backs process_logger() — the
-    // ConfigureLogLevel-push fallback target + any process_logger() caller.
+    // RUNTIME NODE IDENTITY = the PROTOTYPE name ("doip_server") — the name the
+    // manifest/supervisor domain uses everywhere (executor.json art_nodes, the
+    // --tipc arg keys, config/<proc>.json `nodes` sections, `tdb ps` rows). For a
+    // LOCAL node this equals DoipServer::kNodeName; for an IMPORTED package node it
+    // does NOT (the package lib was compiled without a composition, so its
+    // kNodeName is the snake'd node TYPE, e.g. osi_v2v vs prototype v2v). Keying
+    // main's identity calls on kNodeName made an imported node's --tipc lookup
+    // MISS (silent fallback to the compiled address — machine-shift/clones broken)
+    // and its params section unmatched (silent defaults). Use the prototype name.
+    // Per-node logger: tagged [#doip_server] (matches `tdb ps`), sink chosen by
+    // $THEIA_LOGGER. Installed BEFORE start() so do_start/init log through it. The
+    // FIRST node's logger also backs process_logger() — the ConfigureLogLevel-push
+    // fallback target + any process_logger() caller.
     {
-        auto doip_server_log = MakeContextLogger(DoipServer::kNodeName);
+        auto doip_server_log = MakeContextLogger("doip_server");
         doip_server_log->set_level(boot_level);
         ::theia::runtime::set_process_logger(doip_server_log);
         doip_server.set_logger(std::move(doip_server_log));
@@ -126,7 +135,7 @@ int main(int argc, char** argv) {
     // start() — sees its own instance via tipc_instance() (a clone that keys its
     // per-instance config in init() would otherwise race and read 0).
     uint32_t doip_server_type, doip_server_inst;
-    ::theia::runtime::resolve_node_tipc(DoipServer::kNodeName,
+    ::theia::runtime::resolve_node_tipc("doip_server",
         DoipServer::kTipcType, DoipServer::kTipcInstance,
         doip_server_type, doip_server_inst);
     // Generic node params (read via the static-deploy ParamsConfig, overridable
@@ -137,7 +146,7 @@ int main(int argc, char** argv) {
     //   start_delay_ms   (default 0)     — deterministic intra-executable ordering.
     // A node section may be absent entirely → all defaults apply (start normally).
     const auto doip_server_params =
-        ::theia::runtime::get_config().node(DoipServer::kNodeName);
+        ::theia::runtime::get_config().node("doip_server");
     // Boot gate — recomputed identically in the START pass below (cheap param
     // read). PASS 1 (here): wire the mux (bind_node + register_* + pg_attach)
     // BEFORE config_mux.start() and BEFORE the node thread runs. PASS 2 (after
@@ -155,12 +164,21 @@ int main(int argc, char** argv) {
     }  // end if (doip_server_enabled) — PASS 1 (mux wiring)
 
     UdsRouter uds_router;
-    // Per-node logger: tagged [#uds_router] (kNodeName, matches `tdb ps`),
-    // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so do_start/init
-    // log through it. The FIRST node's logger also backs process_logger() — the
-    // ConfigureLogLevel-push fallback target + any process_logger() caller.
+    // RUNTIME NODE IDENTITY = the PROTOTYPE name ("uds_router") — the name the
+    // manifest/supervisor domain uses everywhere (executor.json art_nodes, the
+    // --tipc arg keys, config/<proc>.json `nodes` sections, `tdb ps` rows). For a
+    // LOCAL node this equals UdsRouter::kNodeName; for an IMPORTED package node it
+    // does NOT (the package lib was compiled without a composition, so its
+    // kNodeName is the snake'd node TYPE, e.g. osi_v2v vs prototype v2v). Keying
+    // main's identity calls on kNodeName made an imported node's --tipc lookup
+    // MISS (silent fallback to the compiled address — machine-shift/clones broken)
+    // and its params section unmatched (silent defaults). Use the prototype name.
+    // Per-node logger: tagged [#uds_router] (matches `tdb ps`), sink chosen by
+    // $THEIA_LOGGER. Installed BEFORE start() so do_start/init log through it. The
+    // FIRST node's logger also backs process_logger() — the ConfigureLogLevel-push
+    // fallback target + any process_logger() caller.
     {
-        auto uds_router_log = MakeContextLogger(UdsRouter::kNodeName);
+        auto uds_router_log = MakeContextLogger("uds_router");
         uds_router_log->set_level(boot_level);
         uds_router.set_logger(std::move(uds_router_log));
     }
@@ -172,7 +190,7 @@ int main(int argc, char** argv) {
     // start() — sees its own instance via tipc_instance() (a clone that keys its
     // per-instance config in init() would otherwise race and read 0).
     uint32_t uds_router_type, uds_router_inst;
-    ::theia::runtime::resolve_node_tipc(UdsRouter::kNodeName,
+    ::theia::runtime::resolve_node_tipc("uds_router",
         UdsRouter::kTipcType, UdsRouter::kTipcInstance,
         uds_router_type, uds_router_inst);
     // set_tipc_instance() is a GenServer/GenStateM method — only atomic + statem
@@ -190,7 +208,7 @@ int main(int argc, char** argv) {
     //   start_delay_ms   (default 0)     — deterministic intra-executable ordering.
     // A node section may be absent entirely → all defaults apply (start normally).
     const auto uds_router_params =
-        ::theia::runtime::get_config().node(UdsRouter::kNodeName);
+        ::theia::runtime::get_config().node("uds_router");
     // Boot gate — recomputed identically in the START pass below (cheap param
     // read). PASS 1 (here): wire the mux (bind_node + register_* + pg_attach)
     // BEFORE config_mux.start() and BEFORE the node thread runs. PASS 2 (after
@@ -236,7 +254,7 @@ int main(int argc, char** argv) {
         // supervisor's PgMembership pushes route into handle_cast) and pass its
         // BOUND ADDRESS as the watcher address — where the supervisor casts
         // PgMembership when this node pg_watch'es a group it produces to.
-        uds_router.pg_attach(UdsRouter::kNodeName, uds_router_cfg,
+        uds_router.pg_attach("uds_router", uds_router_cfg,
                                 uds_router_type, uds_router_inst);
     } else {
         uds_router.log().warn("config service bind failed; live log-level "
@@ -247,12 +265,21 @@ int main(int argc, char** argv) {
     }  // end if (uds_router_enabled) — PASS 1 (mux wiring)
 
     DiagTester diag_tester;
-    // Per-node logger: tagged [#diag_tester] (kNodeName, matches `tdb ps`),
-    // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so do_start/init
-    // log through it. The FIRST node's logger also backs process_logger() — the
-    // ConfigureLogLevel-push fallback target + any process_logger() caller.
+    // RUNTIME NODE IDENTITY = the PROTOTYPE name ("diag_tester") — the name the
+    // manifest/supervisor domain uses everywhere (executor.json art_nodes, the
+    // --tipc arg keys, config/<proc>.json `nodes` sections, `tdb ps` rows). For a
+    // LOCAL node this equals DiagTester::kNodeName; for an IMPORTED package node it
+    // does NOT (the package lib was compiled without a composition, so its
+    // kNodeName is the snake'd node TYPE, e.g. osi_v2v vs prototype v2v). Keying
+    // main's identity calls on kNodeName made an imported node's --tipc lookup
+    // MISS (silent fallback to the compiled address — machine-shift/clones broken)
+    // and its params section unmatched (silent defaults). Use the prototype name.
+    // Per-node logger: tagged [#diag_tester] (matches `tdb ps`), sink chosen by
+    // $THEIA_LOGGER. Installed BEFORE start() so do_start/init log through it. The
+    // FIRST node's logger also backs process_logger() — the ConfigureLogLevel-push
+    // fallback target + any process_logger() caller.
     {
-        auto diag_tester_log = MakeContextLogger(DiagTester::kNodeName);
+        auto diag_tester_log = MakeContextLogger("diag_tester");
         diag_tester_log->set_level(boot_level);
         diag_tester.set_logger(std::move(diag_tester_log));
     }
@@ -264,7 +291,7 @@ int main(int argc, char** argv) {
     // start() — sees its own instance via tipc_instance() (a clone that keys its
     // per-instance config in init() would otherwise race and read 0).
     uint32_t diag_tester_type, diag_tester_inst;
-    ::theia::runtime::resolve_node_tipc(DiagTester::kNodeName,
+    ::theia::runtime::resolve_node_tipc("diag_tester",
         DiagTester::kTipcType, DiagTester::kTipcInstance,
         diag_tester_type, diag_tester_inst);
     // set_tipc_instance() is a GenServer/GenStateM method — only atomic + statem
@@ -282,7 +309,7 @@ int main(int argc, char** argv) {
     //   start_delay_ms   (default 0)     — deterministic intra-executable ordering.
     // A node section may be absent entirely → all defaults apply (start normally).
     const auto diag_tester_params =
-        ::theia::runtime::get_config().node(DiagTester::kNodeName);
+        ::theia::runtime::get_config().node("diag_tester");
     // Boot gate — recomputed identically in the START pass below (cheap param
     // read). PASS 1 (here): wire the mux (bind_node + register_* + pg_attach)
     // BEFORE config_mux.start() and BEFORE the node thread runs. PASS 2 (after
@@ -317,7 +344,7 @@ int main(int argc, char** argv) {
         // supervisor's PgMembership pushes route into handle_cast) and pass its
         // BOUND ADDRESS as the watcher address — where the supervisor casts
         // PgMembership when this node pg_watch'es a group it produces to.
-        diag_tester.pg_attach(DiagTester::kNodeName, diag_tester_cfg,
+        diag_tester.pg_attach("diag_tester", diag_tester_cfg,
                                 diag_tester_type, diag_tester_inst);
     } else {
         diag_tester.log().warn("config service bind failed; live log-level "
@@ -350,7 +377,7 @@ int main(int argc, char** argv) {
     // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG. Applied AFTER
     // start() — the thread exists now. No-op when unset; soft-fails on EPERM.
     ::theia::runtime::apply_node_affinity(doip_server.native_handle(),
-        DoipServer::kNodeName, std::getenv("THEIA_NODE_CFG"));
+        "doip_server", std::getenv("THEIA_NODE_CFG"));
 
     }  // end if (doip_server_enabled) — PASS 2 (start + heartbeat)
 
@@ -369,14 +396,14 @@ int main(int argc, char** argv) {
     // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG. Applied AFTER
     // start() — the thread exists now. No-op when unset; soft-fails on EPERM.
     ::theia::runtime::apply_node_affinity(uds_router.native_handle(),
-        UdsRouter::kNodeName, std::getenv("THEIA_NODE_CFG"));
+        "uds_router", std::getenv("THEIA_NODE_CFG"));
 
     // Liveness beat to the supervisor watchdog (#PHM). A reporting node must beat
     // or the watchdog SIGTERMs it after K missed deadlines. One publisher per
     // node, own timer thread; 1s default matches the supervisor's check cadence.
     {
         auto uds_router_hb = std::make_unique<
-            ::theia::runtime::HeartbeatPublisher>(UdsRouter::kNodeName);
+            ::theia::runtime::HeartbeatPublisher>("uds_router");
         if (uds_router_hb->open()) {
             uds_router_hb->start(/*period_ms=*/1000);
             heartbeats.push_back(std::move(uds_router_hb));
@@ -403,14 +430,14 @@ int main(int argc, char** argv) {
     // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG. Applied AFTER
     // start() — the thread exists now. No-op when unset; soft-fails on EPERM.
     ::theia::runtime::apply_node_affinity(diag_tester.native_handle(),
-        DiagTester::kNodeName, std::getenv("THEIA_NODE_CFG"));
+        "diag_tester", std::getenv("THEIA_NODE_CFG"));
 
     // Liveness beat to the supervisor watchdog (#PHM). A reporting node must beat
     // or the watchdog SIGTERMs it after K missed deadlines. One publisher per
     // node, own timer thread; 1s default matches the supervisor's check cadence.
     {
         auto diag_tester_hb = std::make_unique<
-            ::theia::runtime::HeartbeatPublisher>(DiagTester::kNodeName);
+            ::theia::runtime::HeartbeatPublisher>("diag_tester");
         if (diag_tester_hb->open()) {
             diag_tester_hb->start(/*period_ms=*/1000);
             heartbeats.push_back(std::move(diag_tester_hb));

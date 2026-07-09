@@ -104,12 +104,21 @@ int main(int argc, char** argv) {
 
 
     RoudiBroker roudi;
-    // Per-node logger: tagged [#roudi] (kNodeName, matches `tdb ps`),
-    // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so do_start/init
-    // log through it. The FIRST node's logger also backs process_logger() — the
-    // ConfigureLogLevel-push fallback target + any process_logger() caller.
+    // RUNTIME NODE IDENTITY = the PROTOTYPE name ("roudi") — the name the
+    // manifest/supervisor domain uses everywhere (executor.json art_nodes, the
+    // --tipc arg keys, config/<proc>.json `nodes` sections, `tdb ps` rows). For a
+    // LOCAL node this equals RoudiBroker::kNodeName; for an IMPORTED package node it
+    // does NOT (the package lib was compiled without a composition, so its
+    // kNodeName is the snake'd node TYPE, e.g. osi_v2v vs prototype v2v). Keying
+    // main's identity calls on kNodeName made an imported node's --tipc lookup
+    // MISS (silent fallback to the compiled address — machine-shift/clones broken)
+    // and its params section unmatched (silent defaults). Use the prototype name.
+    // Per-node logger: tagged [#roudi] (matches `tdb ps`), sink chosen by
+    // $THEIA_LOGGER. Installed BEFORE start() so do_start/init log through it. The
+    // FIRST node's logger also backs process_logger() — the ConfigureLogLevel-push
+    // fallback target + any process_logger() caller.
     {
-        auto roudi_log = MakeContextLogger(RoudiBroker::kNodeName);
+        auto roudi_log = MakeContextLogger("roudi");
         roudi_log->set_level(boot_level);
         ::theia::runtime::set_process_logger(roudi_log);
         roudi.set_logger(std::move(roudi_log));
@@ -122,7 +131,7 @@ int main(int argc, char** argv) {
     // start() — sees its own instance via tipc_instance() (a clone that keys its
     // per-instance config in init() would otherwise race and read 0).
     uint32_t roudi_type, roudi_inst;
-    ::theia::runtime::resolve_node_tipc(RoudiBroker::kNodeName,
+    ::theia::runtime::resolve_node_tipc("roudi",
         RoudiBroker::kTipcType, RoudiBroker::kTipcInstance,
         roudi_type, roudi_inst);
     // Generic node params (read via the static-deploy ParamsConfig, overridable
@@ -133,7 +142,7 @@ int main(int argc, char** argv) {
     //   start_delay_ms   (default 0)     — deterministic intra-executable ordering.
     // A node section may be absent entirely → all defaults apply (start normally).
     const auto roudi_params =
-        ::theia::runtime::get_config().node(RoudiBroker::kNodeName);
+        ::theia::runtime::get_config().node("roudi");
     // Boot gate — recomputed identically in the START pass below (cheap param
     // read). PASS 1 (here): wire the mux (bind_node + register_* + pg_attach)
     // BEFORE config_mux.start() and BEFORE the node thread runs. PASS 2 (after
@@ -151,12 +160,21 @@ int main(int argc, char** argv) {
     }  // end if (roudi_enabled) — PASS 1 (mux wiring)
 
     RdsCtl ctl;
-    // Per-node logger: tagged [#ctl] (kNodeName, matches `tdb ps`),
-    // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so do_start/init
-    // log through it. The FIRST node's logger also backs process_logger() — the
-    // ConfigureLogLevel-push fallback target + any process_logger() caller.
+    // RUNTIME NODE IDENTITY = the PROTOTYPE name ("ctl") — the name the
+    // manifest/supervisor domain uses everywhere (executor.json art_nodes, the
+    // --tipc arg keys, config/<proc>.json `nodes` sections, `tdb ps` rows). For a
+    // LOCAL node this equals RdsCtl::kNodeName; for an IMPORTED package node it
+    // does NOT (the package lib was compiled without a composition, so its
+    // kNodeName is the snake'd node TYPE, e.g. osi_v2v vs prototype v2v). Keying
+    // main's identity calls on kNodeName made an imported node's --tipc lookup
+    // MISS (silent fallback to the compiled address — machine-shift/clones broken)
+    // and its params section unmatched (silent defaults). Use the prototype name.
+    // Per-node logger: tagged [#ctl] (matches `tdb ps`), sink chosen by
+    // $THEIA_LOGGER. Installed BEFORE start() so do_start/init log through it. The
+    // FIRST node's logger also backs process_logger() — the ConfigureLogLevel-push
+    // fallback target + any process_logger() caller.
     {
-        auto ctl_log = MakeContextLogger(RdsCtl::kNodeName);
+        auto ctl_log = MakeContextLogger("ctl");
         ctl_log->set_level(boot_level);
         ctl.set_logger(std::move(ctl_log));
     }
@@ -168,7 +186,7 @@ int main(int argc, char** argv) {
     // start() — sees its own instance via tipc_instance() (a clone that keys its
     // per-instance config in init() would otherwise race and read 0).
     uint32_t ctl_type, ctl_inst;
-    ::theia::runtime::resolve_node_tipc(RdsCtl::kNodeName,
+    ::theia::runtime::resolve_node_tipc("ctl",
         RdsCtl::kTipcType, RdsCtl::kTipcInstance,
         ctl_type, ctl_inst);
     // set_tipc_instance() is a GenServer/GenStateM method — only atomic + statem
@@ -186,7 +204,7 @@ int main(int argc, char** argv) {
     //   start_delay_ms   (default 0)     — deterministic intra-executable ordering.
     // A node section may be absent entirely → all defaults apply (start normally).
     const auto ctl_params =
-        ::theia::runtime::get_config().node(RdsCtl::kNodeName);
+        ::theia::runtime::get_config().node("ctl");
     // Boot gate — recomputed identically in the START pass below (cheap param
     // read). PASS 1 (here): wire the mux (bind_node + register_* + pg_attach)
     // BEFORE config_mux.start() and BEFORE the node thread runs. PASS 2 (after
@@ -223,7 +241,7 @@ int main(int argc, char** argv) {
         // supervisor's PgMembership pushes route into handle_cast) and pass its
         // BOUND ADDRESS as the watcher address — where the supervisor casts
         // PgMembership when this node pg_watch'es a group it produces to.
-        ctl.pg_attach(RdsCtl::kNodeName, ctl_cfg,
+        ctl.pg_attach("ctl", ctl_cfg,
                                 ctl_type, ctl_inst);
     } else {
         ctl.log().warn("config service bind failed; live log-level "
@@ -256,7 +274,7 @@ int main(int argc, char** argv) {
     // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG. Applied AFTER
     // start() — the thread exists now. No-op when unset; soft-fails on EPERM.
     ::theia::runtime::apply_node_affinity(roudi.native_handle(),
-        RoudiBroker::kNodeName, std::getenv("THEIA_NODE_CFG"));
+        "roudi", std::getenv("THEIA_NODE_CFG"));
 
     }  // end if (roudi_enabled) — PASS 2 (start + heartbeat)
 
@@ -275,14 +293,14 @@ int main(int argc, char** argv) {
     // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG. Applied AFTER
     // start() — the thread exists now. No-op when unset; soft-fails on EPERM.
     ::theia::runtime::apply_node_affinity(ctl.native_handle(),
-        RdsCtl::kNodeName, std::getenv("THEIA_NODE_CFG"));
+        "ctl", std::getenv("THEIA_NODE_CFG"));
 
     // Liveness beat to the supervisor watchdog (#PHM). A reporting node must beat
     // or the watchdog SIGTERMs it after K missed deadlines. One publisher per
     // node, own timer thread; 1s default matches the supervisor's check cadence.
     {
         auto ctl_hb = std::make_unique<
-            ::theia::runtime::HeartbeatPublisher>(RdsCtl::kNodeName);
+            ::theia::runtime::HeartbeatPublisher>("ctl");
         if (ctl_hb->open()) {
             ctl_hb->start(/*period_ms=*/1000);
             heartbeats.push_back(std::move(ctl_hb));

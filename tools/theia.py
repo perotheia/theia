@@ -4768,6 +4768,12 @@ _INIT_BAZELRC = '''\
 build --enable_bzlmod
 build --incompatible_enable_cc_toolchain_resolution
 build --action_env=PATH
+# OPTIMIZED by default. Bazel's stock `fastbuild` is -O0 — unsafe for real-time
+# nodes (observed: a 20 Hz feed vs ~4 Hz -O0 planning → the brake landed late).
+# Keep frame pointers so libtombstone backtraces stay walkable at -O2. Debug
+# builds are explicit: `bazel build -c dbg //...`.
+build -c opt
+build --copt=-fno-omit-frame-pointer
 # nanopb pb.h location varies by libnanopb-dev version (flat /usr/include vs
 # /usr/include/nanopb/) — add the subdir so the generated *.pb.h #include <pb.h>
 # resolves either way (harmless when absent).

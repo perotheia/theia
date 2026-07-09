@@ -103,12 +103,21 @@ int main(int argc, char** argv) {
 
 
     CryptoProvider crypto_provider;
-    // Per-node logger: tagged [#crypto_provider] (kNodeName, matches `tdb ps`),
-    // sink chosen by $THEIA_LOGGER. Installed BEFORE start() so do_start/init
-    // log through it. The FIRST node's logger also backs process_logger() — the
-    // ConfigureLogLevel-push fallback target + any process_logger() caller.
+    // RUNTIME NODE IDENTITY = the PROTOTYPE name ("crypto_provider") — the name the
+    // manifest/supervisor domain uses everywhere (executor.json art_nodes, the
+    // --tipc arg keys, config/<proc>.json `nodes` sections, `tdb ps` rows). For a
+    // LOCAL node this equals CryptoProvider::kNodeName; for an IMPORTED package node it
+    // does NOT (the package lib was compiled without a composition, so its
+    // kNodeName is the snake'd node TYPE, e.g. osi_v2v vs prototype v2v). Keying
+    // main's identity calls on kNodeName made an imported node's --tipc lookup
+    // MISS (silent fallback to the compiled address — machine-shift/clones broken)
+    // and its params section unmatched (silent defaults). Use the prototype name.
+    // Per-node logger: tagged [#crypto_provider] (matches `tdb ps`), sink chosen by
+    // $THEIA_LOGGER. Installed BEFORE start() so do_start/init log through it. The
+    // FIRST node's logger also backs process_logger() — the ConfigureLogLevel-push
+    // fallback target + any process_logger() caller.
     {
-        auto crypto_provider_log = MakeContextLogger(CryptoProvider::kNodeName);
+        auto crypto_provider_log = MakeContextLogger("crypto_provider");
         crypto_provider_log->set_level(boot_level);
         ::theia::runtime::set_process_logger(crypto_provider_log);
         crypto_provider.set_logger(std::move(crypto_provider_log));
@@ -121,7 +130,7 @@ int main(int argc, char** argv) {
     // start() — sees its own instance via tipc_instance() (a clone that keys its
     // per-instance config in init() would otherwise race and read 0).
     uint32_t crypto_provider_type, crypto_provider_inst;
-    ::theia::runtime::resolve_node_tipc(CryptoProvider::kNodeName,
+    ::theia::runtime::resolve_node_tipc("crypto_provider",
         CryptoProvider::kTipcType, CryptoProvider::kTipcInstance,
         crypto_provider_type, crypto_provider_inst);
     // set_tipc_instance() is a GenServer/GenStateM method — only atomic + statem
@@ -139,7 +148,7 @@ int main(int argc, char** argv) {
     //   start_delay_ms   (default 0)     — deterministic intra-executable ordering.
     // A node section may be absent entirely → all defaults apply (start normally).
     const auto crypto_provider_params =
-        ::theia::runtime::get_config().node(CryptoProvider::kNodeName);
+        ::theia::runtime::get_config().node("crypto_provider");
     // Boot gate — recomputed identically in the START pass below (cheap param
     // read). PASS 1 (here): wire the mux (bind_node + register_* + pg_attach)
     // BEFORE config_mux.start() and BEFORE the node thread runs. PASS 2 (after
@@ -202,7 +211,7 @@ int main(int argc, char** argv) {
         // supervisor's PgMembership pushes route into handle_cast) and pass its
         // BOUND ADDRESS as the watcher address — where the supervisor casts
         // PgMembership when this node pg_watch'es a group it produces to.
-        crypto_provider.pg_attach(CryptoProvider::kNodeName, crypto_provider_cfg,
+        crypto_provider.pg_attach("crypto_provider", crypto_provider_cfg,
                                 crypto_provider_type, crypto_provider_inst);
     } else {
         crypto_provider.log().warn("config service bind failed; live log-level "
@@ -235,14 +244,14 @@ int main(int argc, char** argv) {
     // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG. Applied AFTER
     // start() — the thread exists now. No-op when unset; soft-fails on EPERM.
     ::theia::runtime::apply_node_affinity(crypto_provider.native_handle(),
-        CryptoProvider::kNodeName, std::getenv("THEIA_NODE_CFG"));
+        "crypto_provider", std::getenv("THEIA_NODE_CFG"));
 
     // Liveness beat to the supervisor watchdog (#PHM). A reporting node must beat
     // or the watchdog SIGTERMs it after K missed deadlines. One publisher per
     // node, own timer thread; 1s default matches the supervisor's check cadence.
     {
         auto crypto_provider_hb = std::make_unique<
-            ::theia::runtime::HeartbeatPublisher>(CryptoProvider::kNodeName);
+            ::theia::runtime::HeartbeatPublisher>("crypto_provider");
         if (crypto_provider_hb->open()) {
             crypto_provider_hb->start(/*period_ms=*/1000);
             heartbeats.push_back(std::move(crypto_provider_hb));

@@ -168,10 +168,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Check out artheia from the GitHub mirror
+      - name: Check out submodules over HTTPS
         run: |
+          # artheia (the generators) + etcd-cpp-apiv3 (s3 builds the per
+          # service, which links it). SSH .gitmodules URLs re-pointed to HTTPS.
           git config submodule.artheia.url https://github.com/perotheia/artheia.git
-          git submodule update --init artheia
+          git submodule update --init artheia third_party/etcd-cpp-apiv3
 
       - uses: actions/setup-python@v5
         with:

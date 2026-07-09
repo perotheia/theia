@@ -3850,9 +3850,11 @@ def cmd_init(args: list[str]) -> int:
     (system/apps, impl/), only (re)links the framework deps + (re)writes the
     scaffold BUILD/shim files. Run it again (e.g. add --with-services) any time.
 
-    Theia itself is NOT vendored: system/platform/runtime + system/supervisor
-    (and, with --with-services, system/services) are SYMLINKS into $THEIA_ROOT,
-    so a Theia bump is a re-source, not a re-copy."""
+    A BARE workspace plants NO framework symlinks — its system.art imports only
+    system.apps.*, and the supervisor is staged from the fixed framework target at
+    manifest/install time. Only --with-services vendors the framework .art it
+    imports (system/{platform/runtime,supervisor,services,platform/msgs}) as
+    SYMLINKS into $THEIA_ROOT, so a Theia bump is a re-source, not a re-copy."""
     if "-h" in args or "--help" in args:
         print(cmd_init.__doc__, file=sys.stderr)
         return 0
@@ -3959,25 +3961,31 @@ def cmd_init(args: list[str]) -> int:
         p.write_text(content)
         created.append(rel + ("  (re-synced to framework)" if existing else ""))
 
-    # The runtime .art package. The framework's supervisor/services .art import
-    # `system.platform.runtime.*` (ChildControlIf, TraceControlPush, LogLevelPush);
-    # the resolver maps that FQN to system/platform/runtime/, so link the package
-    # dir there. (One link, FQN-correct — no separate platform/runtime/package.art
-    # or system/runtime shims.)
-    _link("system/platform/runtime", runtime_pkg)
-    # The supervisor .art (system.supervisor). Present in a source checkout and in
-    # the theia-runtime-dev deb; link it so `import system.supervisor.*` resolves.
-    if supervisor_pkg.exists():
-        _link("system/supervisor", supervisor_pkg)
-    # --with-services: link the framework's ARA service FCs so `cluster Services`
-    # resolves in the .art tree. (The rig gets the framework's services MANIFEST
-    # by path-load from $THEIA_ROOT/manifest/, not from this .art link.) The
-    # service .art's import `system.platform.msgs.{std,geometry,sensor,nav}.*` (e.g.
-    # tsync uses nav.GnssSolution), so link the msgs namespace dir too — one link
-    # covers all four subpackages (FQN system.platform.msgs.<x> → msgs/<x>/). Without
-    # it a service that references a platform msg fails to resolve (Unknown object).
+    # The supervisor is a DEPLOY-time fabric: `theia manifest`/`install` stage it
+    # from the FIXED framework target (//platform/supervisor/main:supervisor,
+    # $THEIA_ROOT), NOT from this workspace's ART. A BARE workspace's system.art
+    # therefore imports ONLY system.apps.* — no system.supervisor / system.platform
+    # reference — so it needs neither the system/supervisor nor the
+    # system/platform/runtime symlink. (Verified: parse → manifest → install →
+    # start a bare supervisor all work without them.) Only --with-services, whose
+    # service .art DOES import system.platform.runtime.* + system.platform.msgs.* +
+    # system.services.*, needs the framework symlinks so those FQNs resolve.
     if with_services:
+        # runtime: services import system.platform.runtime.* (ChildControlIf,
+        # TraceControlPush, LogLevelPush) — resolver maps the FQN to
+        # system/platform/runtime/.
+        _link("system/platform/runtime", runtime_pkg)
+        # supervisor: the services aggregator imports system.supervisor.* (the tree
+        # that hosts the service FCs); link it so that FQN resolves.
+        if supervisor_pkg.exists():
+            _link("system/supervisor", supervisor_pkg)
+        # the framework's ARA service FCs so `cluster Services` resolves in the .art
+        # tree. (The rig gets the services MANIFEST by path-load from
+        # $THEIA_ROOT/manifest/, not from this .art link.)
         _link("system/services", services_pkg)
+        # service .art import system.platform.msgs.{std,geometry,sensor,nav}.* (e.g.
+        # tsync uses nav.GnssSolution) — one link covers all four subpackages
+        # (FQN system.platform.msgs.<x> → msgs/<x>/).
         if msgs_pkg.exists():
             _link("system/platform/msgs", msgs_pkg)
     # The workspace's OWN empty app package (no compositions yet). gen-manifest
@@ -4238,30 +4246,23 @@ def _init_package(ws: Path, theia_root: Path, name: str,
 
 
 _INIT_SYSTEM_ART = '''\
-// @NAME@ — Theia consuming-workspace aggregator.
+// @NAME@ — Theia consuming-workspace aggregator. `theia manifest` walks this file.
 //
-// Imports the Theia supervisor + THIS workspace's own app package (resolved
-// through the system/ symlinks). `theia manifest` walks this file.
+// It imports ONLY this workspace's own app package (system/apps). The supervisor
+// is a DEPLOY-time fabric — `theia manifest`/`install` stage it from the fixed
+// framework target (//platform/supervisor/main:supervisor, $THEIA_ROOT), NOT from
+// ART — so there is no system.supervisor import and no system/{platform,supervisor}
+// symlink in a bare workspace.
 //
-// EMPTY-workspace shape: just the supervisor + an (empty) Applications cluster.
-// Add your app by declaring a `composition` in system/apps/component.art and
-// `cluster Applications { composition <Yours> <id> }` — it flows here via the
-// import below, no edit needed.
+// EMPTY-workspace shape: an empty Applications cluster. Add your app by declaring a
+// `composition` in system/apps/component.art and `cluster Applications { composition
+// <Yours> <id> }` — it flows here via the import below, no edit needed.
 
 package system
 
-import system.supervisor.*   // the OTP-style supervisor (the runtime fabric)
 import system.apps.*         // THIS workspace's app package (system/apps, real dir)
 
-// --- forward-decl: the clusters this workspace deploys --------------------
 cluster Applications { }     // empty until you add a composition in system/apps/
-
-composition Supervisor { }
-
-// --- this workspace's deployment ------------------------------------------
-cluster Platform {
-    composition Supervisor  sup
-}
 '''
 
 _INIT_APPS_PACKAGE_ART = '''\
@@ -4667,8 +4668,10 @@ _INIT_README = '''\
 # @NAME@ — Theia consuming workspace
 
 Built against a SIBLING Theia source checkout (THEIA_ROOT=@THEIA_ROOT@),
-not vendored. system/platform/runtime + system/supervisor (+ system/services
-with --with-services) are symlinks into it.
+not vendored. A bare workspace plants NO framework symlinks — system.art imports
+only system.apps.*, and the supervisor is staged from $THEIA_ROOT at manifest/
+install time. Only `--with-services` symlinks the framework .art it imports
+(system/{platform/runtime,supervisor,services}).
 
 ```sh
 source @THEIA_ROOT@/env.sh       # activate the sibling framework checkout:

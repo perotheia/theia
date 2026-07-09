@@ -1,0 +1,45 @@
+// CI SEED — the `sensor` package: a timer-driven Sample publisher.
+//
+// USER-side code for the end-user-flow harness (ci/run.sh s4/s5). Grafted over a
+// fresh `theia init --kind package --name sensor` scaffold; exercises: atomic
+// node + timers + a sender port (pg broadcast) + params{} + a call surface.
+// TIPC range 0x800100Fx (the package-scaffold probe range) — never used by services.
+
+package system.sensor
+
+
+message Sample {
+    uint32 seq   = 1
+    uint32 value = 2
+}
+
+message SensorEmpty { }
+
+message SensorStatus {
+    uint32 published = 1
+    bool   ready     = 2
+}
+
+// The sample stream this package PROVIDES (a consumer package subscribes).
+interface senderReceiver SampleStream {
+    data Sample sample
+}
+
+// Probe/call surface (the scaffold's robot suite pings it).
+interface clientServer CtlIf {
+    operation Ping(in p: SensorEmpty) returns SensorStatus
+}
+
+node atomic SensorCtrl {
+    tipc type=0x800100F0 instance=0
+    requires_timers
+    reporting = true
+    tag = "SENS"
+    ports {
+        sender samples_out provides SampleStream
+        server ctl         provides CtlIf
+    }
+    params {
+        rate_ms : uint32 = 100
+    }
+}

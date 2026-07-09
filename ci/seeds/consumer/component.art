@@ -1,0 +1,21 @@
+// CI SEED — the s5 pipeline composition: two EXTERNAL packages (sensor +
+// filter, consumed as bazel modules via local_path_override) assembled into ONE
+// process with a cross-package port connection. The harness asserts live data
+// FLOW: filter's GetStats.received grows while the pipeline runs.
+
+package system.pipeline
+
+import system.sensor.*
+import system.filter.*
+
+composition Pipeline {
+    prototype SensorCtrl sensor
+    prototype FilterCtrl filter
+
+    // producer → consumer across package boundaries (pg transport underneath).
+    connect sensor.samples_out to filter.samples_in
+}
+
+cluster Applications {
+    composition Pipeline app
+}

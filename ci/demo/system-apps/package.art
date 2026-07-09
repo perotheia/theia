@@ -1,0 +1,247 @@
+// gen_server-shape API demo.
+//
+// Three nodes in one process, exchanging typed messages via in-process
+// mailboxes (no TIPC). The point is to validate the C++14 actor API
+// (call/cast/handle_call/handle_cast/handle_info + handle_call_result on
+// the caller side with an opaque ACT) before pulling it into libgw and
+// artheia codegen.
+//
+// Modeled directly on Erlang's gen_server, modulo async:
+//   * Each node owns its own thread + State; handlers run serially.
+//   * call(server, req, act, timeout) is the SYNC primitive that blocks
+//     on a std::promise the server thread fulfills after handle_call.
+//   * cast(server, req) is async fire-and-forget.
+//   * Caller-side reply handling goes through handle_call_result/
+//     handle_call_error/handle_call_timeout, dispatched by the
+//     framework via call_and_dispatch().
+//   * handle_info(const char*, State&) is the C-style catch-all for
+//     non-OTP messages (timer ticks, internal signals).
+
+package system.apps
+
+// ---- messages -----------------------------------------------------------
+
+// Increment counter by `n`. cast — no reply.
+message Inc {
+    int32 n
+}
+
+// Read counter value. call — replies with GetReply.
+message Get {
+}
+
+message GetReply {
+    int32 value
+}
+
+// Runtime-observable config for CounterNode (services/per gatekeeper target).
+// A structured message bound to the node via `config` — the unit gen-schema
+// walks, snapshots decode against, and transforms reshape. v1 shape.
+// CounterConfig — also a per-node migration subject. v2 adds `hysteresis`
+// (add-field rule), proving each node carries its OWN v1->v2 evolution + rules,
+// independent of P4Config's. v1: {step,max_value,wrap,label};
+// v2: {step,max_value,wrap,label,hysteresis}.
+//
+// Fields carry DECLARED DEFAULTS (`= value`, same syntax as a node `params`
+// entry). The default is metadata, NOT part of the wire shape / digest — it
+// feeds (a) the migration `add` rule when a field is introduced, and (b) the
+// first-boot config seed (so a node with no stored config starts here, not at
+// proto3 zeros).
+message CounterConfig {
+    uint32 step       = 1            // how much each Inc adds
+    uint32 max_value  = 100          // saturate at this
+    bool   wrap       = false        // wrap to 0 instead of saturating
+    string label      = "counter"    // human tag
+    uint32 hysteresis = 3            // v2: deadband; the add-rule's default
+}
+
+// Config for ObserverNode (P2) — how often it polls + a name. v2 renames
+// name->tag (rename migration), independent of the other nodes' rules.
+message ObserverConfig {
+    uint32 poll_ms       // poll period
+    string tag           // human tag (was `name` in v1 — rename migration)
+}
+
+// Config for IncrementerNode (P3) — increment amount + cadence.
+message IncrementerConfig {
+    uint32 amount        // how much each Inc adds
+    uint32 period_ms     // cast cadence
+    bool   enabled       // whether to drive at all
+}
+
+// Config for DemoFsm (P4) — the consolidation target. v2 shape: folds in the
+// p1/p2/p3 config fields (counter.step, observer.poll_ms, incrementer.amount)
+// alongside the FSM knobs, and renames tag→label. The v1→v2 migration (a within-
+// P4 schema bump) is what the migration-verification flow exercises:
+//   v1: { timeout_s, tag }
+//   v2: { timeout_s, label(<-tag), step, poll_ms, amount }
+message P4Config {
+    uint32 timeout_s     // PROCESSING-state timeout (mirrors the FSM's 5s)
+    string label         // human label (was `tag` in v1)
+    uint32 step          // consolidated from counter.step
+    uint32 poll_ms       // consolidated from observer.poll_ms
+    uint32 amount        // consolidated from incrementer.amount
+}
+
+// ---- interfaces ---------------------------------------------------------
+
+// senderReceiver: one-way typed messages. Drives handle_cast on the
+// receiving side; the sender uses `cast(server, msg)`.
+interface senderReceiver IncIface {
+    data Inc inc
+}
+
+// clientServer: synchronous request/reply. Drives handle_call on the
+// receiving side; the client uses `call(server, Get{}, act, timeout)`
+// and receives the result via handle_call_result(GetReply, Act, State).
+interface clientServer CounterSrv {
+    operation Get() returns GetReply
+}
+
+// ---- nodes --------------------------------------------------------------
+
+// Holds the counter. Serves Get (sync) and accepts Inc (async).
+// Like every node, traceable at runtime via tracer_for("CounterNode").
+node atomic CounterNode {
+    tipc type=0xd0010001 instance=0
+    config CounterConfig
+    ports {
+        server   srv      provides CounterSrv
+        receiver inc_in   requires IncIface
+    }
+}
+
+// Drives the demo: 10 casts of Inc{5}, then one call(Get) and assert.
+// Needs auto-kickoff and a TimerService for its phase 3 cancel test.
+node atomic DriverNode {
+    tipc type=0xd0010002 instance=0
+    requires_timers
+    ports {
+        sender inc_out      provides IncIface
+        client counter_call requires CounterSrv
+    }
+}
+
+// Periodic "tick" string via handle_info — self-schedules via send_after.
+node atomic TickerNode {
+    tipc type=0xd0010003 instance=0
+    requires_timers
+    ports {
+    }
+}
+
+// ── Cross-process nodes ────────────────────────────────────────────────
+// Both talk to CounterNode over TIPC when placed in a different process.
+
+// Observer: polls counter.Get every 200ms.
+node atomic ObserverNode {
+    tipc type=0xd0010004 instance=0
+    requires_timers
+    config ObserverConfig
+    ports {
+        client counter_call requires CounterSrv
+    }
+}
+
+// Incrementer: every 300ms casts Inc{2} at counter.
+node atomic IncrementerNode {
+    tipc type=0xd0010005 instance=0
+    requires_timers
+    config IncrementerConfig
+    ports {
+        sender inc_out provides IncIface
+    }
+}
+
+// ---- gen_statem test FSM (for STATEM trace + rf testing) ----------------
+//
+// A minimal three-state FSM that exercises BOTH transition paths the
+// GenStateM tracer emits (kind=STATEM, with from→to state names):
+//   - EVENT-driven:  DemoStart (IDLE→PROCESSING), DemoFinish (PROCESSING→DONE,
+//                    DONE→IDLE via DemoReset).
+//   - TIMEOUT-driven: PROCESSING auto-falls back to IDLE after 5s if no
+//                    DemoFinish arrives.
+// Mirrors the sm split: the statem node (DemoFsm) takes NO external
+// messages; a gate (DemoFsmGate) receives the events over TIPC and
+// post_event()s them into the FSM in-process. rf injects events at the
+// gate + asserts the STATEM trace records.
+
+message DemoStart  { }   // IDLE → PROCESSING (after 5s timeout)
+message DemoFinish { }   // PROCESSING → DONE
+message DemoReset  { }   // DONE → IDLE  (or PROCESSING → IDLE)
+
+// The FSM's persistent data — the OTP `{State, Data}` Data term. Carried in
+// the STATEM trace payload on every transition (GenStateM encodes it), so a
+// test can assert on it via the trace observer (`Assert Data`). The user
+// mutates it in on_enter/handle_event; the framework snapshots it.
+message DemoFsmData {
+    uint32 visits   // how many transitions this FSM has entered (cumulative)
+    string reason [max_size:48]   // last transition's trigger/reason, for human-readable trace
+}
+
+// Lifecycle event ingress for the gate. senderReceiver `in` data so the
+// gate's generated handle_cast fires; the gate forwards into the statem.
+interface senderReceiver DemoFsmIn {
+    data DemoStart  start
+    data DemoFinish finish
+    data DemoReset  reset
+}
+
+// The statem node. Three states, initial IDLE. PROCESSING arms a 5s state
+// timeout that falls back to IDLE if DemoFinish doesn't arrive first.
+node atomic DemoFsm {
+    tipc type=0xd0010006 instance=0
+    requires_timers
+    tag = "DFSM"
+    config P4Config
+    statem {
+        states  [IDLE, PROCESSING, DONE]
+        initial IDLE
+        data    DemoFsmData
+
+        on IDLE:
+            event DemoStart   → PROCESSING after 5s
+
+        on PROCESSING:
+            event DemoFinish  → DONE
+            event DemoReset   → IDLE
+            timeout           → IDLE
+
+        on DONE:
+            event DemoReset   → IDLE
+    }
+}
+
+// The gate — the FSM's only TIPC-reachable surface. Receives DemoFsmIn
+// events and post_event()s each into DemoFsm in-process (impl/hand-owned,
+// modeled on SmGate).
+node atomic DemoFsmGate {
+    tipc type=0xd0010007 instance=0
+    tag = "DFSG"
+    ports {
+        receiver events requires DemoFsmIn
+    }
+}
+
+// ---- test-only client node (for artheia.probe) --------------------------
+//
+// DemoFsmTester carries a `sender` on DemoFsmIn so artheia.probe can bind a
+// tester identity and cast DemoStart/DemoFinish/DemoReset at DemoFsmGate —
+// ordered, over one persistent connection — to drive the FSM standalone
+// (apps/test/fsm_drive.py + the rf statem scenario). It lives in THIS package
+// (no import/extern: DemoFsmGate + DemoFsmIn are siblings here) so it resolves
+// through the canonical `system/apps` symlink like every other demo node.
+//
+// NOT deployed: it appears in no composition/cluster, so the manifest +
+// supervisor tree never instantiate it. It exists purely as a probe-resolvable
+// client handle (same idiom as tools/tdb/system/tdb.art's client nodes).
+node atomic DemoFsmTester {
+    tipc type=0xd0010101 instance=0
+    ports {
+        sender events provides DemoFsmIn
+    }
+}
+
+// Compositions and the Demo3Way cluster live in the sibling
+// component.art file. The model loader merges package.art (schema)
+// and component.art (wiring/deploy) when parsing either path.

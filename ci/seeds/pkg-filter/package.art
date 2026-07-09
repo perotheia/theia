@@ -1,0 +1,34 @@
+// CI SEED — the `filter` package: consumes the sensor package's SampleStream.
+//
+// USER-side code for the end-user-flow harness (ci/run.sh s5). Grafted over a
+// fresh `theia init --kind package --name filter` scaffold. Exercises the
+// CROSS-PACKAGE surface: import of another package's message + interface, a
+// receiver port on the imported stream (pg_join consume), and the imported-proto
+// bazel dep the generator derives. TIPC 0x800100Fx = the package-scaffold probe range.
+
+package system.filter
+
+import system.sensor.*
+
+
+message FilterEmpty { }
+
+message FilterStats {
+    uint32 received   = 1
+    uint32 last_value = 2
+}
+
+// Probe/call surface: how many samples flowed in (the s5 data-flow assertion).
+interface clientServer FilterCtlIf {
+    operation GetStats(in p: FilterEmpty) returns FilterStats
+}
+
+node atomic FilterCtrl {
+    tipc type=0x800100F1 instance=0
+    reporting = true
+    tag = "FILT"
+    ports {
+        receiver samples_in requires SampleStream     // the sensor package's stream
+        server   ctl        provides FilterCtlIf
+    }
+}

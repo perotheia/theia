@@ -1,0 +1,5 @@
+// CI SEED — the s5 consumer workspace's app package. The pipeline app declares
+// no nodes of its own: it COMPOSES the sensor + filter packages (see the sibling
+// component.art). USER-side code for the end-user-flow harness.
+
+package system.pipeline

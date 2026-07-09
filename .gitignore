@@ -144,3 +144,4 @@ services/idsm/bpf/vmlinux.h
 # deployment (`theia cert generate`) and ships only the PUBLIC key to colony via
 # S3 (`theia cert copy`). Ignore the whole dir (private .key + generated .pub).
 deploy/signing/
+/ci/.work/

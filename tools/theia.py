@@ -991,15 +991,39 @@ def _probe_send(args: list[str], *, is_call: bool) -> int:
     # its package's component.art / package.art. Try system.art first (single-node
     # apps whose node is inline), then every component.art / package.art under
     # system/ until one resolves <node>.
+    # NOTE: walk with followlinks — a package-consuming workspace maps imported
+    # packages into system/ as SYMLINKED dirs (system/<pkg> → the package repo),
+    # which Path.glob("**") silently skips; without this, `theia call` cannot
+    # resolve any imported-package node. Dedupe by resolved path (a framework
+    # symlink tree can alias the same .art twice).
     candidates = [WORKSPACE / "system" / "system.art"]
-    candidates += sorted(WORKSPACE.glob("system/**/component.art"))
-    candidates += sorted(WORKSPACE.glob("system/**/package.art"))
+    _seen: set[str] = set()
+    _found: list[Path] = []
+    for _root, _dirs, _files in os.walk(WORKSPACE / "system", followlinks=True):
+        for _f in sorted(_files):
+            if _f in ("component.art", "package.art"):
+                _p = Path(_root) / _f
+                _r = str(_p.resolve())
+                if _r not in _seen:
+                    _seen.add(_r)
+                    _found.append(_p)
+    candidates += sorted(_found, key=lambda q: (q.name != "component.art", str(q)))
     ctx = None
     for art in candidates:
         if not art.exists():
             continue
+        # The node's wire types live in the DEFINING package's repo: for an
+        # imported package (system/<pkg> symlink → the package repo) the .proto
+        # is under THAT repo's proto/, not this workspace's. Anchor proto_root
+        # to the resolved .art's own repo (the dir with MODULE.bazel above it),
+        # falling back to this workspace's proto/ for local apps.
+        _aroot = art.resolve().parent
+        while _aroot != _aroot.parent and not (_aroot / "MODULE.bazel").exists():
+            _aroot = _aroot.parent
+        _proot = _aroot / "proto"
+        _pr = _proot if _proot.is_dir() else proto_dir
         try:
-            c = ArtheiaContext(str(art), proto_root=str(proto_dir))
+            c = ArtheiaContext(str(art), proto_root=str(_pr))
             c.ref(node)          # raises if this .art doesn't define <node>
             ctx = c
             break
@@ -5113,7 +5137,8 @@ _PKG_GITIGNORE = '''\
 !/proto/system/@NAME@/BUILD.bazel
 /install/
 /dist/
-/manifest/apps/
+/manifest/@NAME@/manifest.py
+/manifest/@NAME@/executor.py
 /bazel-*
 __pycache__/
 *.pyc
@@ -5142,7 +5167,7 @@ artheia gen-app --kind package system/@NAME@/package.art --out src --proto-out p
 # 2. the TESTER app — imports system.@NAME@, links //src/lib:@NAME@_lib (apps/ gitignored):
 artheia gen-app --kind fc      system/@NAME@_tester/component.art --out apps --proto-out proto
 # 3. manifest + install + run:
-artheia gen-manifest system/@NAME@_tester/component.art manifest/apps/manifest.py
+artheia gen-manifest system/@NAME@_tester/component.art manifest/@NAME@/manifest.py
 theia manifest rig && theia install rig && theia start
 # 4. probe test the node in isolation:
 robot test/@NAME@.robot
@@ -5163,7 +5188,7 @@ Scaffold complete. The whole toolchain runs UNMODIFIED:
   artheia gen-app --kind package system/@NAME@/package.art --out src --proto-out proto --ns ara::@NAME@
   # 2. the TESTER app (imports system.@NAME@, links //src/lib:@NAME@_lib):
   artheia gen-app --kind fc      system/@NAME@_tester/component.art --out apps --proto-out proto
-  artheia gen-manifest system/@NAME@_tester/component.art manifest/apps/manifest.py
+  artheia gen-manifest system/@NAME@_tester/component.art manifest/@NAME@/manifest.py
   theia manifest rig && theia install rig && theia start
   robot test/@NAME@.robot
 

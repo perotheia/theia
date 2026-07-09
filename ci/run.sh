@@ -54,6 +54,17 @@ live_ok() {
 log()  { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
 fail() { printf '\033[31mFAIL: %s\033[0m\n' "$*"; exit 1; }
 
+quiet() {  # $1=step-name, rest=command — capture output, dump tail on failure
+    local step="$1"; shift
+    local logf="$WORK/logs/${step// /_}.log"
+    mkdir -p "$WORK/logs"
+    if ! "$@" >"$logf" 2>&1; then
+        printf '\033[31m-- %s failed; last 60 lines of %s --\033[0m\n' "$step" "$logf"
+        tail -60 "$logf"
+        fail "$step"
+    fi
+}
+
 fresh_ws() {  # $1=dir
     rm -rf "$1"; mkdir -p "$1"
 }
@@ -104,7 +115,7 @@ s1() {
     grep -q '^build -c opt' "$ws/.bazelrc" || fail "scaffold .bazelrc missing -c opt"
 
     log "s1: build //apps/... against @pero_theia"
-    ( cd "$ws" && bazel build //apps/... >/dev/null 2>&1 ) || fail "s1 build"
+    ( cd "$ws" && quiet "s1 build" bazel build //apps/... )
 
     if live_ok; then
         log "s1: live — start, ping, then the enabled-override regression"
@@ -140,7 +151,7 @@ s2() {
     $ARTHEIA gen-manifest system/apps/component.art manifest/apps/manifest.py >/dev/null
 
     log "s2: build all demo compositions (incl. the statem main)"
-    ( cd "$ws" && bazel build //apps/... >/dev/null 2>&1 ) || fail "s2 build"
+    ( cd "$ws" && quiet "s2 build" bazel build //apps/... )
 
     if live_ok; then
         log "s2: live — 4 processes up, counter reaches 50"
@@ -163,7 +174,7 @@ s3() {
     ls "$ws"/dist/manifest/central/config/sm.json >/dev/null 2>&1 || fail "s3: FC configs not staged"
 
     log "s3: install (builds every service FC against @pero_theia)"
-    ( cd "$ws" && $THEIA install svc >/dev/null 2>&1 ) || fail "s3 install"
+    ( cd "$ws" && quiet "s3 install" $THEIA install svc )
 
     if live_ok; then
         log "s3: live — service tree up (per/nm held: no etcd/netadmin here)"
@@ -194,7 +205,7 @@ s4() {
     grep -q "'sensor_ctrl'" "$ws/manifest/sensor/manifest.py" || fail "type-snake params ALIAS missing (imported-node seam regressed)"
 
     log "s4: build the tester (links //src/lib + //src/impl)"
-    ( cd "$ws" && bazel build //apps/... >/dev/null 2>&1 ) || fail "s4 build"
+    ( cd "$ws" && quiet "s4 build" bazel build //apps/... )
 
     if live_ok; then
         log "s4: live — the package's own scaffold-shipped robot probe"
@@ -258,7 +269,7 @@ PY
     grep -q '@sensor//src/lib' "$ws"/apps/*/main/BUILD.bazel || fail "module-qualified label missing"
 
     log "s5: build the composed app (@sensor// + @filter//)"
-    ( cd "$ws" && bazel build //apps/... >/dev/null 2>&1 ) || fail "s5 build"
+    ( cd "$ws" && quiet "s5 build" bazel build //apps/... )
 
     if live_ok; then
         log "s5: live — samples FLOW sensor → filter across the connect"

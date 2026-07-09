@@ -67,6 +67,14 @@ void post_edge(const char* node, const char* name, Evt evt) {
 // the .art default is interfaces="" (auto), and a rig like the rpi4 GPS-feed box
 // sets interfaces="wlan0" + auto_connect/auto_vpn in its deploy/config/rpi4/
 // nm.json. etcd's ConfigUpdated (on_config_update) can still change them live.
+//
+// SAFETY GAP (P0, docs/tasks/TODO/nm-mgmt-iface-safety.md): interfaces="" =
+// "auto" gives nm no allow-list, so on an unconfigured link it could (re)manage
+// the interface carrying the operator's SSH/mgmt session and drop it. Before any
+// UNATTENDED full-stack field deploy, nm MUST never manage the mgmt iface — an
+// explicit allow-list (or a mgmt_iface exclude) with a safe default. Today the
+// mitigation is out-of-band (rigs set interfaces="wlan0" so eth/mgmt is untouched),
+// but the auto default is unsafe on a fresh rig. See [[project-nm-wifi]].
 void NmPoller::init(NmPollerState& s) {
     auto cfg = ::theia::runtime::get_config().node(NmPoller::kNodeName);
     s.interfaces      = cfg.str("interfaces", s.interfaces);

@@ -548,7 +548,12 @@ void UcmGate::handle_cast(const EvDownloaded& /*msg*/, UcmGateState& /*s*/) {
 // until then an empty signature is dev/unsigned-OK and a set one is accepted
 // pending the crypto edge — never silently bypassed.) Then trigger STAGED.
 void UcmGate::handle_cast(const EvValidated& /*msg*/, UcmGateState& s) {
-    // TODO(crypto edge): call to_crypto Verify(signature); post EvFailed on !ok.
+    // TODO(crypto edge — docs/tasks/TODO/ucm-crypto-verify-edge.md): call the
+    // crypto FC's Verify(signature) over TIPC and post EvFailed on !ok. Fail-CLOSED.
+    // NOTE: field-safety is ALREADY covered out-of-band — SWP artifacts are
+    // public-key-signed and mender-update verifies before UCM ever sees them
+    // (see [[project-swp-signing]]). This in-UCM edge is defence-in-depth for the
+    // non-Mender install path (`ucm install` from a local artifact); low urgency.
     step("EvStaged", EvStaged{});           // VALIDATED → STAGED (+drive gate)
     (void)s;
 }

@@ -1,23 +1,24 @@
-"""Hermetic Robot library for the demo .art→.ipk chain selftest.
+"""Hermetic Robot library for the .art→.ipk generation-chain test.
 
-Drives each stage of the Demo3Way generation pipeline against a
-fresh /tmp workdir so the assertions don't depend on any committed
-output state. Each keyword does ONE stage; the test cases compose
-them so a failure points at the first broken hop.
+Drives each stage of the generation pipeline against a fresh scratch
+workdir so the assertions don't depend on any committed output state.
+Each keyword does ONE stage; the test cases compose them so a failure
+points at the first broken hop.
 
-This is a DEMO-APP test and runs FROM the demo consuming workspace
-(demo/). All artheia paths are workspace-relative to demo/:
+It runs FROM a CONSUMING workspace — in the harness, the fresh
+`theia init` scaffold ci/run.sh s2 builds (ci/.work/s2-demo, Demo3Way
+seed grafted). All artheia paths are workspace-relative:
 
   * .art source        system/apps/component.art
-  * rig module         manifest.single.rig   (DeploymentLayer, attr RIG;
+  * rig module         manifest.apps.rig     (DeploymentLayer, attr RIG;
                                               manifest/ is a namespace pkg at
-                                              the demo root — services half is
+                                              the ws root — services half is
                                               symlinked in from the framework)
 
-artheia is the FRAMEWORK's console script — there is no demo/.venv, so
-we put the framework venv (<demo>/../.venv/bin, i.e. THEIA_ROOT/.venv)
-on PATH. Subprocesses run with cwd=demo/ and PYTHONPATH=. so the rig
-module imports.
+artheia is the FRAMEWORK's console script — the workspace has no venv of
+its own, so we prefer $THEIA_ROOT/.venv/bin (dev box) and fall back to
+PATH (CI's pip install). Subprocesses run with cwd=<ws> and PYTHONPATH=.
+so the rig module imports.
 
 Pipeline stages (mirrors the architecture map):
 
@@ -36,11 +37,11 @@ Pipeline stages (mirrors the architecture map):
                                   <machine>/executor.json slice.)
   8. bazel build ...:image      — .ipk with arch tag matching rig.py
 
-The rig is a dotted module path to a DeploymentLayer (manifest.single.rig,
+The rig is a dotted module path to a DeploymentLayer (manifest.apps.rig,
 attr RIG) — NOT an .art file. `manifest.services` (framework) + `manifest.apps`
-(this workspace) resolve as one `manifest` namespace from the demo root.
+(this workspace) resolve as one `manifest` namespace from the ws root.
 
-Only used by demo_chain_selftest.robot.
+Only used by gen_chain.robot.
 """
 from __future__ import annotations
 
@@ -53,7 +54,7 @@ from robot.api.deco import keyword, library
 
 
 @library(scope="SUITE")
-class DemoChainLib:
+class GenChainLib:
     ROBOT_LIBRARY_SCOPE = "SUITE"
 
     # ------------------------------------------------------------------
@@ -63,10 +64,13 @@ class DemoChainLib:
     def __init__(self) -> None:
         self._workdir: Path | None = None
         self._workspace: Path | None = None
+        self._rig: str = "manifest.apps.rig"
+        self._attr: str = "RIG"
+        self._rig_repo: str = "rig_apps"
 
     @keyword("Use Workspace")
     def use_workspace(self, path: str) -> None:
-        """Anchor at the demo consuming workspace root (the dir holding
+        """Anchor at the consuming workspace root (the dir holding
         MODULE.bazel + system/apps/component.art + manifest/). All
         artheia paths below are workspace-relative, so we cd to here
         before each subprocess call."""
@@ -84,25 +88,39 @@ class DemoChainLib:
         self._workdir = Path(path)
         self._workdir.mkdir(parents=True, exist_ok=True)
 
-    def _venv_bin(self) -> Path:
-        """The framework venv's bin dir. The demo workspace has no
-        venv of its own; artheia is the framework console script living
-        at THEIA_ROOT/.venv/bin (THEIA_ROOT == <demo>/..)."""
-        assert self._workspace is not None
-        return self._workspace.parent / ".venv" / "bin"
+    @keyword("Use Rig")
+    def use_rig(self, rig_module: str, attr: str = "RIG",
+                rig_repo: str = "rig_apps") -> None:
+        """Pin the rig module (dotted, e.g. manifest.apps.rig), its export
+        attr, and the synthetic bazel repo name rig_ext declares for it."""
+        self._rig = rig_module
+        self._attr = attr
+        self._rig_repo = rig_repo
+
+    def _venv_bin(self) -> Path | None:
+        """The framework venv's bin dir, if one exists. The scaffolded
+        workspace has no venv of its own; artheia is the framework console
+        script at $THEIA_ROOT/.venv/bin (dev box) or plain PATH (CI's
+        pip-installed artheia) — in the latter case return None."""
+        root = os.environ.get("THEIA_ROOT")
+        if root and (Path(root) / ".venv" / "bin" / "artheia").exists():
+            return Path(root) / ".venv" / "bin"
+        return None
 
     def _artheia(self, *args: str) -> subprocess.CompletedProcess:
-        """Run `artheia ...` from the demo workspace root with the
-        framework venv on PATH.
+        """Run `artheia ...` from the workspace root.
 
-        Sets PYTHONPATH=. so the demo's rig modules (manifest.single.rig
+        Sets PYTHONPATH=. so the workspace's rig modules (manifest.apps.rig
         etc.) import — `manifest/` is a namespace package at the workspace
-        root spanning the demo's apps + the framework's services (the
-        latter symlinked in as manifest/services). The artheia package
-        itself comes from the venv, so prepending '.' doesn't shadow it."""
+        root spanning the workspace's apps AND the framework's
+        manifest.services (symlinked in by `theia init`). The artheia
+        package itself comes from the venv/PATH, so prepending '.' doesn't
+        shadow it."""
         assert self._workspace is not None, "call `Use Workspace` first"
         env = os.environ.copy()
-        env["PATH"] = f"{self._venv_bin()}:{env.get('PATH', '')}"
+        vb = self._venv_bin()
+        if vb:
+            env["PATH"] = f"{vb}:{env.get('PATH', '')}"
         env["PYTHONPATH"] = "."
         return subprocess.run(
             ["artheia", *args],
@@ -128,7 +146,7 @@ class DemoChainLib:
     def stage1_parse(self) -> str:
         """Run `artheia parse system/apps/component.art` and
         return the tree dump. Validates grammar + import resolution
-        for the demo cluster + its process compositions."""
+        for the cluster + its process compositions."""
         r = self._artheia("parse", "system/apps/component.art")
         self._ok(r, "stage 1: artheia parse")
         return r.stdout
@@ -151,7 +169,7 @@ class DemoChainLib:
         assert self._workdir is not None, "call `Use Workdir` first"
         out = self._workdir / "rig.json"
         r = self._artheia(
-            "rig-deps", "manifest.single.rig", "--out", str(out)
+            "rig-deps", self._rig, "--out", str(out)
         )
         self._ok(r, "stage 2: artheia rig-deps")
         if not out.exists():
@@ -203,7 +221,7 @@ class DemoChainLib:
     def stage3_gen_netgraph(self) -> str:
         """Emit netgraph JSON describing nodes + cluster routing."""
         assert self._workdir is not None
-        out = self._workdir / "demo_netgraph.json"
+        out = self._workdir / "netgraph.json"
         r = self._artheia(
             "gen-netgraph", "system/apps/component.art",
             "--out", str(out),
@@ -243,7 +261,7 @@ class DemoChainLib:
     @keyword("Routing Header Exists")
     def routing_header_exists(self, out_dir: str, composition: str,
                               process: str) -> None:
-        # gen-routing names files Demo3Way__<P>_refs.hh per the demo
+        # gen-routing names files Demo3Way__<P>_refs.hh per the
         # convention (composition + process suffix).
         candidates = list(Path(out_dir).glob(f"*{process}*refs.hh"))
         if not candidates:
@@ -270,8 +288,7 @@ class DemoChainLib:
             "system/apps/component.art",
             "--out", str(out_dir),
             "--proto-out", str(self._workdir / "proto"),
-            "--ns", "demo",
-            "--composition", composition,
+                        "--composition", composition,
         )
         self._ok(r, f"stage 5: artheia gen-app --composition {composition}")
         return str(out_dir)
@@ -291,8 +308,8 @@ class DemoChainLib:
     # ------------------------------------------------------------------
 
     @keyword("Stage 6 Serialize Manifest")
-    def stage6_serialize_manifest(self, rig: str = "manifest.single.rig",
-                                  attr: str = "RIG") -> str:
+    def stage6_serialize_manifest(self, rig: str | None = None,
+                                  attr: str | None = None) -> str:
         """Run the orthogonal-engine serializer: a DeploymentLayer rig
         module → the per-machine deploy JSON set. Replaces the old
         `generate-manifest` + `executor emit` pair — `validate()` runs
@@ -300,6 +317,8 @@ class DemoChainLib:
         <out>/<machine>/{machine,execution,service,application,
         executor}.json + a top-level machines.json."""
         assert self._workdir is not None
+        rig = rig or self._rig
+        attr = attr or self._attr
         out = self._workdir / "manifest"
         r = self._artheia(
             "serialize-manifest", rig, "--attr", attr, "--out", str(out),
@@ -449,12 +468,14 @@ class DemoChainLib:
 
     @keyword("Stage 8 Bazel Build Image")
     def stage8_bazel_build(self, machine: str) -> str:
-        """`bazel build @rig_apps//<machine>:image` and return the
+        """`bazel build @<rig_repo>//<machine>:image` and return the
         produced .ipk path via `bazel cquery --output=files`."""
         assert self._workspace is not None
         env = os.environ.copy()
-        env["PATH"] = f"{self._venv_bin()}:{env.get('PATH', '')}"
-        target = f"@rig_apps//{machine}:image"
+        vb = self._venv_bin()
+        if vb:
+            env["PATH"] = f"{vb}:{env.get('PATH', '')}"
+        target = f"@{self._rig_repo}//{machine}:image"
         b = subprocess.run(
             ["bazel", "build", target],
             cwd=str(self._workspace), env=env,

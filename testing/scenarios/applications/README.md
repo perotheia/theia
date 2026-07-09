@@ -6,7 +6,7 @@ base — failures here usually mean the app, not the platform.
 The in-repo **demo** app's tests do NOT live here. The demo moved into
 its own consuming workspace at `demo/`, so its app tests live there:
 
-- `demo/tests/demo_chain/` — the .art→manifest gen pipeline selftest
+- `ci/test/gen_chain.robot` — the .art→.ipk gen pipeline test (runs in ci/run.sh s2 against a fresh scaffold)
 - `demo/tests/demo_fsm.robot` — the demo FSM drive test
 - `demo/tests/per_migration/` — the config-migration example test
 

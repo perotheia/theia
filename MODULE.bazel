@@ -9,7 +9,8 @@ Component map (standalone theia.git):
 
 The demo apps, the gateway / Hercules-firmware / AUTOSAR-PSP / per-vehicle vendor
 trees are NOT part of theia.git — they live in their own consuming workspaces
-(e.g. demo/, gataway_ws) that import Theia as the `pero_theia` module. The
+(e.g. gataway_ws, the harness-scaffolded ci/.work workspaces) that import
+Theia as the `pero_theia` module. The
 per-rig synthetic deploy repos (@rig_apps etc.) are declared in those consuming
 workspaces' MODULE.bazel via `@pero_theia//rules:rig.bzl`, not here. See
 docs/tasks/TODO/repo-split-standalone-theia.md.
@@ -67,7 +68,8 @@ use_repo(theia_codegen_ext, "theia_codegen")
 
 # ── Rig module extension ──────────────────────────────────────────────────
 # The per-rig synthetic deploy repos (@rig_apps / @rig_test / @rig_zonal) are NO
-# LONGER declared here. They are owned by the CONSUMING workspaces (e.g. demo/),
-# whose MODULE.bazel loads `@pero_theia//rules:rig.bzl` and declares its own
-# rig.py modules. The framework just ships the rig.bzl extension (under //rules)
-# for those workspaces to use. See demo/MODULE.bazel for an example.
+# LONGER declared here. They are owned by the CONSUMING workspaces, whose
+# MODULE.bazel loads `@pero_theia//rules:rig.bzl` and declares its own rig.py
+# modules. The framework just ships the rig.bzl extension (under //rules) for
+# those workspaces to use. ci/run.sh s2 grafts the living example (rig_apps)
+# into its scaffold; gataway_ws declares its own.

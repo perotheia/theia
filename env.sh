@@ -46,7 +46,7 @@ export THEIA_ROOT="$_THEIA_ROOT"
 
 # THEIA_WORKSPACE — the dir env.sh was SOURCED FROM, when it differs from the
 # framework checkout. This is the source-side analogue of the deb's
-# /opt/theia/setup.sh: a CONSUMING workspace (demo/, gataway_ws) cd's into its
+# /opt/theia/setup.sh: a CONSUMING workspace (gataway_ws, a theia_ws) cd's into its
 # own root and `source ../theia/env.sh`, so $PWD at source time IS the
 # workspace. theia/tdb/rtdb read the rig + dist/manifest + install/ from HERE,
 # not from the framework. Sourcing env.sh from the framework root leaves the two

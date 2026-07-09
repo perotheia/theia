@@ -1,6 +1,6 @@
 // RemoteCodec specializations for the platform/runtime test suite's
 // own nanopb types. Kept inside the test directory so the cc_test
-// target stays self-contained — no dependency on demo/ or any
+// target stays self-contained — no dependency on any consuming workspace or
 // downstream app's message catalog.
 
 #pragma once

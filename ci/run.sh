@@ -150,8 +150,30 @@ s2() {
     $ARTHEIA gen-app --kind fc system/apps/component.art --out apps --proto-out proto >/dev/null
     $ARTHEIA gen-manifest system/apps/component.art manifest/apps/manifest.py >/dev/null
 
-    log "s2: build all demo compositions (incl. the statem main)"
-    ( cd "$ws" && quiet "s2 build" bazel build //apps/... )
+    # Graft the app-side trace-decoder plugin seed (the hand-written example of
+    # the pluggable decoder ABI — supervisor-gui/rtdb dlopen it) + the
+    # protoc-cpp binding it needs, appended to the generated proto BUILD.
+    cp -r "$CI/demo/trace" "$ws/trace"
+    cat "$CI/demo/proto-apps-cpp.BUILD.frag" >> "$ws/proto/system/apps/BUILD.bazel"
+
+    # Declare the rig repo (@rig_apps) so the .ipk deploy path — rules/rig.bzl
+    # + dist_ipk — is exercised from a consuming workspace (gen_chain stage 8).
+    cat >> "$ws/MODULE.bazel" <<'EOF'
+rig_ext = use_extension("@pero_theia//rules:rig.bzl", "rig_ext")
+rig_ext.declare(
+    name = "rig_apps",
+    rig_module = "manifest.apps.rig",
+    rig_attr = "RIG",
+)
+use_repo(rig_ext, "rig_apps")
+EOF
+
+    log "s2: gen-chain — every artheia pipeline stage against the scaffold"
+    robot_run s2-gen-chain --variable WORKSPACE:"$ws" \
+              --variable WORKDIR:"$WORK/s2-gen-chain" "$CI/test/gen_chain.robot"
+
+    log "s2: build all demo compositions (incl. the statem main + trace plugin)"
+    ( cd "$ws" && quiet "s2 build" bazel build //apps/... //trace/... )
 
     if live_ok; then
         log "s2: live — 4 processes up, counter reaches 50"

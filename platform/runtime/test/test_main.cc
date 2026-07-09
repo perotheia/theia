@@ -439,7 +439,7 @@ namespace {
 std::string find_binary_(const char* name) {
     const char* candidates[] = {
         "./",                      // when run from build/
-        "./build/",                // when run from demo/
+        "./build/",                // when run from a consuming ws
     };
     for (const auto* p : candidates) {
         std::string full = std::string(p) + name;

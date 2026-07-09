@@ -1295,8 +1295,8 @@ def cmd_install(args: list[str]) -> int:
     # the machine comes from --machine / $THEIA_MACHINE / machines.json (a 2nd
     # positional after the target is accepted as the machine for convenience).
     # No default — manifest/<target>/rig.py varies per workspace (theia init
-    # scaffolds manifest/bootstrap/; "single" only exists in the in-repo demo/
-    # test workspace), so guessing wrong used to surface as a bare
+    # scaffolds manifest/<name>/; nothing guarantees any particular target
+    # name), so guessing wrong used to surface as a bare
     # ModuleNotFoundError deep in artheia's import machinery.
     positionals = [a for a in args if not a.startswith("-")]
     if not positionals:
@@ -1917,7 +1917,8 @@ def cmd_manifest(args: list[str]) -> int:
     if (rc := _check_tipc_addresses()) != 0:
         return rc
 
-    # No default target — see cmd_install for why ("single" is demo/-only).
+    # No default target — see cmd_install for why (no target name is
+    # guaranteed to exist).
     target = next((a for a in args if not a.startswith("-")), None)
     if target is None:
         print("theia manifest: missing <target> — pass the manifest target "
@@ -4052,8 +4053,9 @@ def cmd_init(args: list[str]) -> int:
     _write(f"manifest/{slug}/__init__.py", "")
     _write(f"manifest/{slug}/rig.py", _sub(rig_py))
     # Record THEIA_ROOT RELATIVE to the workspace when they share a prefix (keeps
-    # the ws+theia pair relocatable, e.g. an in-repo demo/ committed with a
-    # `../` link); fall back to absolute if they're on different roots.
+    # the ws+theia pair relocatable, e.g. a workspace living next to the
+    # framework checkout with a `../` link); fall back to absolute if they're
+    # on different roots.
     try:
         _theia_root_rec = os.path.relpath(theia_root, ws)
     except ValueError:

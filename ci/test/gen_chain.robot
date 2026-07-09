@@ -1,16 +1,14 @@
 *** Settings ***
-Documentation    End-to-end selftest of the Demo3Way generation
+Documentation    End-to-end test of the .art→.ipk generation
 ...              pipeline. One test case per stage so a regression
 ...              points at the first broken hop instead of a generic
-...              "the demo build broke" failure mode.
+...              "the build broke" failure mode.
 ...
-...              This is a DEMO-APP test: it runs FROM the demo
-...              consuming workspace (demo/), driving artheia against
-...              the demo's own `system/apps/component.art` +
-...              `manifest.rig`. The demo rig is single-machine — every
-...              component lands on `central` (x86_64/amd64). The
-...              multi-host split lives in manifest/zonal_rig.py and is
-...              exercised by the two_supervisor selftest, not here.
+...              It runs FROM a CONSUMING workspace — in the harness,
+...              the fresh scaffold ci/run.sh s2 builds (Demo3Way seed
+...              grafted), passed in as ${WS}. The scaffold's bootstrap
+...              rig is single-machine — every component lands on
+...              `central` (x86_64/amd64).
 ...
 ...              Pipeline (matches docs/architecture.md):
 ...
@@ -29,7 +27,7 @@ Documentation    End-to-end selftest of the Demo3Way generation
 ...                               │  bazel build @rig_apps//<m>:image
 ...                               │  (rules/rig.bzl pkg_opkg)
 ...                               ↓
-...                              demo-<machine>_1.0.0_<arch>.ipk
+...                              theia-<machine>_1.0.0_<arch>.ipk
 ...
 ...              Stages 1–7 run on a fresh /tmp workdir — no commit
 ...              footprint, no order dependence between cases past
@@ -40,7 +38,7 @@ Documentation    End-to-end selftest of the Demo3Way generation
 ...              script: when stage N changes shape (rename, schema
 ...              tweak), only stage N's assertions update. The lib's
 ...              public surface is small and stable.
-Library          ${CURDIR}/demo_chain_lib.py
+Library          ${CURDIR}/gen_chain_lib.py
 Library          OperatingSystem
 
 
@@ -49,18 +47,22 @@ Suite Setup      Set Up Workspace + Workdir
 
 *** Variables ***
 ${TMPDIR}        %{TMPDIR=/tmp}
-${WORKDIR}       ${TMPDIR}/demo_chain_selftest
-# Workspace root — this suite lives at demo/tests/demo_chain/, so the
-# demo consuming-workspace root (the dir with MODULE.bazel +
-# system/apps/component.art + manifest/) is two levels up.
-${WORKSPACE}     ${CURDIR}/../..
+${WORKDIR}       ${TMPDIR}/gen_chain_selftest
+# Consuming-workspace root (the dir with MODULE.bazel +
+# system/apps/component.art + manifest/) — the harness passes the fresh
+# s2 scaffold via --variable WORKSPACE:...; no committed default exists.
+${WORKSPACE}     ${EMPTY}
+${RIG}           manifest.apps.rig
+${RIG_REPO}      rig_apps
 
 
 *** Keywords ***
 Set Up Workspace + Workdir
+    Should Not Be Empty    ${WORKSPACE}    pass the workspace: --variable WORKSPACE:<ws>
     # Resolve to a clean absolute path so the lib can chdir into it.
     ${ws_abs}=    Evaluate    str(__import__('pathlib').Path(r"${WORKSPACE}").resolve())
     Use Workspace    ${ws_abs}
+    Use Rig          ${RIG}    RIG    ${RIG_REPO}
     Remove Directory    ${WORKDIR}    recursive=${TRUE}
     Use Workdir         ${WORKDIR}
 
@@ -70,8 +72,8 @@ Stage 1 — parse component.art
     [Documentation]    `artheia parse system/apps/component.art`
     ...                must succeed and dump a tree that mentions
     ...                the Demo3Way cluster + its process
-    ...                compositions.
-    [Tags]    demo-chain    hermetic    selftest    stage-1
+    ...                compositions (the seed apps).
+    [Tags]    gen-chain    hermetic    selftest    stage-1
 
     ${tree}=    Stage 1 Parse Component Art
     Tree Mentions    ${tree}    Demo3Way
@@ -81,12 +83,12 @@ Stage 1 — parse component.art
 
 
 Stage 2 — rig-deps JSON
-    [Documentation]    `artheia rig-deps manifest.rig` emits the
-    ...                Bazel rig_ext extension's input. The demo rig is
-    ...                single-machine: every component pins to `central`
+    [Documentation]    `artheia rig-deps ${RIG}` emits the
+    ...                Bazel rig_ext extension's input. The bootstrap rig
+    ...                is single-machine: every component pins to `central`
     ...                (x86_64 → amd64). Asserts the machine + arch and
     ...                that p1/p2/p3 land on it.
-    [Tags]    demo-chain    hermetic    selftest    stage-2
+    [Tags]    gen-chain    hermetic    selftest    stage-2
 
     ${rig_json}=    Stage 2 Rig Deps
     Json Has Machines    ${rig_json}    central
@@ -101,7 +103,7 @@ Stage 3 — gen-netgraph JSON
     ...                routing. Driver/Ticker/Counter/Observer/
     ...                Incrementer are the canonical Demo3Way nodes;
     ...                if any drop out the cluster wiring broke.
-    [Tags]    demo-chain    hermetic    selftest    stage-3
+    [Tags]    gen-chain    hermetic    selftest    stage-3
 
     ${netgraph}=    Stage 3 Gen Netgraph
     Netgraph Has Nodes    ${netgraph}    DriverNode    TickerNode    CounterNode
@@ -122,7 +124,7 @@ Stage 4 — gen-routing per-process headers (KNOWN BROKEN, #378)
     ...                error message so we get a green when the bug
     ...                is fixed and the assertion swaps to "header
     ...                exists".
-    [Tags]    demo-chain    hermetic    selftest    stage-4
+    [Tags]    gen-chain    hermetic    selftest    stage-4
     ...      known-broken
 
     Run Keyword And Expect Error    *Unknown object "CounterNode"*
@@ -134,7 +136,7 @@ Stage 5 — gen-app per-process skeleton
     ...                emitted by `gen-app --kind fc --composition`.
     ...                gen-app appends the composition to --out, so the
     ...                project lands at <out>/Demo3WayP1/{lib,main,impl}.
-    [Tags]    demo-chain    hermetic    selftest    stage-5
+    [Tags]    gen-chain    hermetic    selftest    stage-5
 
     ${out}=    Stage 5 Gen App Composition    Demo3WayP1
     App Composition Has Process Dir    ${out}    Demo3WayP1
@@ -150,7 +152,7 @@ Stage 6 — serialize-manifest JSON set
     ...                directly via nlohmann/json (no yaml-cpp dep
     ...                since #380). Asserts p1/p2/p3 land in central's
     ...                execution.json.
-    [Tags]    demo-chain    hermetic    selftest    stage-6
+    [Tags]    gen-chain    hermetic    selftest    stage-6
 
     ${root}=    Stage 6 Serialize Manifest
     Manifest Has Machine Jsons    ${root}    central
@@ -169,7 +171,7 @@ Stage 6b — manifest schema sanity (#379, #380)
     ...                NESTED supervisor tree: its root object is the
     ...                `root` supervisor (name + children), the shape the
     ...                C++ supervisor parses. Plus: no YAML (#380).
-    [Tags]    demo-chain    hermetic    selftest    stage-6b
+    [Tags]    gen-chain    hermetic    selftest    stage-6b
 
     ${root}=    Stage 6 Serialize Manifest
 
@@ -196,7 +198,7 @@ Stage 7 — per-machine supervisor tree (executor.json slice)
     ...                <machine>/executor.json slice. Each worker leaf
     ...                carries its .art nodes (tipc) from PROCESS_NODES —
     ...                p1 hosts counter/driver/ticker.
-    [Tags]    demo-chain    hermetic    selftest    stage-7
+    [Tags]    gen-chain    hermetic    selftest    stage-7
 
     ${root}=    Stage 6 Serialize Manifest
     ${y}=    Executor Slice For Machine    ${root}    central
@@ -207,13 +209,17 @@ Stage 7 — per-machine supervisor tree (executor.json slice)
 Stage 8 — bazel build .ipk image (arch tag matches rig.py)
     [Documentation]    The terminal stage — bazel build produces
     ...                an .ipk whose arch tag matches what rig.py
-    ...                declared for the machine (#371). The demo's
-    ...                single `central` machine declared x86_64 →
-    ...                _amd64.ipk.
+    ...                declared for the machine (#371). Arch tags are
+    ...                format-specific (rules/pack_ipk.py): .deb wants
+    ...                amd64/arm64, .ipk (opkg) wants x86_64/aarch64 —
+    ...                so the bootstrap rig's x86_64 machine yields
+    ...                _x86_64.ipk. (The retired demo/ copy of this
+    ...                suite still asserted the pre-split _amd64 tag —
+    ...                its stage 8 never ran in CI, so it rotted.)
     ...
     ...                Tagged 'live-bazel' — skip in CI environments
     ...                where Bazel isn't installed.
-    [Tags]    demo-chain    live-bazel    selftest    stage-8
+    [Tags]    gen-chain    live-bazel    selftest    stage-8
 
     ${ipk}=    Stage 8 Bazel Build Image    central
-    Ipk Name Carries Arch    ${ipk}    amd64
+    Ipk Name Carries Arch    ${ipk}    x86_64

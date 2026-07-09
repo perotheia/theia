@@ -8,7 +8,8 @@
 //   system/platform/runtime/    →  system.platform.runtime
 //
 // (The app cluster `system.apps` is NOT part of the framework — the in-repo
-//  demo lives in the consuming workspace at demo/ (demo/system/apps/...), and
+//  demo apps live in a consuming workspace (the harness scaffolds one from
+//  the ci/demo seed on every run), and
 //  the gateway + AUTOSAR vendor trees are added by a consuming workspace too.)
 //
 // This file does NOT declare a top-level composition. In the new
@@ -33,10 +34,10 @@ import system.services.*    // system/services → ../services/system/services (
 import system.supervisor.*  // system/supervisor → ../platform/supervisor/system
 
 // NB: `system.apps.*` (the Demo3Way application cluster) is NOT part of
-// standalone theia.git either — the in-repo demo moved into the CONSUMING
-// workspace at demo/ (demo/system/apps/component.art). Like the gateway below,
-// the demo's aggregator imports these Theia clusters and Appends its app
-// cluster; the framework aggregator no longer references system.apps.
+// standalone theia.git either — it lives in a consuming workspace (the harness
+// scaffolds one from the ci/demo seed on every run). Like the gateway below,
+// a consuming workspace's aggregator imports these Theia clusters and Appends
+// its app cluster; the framework aggregator no longer references system.apps.
 
 // NB: the gateway is NOT part of standalone theia.git. `GatewayBridge` + the
 // vehicle-bus driver layer live in a CONSUMING workspace (gataway_ws), whose

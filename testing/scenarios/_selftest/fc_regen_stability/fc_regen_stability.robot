@@ -80,31 +80,7 @@ log regenerates byte-identically
     Regen And Diff FC    log
 
 
-# ── Non-services FCs (demo consuming workspace) ────────────────────────────
-# Same generator, a different home AND a different workspace. The in-repo demo
-# app moved out of the framework tree into the CONSUMING workspace at demo/;
-# its .art + committed apps are resolved against demo/, not the framework root.
-# Still proves gen-app's path-agnostic label derivation: the apps spec is one
-# spec, three process-compositions (--composition appended to --out verbatim).
-
-demo apps Demo3WayP1 regenerates byte-identically
-    [Documentation]    demo/apps/Demo3WayP1/{lib,main,impl/BUILD.bazel} ==
-    ...                gen-app --composition Demo3WayP1 from
-    ...                demo/system/apps/component.art (demo workspace).
-    [Tags]    fc-regen-stability    hermetic    selftest
-    Regen And Diff FC    demo_p1
-
-
-demo apps Demo3WayP2 regenerates byte-identically
-    [Documentation]    demo/apps/Demo3WayP2/{lib,main,impl/BUILD.bazel} ==
-    ...                gen-app --composition Demo3WayP2 from the demo apps spec.
-    [Tags]    fc-regen-stability    hermetic    selftest
-    Regen And Diff FC    demo_p2
-
-
-demo apps Demo3WayP3 regenerates byte-identically
-    [Documentation]    demo/apps/Demo3WayP3/{lib,main,impl/BUILD.bazel} ==
-    ...                gen-app --composition Demo3WayP3 from the demo apps spec.
-    [Tags]    fc-regen-stability    hermetic    selftest
-    Regen And Diff FC    demo_p3
+# Non-services (consuming-workspace) regen coverage lives in the user-flow
+# harness now: ci/run.sh s2 + ci/test/gen_chain.robot scaffold a FRESH
+# workspace per run — no committed reference tree to drift (demo/ retired).
 

@@ -41,11 +41,12 @@ cc_library(
 # PLUGGABLE DECODER SPLIT: this is the SYSTEM (framework) half. It
 # registers ONLY framework wire types (system_services_sm_*). The demo
 # app types (system_apps_*) moved to the consuming workspace's own
-# plugin (demo/trace/trace_decoder_apps_protos.cc → libtrace_decoder_apps.so).
+# plugin (the ci/demo/trace seed's trace_decoder_apps_protos.cc →
+# libtrace_decoder_apps.so, grafted per consuming workspace).
 #
 # Back-compat note: was `trace_decoder_protos` (srcs trace_decoder_protos.cc),
 # which also linked //platform/proto/system/apps:apps_pb_cpp. That apps proto
-# moved to demo/ and the dep was dropped here.
+# moved out to the consuming workspaces and the dep was dropped here.
 cc_library(
     name = "trace_decoder_system_protos",
     srcs = ["trace_decoder_system_protos.cc"],
@@ -83,7 +84,7 @@ cc_library(
 #
 # Back-compat note: was `libtrace_decoder_ctypes.so` (a single monolithic
 # .so carrying both framework + demo types). Renamed in the pluggable
-# split; the demo/ install bundle's install_lib and the three consumers
+# split; a consuming workspace's install bundle install_lib and the three consumers
 # (supervisor-gui, rf-theia adapter, rtdb-via-adapter) were updated to
 # match. The distinct `_system` suffix also still avoids colliding with
 # the `libtrace_decoder.so` that `:trace_decoder` (a cc_library) emits.

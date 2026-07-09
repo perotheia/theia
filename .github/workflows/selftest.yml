@@ -109,61 +109,11 @@ jobs:
             out/
             out-fc/
 
-  # The in-repo demo at demo/ is a real CONSUMING WORKSPACE (the `theia init`
-  # shape: system/apps real, manifest/ rig, proto/, framework symlinked via
-  # @pero_theia). Run its HERMETIC app tests — the artheia gen pipeline stages
-  # (parse → gen-netgraph/routing/app-composition → manifest/rig resolution) a
-  # real user exercises — from the demo workspace root. The live + live-bazel
-  # stages (need a running stack / a bazel C++ build) stay gated, same as the
-  # framework's live suites above.
-  demo-workspace:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Check out artheia + rf-theia from the GitHub mirror
-        run: |
-          git config submodule.artheia.url https://github.com/perotheia/artheia.git
-          git config submodule.rf-theia.url https://github.com/perotheia/rf-theia.git
-          git submodule update --init artheia rf-theia
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.x"
-
-      - name: Install artheia + rf-theia
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e artheia/
-          pip install -e rf-theia/
-
-      - name: Demo consuming-workspace hermetic tests
-        env:
-          # The demo workspace is self-contained: PYTHONPATH=demo only. Its
-          # `manifest` namespace package spans the demo's apps (manifest.apps,
-          # manifest.<rig>) AND the framework's manifest.services — the latter
-          # symlinked in at demo/manifest/services (mirroring a deb-installed
-          # /opt/theia framework next to a user's own theia_ws). Repo-root is
-          # deliberately NOT on the path: it would shadow the venv-installed
-          # artheia with the ./artheia submodule checkout dir.
-          PYTHONPATH: ${{ github.workspace }}/demo
-          RF_THEIA_WORKSPACE: ${{ github.workspace }}/demo
-        working-directory: demo
-        run: |
-          python -m robot \
-            --include hermetic --exclude live --exclude live-bazel \
-            --outputdir out \
-            tests/demo_chain/
-
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: demo-workspace-report
-          path: demo/out/
-
-  # The END-USER-FLOW harness (ci/run.sh): every `theia init` kind/flag +
-  # every gen-app mode a user touches, from FRESH scaffolds, through bazel
-  # build against @pero_theia, to LIVE supervised runtime checks over TIPC
-  # (Robot). The same script devs run locally — see ci/README.md.
+  # The gen-pipeline consuming-workspace coverage moved into the user-flow
+  # harness: ci/run.sh s2 scaffolds a FRESH workspace per run and drives
+  # ci/test/gen_chain.robot (parse → rig-deps → gen-netgraph/routing/app →
+  # serialize-manifest → @rig_apps .ipk) against it — the committed demo/
+  # workspace this file used to test was retired (it drifted).
   user-flow:
     runs-on: ubuntu-latest
     steps:

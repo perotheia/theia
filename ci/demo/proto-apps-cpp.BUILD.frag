@@ -1,24 +1,3 @@
-# nanopb sources for the system.apps package. gen-app (--proto-out proto)
-# writes apps.proto AND apps.options here (it auto-pins every string/bytes field
-# to a fixed char[]; override per field with an .art `[max_size:N]`). Both feed
-# this genrule (.options auto-loaded by nanopb). .pb.{c,h} are BUILT, not committed.
-package(default_visibility = ["//visibility:public"])
-
-genrule(
-    name = "apps_pb",
-    srcs = ["apps.proto"] + glob(["apps.options"], allow_empty = True),
-    outs = ["apps.pb.c", "apps.pb.h"],
-    cmd = "set -e;"
-        + " in_dir=$$(dirname $(location apps.proto));"
-        + " out_dir=$$(dirname $(location apps.pb.c));"
-        + " nanopb_generator -I $$in_dir -D $$out_dir apps.proto;",
-    local = True,
-)
-filegroup(name = "apps_pb_c", srcs = ["apps.pb.c"])
-filegroup(name = "apps_pb_h", srcs = ["apps.pb.h"])
-filegroup(name = "apps_proto", srcs = ["apps.proto"])
-
-
 # ---------------------------------------------------------------------------
 # Google libprotobuf companion — REFLECTION-capable C++ binding of the
 # same .proto. Host-only, used by the app's trace-decoder plugin

@@ -104,7 +104,7 @@ jobs:
 
       # GATE: a CONSUMING workspace pinned to the installed deb must be able to
       # `theia manifest` + `theia dist` (DEB MODE — framework FCs are prebuilt,
-      # no services/ source). The source-mode demo/ nightly never exercises this,
+      # no services/ source). The source-mode nightly never exercises this,
       # so a deb-mode regression (e.g. dist_pkg emitting unbuildable @pero_theia//
       # services labels) slips through unless we install the deb and build against
       # it here. Non-fatal to the RELEASE (continue-on-error) but visible as a

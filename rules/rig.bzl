@@ -23,7 +23,7 @@ reads the resulting per-machine JSON, and materializes a synthetic repository
 Usage from MODULE.bazel:
 
     rig_ext = use_extension("@pero_theia//rules:rig.bzl", "rig_ext")
-    rig_ext.declare(name = "rig_single", rig_module = "manifest.single.rig",
+    rig_ext.declare(name = "rig_apps", rig_module = "manifest.apps.rig",
                     rig_attr = "RIG")
     use_repo(rig_ext, "rig_single")
 
@@ -218,7 +218,7 @@ def _rig_repo_impl(ctx):
     # 1. Resolve artheia + the import roots for the rig module.
     #
     # The rig MODULE (e.g. `manifest.single.rig`) imports manifest.apps (owned
-    # by the CONSUMING workspace = the ROOT module: demo/) AND manifest.services
+    # by the CONSUMING workspace = the ROOT module) AND manifest.services
     # (owned by the @pero_theia framework module). serialize-manifest must run
     # with BOTH roots on PYTHONPATH so the `manifest` namespace package resolves
     # across both. `ctx.workspace_root` is the consuming root (the main repo dir).

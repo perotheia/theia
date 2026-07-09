@@ -1,9 +1,10 @@
 // Static-init shim: registers every FRAMEWORK libprotobuf-compiled
 // message type with this .so's process-global Decoder. This is the
 // SYSTEM (framework) half of what was once the monolithic
-// trace_decoder_protos.cc — the demo/app types (`system_apps_*`)
+// trace_decoder_protos.cc — the app types (`system_apps_*`)
 // were split out into the consuming workspace's own plugin
-// (demo/trace/trace_decoder_apps_protos.cc → libtrace_decoder_apps.so).
+// (the consuming workspace's trace_decoder_apps_protos.cc →
+// libtrace_decoder_apps.so; seed at ci/demo/trace/).
 //
 // PLUGGABLE DECODER MODEL: each libtrace_decoder_*.so carries its OWN
 // copy of the global Decoder + its OWN `trace_decode` C ABI. A consumer

@@ -37,7 +37,7 @@ Usage (one target per host, the macro form — `theia manifest` writes this glue
 # from a consuming workspace), so a bare `//…` would resolve against @pero_theia.
 #   - framework services → @pero_theia//services/… (the framework module)
 # This default is SERVICES-ONLY — the framework runtime plane. It carries NO
-# user/app binaries: a consuming workspace (incl. theia.git's own demo/) passes
+# user/app binaries: a consuming workspace passes
 # its own `binaries=[…]` to dist_pkg, and every `theia manifest`-generated
 # dist_pkg DERIVES `binaries` from the host's execution.json, so this default is
 # only the services fallback. Leaking demo app labels here dragged @@//apps/…
@@ -64,7 +64,7 @@ ALL_BINARIES = [
     # breaking the cross-build. No zonal/test machine's execution.json references
     # it; a consuming workspace adds its own gateway binary to this list.
     # NOTE: NO app binaries here — apps are a consuming-workspace concern
-    # (theia.git's demo/ passes its own binaries=[…]; see demo/dist/manifest).
+    # (a consuming workspace passes its own binaries=[…]).
 ]
 
 # Shared libs bundled at /opt/theia/lib/<basename> for every host (harmless if a

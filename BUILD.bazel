@@ -7,10 +7,11 @@ Quick reference:
   # Build & test the platform runtime + Functional Clusters
   bazel test //platform/... //services/... --config=linux
 
-The local-host demo deploy bundle (//:install) and the per-rig synthetic deploy
-repos (@rig_apps etc.) moved to the demo/ consuming workspace when the demo apps
+The local-host deploy bundle (//:install) and the per-rig synthetic deploy
+repos (@rig_apps etc.) belong to CONSUMING workspaces since the demo apps
 were extracted. The framework root no longer carries an install target; a
-consuming workspace assembles its own (see demo/BUILD.bazel).
+consuming workspace assembles its own (the harness-scaffolded ci/.work
+workspaces and gataway_ws are the living examples).
 """
 
 package(default_visibility = ["//visibility:public"])

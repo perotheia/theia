@@ -45,20 +45,19 @@ class FcSpec:
                  here (or here/<composition> when composition is set —
                  gen-app appends it verbatim). NOT assumed to be
                  services/<short>; an FC lives anywhere.
-    composition: --composition for a multi-composition spec (the demo);
+    composition: --composition for a multi-composition spec;
                  None for a single-app FC.
     workspace:   which workspace the FC lives in, relative to the framework
                  checkout root. None ⇒ the framework root itself (services/
-                 FCs). "demo" ⇒ the in-repo demo CONSUMING workspace, whose
-                 app FCs (Demo3Way) moved out of the framework tree. The lib
-                 runs gen-app with cwd / spec / in-tree resolved against this
-                 workspace, and --proto-out set per-workspace.
+                 FCs). A CONSUMING-workspace subdir can be named here; since
+                 the demo/ retirement no committed spec uses it (the user-flow
+                 harness owns consuming-ws regen), but the mechanism stays.
     proto_out:   --proto-out tree, workspace-relative. The framework's
                  committed FCs were emitted with the proto tree under
                  platform/proto (that's where the //platform/proto:platform_protos
                  label the BUILD files reference resolves), so that's the
-                 default. The demo workspace keeps proto at its root (proto/),
-                 so the demo FCs override this to "proto".
+                 default. A consuming workspace keeps proto at its root
+                 (proto/), so its specs would override this to "proto".
     """
     short: str
     spec: str
@@ -119,22 +118,11 @@ FC_SPECS = [
     # regen-stable. The ara::rds transport lib lives in services/rds/transport
     # (a sibling target), not impl/BUILD, so impl/BUILD is gen-app-default.
     FcSpec("rds", "system/services/rds/package.art", "ara::rds", "services/rds"),
-    # Non-services FCs — same generator, different home AND a different
-    # workspace. The in-repo demo app moved out of the framework tree into a
-    # CONSUMING workspace at demo/, so its .art (demo/system/apps/component.art)
-    # and committed apps (demo/apps/Demo3WayP<N>) are resolved against the demo
-    # workspace, not the framework root. The C++ namespace is `system_apps` —
-    # the demo's gen-app default derived from the system.apps package path (the
-    # committed apps were emitted with --ns system_apps). These still prove
-    # gen-app's path-agnostic label derivation (//<out>/lib:<short>_lib): the
-    # apps spec is one spec with three process-compositions, each its own app
-    # dir via --composition (appended to --out verbatim).
-    FcSpec("demo_p1", "system/apps/component.art", "system_apps", "apps",
-           "Demo3WayP1", workspace="demo", proto_out="proto"),
-    FcSpec("demo_p2", "system/apps/component.art", "system_apps", "apps",
-           "Demo3WayP2", workspace="demo", proto_out="proto"),
-    FcSpec("demo_p3", "system/apps/component.art", "system_apps", "apps",
-           "Demo3WayP3", workspace="demo", proto_out="proto"),
+    # Non-services (consuming-workspace) regen coverage moved with the demo/
+    # retirement: the user-flow harness (ci/run.sh s2 + ci/test/gen_chain.robot)
+    # scaffolds a FRESH workspace per run and drives gen-app/--composition
+    # against it — path-agnostic label derivation is proven there on every
+    # commit, with no committed reference tree to drift.
 ]
 
 
@@ -169,9 +157,9 @@ class FcRegenLib:
         scratch.mkdir(parents=True)
 
         # Which workspace this FC lives in. services/ FCs live in the
-        # framework checkout (Use Workspace anchors there); the demo app FCs
-        # moved out into the demo CONSUMING workspace at <framework>/demo. The
-        # .art spec + committed FC dir are resolved against THIS workspace.
+        # framework checkout (Use Workspace anchors there); a spec may name a
+        # CONSUMING-workspace subdir instead. The .art spec + committed FC dir
+        # are resolved against THIS workspace.
         fc_ws = self._workspace / fc.workspace if fc.workspace else self._workspace
 
         # The cross-slice Bazel labels gen-app emits are derived from the

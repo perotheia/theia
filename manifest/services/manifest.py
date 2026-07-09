@@ -6,7 +6,8 @@ EXECUTION-axis process; provided interfaces map to SERVICE-axis instances.
 
 ``machine`` is intentionally LEFT OPEN on every process: this is a BASE
 manifest — a deploy variant binds each process to a machine (see
-``manifest/demo/single.py`` for the override idiom). ``validate()`` of THIS
+a rig variant like ``manifest/<name>/rig.py`` for the override idiom).
+``validate()`` of THIS
 base therefore reports ``machine`` Undefined; that is expected — the variant
 makes it consistent.
 
@@ -280,7 +281,11 @@ PROCESS_PARAMS = {   'com': {'nodes': {}, 'package': 'system.services.com'},
     'shwa': {'nodes': {}, 'package': 'system.services.shwa'},
     'sm': {'nodes': {}, 'package': 'system.services.sm'},
     'tsync': {   'nodes': {   'phc2sys': {'args': '-a -r -m -q', 'enabled': True},
+                              'phc2sys_provider': {   'args': '-a -r -m -q',
+                                                      'enabled': True},
                               'ptp4l': {'args': '-i ptpIf0 -s -m -q', 'enabled': True},
+                              'ptp4l_provider': {   'args': '-i ptpIf0 -s -m -q',
+                                                    'enabled': True},
                               'tsync_ctl': {   'gps_baud': 460800,
                                                'gps_serial_dev': '',
                                                'poll_ms': 100}},

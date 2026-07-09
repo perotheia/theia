@@ -3940,6 +3940,25 @@ def cmd_init(args: list[str]) -> int:
         p.symlink_to(rel_target)
         created.append(f"{rel} -> {rel_target}")
 
+    def _sync_pin(rel: str, content: str) -> None:
+        """A framework-PINNED build file (.bazelversion): it must MATCH the
+        framework, so re-sync it on mismatch rather than 'keep existing'. A stale
+        .bazelversion from an earlier init against an older framework causes an
+        incompatible bazel to load the framework's toolchain configs — e.g.
+        `name 'set' is not defined` in rules_cc's cc_toolchain_config, aborting the
+        build. This is generated config, not user-edited source, so overwriting is
+        safe (unlike .art)."""
+        p = ws / rel
+        try:
+            existing = p.read_text() if p.exists() else None
+        except OSError:
+            existing = None
+        if existing is not None and existing.strip() == content.strip():
+            return                       # already correct — silent
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content)
+        created.append(rel + ("  (re-synced to framework)" if existing else ""))
+
     # The runtime .art package. The framework's supervisor/services .art import
     # `system.platform.runtime.*` (ChildControlIf, TraceControlPush, LogLevelPush);
     # the resolver maps that FQN to system/platform/runtime/, so link the package
@@ -4037,7 +4056,11 @@ def cmd_init(args: list[str]) -> int:
     _write("MODULE.bazel", _INIT_MODULE_BAZEL.replace("@MODNAME@", _mod_name)
                                              .replace("@THEIA_REL@", _theia_rel))
     _write(".bazelrc", _INIT_BAZELRC)
-    _write(".bazelversion", _read_or(theia_root / ".bazelversion", "8.0.0"))
+    # .bazelversion MUST match the framework's — an incompatible bazel can't load
+    # @pero_theia's toolchain configs. Re-sync (not keep-existing) so a re-init
+    # against a bumped framework picks up the new pin. Default falls back to the
+    # framework's current pin if the file is somehow unreadable.
+    _sync_pin(".bazelversion", _read_or(theia_root / ".bazelversion", "9.1.0"))
     # The app's own proto package: gen-app writes apps.proto + apps.options under
     # proto/system/apps/ (--proto-out proto); this BUILD nanopb-compiles them.
     # //proto:platform_protos aggregates it (+ the runtime proto from @pero_theia)
@@ -4094,6 +4117,21 @@ def _init_package(ws: Path, theia_root: Path, name: str,
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content)
         created.append(rel)
+
+    def _sync_pin(rel: str, content: str) -> None:
+        """Framework-PINNED build file (.bazelversion): re-sync on mismatch (a
+        stale pin loads an incompatible bazel against @pero_theia's toolchains).
+        See the twin in _init_ws for the full rationale."""
+        p = ws / rel
+        try:
+            existing = p.read_text() if p.exists() else None
+        except OSError:
+            existing = None
+        if existing is not None and existing.strip() == content.strip():
+            return
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content)
+        created.append(rel + ("  (re-synced to framework)" if existing else ""))
 
     def _link(rel: str, target: Path) -> None:
         p = ws / rel
@@ -4168,7 +4206,7 @@ def _init_package(ws: Path, theia_root: Path, name: str,
     _write("MODULE.bazel", _INIT_MODULE_BAZEL.replace("@MODNAME@", slug)
                                              .replace("@THEIA_REL@", theia_rel))
     _write(".bazelrc", _INIT_BAZELRC)
-    _write(".bazelversion", _read_or(theia_root / ".bazelversion", "8.0.0"))
+    _sync_pin(".bazelversion", _read_or(theia_root / ".bazelversion", "9.1.0"))
     # The TESTER app's proto shims. In the two-package layout the runnable app is
     # system.@NAME@_tester (NOT system.apps), so its proto lands at
     # proto/system/@NAME@_tester/@NAME@_tester.proto. gen-app --kind fc writes that

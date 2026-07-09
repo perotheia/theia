@@ -214,4 +214,6 @@ jobs:
         if: always()
         with:
           name: user-flow-report
-          path: ci/.work/robot/
+          path: |
+            ci/.work/robot/
+            ci/.work/logs/

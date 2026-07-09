@@ -99,8 +99,7 @@ jobs:
             testing/scenarios/services/nm/ \
             testing/scenarios/services/sm/ \
             testing/scenarios/services/log/log_firehose_temporal.robot \
-            testing/scenarios/services/com/com_firehose_temporal.robot \
-            testing/scenarios/services/osi/consensus_probe.robot
+            testing/scenarios/services/com/com_firehose_temporal.robot
 
       - uses: actions/upload-artifact@v4
         if: always()

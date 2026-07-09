@@ -3833,16 +3833,16 @@ def cmd_init(args: list[str]) -> int:
     a bare `theia start` brings the full service tree up under the supervisor.
 
     It creates, in the CWD (never overwriting an existing file):
-      - system/apps/{package,component}.art — this workspace's OWN app package,
-        a REAL dir (FQN system.apps ↔ this path 1:1; no symlink). You edit these.
-      - system/system.art   — the workspace aggregator. Imports the Theia
-        clusters (services / supervisor) you'll deploy, plus a stub you fill in
-        by hand (link system/<yourthing> + add its cluster). You then `theia
-        manifest` against it.
-      - manifest/bootstrap/rig.py — the one-machine BOOTSTRAP rig (smoke-test a
-        fresh workspace via `theia manifest bootstrap`); imports the generated
-        apps manifest (gen-manifest writes manifest/apps/manifest.py).
-      - apps/, proto/        — homes for the GENERATED C++ (gen-app --out apps)
+      - system/<name>/{package,component}.art — this workspace's OWN app package,
+        named after --name (FQN system.<name> ↔ this path 1:1; no symlink). <name>
+        is the SWP/app name, propagated through the source package, the deploy dir,
+        and the manifest target. You edit these.
+      - system/system.art   — the workspace aggregator (imports system.<name>.*).
+        You `theia manifest <name>` against it.
+      - manifest/<name>/rig.py — the one-machine deploy rig, addressable as
+        `theia manifest <name>`; imports the generated app manifest (gen-manifest
+        writes manifest/<name>/manifest.py).
+      - <name>/, proto/     — homes for the GENERATED C++ (gen-app --out <name>)
         and proto (gen-app --proto-out proto); never mixed with the framework.
       - .theia               — records THEIA_ROOT (the source it's bound to).
 
@@ -3921,6 +3921,14 @@ def cmd_init(args: list[str]) -> int:
         return _init_package(ws, theia_root, name, with_services)
 
     created: list[str] = []
+    # --name drives the app's identity end-to-end: the SWP name, the source
+    # package (system/<slug>, FQN system.<slug>), the deploy dir (gen-app --out
+    # <slug> → //<slug>/…), and the rig/manifest target (manifest/<slug> →
+    # `theia manifest <slug>`). `slug` = a py/bazel-safe form of --name.
+    slug = _py_ident_safe(name)
+
+    def _sub(t: str) -> str:
+        return t.replace("@NAME@", slug)
 
     def _write(rel: str, content: str) -> None:
         p = ws / rel
@@ -3992,29 +4000,30 @@ def cmd_init(args: list[str]) -> int:
     # walks `cluster Applications` here — empty → an empty app manifest +
     # executor sidecar, which the rig imports as-is.
     #
-    # system/apps is the REAL, canonical app source (FQN system.apps maps to the
-    # dir 1:1 — no `apps/system/apps` indirection, no symlink). The user edits
-    # these; gen-app emits the C++ to apps/ and the proto to proto/, gen-manifest
-    # writes the Python sidecar to manifest/ — all SEPARATE from this source dir.
-    _write("system/apps/package.art", _INIT_APPS_PACKAGE_ART)
-    _write("system/apps/component.art", _INIT_APPS_COMPONENT_ART)
-    # Python package marker for the generated C++ tree. NOTE: `manifest/` here is
-    # the WORKSPACE's own manifest package (manifest.apps / manifest.rig), local
-    # to this dir. The framework's services manifest is NOT part of this package —
-    # the rig loads it by path from $THEIA_ROOT/manifest/ — so there's no
+    # The app is named after --name: system/<name> is the REAL, canonical app
+    # source (FQN system.<name> maps to the dir 1:1 — no indirection, no symlink)
+    # and <name> is this workspace's SWP/app name. The user edits these; gen-app
+    # emits the C++ to <name>/ and the proto to proto/, gen-manifest writes the
+    # Python sidecar to manifest/<name>/ — all SEPARATE from this source dir.
+    # (`slug` = a py/bazel-safe form of --name for dir + module + label use.)
+    _write(f"system/{slug}/package.art", _sub(_INIT_APPS_PACKAGE_ART))
+    _write(f"system/{slug}/component.art", _sub(_INIT_APPS_COMPONENT_ART))
+    # Python package marker for the generated C++ tree (<name>/). NOTE: `manifest/`
+    # here is the WORKSPACE's own manifest package (manifest.<name> / the rig),
+    # local to this dir. The framework's services manifest is NOT part of this
+    # package — the rig loads it by path from $THEIA_ROOT/manifest/ — so there's no
     # cross-root namespace-package coupling to preserve.
-    _write("apps/__init__.py", "")
+    _write(f"{slug}/__init__.py", "")
 
     sys_art = (_INIT_SYSTEM_ART_SERVICES if with_services else _INIT_SYSTEM_ART)
     rig_py = (_INIT_RIG_PY_SERVICES if with_services else _INIT_RIG_PY)
-    _write("system/system.art", sys_art.replace("@NAME@", name))
-    # The BOOTSTRAP rig — a one-machine smoke-test target for verifying a fresh
-    # workspace's toolchain before it has real deploy targets. Lives at
-    # manifest/bootstrap/rig.py so it's addressable as `theia manifest bootstrap`
-    # (manifest.<target>.rig) and sits beside, not in competition with, the real
-    # per-target rigs (manifest/single/rig.py, …) a workspace grows later.
-    _write("manifest/bootstrap/__init__.py", "")
-    _write("manifest/bootstrap/rig.py", rig_py.replace("@NAME@", name))
+    _write("system/system.art", _sub(sys_art))
+    # The deploy rig — a one-machine smoke-test target for verifying a fresh
+    # workspace's toolchain. Named after --name (manifest/<name>/rig.py) so it's
+    # addressable as `theia manifest <name>` (manifest.<target>.rig); real
+    # per-target rigs a workspace grows later sit beside it.
+    _write(f"manifest/{slug}/__init__.py", "")
+    _write(f"manifest/{slug}/rig.py", _sub(rig_py))
     # Record THEIA_ROOT RELATIVE to the workspace when they share a prefix (keeps
     # the ws+theia pair relocatable, e.g. an in-repo demo/ committed with a
     # `../` link); fall back to absolute if they're on different roots.
@@ -4069,14 +4078,14 @@ def cmd_init(args: list[str]) -> int:
     # against a bumped framework picks up the new pin. Default falls back to the
     # framework's current pin if the file is somehow unreadable.
     _sync_pin(".bazelversion", _read_or(theia_root / ".bazelversion", "9.1.0"))
-    # The app's own proto package: gen-app writes apps.proto + apps.options under
-    # proto/system/apps/ (--proto-out proto); this BUILD nanopb-compiles them.
-    # //proto:platform_protos aggregates it (+ the runtime proto from @pero_theia)
-    # so the gen-app lib's `//proto:platform_protos` dep resolves locally. The app
-    # proto lives under proto/ (the workspace's own), NOT platform/proto/ (which
-    # in the framework holds the FC protos) — they never mix.
-    _write("proto/BUILD.bazel", _INIT_PROTO_AGG)
-    _write("proto/system/apps/BUILD.bazel", _INIT_APPS_PROTO_BUILD)
+    # The app's own proto package: gen-app writes <slug>.proto + <slug>.options
+    # under proto/system/<slug>/ (--proto-out proto keys the subpath off the FQN
+    # system.<slug>); this BUILD nanopb-compiles them. //proto:platform_protos
+    # aggregates it (+ the runtime proto from @pero_theia) so the gen-app lib's
+    # `//proto:platform_protos` dep resolves locally. The app proto lives under
+    # proto/ (the workspace's own), NOT platform/proto/ — they never mix.
+    _write("proto/BUILD.bazel", _sub(_INIT_PROTO_AGG))
+    _write(f"proto/system/{slug}/BUILD.bazel", _sub(_INIT_APPS_PROTO_BUILD))
 
     flavour = "services workspace" if with_services else "empty workspace"
     print(f"\ntheia init: scaffolded '{name}' ({flavour}) against {theia_root}",
@@ -4085,15 +4094,15 @@ def cmd_init(args: list[str]) -> int:
         print(f"  + {c}", file=sys.stderr)
     extra = ("\n  (the ARA services com/log/per/sm/ucm/shwa come up under the "
              "supervisor)" if with_services else "")
-    print("\nVerify the toolchain before adding apps (the bootstrap rig):\n"
-          "  artheia gen-manifest system/apps/component.art "
-          "manifest/apps/manifest.py\n"
-          f"  theia manifest bootstrap && theia install bootstrap && theia start{extra}\n"
-          "\nThen add a composition to system/apps/component.art and "
+    print(f"\nVerify the toolchain before adding apps (the '{slug}' rig):\n"
+          f"  artheia gen-manifest system/{slug}/component.art "
+          f"manifest/{slug}/manifest.py\n"
+          f"  theia manifest {slug} && theia install {slug} && theia start{extra}\n"
+          f"\nThen add a composition to system/{slug}/component.art and "
           "generate + build its C++:\n"
-          "  artheia gen-app --kind fc system/apps/component.art "
-          "--out apps --proto-out proto\n"
-          "  bazel build //apps/...        # compiles against @pero_theia",
+          f"  artheia gen-app --kind fc system/{slug}/component.art "
+          f"--out {slug} --proto-out proto\n"
+          f"  bazel build //{slug}/...        # compiles against @pero_theia",
           file=sys.stderr)
     return 0
 
@@ -4248,25 +4257,27 @@ def _init_package(ws: Path, theia_root: Path, name: str,
 _INIT_SYSTEM_ART = '''\
 // @NAME@ — Theia consuming-workspace aggregator. `theia manifest` walks this file.
 //
-// It imports ONLY this workspace's own app package (system/apps). The supervisor
+// It imports ONLY this workspace's own app package (system/@NAME@). The supervisor
 // is a DEPLOY-time fabric — `theia manifest`/`install` stage it from the fixed
 // framework target (//platform/supervisor/main:supervisor, $THEIA_ROOT), NOT from
 // ART — so there is no system.supervisor import and no system/{platform,supervisor}
 // symlink in a bare workspace.
 //
 // EMPTY-workspace shape: an empty Applications cluster. Add your app by declaring a
-// `composition` in system/apps/component.art and `cluster Applications { composition
+// `composition` in system/@NAME@/component.art and `cluster Applications { composition
 // <Yours> <id> }` — it flows here via the import below, no edit needed.
 
 package system
 
-import system.apps.*         // THIS workspace's app package (system/apps, real dir)
+import system.@NAME@.*       // THIS workspace's app package (system/@NAME@, real dir)
 
-cluster Applications { }     // empty until you add a composition in system/apps/
+cluster Applications { }     // empty until you add a composition in system/@NAME@/
 '''
 
 _INIT_APPS_PACKAGE_ART = '''\
-// @NAME@ apps — message + node declarations for this workspace's applications.
+// @NAME@ — message + node declarations for this workspace's application (the SWP
+// named @NAME@). The package is `system.@NAME@`, sourced at system/@NAME@/ (FQN ↔
+// dir 1:1).
 //
 // EMPTY scaffold. Declare your nodes here (messages, interfaces, `node atomic
 // <Name> { tipc ... ports { ... } }`), then prototype them in a composition in
@@ -4274,11 +4285,11 @@ _INIT_APPS_PACKAGE_ART = '''\
 // toolchain (parse / gen-manifest / build / run a bare supervisor) works before
 // you write a single app.
 
-package system.apps
+package system.@NAME@
 '''
 
 _INIT_APPS_COMPONENT_ART = '''\
-// @NAME@ apps — composition + cluster wiring.
+// @NAME@ — composition + cluster wiring for this workspace's app (SWP @NAME@).
 //
 // EMPTY scaffold: `cluster Applications { }` with no members. gen-manifest
 // emits an empty app manifest + executor sidecar from this, which the rig
@@ -4289,12 +4300,12 @@ _INIT_APPS_COMPONENT_ART = '''\
 //   1. declare a node in package.art
 //   2. `composition MyApp { prototype MyNode my_node }`  (here)
 //   3. `cluster Applications { composition MyApp my_app }`  (here)
-//   4. `artheia gen-app --kind fc system/apps/component.art --out apps
+//   4. `artheia gen-app --kind fc system/@NAME@/component.art --out @NAME@
 //       --proto-out proto [--composition MyApp]` to emit the C++
-//       (--proto-out lands apps.proto where proto/'s BUILD expects it),
-//       then `bazel build //apps/...` (compiles against @pero_theia).
+//       (--proto-out lands @NAME@.proto where proto/'s BUILD expects it),
+//       then `bazel build //@NAME@/...` (compiles against @pero_theia).
 
-package system.apps
+package system.@NAME@
 
 cluster Applications { }
 '''
@@ -4302,23 +4313,23 @@ cluster Applications { }
 _INIT_RIG_PY = '''\
 """@NAME@ BOOTSTRAP rig — one machine ("central") running this workspace's apps.
 
-The smoke-test target for a FRESH workspace: it lets `theia manifest bootstrap
+The smoke-test target for a FRESH workspace: it lets `theia manifest @NAME@
 && theia install && theia start` run before you have any real deploy targets,
 so you can verify the toolchain end to end on a clean scaffold. Addressed as
-`bootstrap` because it lives at manifest/bootstrap/rig.py (manifest.<target>.rig);
+`bootstrap` because it lives at manifest/@NAME@/rig.py (manifest.<target>.rig);
 the real per-target rigs (manifest/single/rig.py, …) come later and sit beside
 it, never replacing it.
 
 A :class:`DeploymentLayer` on the orthogonal-ARA engine
 (:mod:`artheia.manifest.deployment`). It combines the workspace's generated
 apps manifest (the BASE — open machines) with a deploy delta: one machine and
-every process bound to it. `theia manifest bootstrap` reads the RIG export.
+every process bound to it. `theia manifest @NAME@` reads the RIG export.
 
 The apps manifest is gen-manifest output. Until you run it the import fails, so
 it is guarded — a fresh workspace resolves to an EMPTY deployment (one machine,
 no processes), which is enough to verify the toolchain. As you add compositions
-to system/apps/component.art and regenerate (`artheia gen-manifest
-system/apps/component.art manifest/apps/manifest.py`), the processes +
+to system/@NAME@/component.art and regenerate (`artheia gen-manifest
+system/@NAME@/component.art manifest/@NAME@/manifest.py`), the processes +
 applications flow in automatically.
 
 See $THEIA_ROOT/docs/skills/theia/references/deployment.md.
@@ -4340,7 +4351,7 @@ from artheia.manifest.deployment import (
 # Not present until the first `gen-manifest` — guard the import so a fresh
 # workspace still imports + serializes (an empty deployment).
 try:
-    from manifest.apps.manifest import DEPLOYMENT as _APPS
+    from manifest.@NAME@.manifest import DEPLOYMENT as _APPS
 except Exception:               # not generated yet → empty workspace
     _APPS = DeploymentLayer()
 
@@ -4371,29 +4382,29 @@ RIG = _APPS.combine(DeploymentLayer(
     }),
 ))
 
-# Optional supervisor sidecar (gen-manifest writes manifest/apps/executor.py).
+# Optional supervisor sidecar (gen-manifest writes manifest/@NAME@/executor.py).
 # serialize-manifest reads SUPERVISORS off this module if present.
 try:
-    from manifest.apps.executor import SUPERVISORS
+    from manifest.@NAME@.executor import SUPERVISORS
 except Exception:
     SUPERVISORS = []
 
 # Per-process node/module metadata for the executor.json worker leaves.
-# gen-manifest emits PROCESS_NODES onto manifest.apps.manifest.
+# gen-manifest emits PROCESS_NODES onto manifest.@NAME@.manifest.
 try:
-    from manifest.apps.manifest import PROCESS_NODES
+    from manifest.@NAME@.manifest import PROCESS_NODES
 except Exception:
     PROCESS_NODES = {}
 
 # Static params defaults (params{} declared in .art) for config/<fc>.json.
 try:
-    from manifest.apps.manifest import PROCESS_PARAMS
+    from manifest.@NAME@.manifest import PROCESS_PARAMS
 except Exception:
     PROCESS_PARAMS = {}
 
 # Etcd config-defaults (config{} declared values + digest) for first-boot seed.
 try:
-    from manifest.apps.manifest import PROCESS_CONFIG_DEFAULTS
+    from manifest.@NAME@.manifest import PROCESS_CONFIG_DEFAULTS
 except Exception:
     PROCESS_CONFIG_DEFAULTS = {}
 '''
@@ -4411,7 +4422,7 @@ package system
 
 import system.services.*     // the ARA platform FCs (system/services → framework)
 import system.supervisor.*   // the OTP-style supervisor (the runtime fabric)
-import system.apps.*         // THIS workspace's app package
+import system.@NAME@.*       // THIS workspace's app package (system/@NAME@, real dir)
 
 // --- forward-decl: the clusters this workspace deploys --------------------
 cluster Services     { }     // the platform FCs (materialized from the import)
@@ -4429,7 +4440,7 @@ _INIT_RIG_PY_SERVICES = '''\
 """@NAME@ BOOTSTRAP rig — one machine: the ARA services + this workspace's apps.
 
 The smoke-test target for a fresh WITH-SERVICES workspace, addressed as
-`bootstrap` (manifest/bootstrap/rig.py): `theia manifest bootstrap && theia
+`bootstrap` (manifest/@NAME@/rig.py): `theia manifest @NAME@ && theia
 install && theia start` verifies the toolchain before real deploy targets exist.
 
 A :class:`DeploymentLayer` (orthogonal-ARA engine) built by combining the
@@ -4438,8 +4449,8 @@ this workspace's generated apps manifest, then a deploy delta binding everything
 to one machine ("central"). `theia install` builds the FC binaries + the
 supervisor; `theia start` runs the whole service tree with your apps under it.
 
-As you add compositions to system/apps/component.art and regenerate
-(`artheia gen-manifest system/apps/component.art manifest/apps/manifest.py`),
+As you add compositions to system/@NAME@/component.art and regenerate
+(`artheia gen-manifest system/@NAME@/component.art manifest/@NAME@/manifest.py`),
 the app processes + applications flow in automatically.
 
 See $THEIA_ROOT/docs/skills/theia/references/deployment.md.
@@ -4491,11 +4502,11 @@ _svc_executor = _load_services_manifest("executor")
 _SERVICES = _svc_manifest.DEPLOYMENT if _svc_manifest else DeploymentLayer()
 
 # This workspace's generated apps manifest (empty until you add apps). Guarded:
-# a fresh workspace has no manifest/apps/manifest.py yet → services-only.
-# manifest.apps is the WORKSPACE's own package (this dir is on sys.path when the
+# a fresh workspace has no manifest/@NAME@/manifest.py yet → services-only.
+# manifest.@NAME@ is the WORKSPACE's own package (this dir is on sys.path when the
 # rig runs), so a plain import is correct — no global-namespace concern.
 try:
-    from manifest.apps.manifest import DEPLOYMENT as _APPS
+    from manifest.@NAME@.manifest import DEPLOYMENT as _APPS
 except Exception:               # not generated yet → services-only
     _APPS = DeploymentLayer()
 
@@ -4530,7 +4541,7 @@ try:
     from artheia.manifest.supervisor import RestartStrategy, SupervisorNode
     _SVC_SUP = _svc_executor.SUPERVISORS if _svc_executor else []
     try:
-        from manifest.apps.executor import SUPERVISORS as _APP_SUP
+        from manifest.@NAME@.executor import SUPERVISORS as _APP_SUP
     except Exception:
         _APP_SUP = []
     _SUBTREES = [n for n in (_SVC_SUP + _APP_SUP) if n.name != "root"]
@@ -4547,7 +4558,7 @@ except Exception:
 try:
     _SVC_NODES = _svc_manifest.PROCESS_NODES if _svc_manifest else {}
     try:
-        from manifest.apps.manifest import PROCESS_NODES as _APP_NODES
+        from manifest.@NAME@.manifest import PROCESS_NODES as _APP_NODES
     except Exception:
         _APP_NODES = {}
     PROCESS_NODES = {**_SVC_NODES, **_APP_NODES}
@@ -4558,7 +4569,7 @@ except Exception:
 try:
     _SVC_PARAMS = _svc_manifest.PROCESS_PARAMS if _svc_manifest else {}
     try:
-        from manifest.apps.manifest import PROCESS_PARAMS as _APP_PARAMS
+        from manifest.@NAME@.manifest import PROCESS_PARAMS as _APP_PARAMS
     except Exception:
         _APP_PARAMS = {}
     PROCESS_PARAMS = {**_SVC_PARAMS, **_APP_PARAMS}
@@ -4569,7 +4580,7 @@ except Exception:
 try:
     _SVC_CD = _svc_manifest.PROCESS_CONFIG_DEFAULTS if _svc_manifest else {}
     try:
-        from manifest.apps.manifest import PROCESS_CONFIG_DEFAULTS as _APP_CD
+        from manifest.@NAME@.manifest import PROCESS_CONFIG_DEFAULTS as _APP_CD
     except Exception:
         _APP_CD = {}
     PROCESS_CONFIG_DEFAULTS = {**_SVC_CD, **_APP_CD}
@@ -4740,10 +4751,10 @@ build --config=linux
 
 _INIT_PROTO_AGG = '''\
 # //proto:platform_protos — the nanopb wire types the gen-app lib links. This
-# workspace builds its OWN app proto (system/apps, nanopb-compiled below) + pulls
+# workspace builds its OWN app proto (system/@NAME@, nanopb-compiled below) + pulls
 # the runtime control proto from @pero_theia. (The framework aggregates all the
 # FC protos under //platform/proto; a consuming workspace only needs its own app
-# proto + the runtime one — the lib #includes "system/apps/apps.pb.h". The app
+# proto + the runtime one — the lib #includes "system/@NAME@/@NAME@.pb.h". The app
 # proto lives under proto/, never mixed with the framework's platform/proto/.)
 load("@rules_cc//cc:defs.bzl", "cc_library")
 
@@ -4751,34 +4762,34 @@ package(default_visibility = ["//visibility:public"])
 
 cc_library(
     name = "platform_protos",
-    srcs = ["//proto/system/apps:apps_pb_c"],
-    hdrs = ["//proto/system/apps:apps_pb_h"],
-    includes = ["."],   # callers #include "system/apps/apps.pb.h"
+    srcs = ["//proto/system/@NAME@:@NAME@_pb_c"],
+    hdrs = ["//proto/system/@NAME@:@NAME@_pb_h"],
+    includes = ["."],   # callers #include "system/@NAME@/@NAME@.pb.h"
     copts = ["-fPIC"],
     deps = ["@pero_theia//platform/runtime:runtime_proto_cc"],
 )
 '''
 
 _INIT_APPS_PROTO_BUILD = '''\
-# nanopb sources for the system.apps package. gen-app (--proto-out proto)
-# writes apps.proto AND apps.options here (it auto-pins every string/bytes field
+# nanopb sources for the system.@NAME@ package. gen-app (--proto-out proto)
+# writes @NAME@.proto AND @NAME@.options here (it auto-pins every string/bytes field
 # to a fixed char[]; override per field with an .art `[max_size:N]`). Both feed
 # this genrule (.options auto-loaded by nanopb). .pb.{c,h} are BUILT, not committed.
 package(default_visibility = ["//visibility:public"])
 
 genrule(
-    name = "apps_pb",
-    srcs = ["apps.proto"] + glob(["apps.options"], allow_empty = True),
-    outs = ["apps.pb.c", "apps.pb.h"],
+    name = "@NAME@_pb",
+    srcs = ["@NAME@.proto"] + glob(["@NAME@.options"], allow_empty = True),
+    outs = ["@NAME@.pb.c", "@NAME@.pb.h"],
     cmd = "set -e;"
-        + " in_dir=$$(dirname $(location apps.proto));"
-        + " out_dir=$$(dirname $(location apps.pb.c));"
-        + " nanopb_generator -I $$in_dir -D $$out_dir apps.proto;",
+        + " in_dir=$$(dirname $(location @NAME@.proto));"
+        + " out_dir=$$(dirname $(location @NAME@.pb.c));"
+        + " nanopb_generator -I $$in_dir -D $$out_dir @NAME@.proto;",
     local = True,
 )
-filegroup(name = "apps_pb_c", srcs = ["apps.pb.c"])
-filegroup(name = "apps_pb_h", srcs = ["apps.pb.h"])
-filegroup(name = "apps_proto", srcs = ["apps.proto"])
+filegroup(name = "@NAME@_pb_c", srcs = ["@NAME@.pb.c"])
+filegroup(name = "@NAME@_pb_h", srcs = ["@NAME@.pb.h"])
+filegroup(name = "@NAME@_proto", srcs = ["@NAME@.proto"])
 '''
 
 # ── package-flavour proto shims ─────────────────────────────────────────────

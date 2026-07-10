@@ -182,7 +182,9 @@ class PerClient:
                         schema_path: str | Path) -> dict:
         """Read a .persnap file + a gen-schema config schema, decode each
         record's opaque config bytes against its config-type proto, and return
-        {node: {digest, config_type, config: <decoded dict>}}.
+        {node: {digest, config_type, config: <decoded dict>}}. A per-instance
+        key ("<component>/<instance>") resolves its config-type via the base
+        component and carries an extra "instance" field.
 
         A record whose stored digest doesn't match any schema config (or whose
         type can't be decoded) is returned with the raw bytes hex + a note, so
@@ -200,7 +202,17 @@ class PerClient:
         out = {}
         for node, digest, blob in recs:
             entry = {"digest": digest}
-            cfg = node_to_cfg.get(node)
+            # Per-INSTANCE key: a cloned node stores its config under
+            # "<component>/<instance>" (counter/1 — the instance may also be
+            # machine-shifted on a multi-machine rig). The schema is keyed by
+            # NODE, so resolve the config-type against the base component and
+            # surface the parsed instance in the entry.
+            base, sep, tail = node.rpartition("/")
+            if sep and tail.isdigit():
+                entry["instance"] = int(tail)
+            else:
+                base = node
+            cfg = node_to_cfg.get(node) or node_to_cfg.get(base)
             if cfg is None:
                 entry.update(config_type=None, config={"_raw_hex": blob.hex()},
                              note="node not in schema")

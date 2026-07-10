@@ -78,3 +78,24 @@ def test_apply_transform_digest_filter():
     assert out["nodes"]["n2"]["config"]["x"] == 2   # untouched (digest filter)
     assert out["nodes"]["n3"]["config"]["x"] == 3   # untouched (type filter)
     assert out["_migrate"]["migrated"] == 1
+
+
+def test_apply_transform_per_instance_keys():
+    """Per-instance keys (`<component>/<instance>`, per commit 37d3acf): each
+    clone is its own snapshot entry with an instance-suffixed key. A transform
+    matches by config_type/digest — the key shape is opaque — so EVERY clone's
+    entry migrates, independently."""
+    snap = {"nodes": {
+        "counter":   {"digest": "old", "config_type": "C", "config": {"x": 1}},
+        "counter/0": {"digest": "old", "config_type": "C", "config": {"x": 2}},
+        "counter/3": {"digest": "old", "config_type": "C", "config": {"x": 3}},
+        "counter/1": {"digest": "new", "config_type": "C", "config": {"x": 4}},  # already migrated
+    }}
+    t = {"config_type": "C", "from_digest": "old", "to_digest": "new",
+         "rules": [{"op": "rename", "from": "x", "to": "y"}]}
+    out = apply_transform(snap, t)
+    for key, want in (("counter", 1), ("counter/0", 2), ("counter/3", 3)):
+        assert out["nodes"][key]["config"] == {"y": want}
+        assert out["nodes"][key]["digest"] == "new"
+    assert out["nodes"]["counter/1"]["config"] == {"x": 4}  # digest filter holds
+    assert out["_migrate"]["migrated"] == 3

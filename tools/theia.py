@@ -734,10 +734,10 @@ def cmd_start(args: list[str]) -> int:
 def _seed_defaults() -> None:
     """Seed declared config defaults into etcd via services/per (first-boot).
 
-    Generates the schema + config-defaults from system/apps/package.art and runs
-    migration/seed.py's idempotent `defaults` action. per must be up and reachable
-    (give it a moment after the supervisor forks it). Best-effort: any failure is
-    logged, never fatal."""
+    Generates the schema + config-defaults from the workspace's .art trees and
+    runs tools/migrate/seed.py's idempotent `defaults` action. per must be up and
+    reachable (give it a moment after the supervisor forks it). Best-effort: any
+    failure is logged, never fatal."""
     import tempfile
     import time
 
@@ -752,9 +752,15 @@ def _seed_defaults() -> None:
     # dynamically via the probe codec. (Was a single system/apps/package.art →
     # FwConfig/PhmConfig/NmConfig/… never reached etcd.)
     arts = sorted((WORKSPACE / "system" / "services").glob("*/package.art"))
-    demo_art = WORKSPACE / "system" / "demo" / "package.art"
-    if demo_art.exists():
-        arts.append(demo_art)
+    # The workspace's OWN app packages (system/<name>/{package,component}.art) —
+    # any config{} their nodes declare seeds the same way the FCs' do. Skip the
+    # aggregator and the services dir (already globbed above). parse_file merges
+    # sibling pairs, so listing both siblings just re-yields the same configs
+    # (the merge dedupes by node key).
+    for pat in ("*/package.art", "*/component.art"):
+        for a in sorted((WORKSPACE / "system").glob(pat)):
+            if a.parent.name != "services":
+                arts.append(a)
     if not arts:
         return
     tmp = Path(tempfile.gettempdir())
@@ -793,8 +799,16 @@ def _seed_defaults() -> None:
         # in (after the etcd connect). Retry the (idempotent) seed until it lands
         # or a ~20s budget runs out — the ConnectionError on a not-yet-bound per
         # is the expected early miss, not a real failure.
-        seed = [sys.executable, str(WORKSPACE / "migration" / "seed.py"),
-                "defaults", "--defaults", str(defs), "--schema", str(schema)]
+        # seed.py is FRAMEWORK tooling (tools/migrate/ — it moved out of the
+        # retired demo/migration/); the workspace only supplies the .art trees.
+        seed_py = THEIA_ROOT / "tools" / "migrate" / "seed.py"
+        if not seed_py.is_file():
+            print("theia: seed skipped — tools/migrate/seed.py not found "
+                  f"under {THEIA_ROOT}.", file=sys.stderr)
+            return
+        seed = [sys.executable, str(seed_py), "defaults",
+                "--defaults", str(defs), "--schema", str(schema),
+                "--workspace", str(WORKSPACE)]
         for attempt in range(7):
             time.sleep(3.0)
             if subprocess.call(seed, stdout=subprocess.DEVNULL,
@@ -803,7 +817,7 @@ def _seed_defaults() -> None:
                       file=sys.stderr)
                 return
         print("theia: config-defaults seed did not land within ~20s "
-              "(per slow to start?) — non-fatal; run `migration/seed.py "
+              "(per slow to start?) — non-fatal; run `tools/migrate/seed.py "
               "defaults` manually.", file=sys.stderr)
     except Exception as e:  # noqa: BLE001 — best-effort, never fail the start
         print(f"theia: config-defaults seed errored ({e}) — non-fatal.",

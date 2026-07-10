@@ -155,15 +155,24 @@ PY
 # migration/ dir, so this is a no-op for the common (free-swap) case.
 _run_migration() {
     work="$1"
-    mig="$(ls "$work"/migration/*.py 2>/dev/null | head -1 || true)"
-    [ -n "$mig" ] || { echo "theia-swp: no migration (free-swap SWP)"; return 0; }
-    echo "theia-swp: running migration $(basename "$mig") (MAJOR — .art interface change)"
-    if python3 "$mig" "$THEIA_ROOT"; then
-        echo "theia-swp: migration $(basename "$mig") OK"
-    else
-        echo "theia-swp: migration $(basename "$mig") FAILED — aborting install" >&2
-        return 1
-    fi
+    any=""
+    # SORTED: 00-migrate-config.py (the per config-migration driver — Snapshot
+    # + MigrateBulk per step, see migration/migration.json) runs FIRST, then
+    # any hand-authored v<F>-to-v<T>.py. Each is invoked `python3 <mig>
+    # <THEIA_ROOT>`; the first non-zero ABORTS the install (Mender rolls back).
+    for mig in $(ls "$work"/migration/*.py 2>/dev/null | sort || true); do
+        [ -f "$mig" ] || continue
+        any=1
+        echo "theia-swp: running migration $(basename "$mig") (MAJOR — .art interface change)"
+        if python3 "$mig" "$THEIA_ROOT"; then
+            echo "theia-swp: migration $(basename "$mig") OK"
+        else
+            echo "theia-swp: migration $(basename "$mig") FAILED — aborting install" >&2
+            return 1
+        fi
+    done
+    [ -n "$any" ] || echo "theia-swp: no migration (free-swap SWP)"
+    return 0
 }
 
 # The RUNTIME the installed theia-runtime deb reports (M.m.p), or "" if the deb
@@ -348,6 +357,12 @@ case "$STATE" in
     # later runtime install / debug can read what landed).
     mkdir -p "$rec/manifest"
     cp -af "$work/manifest/." "$rec/manifest/" 2>/dev/null || true
+    # keep the migration part (driver + migration.json + plugins) so
+    # ArtifactRollback can restore the pre-migration config snapshot.
+    if [ -d "$work/migration" ]; then
+        rm -rf "$rec/migration"
+        cp -a "$work/migration" "$rec/migration"
+    fi
     echo "$art" > "$rec/.artifact"
     if [ -f "$srcexec" ] && [ -n "$procs" ]; then
         _merge_executor "$swp" "$srcexec" "$procs"
@@ -376,6 +391,18 @@ case "$STATE" in
         for d in psp lib; do
             [ -d "$rec/prev-$d" ] && { rm -rf "$CURRENT/$d"; cp -a "$rec/prev-$d" "$CURRENT/$d"; }
         done
+        # Config rollback: the migration driver restores the pre-update per
+        # snapshot (RestoreSnapshot "pre-<artifact>"). A failure here is LOUD
+        # but does not block the SW restore — a rolled-back box with migrated
+        # config needs operator attention, not a wedged Mender state; the
+        # deployment log carries the error.
+        if [ -f "$rec/migration/00-migrate-config.py" ]; then
+            if python3 "$rec/migration/00-migrate-config.py" "$THEIA_ROOT" --rollback; then
+                echo "theia-swp: config snapshot restored (pre-update per state)"
+            else
+                echo "theia-swp: CONFIG ROLLBACK FAILED — SW restored but the per config may still be at the NEW shape; restore snapshot 'pre-$(cat "$rec/.artifact" 2>/dev/null)' manually (tdb / PerManager.RestoreSnapshot)" >&2
+            fi
+        fi
         echo "theia-swp: ROLLBACK SWP '$swp' (executor + binaries + assets restored)"
         _reload_supervisor
     else

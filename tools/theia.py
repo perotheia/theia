@@ -2949,7 +2949,7 @@ def cmd_release_swp(args: list[str]) -> int:
     # options (e.g. `--to 2.0.0` must not make "2.0.0" the app).
     _VALUE_OPTS = {"--swp-version", "--app-version", "--fleet", "--arch", "--machine",
                    "--s3", "--from", "--to", "--requires-runtime", "--migration",
-                   "--asset", "--env", "--sign-key"}
+                   "--from-schema", "--asset", "--env", "--sign-key"}
     _skip = {i + 1 for i, a in enumerate(args)
              if a in _VALUE_OPTS and i + 1 < len(args)}
     app = next((a for i, a in enumerate(args)
@@ -3125,6 +3125,56 @@ def cmd_release_swp(args: list[str]) -> int:
     print(f"theia release-swp: {app} v{app_ver} abi={abi or 'host'} fleet={fleet} "
           f"arch={arch} machine={machine} procs={app_procs}", file=sys.stderr)
 
+    # ── Config-migration gate + schema publish (OTA config migration). ─────────
+    # EVERY release stages its gen-schema output (schema.json) in the artifact +
+    # S3 dir, so the NEXT release has authoritative FROM digests. A --migrate
+    # release fetches the FROM version's schema.json (S3, or --from-schema
+    # <path>), diffs shape digests per config_type, and REFUSES to ship if any
+    # changed config lacks a REVIEWED transform in apps/<app>/migrations/
+    # (scaffold with `artheia gen-migration`). The matched steps cross-build as
+    # per-dlopen plugin .so's below and ship in the migration/ part. See
+    # docs/tasks/TODO/ota-config-migration.md.
+    new_schema = _gen_swp_schema(app)
+    config_steps: "list[dict]" = []
+    if is_major:
+        from_ver_g = (base if "--patch" in args else _opt("--from")) or ""
+        old_schema = _resolve_from_schema(
+            _opt("--from-schema"), s3_url, fleet, app, from_ver_g, abi)
+        if old_schema is None:
+            print("theia release-swp --migrate: cannot resolve the FROM "
+                  "version's schema.json (no --from-schema, and the S3 package "
+                  "plane has none for "
+                  f"{app}/{from_ver_g or '?'}) — the config-migration gate "
+                  "needs it. Older releases published no schema: pass "
+                  "--from-schema <gen-schema output of the OLD tree>.",
+                  file=sys.stderr)
+            return 2
+        if new_schema is None:
+            print("theia release-swp --migrate: gen-schema produced no schema "
+                  "for the current tree — cannot gate.", file=sys.stderr)
+            return 2
+        config_steps, gate_errs = _config_migration_gate(
+            app, old_schema, new_schema)
+        if gate_errs:
+            print("theia release-swp --migrate: CONFIG-MIGRATION GATE refused "
+                  "the release:", file=sys.stderr)
+            for e in gate_errs:
+                print(f"  - {e}", file=sys.stderr)
+            print(f"  scaffold/refresh transforms with:\n"
+                  f"    artheia gen-migration --from {old_schema} "
+                  f"--to {new_schema} --out apps/{app}/migrations/\n"
+                  f"  then RESOLVE every _review note and re-run.",
+                  file=sys.stderr)
+            return 2
+        if config_steps:
+            print(f"theia release-swp: config-migration gate OK — "
+                  f"{len(config_steps)} transform(s) to ship: "
+                  + ", ".join(st['config_type'] for st in config_steps),
+                  file=sys.stderr)
+        else:
+            print("theia release-swp: config-migration gate OK — no config "
+                  "shape changed (code-only major).", file=sys.stderr)
+
     # ── Resolve each process's bazel package prefix. A Software Package is the
     #    user's WHOLE multi-composition deliverable: an SWP spans as many
     #    compositions as it has process groups (a composition == ONE executable;
@@ -3153,6 +3203,45 @@ def cmd_release_swp(args: list[str]) -> int:
                     f"--platforms={platform}"])) != 0:
         print("theia release-swp: SWP FC build failed.", file=sys.stderr)
         return rc
+
+    # ── Cross-build the config-migration plugins (same --platforms as the FCs).
+    #    gen-transform regenerates each <node>_vF_to_vT.cc from its reviewed
+    #    transform.json (deterministic; the _custom.cc sidecar is write-once),
+    #    then bazel builds the managed migration_plugin() targets. ──────────────
+    plugin_sos: "dict[str, Path]" = {}          # plugin file name -> built path
+    if config_steps:
+        mig_dir = WORKSPACE / "apps" / app / "migrations"
+        build_f = mig_dir / "BUILD.bazel"
+        if not build_f.is_file():
+            print(f"theia release-swp --migrate: {build_f} missing — "
+                  f"`artheia gen-migration` scaffolds it (managed plugin "
+                  f"entries + the :pb_hdr/:pb_c preamble).", file=sys.stderr)
+            return 2
+        assert new_schema is not None
+        for st in config_steps:
+            tj = mig_dir / st["transform"]
+            cc = tj.with_suffix(".cc")
+            if (rc := _run(["artheia", "gen-transform", str(tj),
+                            "--out", str(cc),
+                            "--schema", str(new_schema)])) != 0:
+                print(f"theia release-swp: gen-transform {tj.name} failed.",
+                      file=sys.stderr)
+                return rc
+        so_targets = sorted({f"//apps/{app}/migrations:libper_migrate_"
+                             f"{st['node']}.so" for st in config_steps})
+        if (rc := _run(["bazel", "build", *so_targets,
+                        f"--platforms={platform}"])) != 0:
+            print("theia release-swp: migration-plugin build failed.",
+                  file=sys.stderr)
+            return rc
+        for st in config_steps:
+            so = (WORKSPACE / "bazel-bin" / "apps" / app / "migrations" /
+                  f"libper_migrate_{st['node']}.so")
+            if not so.is_file():
+                print(f"theia release-swp: built plugin missing at {so}.",
+                      file=sys.stderr)
+                return 1
+            plugin_sos[st["plugin"]] = so
 
     # ── Stage the SWP overlay tree: bin/<fc> (ALL compositions) + swp.json +
     #    version.txt. The bazel output is named <cluster>; stage it as bin/<proc>
@@ -3279,11 +3368,42 @@ def cmd_release_swp(args: list[str]) -> int:
         _sh.copy2(migration_src, stage / "migration" / migration_name)
         print(f"theia release-swp: packed migration {migration_name} into the SWP",
               file=sys.stderr)
+    # (c2) schema.json — EVERY release publishes its config shapes so the NEXT
+    # --migrate release has authoritative FROM digests (the gate's input).
+    if new_schema is not None and Path(new_schema).is_file():
+        _sh.copy2(new_schema, stage / "schema.json")
+    # (c3) The CONFIG-migration part: the per-dlopen plugin .so's + their
+    # reviewed transform.json's + migration.json (the step manifest) + the
+    # driver (00- prefix → the theia-swp module runs it FIRST, before any
+    # hand-authored migration .py). The driver Snapshots, MigrateBulk's each
+    # step, and on ArtifactRollback restores the snapshot.
+    if config_steps:
+        mdir_stage = stage / "migration"
+        mdir_stage.mkdir(exist_ok=True)
+        driver_src = THEIA_ROOT / "platform" / "runtime" / "ota" / "migrate-config.py"
+        _sh.copy2(driver_src, mdir_stage / "00-migrate-config.py")
+        for st in config_steps:
+            _sh.copy2(plugin_sos[st["plugin"]], mdir_stage / st["plugin"])
+            _sh.copy2(WORKSPACE / "apps" / app / "migrations" / st["transform"],
+                      mdir_stage / st["transform"])
+        (mdir_stage / "migration.json").write_text(json.dumps(
+            {"artifact": artifact_name,
+             "steps": [{k: st[k] for k in
+                        ("config_type", "from_digest", "to_digest",
+                         "plugin", "transform")} for st in config_steps]},
+            indent=2) + "\n")
+        print(f"theia release-swp: packed config-migration part "
+              f"({len(config_steps)} step(s) + driver + plugins)",
+              file=sys.stderr)
     # The plane-index fields the GS catalog reads, all DERIVED from the manifest.
     swp_meta = {"abi": abi, "arity": arity, "roles": roles, "on": swp_on,
                 "requires_runtime": requires_runtime,
                 # (d) record the migration + major flag on the index.
-                "migration": migration_name, "major": bool(is_major)}
+                "migration": migration_name, "major": bool(is_major),
+                # (e) the config transforms the SWP applies (GS catalog surface).
+                "config_transforms": [
+                    {k: st[k] for k in ("config_type", "from_digest", "to_digest")}
+                    for st in config_steps]}
 
     # ── Pack the Mender artifact (theia-swp module). Reuse mender-artifact if
     #    present; else leave the staged tree + a tarball for the GW to pack. ─────
@@ -3651,6 +3771,127 @@ def cmd_release_role(args: list[str]) -> int:
                 return 1
             print(f"theia release-role: published → {dst}", file=sys.stderr)
     return 0
+
+
+
+
+def _gen_swp_schema(app: str) -> "Path | None":
+    """gen-schema over the SWP app's .art → dist/apps/<app>/schema.json.
+
+    The schema (config_type → shape digest) is the config-migration gate's
+    input; EVERY release stages+publishes it so the next release can diff.
+    None when the app has no .art (nothing config-bearing) or gen fails."""
+    art = None
+    for leaf in ("package.art", "component.art"):
+        cand = WORKSPACE / "system" / app / leaf
+        if cand.is_file():
+            art = cand
+            break
+    if art is None:
+        return None
+    out = WORKSPACE / "dist" / "apps" / app / "schema.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    if _run(["artheia", "gen-schema", str(art), "--out", str(out)]) != 0:
+        print(f"theia release-swp: gen-schema {art} failed — no schema.json "
+              "will ship with this release.", file=sys.stderr)
+        return None
+    return out
+
+
+def _resolve_from_schema(explicit: "str | None", s3_url: "str | None",
+                         fleet: str, app: str, from_ver: str,
+                         abi: str) -> "Path | None":
+    """The FROM version's schema.json for the config-migration gate: an
+    explicit --from-schema path, else fetched from the S3 package plane
+    (user-software/<fleet>/<app>/<from_ver>[-<abi>]/schema.json)."""
+    import os
+    import subprocess
+    if explicit:
+        pth = Path(explicit)
+        return pth if pth.is_file() else None
+    if not (s3_url and from_ver and shutil.which("aws")):
+        return None
+    bucket = os.environ.get("THEIA_SWP_BUCKET", "theia-swp")
+    env = {**os.environ,
+           "AWS_ACCESS_KEY_ID": os.environ.get("MINIO_USER", "theia"),
+           "AWS_SECRET_ACCESS_KEY": os.environ.get("MINIO_PASSWORD", "theiaminio"),
+           "AWS_DEFAULT_REGION": "us-east-1"}
+    dest = WORKSPACE / "dist" / "apps" / app / f"schema-from-{from_ver}.json"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    # the version dir is abi-keyed for cross-built boards; try both spellings.
+    for vk in ([f"{from_ver}-{abi}"] if abi else []) + [from_ver]:
+        key = f"user-software/{fleet}/{app}/{vk}/schema.json"
+        r = subprocess.run(["aws", "--endpoint-url", s3_url, "s3", "cp",
+                            f"s3://{bucket}/{key}", str(dest)],
+                           env=env, capture_output=True, text=True)
+        if r.returncode == 0 and dest.is_file():
+            return dest
+    return None
+
+
+def _config_migration_gate(app: str, old_schema: "Path",
+                           new_schema: "Path") -> "tuple[list[dict], list[str]]":
+    """Diff the two schemas' shape digests; match every CHANGED config to a
+    REVIEWED transform in apps/<app>/migrations/. Returns (steps, errors) —
+    any error refuses the release (`theia release-swp --migrate`).
+
+    A transform matches when its config_type + from/to digests equal the
+    actual diff and it carries no unresolved `_review` notes (the
+    gen-migration scaffold flags every heuristic guess with one)."""
+    import json as _json
+    old = _json.loads(Path(old_schema).read_text())
+    new = _json.loads(Path(new_schema).read_text())
+    oc, nc = old.get("configs", {}), new.get("configs", {})
+    changed = [(ct, oc[ct].get("digest", ""), nc[ct].get("digest", ""))
+               for ct in nc if ct in oc
+               and oc[ct].get("digest") != nc[ct].get("digest")]
+    if not changed:
+        return [], []
+
+    # Index the workspace's transform files by config_type.
+    mig_dir = WORKSPACE / "apps" / app / "migrations"
+    transforms: dict = {}
+    for tj in sorted(mig_dir.glob("*.json")) if mig_dir.is_dir() else []:
+        try:
+            doc = _json.loads(tj.read_text())
+        except Exception:  # noqa: BLE001
+            continue
+        if isinstance(doc, dict) and doc.get("config_type"):
+            transforms[doc["config_type"]] = (tj, doc)
+
+    def _has_review(x) -> bool:
+        if isinstance(x, dict):
+            return any(k == "_review" or _has_review(v) for k, v in x.items())
+        if isinstance(x, list):
+            return any(_has_review(v) for v in x)
+        return False
+
+    steps: list[dict] = []
+    errs: list[str] = []
+    for ct, frm, to in changed:
+        got = transforms.get(ct)
+        if got is None:
+            errs.append(f"config '{ct}' shape changed ({frm} → {to}) but no "
+                        f"transform for it in {mig_dir}/")
+            continue
+        tj, doc = got
+        if (doc.get("from_digest"), doc.get("to_digest")) != (frm, to):
+            errs.append(f"{tj.name}: STALE — declares "
+                        f"{doc.get('from_digest')} → {doc.get('to_digest')}, "
+                        f"actual diff is {frm} → {to} (re-scaffold: delete + "
+                        f"gen-migration)")
+            continue
+        if _has_review(doc):
+            errs.append(f"{tj.name}: unresolved _review note(s) — confirm the "
+                        f"scaffold's guesses, remove the notes")
+            continue
+        nodes = (nc.get(ct, {}).get("nodes") or [])
+        node = nodes[0] if nodes else ct.lower()
+        steps.append({"config_type": ct, "from_digest": frm, "to_digest": to,
+                      "node": node,
+                      "plugin": f"libper_migrate_{node}.so",
+                      "transform": tj.name})
+    return steps, errs
 
 
 def _publish_swp_plane(s3_url: str, fleet: str, app: str, ver: str,

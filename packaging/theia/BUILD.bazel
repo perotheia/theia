@@ -82,6 +82,9 @@ pkg_deb(
     postinst = _RUNTIME_POSTINST,
     files = {
         "//platform/supervisor/main:supervisor": "/opt/theia/bin/supervisor",
+        # on-device config-migration executor for the SWP overlay path (C++, no
+        # probe) — the theia-swp module calls it; see tools/theia_migrate.
+        "//tools/theia_migrate:theia-migrate": "/opt/theia/bin/theia-migrate",
     },
 )
 

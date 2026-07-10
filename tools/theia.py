@@ -3388,15 +3388,15 @@ def cmd_release_swp(args: list[str]) -> int:
     if new_schema is not None and Path(new_schema).is_file():
         _sh.copy2(new_schema, stage / "schema.json")
     # (c3) The CONFIG-migration part: the per-dlopen plugin .so's + their
-    # reviewed transform.json's + migration.json (the step manifest) + the
-    # driver (00- prefix → the theia-swp module runs it FIRST, before any
-    # hand-authored migration .py). The driver Snapshots, MigrateBulk's each
-    # step, and on ArtifactRollback restores the snapshot.
+    # reviewed transform.json's + migration.json (the step manifest). This is
+    # DATA for the on-device executor — the migration runs in C++ inside
+    # UcmGate (EvInstalled: Snapshot + MigrateBulk from the staged release,
+    # per the P4 redesign), NOT a python driver. The probe/artheia env does
+    # NOT ship to rigs, so NO python runs on-device; UcmGate reads exactly
+    # these files from releases/<ver>/migration/.
     if config_steps:
         mdir_stage = stage / "migration"
         mdir_stage.mkdir(exist_ok=True)
-        driver_src = THEIA_ROOT / "platform" / "runtime" / "ota" / "migrate-config.py"
-        _sh.copy2(driver_src, mdir_stage / "00-migrate-config.py")
         for st in config_steps:
             _sh.copy2(plugin_sos[st["plugin"]], mdir_stage / st["plugin"])
             _sh.copy2(WORKSPACE / "apps" / app / "migrations" / st["transform"],
@@ -3408,7 +3408,7 @@ def cmd_release_swp(args: list[str]) -> int:
                          "plugin", "transform")} for st in config_steps]},
             indent=2) + "\n")
         print(f"theia release-swp: packed config-migration part "
-              f"({len(config_steps)} step(s) + driver + plugins)",
+              f"({len(config_steps)} step(s) + plugins; UcmGate executes)",
               file=sys.stderr)
     # The plane-index fields the GS catalog reads, all DERIVED from the manifest.
     swp_meta = {"abi": abi, "arity": arity, "roles": roles, "on": swp_on,

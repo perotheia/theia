@@ -32,6 +32,11 @@ struct UcmGateState {
     uint32_t    kind  = 0;      // UpdateKind (0=SOFTWARE, 1=CONFIG)
     uint32_t    scope = 0;      // UpdateScope (0=FULL, 1=PARTIAL)
     bool        verifying = false;
+    // This cycle ran the release's config migration (Snapshot + MigrateBulk) —
+    // EvFailed then restores the pre-<version> snapshot. Also re-derived from
+    // the staged release's migration/ dir on rollback, so a reboot between
+    // migrate and rollback still restores.
+    bool        config_migrated = false;
 
     // Two-phase commit. confirm_window_ms > 0 (from the manifest `requires`
     // "confirm=<ms>") means: after the clean verify window, HOLD in PROVISIONAL

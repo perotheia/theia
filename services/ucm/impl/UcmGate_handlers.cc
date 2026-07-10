@@ -31,6 +31,14 @@ THEIA_DECLARE_REMOTE_CODEC(system_services_per_PutConfigReq)
 THEIA_DECLARE_REMOTE_CODEC(system_services_per_GetConfigReq)
 THEIA_DECLARE_REMOTE_CODEC(system_services_per_ConfigSnapshot)
 THEIA_DECLARE_REMOTE_CODEC(system_services_per_PerReply)
+// PerManager ops (config migration): Snapshot / MigrateBulk / RestoreSnapshot.
+THEIA_DECLARE_REMOTE_CODEC(system_services_per_SnapshotReq)
+THEIA_DECLARE_REMOTE_CODEC(system_services_per_RestoreSnapshotReq)
+THEIA_DECLARE_REMOTE_CODEC(system_services_per_MigrateBulkReq)
+
+#include "nlohmann/json.hpp"     // migration.json (the SWP artifact's step manifest)
+#include <fstream>
+#include <vector>
 
 #include <algorithm>
 #include <chrono>
@@ -149,6 +157,118 @@ struct PerLink {
         return true;
     }
 };
+
+// Singleton link to per's PerManager (Snapshot/MigrateBulk/Restore — the config
+// migration surface). Mirrors PerLink; distinct address 0x80010016.
+struct PerManLink {
+    struct PerManagerTag { static constexpr const char* kNodeName = "per_manager"; };
+    using PerManRef = ::theia::runtime::RemoteRef<PerManagerTag, 0x80010016u, 0u>;
+    PerManRef               ref;
+    ::theia::runtime::TipcMux mux;
+    bool                    started = false;
+    std::mutex              mu;
+    static PerManLink& instance() { static PerManLink l; return l; }
+    bool ensure_started() {
+        if (started) return true;
+        if (!ref.connect(/*timeout_ms=*/2000)) return false;
+        mux.watch_remote_ref(ref);
+        mux.start();
+        started = true;
+        return true;
+    }
+};
+
+// ─── Config migration (OTA) ─────────────────────────────────────────────────
+// A --migrate SWP/release ships migration/{migration.json, libper_migrate_*.so,
+// *.json transforms} in its release dir (theia release-swp packs it; see
+// docs/tasks ota-config-migration). UCM executes it: Snapshot("pre-<ver>") →
+// MigrateBulk per step (per dlopen's the plugin FROM THE STAGED RELEASE — the
+// n+1 reshape code runs inside the deployed n per) — BEFORE the switch, so the
+// new binaries never read old-shape config. ROLLBACK restores the snapshot.
+// No probe, no python: this IS the production path (Mender staged rollout →
+// theia-swp/theia-release module → UCM lifecycle → here).
+
+struct MigrationStep {
+    std::string config_type, from_digest, to_digest, plugin;
+};
+
+// releases/<ver>/migration/migration.json → steps ([] when the release ships
+// no migration — the common free-swap case). A present-but-unparsable manifest
+// returns nullopt: fail CLOSED (a migration we can't read must abort, not
+// silently skip).
+bool load_migration_steps(const ReleaseLayout& l, const std::string& ver,
+                          std::vector<MigrationStep>* out) {
+    const std::string dir = l.releases + "/" + ver + "/migration";
+    std::ifstream f(dir + "/migration.json");
+    if (!f.good()) return true;                    // no migration part → 0 steps
+    try {
+        nlohmann::json doc = nlohmann::json::parse(f);
+        for (const auto& st : doc.at("steps")) {
+            MigrationStep m;
+            m.config_type = st.at("config_type").get<std::string>();
+            m.from_digest = st.at("from_digest").get<std::string>();
+            m.to_digest   = st.at("to_digest").get<std::string>();
+            m.plugin      = st.at("plugin").get<std::string>();
+            out->push_back(std::move(m));
+        }
+        return true;
+    } catch (const std::exception&) {
+        return false;                              // unreadable manifest → abort
+    }
+}
+
+// One PerManager call (encode req → call → PerReply.status==0). Returns false
+// on link/call/status failure; `what` labels the log line.
+template <typename ReqT>
+bool per_manager_call(const ReqT& req, const pb_msgdesc_t* /*fields*/,
+                      const char* what, std::string* err) {
+    auto& link = PerManLink::instance();
+    std::lock_guard<std::mutex> lk(link.mu);
+    if (!link.ensure_started()) { *err = "per_manager unreachable"; return false; }
+    auto result = ::theia::runtime::call<system_services_per_PerReply>(
+        link.ref, req, 0, 5000);
+    if (result.tag != ::theia::runtime::CallTag::Reply) {
+        *err = std::string(what) + ": no reply";
+        return false;
+    }
+    if (result.reply.status != 0) {
+        *err = std::string(what) + ": " + result.reply.message;
+        return false;
+    }
+    return true;
+}
+
+// Snapshot the config store (the rollback anchor). Label = "pre-<ver>".
+bool per_snapshot(const std::string& label, std::string* err) {
+    system_services_per_SnapshotReq req = system_services_per_SnapshotReq_init_zero;
+    std::snprintf(req.label, sizeof(req.label), "%s", label.c_str());
+    return per_manager_call(req, system_services_per_SnapshotReq_fields,
+                            "Snapshot", err);
+}
+
+bool per_restore(const std::string& label, std::string* err) {
+    system_services_per_RestoreSnapshotReq req =
+        system_services_per_RestoreSnapshotReq_init_zero;
+    std::snprintf(req.label, sizeof(req.label), "%s", label.c_str());
+    return per_manager_call(req, system_services_per_RestoreSnapshotReq_fields,
+                            "RestoreSnapshot", err);
+}
+
+bool per_migrate_bulk(const MigrationStep& st, const std::string& plugin_abs,
+                      std::string* err) {
+    system_services_per_MigrateBulkReq req =
+        system_services_per_MigrateBulkReq_init_zero;
+    std::snprintf(req.config_type, sizeof(req.config_type), "%s",
+                  st.config_type.c_str());
+    std::snprintf(req.from_digest, sizeof(req.from_digest), "%s",
+                  st.from_digest.c_str());
+    std::snprintf(req.to_digest, sizeof(req.to_digest), "%s",
+                  st.to_digest.c_str());
+    std::snprintf(req.plugin_so, sizeof(req.plugin_so), "%s",
+                  plugin_abs.c_str());
+    return per_manager_call(req, system_services_per_MigrateBulkReq_fields,
+                            "MigrateBulk", err);
+}
 
 // Encode the marker as a system_services_ucm_UcmActivation + PutConfig it to per.
 void write_marker(const std::string& /*root*/, const Marker& m) {
@@ -598,6 +718,43 @@ void UcmGate::handle_cast(const EvInstalled& /*msg*/, UcmGateState& s) {
     }
 
     // Software Package.
+    //
+    // CONFIG MIGRATION runs FIRST — before the current→releases/<ver> switch —
+    // so the new binaries never read old-shape config. Steps ride the staged
+    // release (migration/migration.json + plugin .so, packed by `theia
+    // release-swp --migrate`). Snapshot("pre-<ver>") is the rollback anchor;
+    // EvFailed restores it. MigrateBulk is idempotent (CAS on digest==from),
+    // so a zonal board's repeat — or a Mender retry — is a no-op.
+    {
+        std::vector<MigrationStep> steps;
+        if (!load_migration_steps(l, s.version, &steps)) {
+            this->log().warn("config migration manifest unreadable — rolling back");
+            step("EvFailed", EvFailed{});
+            return;
+        }
+        if (!steps.empty()) {
+            std::string err;
+            if (!per_snapshot("pre-" + s.version, &err)) {
+                this->log().warn(std::string("config migration: snapshot failed (")
+                                 + err + ") — rolling back");
+                step("EvFailed", EvFailed{});
+                return;
+            }
+            for (const auto& st : steps) {
+                const std::string so =
+                    l.releases + "/" + s.version + "/migration/" + st.plugin;
+                if (!per_migrate_bulk(st, so, &err)) {
+                    this->log().warn(std::string("config migration: ") + err +
+                                     " — rolling back");
+                    step("EvFailed", EvFailed{});
+                    return;
+                }
+                this->log().info(std::string("config migrated: ") +
+                    st.config_type + " " + st.from_digest + " → " + st.to_digest);
+            }
+            s.config_migrated = true;
+        }
+    }
     const bool full = (s.scope == 0u /*US_FULL*/);
     if (full) {
         if (!switch_full(l, s.version)) {
@@ -648,6 +805,29 @@ void UcmGate::handle_cast(const EvFailed& /*msg*/, UcmGateState& s) {
     s.provisioning = false;
     clear_marker(s.releases_root);   // a rollback drops the provisional marker
     ReleaseLayout l(s.releases_root);
+    // CONFIG rollback first: if this cycle migrated (or the staged release
+    // ships a migration part — the disk-derived check survives a reboot),
+    // restore the pre-update snapshot. There is no reverse edge — the
+    // snapshot IS the reverse. Failure is LOUD but never blocks the SW
+    // rollback below (an inconsistent box needs the old binaries back first;
+    // the log carries the operator action).
+    {
+        std::vector<MigrationStep> steps;
+        const bool had_migration =
+            load_migration_steps(l, s.version, &steps) && !steps.empty();
+        if (s.config_migrated || had_migration) {
+            std::string err;
+            if (per_restore("pre-" + s.version, &err)) {
+                this->log().warn(std::string("ROLLBACK: config restored from "
+                    "snapshot pre-") + s.version);
+            } else {
+                this->log().error(std::string("ROLLBACK: CONFIG RESTORE FAILED (")
+                    + err + ") — config may be AHEAD of the rolled-back SW; "
+                    "restore snapshot 'pre-" + s.version + "' manually");
+            }
+            s.config_migrated = false;
+        }
+    }
     if (s.scope == 0u /*US_FULL*/) {
         if (rollback_full(l))
             this->log().warn(std::string("ROLLBACK: current → previous (was v") +

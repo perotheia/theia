@@ -52,5 +52,8 @@ cc_library(
     ],
     deps = [
         "//services/ucm/lib:ucm_lib",
+        # migration.json (the OTA config-migration step manifest UcmGate
+        # executes at EvInstalled) — HAND-OWNED dep, keep on regen.
+        "//third_party:nlohmann_json",
     ],
 )

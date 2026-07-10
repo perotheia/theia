@@ -30,6 +30,22 @@ struct VucmGateState {
     // This board's own machine name (THEIA_MACHINE) — the single-board fallback.
     std::string              self_board = "central";
 
+    // ── Update admission (the AUTHORIZING conjunction; VucmConfig knobs) ─────
+    // enforce_* false = observe-only (lab default). last_* track the live
+    // SM/NM/PHM edges; UINT32_MAX = never seen (blocks when enforced).
+    bool     enforce_sm  = false;
+    bool     enforce_nm  = false;
+    bool     enforce_phm = false;
+    uint32_t min_net_state    = 6;          // NETWORK_OPERATIONAL
+    uint32_t window_start_min = 0;          // garage window, minutes-of-day UTC
+    uint32_t window_end_min   = 0;          // 0/0 = no window
+    bool     require_user_confirm = false;  // force the PROVISIONAL confirm leg
+    uint32_t last_sm  = 0xFFFFFFFFu;        // SmState
+    uint32_t last_nm  = 0xFFFFFFFFu;        // NetState
+    uint32_t last_phm = 0u;                 // HealthLevel (0 OK — absent = OK)
+    // An admission-blocked campaign re-checks on a timer (authorize poll).
+    bool     authorize_pending = false;
+
     // ── Active campaign (empty campaign_id == idle) ─────────────────────────
     std::string campaign_id;
     std::string version;

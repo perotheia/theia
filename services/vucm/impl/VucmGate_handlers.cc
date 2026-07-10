@@ -31,6 +31,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <map>
 #include <mutex>
 #include <sstream>
@@ -362,6 +363,14 @@ void VucmGate::init(VucmGateState& s) {
     s.cfg_boards        = split_boards(cfg.str("boards", ""));
     s.confirm_budget_ms = cfg.u32("confirm_budget_ms", 120000);
     s.bundle_base       = cfg.str("bundle_base", "");
+    // Update-admission knobs (AUTHORIZING conjunction + garage window).
+    s.enforce_sm           = cfg.u32("enforce_sm", 0) != 0;
+    s.enforce_nm           = cfg.u32("enforce_nm", 0) != 0;
+    s.enforce_phm          = cfg.u32("enforce_phm", 0) != 0;
+    s.min_net_state        = cfg.u32("min_net_state", 6);
+    s.window_start_min     = cfg.u32("window_start_min", 0);
+    s.window_end_min       = cfg.u32("window_end_min", 0);
+    s.require_user_confirm = cfg.u32("require_user_confirm", 0) != 0;
     // board_instances: the explicit board→machine-index map ("central:0,compute:1")
     // so connect_instance(idx) reaches the right board's UCM without depending on
     // the cluster machine manifest being deployed.
@@ -372,7 +381,7 @@ void VucmGate::init(VucmGateState& s) {
     s.campaign_id.clear();
     this->log().info(std::string("vucm gate up — board=") + s.self_board +
                      " roster=" + std::to_string(s.cfg_boards.size()) +
-                     " (L4-B campaign orchestrator)");
+                     " (vehicle campaign orchestrator)");
 
     // L4-C.4 RECOVERY: a supervisor restart (step 5) or coordinator reboot wiped
     // our in-memory campaign. Read the persisted campaign back from the shared
@@ -397,6 +406,18 @@ void VucmGate::init(VucmGateState& s) {
 //      PROVISIONAL marker; ALL PROVISIONAL → EvProvisioned + fan Confirm;
 //      budget exceeded → EvFailed + fan Cancel.
 void VucmGate::handle_info(const char* info, VucmGateState& s) {
+    // Admission re-check: a BLOCKED campaign (vehicle moving / tunnel /
+    // outside the window) retries until admitted or operator-cancelled.
+    if (info && std::strcmp(info, "authorize_poll") == 0) {
+        s.authorize_pending = false;
+        if (!s.campaign_id.empty() &&
+            s.last_state ==
+                system_services_vucm_CampaignState_CampaignState_CMP_PLANNING) {
+            to_gate(EvPlanned{});   // re-enter AUTHORIZING via the gate chain
+            to_fsm("EvPlanned", EvPlanned{});
+        }
+        return;
+    }
     if (!info || std::strcmp(info, "confirm_poll") != 0) return;
     if (s.campaign_id.empty() || s.boards.empty()) return;
 
@@ -513,6 +534,47 @@ DecisionReply VucmGate::handle_call(const RollbackRequest& req, VucmGateState& s
 //      PLANNING/AUTHORIZING legs (the SM/PHM go/no-go gates are observed via
 //      from_sm/from_phm; a real deny would post EvBlocked / EvFailed instead).
 
+// ── Update admission (AUTHORIZING) ──────────────────────────────────────────
+// The conjunction the vehicle must satisfy BEFORE a campaign fans out:
+//   SM  — machine RUNNING (a moving/updating/shutting-down vehicle blocks);
+//   NM  — network ≥ min_net_state (no SW update mid-tunnel / degraded link);
+//   PHM — health < DEGRADED;
+//   garage window — minutes-of-day UTC, start>end spans midnight; 0/0 = open.
+// Each gate is enforce-flagged (VucmConfig) — observe-only by default (lab),
+// so enabling is a config/policy act, not a code change. A denial posts
+// EvBlocked (→ CMP_PLANNING) and arms a re-check poll: the campaign starts by
+// itself when the vehicle parks / the tunnel ends / the window opens.
+namespace {
+constexpr uint32_t kAuthPollMs = 5000;
+
+bool in_window(uint32_t start_min, uint32_t end_min) {
+    if (start_min == 0 && end_min == 0) return true;      // no window configured
+    std::time_t t = std::time(nullptr);
+    std::tm tm{};
+    gmtime_r(&t, &tm);
+    const uint32_t now = static_cast<uint32_t>(tm.tm_hour * 60 + tm.tm_min);
+    if (start_min <= end_min) return now >= start_min && now < end_min;
+    return now >= start_min || now < end_min;             // spans midnight
+}
+}  // namespace
+
+// "" when admitted; else the (log-ready) denial reason.
+static std::string admission_denied(const VucmGateState& s) {
+    if (s.enforce_sm && s.last_sm != 2u /*RUNNING*/)
+        return "SM state " + std::to_string(s.last_sm) + " != RUNNING";
+    if (s.enforce_nm && (s.last_nm == 0xFFFFFFFFu || s.last_nm < s.min_net_state
+                         || s.last_nm == 3u /*DEGRADED*/))
+        return "NM state " + std::to_string(s.last_nm) + " < required "
+               + std::to_string(s.min_net_state);
+    if (s.enforce_phm && s.last_phm >= 2u /*DEGRADED*/)
+        return "PHM level " + std::to_string(s.last_phm) + " unhealthy";
+    if (!in_window(s.window_start_min, s.window_end_min))
+        return "outside the update window ("
+               + std::to_string(s.window_start_min) + "–"
+               + std::to_string(s.window_end_min) + " min UTC)";
+    return "";
+}
+
 void VucmGate::handle_cast(const EvDeployment& /*msg*/, VucmGateState& s) {
     s.last_state = system_services_vucm_CampaignState_CampaignState_CMP_PLANNING;
     to_fsm("EvPlanned", EvPlanned{});         // PLANNING → AUTHORIZING
@@ -521,6 +583,22 @@ void VucmGate::handle_cast(const EvDeployment& /*msg*/, VucmGateState& s) {
 
 void VucmGate::handle_cast(const EvPlanned& /*msg*/, VucmGateState& s) {
     s.last_state = system_services_vucm_CampaignState_CampaignState_CMP_AUTHORIZING;
+    const std::string denied = admission_denied(s);
+    if (!denied.empty()) {
+        this->log().warn(std::string("campaign ") + s.campaign_id +
+                         ": admission BLOCKED — " + denied +
+                         " (re-checking every " + std::to_string(kAuthPollMs) +
+                         "ms)");
+        to_fsm("EvBlocked", EvBlocked{});     // AUTHORIZING → PLANNING (hold)
+        s.last_state = system_services_vucm_CampaignState_CampaignState_CMP_PLANNING;
+        if (!s.authorize_pending) {
+            s.authorize_pending = true;
+            ::theia::runtime::send_after(::theia::runtime::process_timers(),
+                                         kAuthPollMs, *this, "authorize_poll");
+        }
+        return;
+    }
+    s.authorize_pending = false;
     to_fsm("EvAuthorized", EvAuthorized{});   // AUTHORIZING → INSTALLING
     to_gate(EvAuthorized{});
 }
@@ -537,9 +615,14 @@ void VucmGate::handle_cast(const EvAuthorized& /*msg*/, VucmGateState& s) {
     this->log().info(std::string("campaign ") + s.campaign_id +
                      ": INSTALLING — fanning RequestUpdate to " +
                      std::to_string(s.boards.size()) + " boards");
+    // Garage-mode policy: the user/operator confirm leg is mandatory — force a
+    // confirm window so every board HOLDS PROVISIONAL (CommitCampaign is the
+    // confirm surface) even if the deployment declared none.
+    uint32_t confirm_ms = s.confirm_budget_ms;
+    if (s.require_user_confirm && confirm_ms == 0) confirm_ms = 900000;
     for (const auto& b : s.boards) {
         bool ok = ucm_request_update(b, s.version, s.campaign_id, s.scope,
-                                     s.confirm_budget_ms, s.bundle_base);
+                                     confirm_ms, s.bundle_base);
         this->log().info(std::string("  → board ") + b + ": RequestUpdate " +
                          (ok ? "accepted" : "UNREACHABLE/rejected"));
     }
@@ -595,12 +678,22 @@ void VucmGate::handle_cast(const EvFailed& /*msg*/, VucmGateState& s) {
     s.boards.clear();
 }
 
-// ---- Observed foreign edges (SM authorize / PHM validate). Lab: log only.
-void VucmGate::handle_cast(const SmStateMsg& /*msg*/, VucmGateState& /*s*/) {
-    std::fprintf(stderr, "[%s] SM state observed\n", kNodeName);
+// ---- Observed foreign edges — the ADMISSION inputs. Recorded always;
+//      enforcement is the VucmConfig enforce_* flags (observe-only default).
+void VucmGate::handle_cast(const SmStateMsg& msg, VucmGateState& s) {
+    if (s.last_sm != static_cast<uint32_t>(msg.state))
+        this->log().info(std::string("SM state → ") +
+                         std::to_string(static_cast<uint32_t>(msg.state)));
+    s.last_sm = static_cast<uint32_t>(msg.state);
 }
-void VucmGate::handle_cast(const PhmHealthStatus& /*msg*/, VucmGateState& /*s*/) {
-    std::fprintf(stderr, "[%s] PHM health observed\n", kNodeName);
+void VucmGate::handle_cast(const NmStatusMsg& msg, VucmGateState& s) {
+    if (s.last_nm != static_cast<uint32_t>(msg.state))
+        this->log().info(std::string("NM state → ") +
+                         std::to_string(static_cast<uint32_t>(msg.state)));
+    s.last_nm = static_cast<uint32_t>(msg.state);
+}
+void VucmGate::handle_cast(const PhmHealthStatus& msg, VucmGateState& s) {
+    s.last_phm = msg.level;
 }
 
 }  // namespace ara::vucm

@@ -59,6 +59,7 @@ using EvValidated = system_services_vucm_EvValidated;
 using EvBlocked = system_services_vucm_EvBlocked;
 using EvFailed = system_services_vucm_EvFailed;
 using SmStateMsg = system_services_sm_SmStateMsg;
+using NmStatusMsg = system_services_nm_NmStatusMsg;
 using PhmHealthStatus = system_services_phm_PhmHealthStatus;
 
 // statem block declared in .art — see the corresponding StateMBase
@@ -216,6 +217,8 @@ public:
     void handle_cast(const EvFailed& msg, VucmGateState& s);
 
     void handle_cast(const SmStateMsg& msg, VucmGateState& s);
+
+    void handle_cast(const NmStatusMsg& msg, VucmGateState& s);
 
     void handle_cast(const PhmHealthStatus& msg, VucmGateState& s);
 

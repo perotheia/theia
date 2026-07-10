@@ -27,6 +27,7 @@ import system.services.ucm.*
 // SM authorizes (vehicle-state go/no-go) + PHM validates (health go/no-go). Reuse
 // their real types so the cross-package service_ids line up (the SM/PHM idiom).
 import system.services.sm.*
+import system.services.nm.*
 import system.services.phm.*
 
 // per is the shared-etcd config store. V-UCM reads each board's PROVISIONAL marker
@@ -36,7 +37,7 @@ import system.services.per.*
 
 // ─── Campaign state ──────────────────────────────────────────────────────────
 
-// A fleet campaign's lifecycle. VUCM owns this; UCM owns the per-artifact install
+// A VEHICLE campaign's lifecycle. VUCM owns this; UCM owns the per-artifact install
 // FSM one layer down. PLANNING: a deployment arrived from Mender; AUTHORIZING:
 // gate on SM-state + PHM-health; INSTALLING: every board's UCM is executing
 // (RequestUpdate fanned out); CONFIRMING: the L4-B two-phase-commit barrier — all
@@ -58,7 +59,7 @@ enum CampaignState {
     CMP_INSTALLING  = 3   // every board's UCM is downloading/verifying/staging/installing
     CMP_CONFIRMING  = 7   // waiting for EVERY board to reach PROVISIONAL (the barrier)
     CMP_AWAITING_COMMIT = 8 // ALL boards PROVISIONAL — HOLDING for the operator's commit (L4-C)
-    CMP_VALIDATING  = 4   // post-confirm fleet health confirm
+    CMP_VALIDATING  = 4   // post-confirm vehicle health confirm
     CMP_DONE        = 5   // campaign succeeded; reported to fleet
     CMP_ROLLBACK    = 6   // a step failed; UCM(s) rolled back; failure reported
 }
@@ -137,6 +138,10 @@ interface senderReceiver CampaignStream {
 // ─── Foreign edges (reused real types from the imports) ──────────────────────
 
 // SM authorize edge: VUCM observes the vehicle state to decide go/no-go. The real
+// NmStatusStream (from nm) carries NmStatusMsg; the AUTHORIZING admission gates
+// on network readiness — no SW update mid-tunnel / on a degraded link.
+interface senderReceiver NmStatusStream { data NmStatusMsg status }
+
 // SmStateStream (from sm) carries SmStateMsg; VucmCampaign gates the campaign on it
 // (DRIVING → postpone; CHARGING/SERVICE/READY → allow). Receiver — SM informs.
 interface senderReceiver SmStateStream { data SmStateMsg sm_state }
@@ -204,7 +209,8 @@ node atomic VucmCampaign {
     }
 }
 
-// The fleet ingress + orchestrator. tipc 0x8001005E. The ONLY TIPC-reachable VUCM
+// The VEHICLE ingress + orchestrator (VUCM = Vehicle UCM; the FLEET side is
+// Mender + the GS — deploy/vucm/fleet.py). tipc 0x8001005E. The ONLY TIPC-reachable VUCM
 // surface: serves VucmCtlIf (Mender/com), receives SM-state + PHM-health, and
 // post_event()s the campaign lifecycle into VucmCampaign. requires_timers for the
 // authorize-retry / validate window.
@@ -216,6 +222,7 @@ node atomic VucmGate {
         server   ctl       provides VucmCtlIf          // Mender → com gRPC → here
         receiver lifecycle requires VucmLifecycleIn    // in-process FSM events
         receiver from_sm   requires SmStateStream      // SM authorizes (vehicle state)
+        receiver from_nm   requires NmStatusStream      // NM authorizes (connectivity)
         receiver from_phm  requires PhmHealthStream     // PHM validates (health)
     }
 }
@@ -254,4 +261,25 @@ message VucmConfig {
     // RequestUpdate manifest artifact_path; each board's UCM resolves its role
     // slice <bundle_base>/<role>.mender + runs `mender install` of it.
     string bundle_base [max_size:200]
+    // ── Update admission (the AUTHORIZING conjunction) ───────────────────────
+    // Enforce the SM gate: the machine must be RUNNING to start a campaign.
+    // false = observe-only (the lab default until the vehicle policy is set).
+    bool enforce_sm = false
+    // Enforce the NM gate: network state must be ≥ min_net_state (NetState
+    // ordinal; 6 = NETWORK_OPERATIONAL). No SW update mid-tunnel: a DEGRADED /
+    // LINK-only network blocks and the campaign re-plans until it recovers.
+    bool   enforce_nm    = false
+    uint32 min_net_state = 6
+    // Enforce the PHM gate: health level must be < 2 (OK/WARNING) to start.
+    bool enforce_phm = false
+    // ── Garage window (the AAOS analogue; 0/0 = no window, always allowed) ──
+    // Minutes-of-day UTC; start > end spans midnight (e.g. 1380/300 = 23:00 →
+    // 05:00). A campaign outside the window HOLDS in PLANNING and re-plans.
+    uint32 window_start_min = 0
+    uint32 window_end_min   = 0
+    // Require the user/operator confirm leg: force a confirm window on every
+    // fanned RequestUpdate (boards HOLD PROVISIONAL → CMP_AWAITING_COMMIT →
+    // CommitCampaign is the confirm surface), even if the deployment didn't
+    // ask for one.
+    bool require_user_confirm = false
 }

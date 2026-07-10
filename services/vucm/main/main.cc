@@ -235,6 +235,7 @@ int main(int argc, char** argv) {
         config_mux.register_cast<EvBlocked>(vucm_gate_cfg, vucm_gate);
         config_mux.register_cast<EvFailed>(vucm_gate_cfg, vucm_gate);
         config_mux.register_cast<SmStateMsg>(vucm_gate_cfg, vucm_gate);
+        config_mux.register_cast<NmStatusMsg>(vucm_gate_cfg, vucm_gate);
         config_mux.register_cast<PhmHealthStatus>(vucm_gate_cfg, vucm_gate);
         // PG (manual pub/sub, OTP shape): attach this statem node's PgClient to
         // its demux binding (joined-group frames + PgMembership pushes route into

@@ -29,6 +29,7 @@
 #include "system/services/ucm/ucm.pb.h"
 #include "system/services/per/per.pb.h"
 #include "system/services/sm/sm.pb.h"
+#include "system/services/nm/nm.pb.h"
 #include "system/services/phm/phm.pb.h"
 
 
@@ -136,6 +137,10 @@ THEIA_DECLARE_REMOTE_CODEC(system_services_vucm_EvFailed)
 #ifndef THEIA_CODEC_system_services_sm_SmStateMsg
 #define THEIA_CODEC_system_services_sm_SmStateMsg
 THEIA_DECLARE_REMOTE_CODEC(system_services_sm_SmStateMsg)
+#endif
+#ifndef THEIA_CODEC_system_services_nm_NmStatusMsg
+#define THEIA_CODEC_system_services_nm_NmStatusMsg
+THEIA_DECLARE_REMOTE_CODEC(system_services_nm_NmStatusMsg)
 #endif
 #ifndef THEIA_CODEC_system_services_phm_PhmHealthStatus
 #define THEIA_CODEC_system_services_phm_PhmHealthStatus

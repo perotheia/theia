@@ -701,6 +701,21 @@ def cmd_start(args: list[str]) -> int:
     sup_argv = ["./supervisor"]
     if machine_instance != "0":
         sup_argv.append(f"--tipc=supervisor_ctl=:{machine_instance}")
+    # Dev-stack TIPC isolation: honor THEIA_TIPC_NETID (same knob theia-run.sh
+    # uses on deployed rigs) — a distinct netid keeps this stack from cross-
+    # talking with another dev's `theia start` sharing this host's namespace.
+    # Best-effort: the netid only changes while no TIPC sockets are up.
+    _netid = os.environ.get("THEIA_TIPC_NETID", "")
+    if _netid:
+        r = subprocess.run(["tipc", "node", "set", "netid", _netid],
+                           capture_output=True, text=True)
+        if r.returncode == 0:
+            print(f"theia: TIPC netid set to {_netid}", file=sys.stderr)
+        else:
+            print(f"theia: WARNING — could not set TIPC netid {_netid} "
+                  f"({(r.stderr or r.stdout).strip()}); sockets already up? "
+                  f"This stack may cross-talk with another cluster.",
+                  file=sys.stderr)
     proc = subprocess.Popen(
         sup_argv, cwd=str(dest), env=env,
         stdout=logf, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,

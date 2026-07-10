@@ -62,4 +62,30 @@ export THEIA_LOG_LEVEL="${THEIA_LOG_LEVEL:-info}"
 # The CHILDREN's libs come from the current release; OTA swaps them with current.
 export LD_LIBRARY_PATH="$THEIA_ROOT_DIR/current/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
+# TIPC netid (cluster id) — per-rig ISOLATION on a shared L2 / shared host ns.
+# A DEPLOY fact like machine_instance: colony passes THEIA_TIPC_NETID per rig
+# (e.g. an e2e/test rig picks a non-default id so a dev's `theia start` on the
+# same wire can't cross-talk); persisted so an OTA relaunch / manual restart
+# recovers it. The netid is per NETWORK NAMESPACE and only changes while no
+# TIPC sockets/bearers are up — best-effort with a LOUD diagnostic: a mismatch
+# means this rig may see (and be seen by) another cluster's services.
+_NETID_FILE="$THEIA_ROOT_DIR/config/tipc_netid"
+if [[ -n "${THEIA_TIPC_NETID:-}" ]]; then
+    printf '%s\n' "$THEIA_TIPC_NETID" > "$_NETID_FILE" 2>/dev/null || true
+elif [[ -r "$_NETID_FILE" ]]; then
+    THEIA_TIPC_NETID="$(cat "$_NETID_FILE")"
+fi
+if [[ -n "${THEIA_TIPC_NETID:-}" ]] && command -v tipc >/dev/null 2>&1; then
+    _cur="$(tipc node get netid 2>/dev/null | head -1 | tr -dc '0-9')"
+    if [[ "$_cur" != "$THEIA_TIPC_NETID" ]]; then
+        if tipc node set netid "$THEIA_TIPC_NETID" 2>/dev/null; then
+            echo "theia-run: TIPC netid set to $THEIA_TIPC_NETID (was ${_cur:-unset})"
+        else
+            echo "theia-run: WARNING — could not set TIPC netid $THEIA_TIPC_NETID" \
+                 "(current ${_cur:-unknown}; sockets/bearers already up?). This rig" \
+                 "may cross-talk with another cluster on this namespace." >&2
+        fi
+    fi
+fi
+
 exec "$THEIA_ROOT_DIR/bin/supervisor" "$@"

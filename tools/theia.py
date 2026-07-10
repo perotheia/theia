@@ -3941,7 +3941,15 @@ def _publish_swp_plane(s3_url: str, fleet: str, app: str, ver: str,
 
     subprocess.run([*aws, "mb", f"s3://{bucket}"], env=env)  # idempotent
     objs = []
-    for f in (mender, tarball):
+    # schema.json — the config-shape digests THIS release publishes. The NEXT
+    # release's --migrate gate fetches it as the FROM schema (S3 <ver>/schema.json),
+    # so it MUST land on the plane, not just in the .mender payload. Staged next to
+    # the tarball at _stage/schema.json.
+    schema_json = (tarball.parent / "_stage" / "schema.json") if tarball else None
+    upload = [mender, tarball]
+    if schema_json and schema_json.is_file():
+        upload.append(schema_json)
+    for f in upload:
         if f and f.is_file():
             if _aws([*aws, "cp", str(f), f"s3://{bucket}/{key}/{f.name}"]) != 0:
                 return 1

@@ -1,0 +1,19 @@
+# theia-migrate — on-device config migration for the SWP overlay path (C++, no
+# probe/python). Ships in theia-runtime → /opt/theia/bin/theia-migrate; the
+# theia-swp update module calls it instead of the retired python driver.
+# Reuses the runtime's RemoteRef/TipcMux + the per nanopb proto, exactly as
+# UcmGate's EvInstalled migration does.
+load("@rules_cc//cc:defs.bzl", "cc_binary")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_binary(
+    name = "theia-migrate",
+    srcs = ["theia_migrate.cc"],
+    copts = ["-std=c++17", "-Wall", "-Wextra"],
+    deps = [
+        "//platform/runtime:runtime",       # RemoteRef / TipcMux / call<>
+        "//platform/proto:platform_protos",  # system/services/per/per.pb.h (nanopb)
+        "//third_party:nlohmann_json",       # migration.json
+    ],
+)

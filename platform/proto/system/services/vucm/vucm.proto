@@ -104,5 +104,6 @@ message VucmConfig {
     uint32 window_start_min = 11;
     uint32 window_end_min = 12;
     bool require_user_confirm = 13;
+    bool auto_confirm_in_window = 14;
 }
 

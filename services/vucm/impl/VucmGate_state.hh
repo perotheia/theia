@@ -40,6 +40,7 @@ struct VucmGateState {
     uint32_t window_start_min = 0;          // garage window, minutes-of-day UTC
     uint32_t window_end_min   = 0;          // 0/0 = no window
     bool     require_user_confirm = false;  // force the PROVISIONAL confirm leg
+    bool     auto_confirm_in_window = false; // garage case 2: pre-consent → auto-Confirm in-window
     uint32_t last_sm  = 0xFFFFFFFFu;        // SmState
     uint32_t last_nm  = 0xFFFFFFFFu;        // NetState
     uint32_t last_phm = 0u;                 // HealthLevel (0 OK — absent = OK)

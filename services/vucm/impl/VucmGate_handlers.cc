@@ -354,6 +354,18 @@ std::vector<std::string> split_boards(const std::string& csv) {
 
 constexpr unsigned kPollMs = 2000;   // confirm-poll cadence
 
+
+// True iff `now` (UTC minutes-of-day) is inside [start,end); start>end
+// spans midnight; 0/0 = always (no window). Shared by admission + auto-confirm.
+bool in_window(uint32_t start_min, uint32_t end_min) {
+    if (start_min == 0 && end_min == 0) return true;      // no window configured
+    std::time_t t = std::time(nullptr);
+    std::tm tm{};
+    gmtime_r(&t, &tm);
+    const uint32_t now = static_cast<uint32_t>(tm.tm_hour * 60 + tm.tm_min);
+    if (start_min <= end_min) return now >= start_min && now < end_min;
+    return now >= start_min || now < end_min;             // spans midnight
+}
 }  // namespace
 
 // ---- OTP init/1 — publish the gate peer + read the campaign config. ---------
@@ -371,6 +383,7 @@ void VucmGate::init(VucmGateState& s) {
     s.window_start_min     = cfg.u32("window_start_min", 0);
     s.window_end_min       = cfg.u32("window_end_min", 0);
     s.require_user_confirm = cfg.u32("require_user_confirm", 0) != 0;
+    s.auto_confirm_in_window = cfg.u32("auto_confirm_in_window", 0) != 0;
     // board_instances: the explicit board→machine-index map ("central:0,compute:1")
     // so connect_instance(idx) reaches the right board's UCM without depending on
     // the cluster machine manifest being deployed.
@@ -428,12 +441,25 @@ void VucmGate::handle_info(const char* info, VucmGateState& s) {
     }
 
     if (provisional == s.boards.size()) {
-        // L4-C: all boards PROVISIONAL → HOLD for the operator (do NOT auto-confirm).
-        // V-UCM reports AWAITING_COMMIT; the GS operator audits + commits/rolls back.
+        s.confirm_ticks = 0;
+        // GARAGE AUTO-CONFIRM (case 2): the user consented up front, so once
+        // every board is PROVISIONAL AND we're inside the window, VUCM fires
+        // the aggregate Confirm ITSELF (pre-consent IS the confirm) — the
+        // vehicle "finishes before morning" with no live operator. PROVISIONAL's
+        // deadline still auto-cancels a stuck board, and a broken update still
+        // rolls back downstream (PHM verify / migration fail).
+        if (s.auto_confirm_in_window &&
+            in_window(s.window_start_min, s.window_end_min)) {
+            this->log().info(std::string("campaign ") + s.campaign_id + ": ALL " +
+                             std::to_string(s.boards.size()) +
+                             " boards PROVISIONAL, in-window — AUTO-CONFIRM (garage)");
+            to_gate(EvCommit{});   // → fan Confirm to every board → VALIDATING
+            return;
+        }
+        // Case 1 (operator-first): HOLD for a live CommitCampaign/Rollback.
         this->log().info(std::string("campaign ") + s.campaign_id + ": ALL " +
                          std::to_string(s.boards.size()) +
                          " boards PROVISIONAL — AWAITING OPERATOR COMMIT");
-        s.confirm_ticks = 0;
         s.last_state = system_services_vucm_CampaignState_CampaignState_CMP_AWAITING_COMMIT;
         write_campaign(s.campaign_id, s.version, s.scope, "AWAITING_COMMIT", s.boards);
         to_fsm("EvProvisioned", EvProvisioned{});   // CMP_CONFIRMING → CMP_AWAITING_COMMIT
@@ -544,19 +570,7 @@ DecisionReply VucmGate::handle_call(const RollbackRequest& req, VucmGateState& s
 // so enabling is a config/policy act, not a code change. A denial posts
 // EvBlocked (→ CMP_PLANNING) and arms a re-check poll: the campaign starts by
 // itself when the vehicle parks / the tunnel ends / the window opens.
-namespace {
-constexpr uint32_t kAuthPollMs = 5000;
-
-bool in_window(uint32_t start_min, uint32_t end_min) {
-    if (start_min == 0 && end_min == 0) return true;      // no window configured
-    std::time_t t = std::time(nullptr);
-    std::tm tm{};
-    gmtime_r(&t, &tm);
-    const uint32_t now = static_cast<uint32_t>(tm.tm_hour * 60 + tm.tm_min);
-    if (start_min <= end_min) return now >= start_min && now < end_min;
-    return now >= start_min || now < end_min;             // spans midnight
-}
-}  // namespace
+namespace { constexpr uint32_t kAuthPollMs = 5000; }  // namespace
 
 // "" when admitted; else the (log-ready) denial reason.
 static std::string admission_denied(const VucmGateState& s) {

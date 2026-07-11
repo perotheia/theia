@@ -211,6 +211,11 @@ node atomic PerManager {
         // backup files (<dir>/<label>.persnap). CONFIG-SCOPED, not a full etcd
         // snapshot: just per's /theia/config/ keyspace, so restore is a safe
         // live re-put with no cluster disruption.
-        snapshot_dir : string = "/tmp/theia/dbbackup"
+        //
+        // PERSISTENT (under $THEIA_ROOT, not /tmp): an OTA migration's pre-<ver>
+        // snapshot is the rollback anchor, and a mid-update REBOOT must not lose
+        // it (a /tmp dir is wiped on boot → a rolled-back board with no anchor).
+        // theia-migrate/UcmGate write here on the OTA path.
+        snapshot_dir : string = "/opt/theia/dbbackup"
     }
 }

@@ -280,6 +280,15 @@ message VucmConfig {
     // Require the user/operator confirm leg: force a confirm window on every
     // fanned RequestUpdate (boards HOLD PROVISIONAL → CMP_AWAITING_COMMIT →
     // CommitCampaign is the confirm surface), even if the deployment didn't
-    // ask for one.
+    // ask for one. This is CASE 1 (operator-first): rollout → hold → confirm.
     bool require_user_confirm = false
+    // Garage AUTO-confirm (CASE 2, the AAOS "wake at night, finish before
+    // morning"): the user consented UP FRONT, so once all boards are
+    // PROVISIONAL AND clean, VUCM AUTO-fires the aggregate Confirm (→ commit)
+    // WITHOUT waiting for a live CommitCampaign — the pre-consent IS the
+    // confirm. Only honored INSIDE the update window; PROVISIONAL's deadline
+    // still auto-cancels a never-verified update, and a broken update still
+    // rolls back (PHM verify / migration fail → snapshot restore). false =
+    // case 1 (hold for the live operator).
+    bool auto_confirm_in_window = false
 }

@@ -34,10 +34,12 @@
 
 #include <atomic>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <functional>
 #include <map>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -217,6 +219,34 @@ private:
     };
 
     // ---- the supervisor CALL (hand-framed; no supervisor-proto dep) --------
+    //
+    // FAILURE IS LOUD: pg membership is allocated by the SUPERVISOR — there is
+    // no supervisor-less pg. A tester binary run outside a rig gets ok=false
+    // here and the caller's feed silently never arrives, which reads as a
+    // wiring bug (it isn't). The one-shot stderr line below names the real
+    // cause + the working pattern: `theia start` ONE local rig — its
+    // supervisor serves every tester process on the host — and run the other
+    // testers alongside. (One warning per group, not per retry: join is often
+    // polled until the supervisor comes up, and that path must not spam.)
+    void warn_no_supervisor_(const char* what, const char* group_name) {
+        std::lock_guard<std::mutex> lk(mu_);
+        if (!warned_groups_.insert(group_name).second) return;
+        // One buffer, one write(2): two nodes warning concurrently must not
+        // interleave their multi-line messages on the shared stderr.
+        char buf[512];
+        int n = std::snprintf(buf, sizeof(buf),
+            "[PgClient] %s(%s) FAILED for node '%s': no supervisor answered at "
+            "TIPC 0x%X:%u.\n"
+            "  pg groups are allocated by the supervisor — a supervisor-less "
+            "process cannot join/watch pg feeds.\n"
+            "  Fix: `theia start` one rig on this host (its supervisor serves "
+            "all local testers), then run this binary alongside.\n",
+            what, group_name, node_name_.c_str(), kSupTipcType,
+            kSupTipcInstance);
+        if (n > 0)
+            (void)!::write(2, buf, static_cast<size_t>(
+                n < (int)sizeof(buf) ? n : (int)sizeof(buf) - 1));
+    }
     Group call_join_(const char* group_name, bool join) {
         std::string req;
         pb_string(req, 1, node_name_.c_str(), node_name_.size());  // node_name
@@ -225,7 +255,10 @@ private:
         if (join) pb_varint_field(req, 4, 1);                      // join=true
         std::string reply;
         Group g;
-        if (!call_(kJoinSid, req, reply)) return g;
+        if (!call_(kJoinSid, req, reply)) {
+            warn_no_supervisor_(join ? "pg_join" : "pg_resolve", group_name);
+            return g;
+        }
         // PgJoinReply { uint32 status=1; uint32 group_type=2; uint32 instance=3 }
         uint64_t status = 0, type = 0, inst = 0;
         pb_read_uint(reply, 1, status);
@@ -257,7 +290,10 @@ private:
         if (watch) pb_varint_field(req, 5, 1);                     // watch=true
         std::string reply;
         Group g;
-        if (!call_(kWatchSid, req, reply)) return g;
+        if (!call_(kWatchSid, req, reply)) {
+            warn_no_supervisor_("pg_watch", group_name);
+            return g;
+        }
         g.ok = true;
         uint64_t gtype = 0;
         pb_read_uint(reply, 3, gtype);                            // group_type=3
@@ -589,6 +625,7 @@ private:
 
     std::mutex         mu_;
     std::vector<Bound> bound_;               // joined groups (recv sockets)
+    std::set<std::string> warned_groups_;    // one no-supervisor warning per group
     std::atomic<bool>  running_{false};
     std::thread        recv_thread_;
 

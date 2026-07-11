@@ -442,64 +442,6 @@ def _load_install_components(manifest_root: Path, machine: str):
     return _SUPERVISOR_TARGET, binaries
 
 
-def _fc_art_path(fc: str, target: str):
-    """The .art the gen-params emitter reads for an FC.
-
-    Services FCs (``//services/<fc>/...``) live at the canonical symlink path
-    system/services/<fc>/package.art — the FC name IS the dir segment.
-
-    App compositions are resolved from ``system/system.art`` imports: we walk
-    each imported package dir, look for a ``package.art``, and check whether
-    that package's cluster members include *fc* as an ident. This is
-    layout-independent — the user can name their app dir anything; artheia's
-    ``_import_dir`` follows the package FQN to the right dir regardless.
-
-    Returns a Path or None if no art is found (platform FCs carry their own)."""
-    if target.startswith("//services/"):
-        cand = WORKSPACE / "system" / "services" / fc / "package.art"
-        return cand if cand.exists() else None
-
-    if not target.startswith("//apps/"):
-        return None   # platform FCs (gateway) carry their own params path
-
-    # Resolve via system/system.art imports — layout-independent. The user
-    # can name their app dir anything; artheia's _import_dir follows the
-    # package FQN declared in system.art to the right dir regardless.
-    system_art = WORKSPACE / "system" / "system.art"
-    if not system_art.exists():
-        return None
-    try:
-        from artheia.generators._art_clusters import (
-            _extract_package, _extract_imports, _import_dir,
-            _PKG_FILE_PRIORITY,
-        )
-        from artheia.model.loader import parse_file
-    except ImportError:
-        return None
-    entry_pkg = _extract_package(str(system_art))
-    for imp_pkg in _extract_imports(str(system_art)):
-        pkg_dir = _import_dir(system_art, entry_pkg, imp_pkg)
-        if pkg_dir is None or not pkg_dir.is_dir():
-            continue
-        for fname in _PKG_FILE_PRIORITY:
-            cand = pkg_dir / fname
-            if not cand.is_file():
-                continue
-            # Parse package (merges package.art + component.art) and scan
-            # ClusterDecl.elements for a ClusterMember whose ident == fc.
-            try:
-                m = parse_file(str(cand))
-                for el in getattr(m, "elements", []):
-                    if type(el).__name__ == "ClusterDecl":
-                        for member in getattr(el, "elements", []):
-                            if getattr(member, "name", None) == fc:
-                                return cand
-            except Exception:
-                pass
-            break  # one file per pkg dir; move on to next import
-    return None
-
-
 def _install_dir(args: list[str]) -> Path:
     """install/<machine>/ — the machine from the arg, else $THEIA_MACHINE, else
     the single staged machine under install/ (a single-host workspace needs no
@@ -1513,81 +1455,6 @@ def cmd_install(args: list[str]) -> int:
     return _stage_local(dest, sup_src, bins, link=link)
 
 
-_warned_legacy_machine_cfg: set = set()
-
-
-def _warn_legacy_machine_config(machine: str) -> None:
-    """Warn (once per machine) if a stale deploy/config/<machine>/ override dir
-    exists — it is NO LONGER baked into the built artifact.
-
-    Config overrides used to be deep-merged into the gen-params default here, at
-    install/manifest time, keyed by the artheia `machine`. That coupled the
-    build-once artifact to a rig's config and conflated machine (a manifest
-    slice) with rig (a physical deploy target). Overrides are now a DEPLOY-time
-    concern, applied per TARGET by colony's tasks/config-override.yml. A
-    leftover deploy/config/<machine>/ dir is the legacy layout: tell the operator
-    to re-key it under the deploy TARGET name (deploy/registry/<target>.yml) so
-    it's applied at deploy time. Machine-shared config (e.g. central=GPS-
-    grandmaster vs compute=slave) still works — colony also merges
-    deploy/config/<machine>/ at deploy time using the target's resolved machine,
-    just not baked into the artifact."""
-    if machine in _warned_legacy_machine_cfg:
-        return
-    _warned_legacy_machine_cfg.add(machine)
-    legacy = WORKSPACE / "deploy" / "config" / machine
-    if legacy.is_dir() and any(legacy.glob("*.json")):
-        files = ", ".join(sorted(p.name for p in legacy.glob("*.json")))
-        print(
-            f"WARNING: deploy/config/{machine}/ ({files}) is NOT baked into the "
-            f"artifact — config overrides are applied at DEPLOY time, per rig.\n"
-            f"         It still works if a deploy target runs the '{machine}' "
-            f"machine (colony merges it at orchestrate time), but a per-RIG "
-            f"change belongs under deploy/config/<target>/ "
-            f"(deploy/registry/<target>.yml).",
-            file=sys.stderr,
-        )
-
-
-def _emit_fc_config(machine: str, binaries: dict, cfg_dir: Path) -> int:
-    """Emit the per-FC static params JSON (config/<fc>.json) for *machine* into
-    *cfg_dir*, one file per FC that declares a params {} block.
-
-    Read once at boot by the runtime config singleton (init_config(<fc>)
-    resolves $THEIA_CONFIG_DIR/<fc>.json; the supervisor sets
-    THEIA_CONFIG_DIR=config in the child env). A params-less FC emits an empty
-    {nodes:{}} (harmless; lookups default).
-
-    `binaries` maps fc name → its bazel target (so _fc_art_path resolves the
-    .art). gen-params writes the machine-generic default; the hand-written
-    per-machine override deploy/config/<machine>/<fc>.json (partial, same shape)
-    is deep-merged on top so each machine gets its own profile (e.g. tsync
-    central=GPS-grandmaster vs compute=PTP-slave) without forking the .art.
-
-    SHARED by `theia install` (→ install/<machine>/config/) and `theia manifest`
-    (→ dist/manifest/<machine>/config/) so a local stage and a remote deploy
-    ship byte-identical per-FC config. Returns 0 on success, non-zero rc on a
-    gen-params failure.
-
-    The output is the MACHINE-GENERIC default ONLY — no deploy/config override is
-    baked in here. Config overrides are a DEPLOY-time concern (per rig), applied
-    by colony's tasks/config-override.yml against the running device, so the built
-    artifact stays a pure function of (arch, os, version) — never rig-specific.
-    See _warn_legacy_machine_config for the migration warning."""
-    cfg_dir.mkdir(parents=True, exist_ok=True)
-    _warn_legacy_machine_config(machine)
-    for fc, target in binaries.items():
-        art = _fc_art_path(fc, target)
-        if art is None:
-            continue
-        out_json = cfg_dir / f"{fc}.json"
-        if (rc := _run([
-            "artheia", "gen-params", str(art), "--out", str(out_json),
-        ])) != 0:
-            return rc
-    print(f"staged {cfg_dir}/<fc>.json (static params)")
-    return 0
-
-
 def _stage_certs(machines: list[dict], out: Path) -> int:
     """Stage the dev mTLS certs into each target machine's manifest dir.
 
@@ -1624,53 +1491,6 @@ def _stage_certs(machines: list[dict], out: Path) -> int:
             shutil.copy2(certs_src / f, dst / f)
     print(f"theia manifest: staged dev mTLS certs → "
           f"dist/manifest/<machine>/certs/ (from deploy/certs/)", file=sys.stderr)
-    return 0
-
-
-def _emit_machine_config(machine: str, mdir: Path) -> int:
-    """Emit per-FC static params into <mdir>/config/<fc>.json for one machine.
-
-    The deploy counterpart of cmd_install's step 3b: for every buildable FC in
-    THIS machine's application.json, run `gen-params <fc>.art` to write the
-    machine-generic default, then deep-merge the per-machine override
-    deploy/config/<machine>/<fc>.json (if present) on top. The result is what
-    orchestration.pp copies into /opt/theia/config/ so the containerized FC
-    boots with its REAL profile (e.g. tsync central=GPS-grandmaster vs
-    compute=PTP-slave) — not just the .art slave default.
-
-    The emitted config is the MACHINE-GENERIC default (gen-params) ONLY — no
-    deploy/config override is baked in. A per-rig config change (e.g. the rpi4
-    RTK-GPS box disabling ptp4l/gpsd) is a DEPLOY-time concern, applied by
-    colony's tasks/config-override.yml against the device keyed by the deploy
-    TARGET (the rig in deploy/registry/<target>.yml). Keeping it out of the
-    artifact preserves build-once: dist/manifest/<machine>/ is a pure function of
-    (arch, os, version), reused across every rig that runs this machine slice.
-    mdir is the machine's manifest dir (dist/manifest/<machine>)."""
-    import json as _json
-    app = mdir / "application.json"
-    if not app.is_file():
-        return 0
-    data = _json.loads(app.read_text())
-    binaries: dict[str, str] = {}
-    for a in data.get("applications", []):
-        for c in a.get("components", []):
-            if not c.get("bazel_buildable", True):
-                continue
-            name, target = c.get("name"), c.get("bazel_target")
-            if name and target and name != "supervisor":
-                binaries[name] = target
-    cfg_dir = mdir / "config"
-    cfg_dir.mkdir(parents=True, exist_ok=True)
-    _warn_legacy_machine_config(machine)
-    for fc, target in binaries.items():
-        art = _fc_art_path(fc, target)
-        if art is None:
-            continue
-        out_json = cfg_dir / f"{fc}.json"
-        if (rc := _run([
-            "artheia", "gen-params", str(art), "--out", str(out_json),
-        ])) != 0:
-            return rc
     return 0
 
 

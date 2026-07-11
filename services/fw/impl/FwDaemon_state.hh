@@ -38,7 +38,6 @@ struct FwDaemonState {
     int         state          = F_UNKNOWN;
     uint32_t    rule_count     = 0;
     uint32_t    override_count = 0;
-    uint32_t    egress_fc_count = 0;
     std::string message        = "not yet applied";
 
     // PHM health edge-latch: the last health level reported to PHM (-1 = none

@@ -1,10 +1,10 @@
 // SchemaRegistry — the process-global, mutex-guarded config-schema registry.
 //
 // Shared by the two per nodes (like services/log's TraceHub is shared by
-// TraceCtl + TraceStreamPump): PerManager WRITES it (RegisterSchema /
-// ListSchemas) and PerClient READS it (migration-on-read: is the stored digest
-// a known schema for this config_type?). A process-global singleton with a
-// short mutex, so either node thread can touch it safely.
+// TraceCtl + TraceStreamPump): PerManager WRITES it (RegisterSchema) and
+// serves it back (ListSchemas). Migration-on-read goes through
+// MigrationRegistry::migrate, not this registry. A process-global singleton
+// with a short mutex, so either node thread can touch it safely.
 //
 // Keyed by config_type (the node-config message FQN, e.g. "SupervisorConfig"),
 // value = the SET of registered schema digests for that type. The registry is
@@ -43,13 +43,6 @@ public:
         std::lock_guard<std::mutex> lk(mu_);
         types_[config_type].insert(digest);
         return true;
-    }
-
-    // Is this digest a known schema for config_type?
-    bool known(const std::string& config_type, const std::string& digest) const {
-        std::lock_guard<std::mutex> lk(const_cast<std::mutex&>(mu_));
-        auto it = types_.find(config_type);
-        return it != types_.end() && it->second.count(digest) != 0;
     }
 
     // All registered (config_type, digest) pairs, optionally filtered by

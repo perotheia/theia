@@ -31,27 +31,12 @@ RestartType parse_restart_type(const std::string& s) {
     throw std::runtime_error("unknown restart type: " + s);
 }
 
-ChildType parse_child_type(const std::string& s) {
-    if (s == "worker")     return ChildType::Worker;
-    if (s == "supervisor") return ChildType::Supervisor;
-    throw std::runtime_error("unknown child type: " + s);
-}
-
 const char* to_string(RestartStrategy s) {
     switch (s) {
         case RestartStrategy::OneForOne:        return "one_for_one";
         case RestartStrategy::OneForAll:        return "one_for_all";
         case RestartStrategy::RestForOne:       return "rest_for_one";
         case RestartStrategy::SimpleOneForOne:  return "simple_one_for_one";
-    }
-    return "<unknown>";
-}
-
-const char* to_string(RestartType t) {
-    switch (t) {
-        case RestartType::Permanent: return "permanent";
-        case RestartType::Transient: return "transient";
-        case RestartType::Temporary: return "temporary";
     }
     return "<unknown>";
 }

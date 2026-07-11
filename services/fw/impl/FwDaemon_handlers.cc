@@ -61,7 +61,6 @@ void apply_now(FwDaemon& self, FwDaemonState& s) {
         ApplyResult r = apply_ruleset(ruleset, rules, overrides);
         s.rule_count = static_cast<uint32_t>(r.rule_count);
         s.override_count = static_cast<uint32_t>(r.override_count);
-        s.egress_fc_count = static_cast<uint32_t>(egress_fcs);
         s.message = r.message;
         s.state = r.ok ? F_APPLIED : F_DEGRADED;
         if (r.ok) self.log().info("nftables: " + r.message +

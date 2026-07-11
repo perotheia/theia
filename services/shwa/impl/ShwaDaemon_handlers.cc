@@ -153,7 +153,6 @@ void ShwaDaemon::on_config_update(const platform_runtime_ConfigUpdated& cfg,
     s.poll_ms       = c.poll_ms ? c.poll_ms : 2000;
     s.power_mode    = static_cast<int>(c.power_mode);
     s.jetson_clocks = c.jetson_clocks;
-    s.persist       = c.persist;
     log().info(std::string("config: poll_ms=") + std::to_string(s.poll_ms) +
         " power_mode=" + std::to_string(s.power_mode) +
         " jetson_clocks=" + (s.jetson_clocks ? "true" : "false"));

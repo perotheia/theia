@@ -30,11 +30,6 @@ enum class RestartType {
     Temporary,
 };
 
-enum class ChildType {
-    Worker,
-    Supervisor,
-};
-
 // Shutdown is either:
 //   - milliseconds (>= 0) — SIGTERM then SIGKILL after timeout
 //   - kBrutalKill           — immediate SIGKILL, no SIGTERM
@@ -207,9 +202,6 @@ std::unique_ptr<Node> load_manifest(const std::string& path,
 // String <-> enum helpers (used by both loader and logging).
 RestartStrategy parse_strategy(const std::string& s);
 RestartType     parse_restart_type(const std::string& s);
-ChildType       parse_child_type(const std::string& s);
-Shutdown        parse_shutdown(const std::string& s);  // for textual forms
 const char*     to_string(RestartStrategy s);
-const char*     to_string(RestartType t);
 
 }  // namespace supervisor

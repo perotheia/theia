@@ -264,7 +264,6 @@ void TsyncCtl::on_config_update(const platform_runtime_ConfigUpdated& push,
         return;
     }
     s.ptp_interface     = cfg.ptp_interface;
-    s.ptp_domain        = cfg.ptp_domain;
     s.cfg_source        = cfg.source[0] ? cfg.source : "ptp";
     s.poll_ms           = cfg.poll_ms ? cfg.poll_ms : 1000;
     s.lock_offset_ns    = cfg.lock_offset_ns ? cfg.lock_offset_ns : 100000;

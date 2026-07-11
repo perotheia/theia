@@ -46,9 +46,10 @@ struct TsyncCtlState {
     // The provider registry (keyed by RegisterTimeSourceReq.name).
     std::map<std::string, RegisteredTimeSource> sources;
 
-    // Applied config (from TsyncConfig / on_config_update).
+    // Applied config (from TsyncConfig / on_config_update). ptp_domain is NOT
+    // mirrored here: the pmc poller reads the daemon's own state, and ptp4l
+    // gets its domain from its args — the wire field has no in-process reader.
     std::string ptp_interface;
-    uint32_t    ptp_domain = 0;
     std::string cfg_source = "ptp";   // "external" | "ptp" | "system"
     uint32_t    poll_ms = 100;        // deploy param (config/tsync.json); 100 = 10 Hz
     uint32_t    lock_offset_ns = 100000;

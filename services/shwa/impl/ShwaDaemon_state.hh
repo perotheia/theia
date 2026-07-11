@@ -22,7 +22,9 @@ struct ShwaDaemonState {
     uint32_t poll_ms        = 2000;
     int      power_mode     = PM_UNKNOWN;
     bool     jetson_clocks  = false;
-    bool     persist        = false;
+    // NOTE: ShwaConfig.persist (persist nvpmodel across reboots) is accepted
+    // on the wire but NOT implemented — apply_power_mode never consumed it,
+    // so there is no state mirror. Tracked in docs/tasks (shwa persist knob).
 
     // Power-reconcile edge: the last mode we pushed (so we only nvpmodel on a
     // change, not every tick).

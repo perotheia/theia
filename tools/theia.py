@@ -276,15 +276,6 @@ def _rig_status(args: list[str]) -> int:
 
 
 
-def _bazel_root() -> Path:
-    """The dir bazel builds run in. A consuming workspace with its OWN
-    MODULE.bazel (e.g. gataway_ws → @pero_theia) builds in place; an empty /
-    no-bazel workspace builds the framework targets (//platform/...) from
-    THEIA_ROOT (the framework module). So: WORKSPACE if it has MODULE.bazel,
-    else THEIA_ROOT."""
-    return WORKSPACE if (WORKSPACE / "MODULE.bazel").is_file() else THEIA_ROOT
-
-
 def _is_framework_target(target: str) -> bool:
     """A bazel label OWNED by the framework (built in THEIA_ROOT), vs the
     workspace's own app targets. //platform/... and //services/... are the
@@ -347,54 +338,6 @@ def _prebuilt_bin(name: str) -> "Path | None":
     supervisor + the ARA service FCs (com/per/sm/ucm/log/shwa)."""
     p = THEIA_ROOT / "bin" / name
     return p if p.is_file() else None
-
-
-def _discover_rig_module(zonal: bool = False) -> "str | None":
-    """Find the workspace's rig Python module — name-INDEPENDENT, so Theia works
-    in the monorepo (apps.manifest.rig) AND a downstream workspace (manifest.rig)
-    with no hardcoded name.
-
-    Resolution order:
-      1. $THEIA_RIG_MODULE (zonal: $THEIA_ZONAL_RIG_MODULE) — explicit override.
-      2. The single `*/manifest/rig.py` (or zonal_rig.py) under the workspace
-         → its dotted module (apps/manifest/rig.py → apps.manifest.rig;
-         manifest/rig.py → manifest.rig).
-    Returns None if none/ambiguous (caller errors helpfully).
-
-    The "zonal" (2-machine) rig has TWO flavours: test_rig.py (all-x86, for the
-    docker provisioning/orchestration test — the in-repo default) and
-    zonal_rig.py (arm64 rpi4+jetson, real hardware). `theia manifest`/`dist` for
-    docker want the x86 test_rig, so it's PREFERRED here; zonal_rig (hardware) is
-    reached by an explicit module arg or $THEIA_ZONAL_RIG_MODULE."""
-    env = os.environ.get(
-        "THEIA_ZONAL_RIG_MODULE" if zonal else "THEIA_RIG_MODULE")
-    if env:
-        return env
-    # 2-machine: prefer the x86 docker test_rig, fall back to the arm64 zonal_rig.
-    leaves = ["test_rig.py", "zonal_rig.py"] if zonal else ["rig.py"]
-    # Trees that are not the WORKSPACE's deploy rig: vendored repos, the venv,
-    # bazel/build outputs, the framework's own internals (artheia.manifest.*),
-    # and the shipped workspace template.
-    _skip = {"up", ".venv", "bazel-bin", "bazel-out", "external", "vendor",
-             "artheia", "templates", "build", ".git"}
-    # Try each candidate leaf in PREFERENCE order; return the first that resolves
-    # to exactly one module (test_rig before zonal_rig for the 2-machine case).
-    for leaf in leaves:
-        hits = []
-        for p in WORKSPACE.glob(f"**/manifest/{leaf}"):
-            rel = p.relative_to(WORKSPACE)
-            if any(seg in _skip for seg in rel.parts):
-                continue
-            # dotted module = the path minus the .py, dirs joined by '.'
-            hits.append(".".join(rel.with_suffix("").parts))
-        if len(hits) == 1:
-            return hits[0]
-        if len(hits) > 1:
-            # Ambiguous: prefer a top-level `manifest.<leaf>` (downstream conv).
-            top = f"manifest.{leaf[:-3]}"
-            if top in hits:
-                return top
-    return None
 
 
 #: The framework supervisor runtime binary. It is the platform runtime, NOT a
@@ -766,7 +709,7 @@ def _seed_defaults() -> None:
         seed = [sys.executable, str(seed_py), "defaults",
                 "--defaults", str(defs), "--schema", str(schema),
                 "--workspace", str(WORKSPACE)]
-        for attempt in range(7):
+        for _ in range(7):
             time.sleep(3.0)
             if subprocess.call(seed, stdout=subprocess.DEVNULL,
                                stderr=subprocess.DEVNULL) == 0:
@@ -1453,45 +1396,6 @@ def cmd_install(args: list[str]) -> int:
     link = _deb_mode() and all(
         str(p).startswith(str(THEIA_ROOT / "bin")) for p in [sup_src, *bins.values()])
     return _stage_local(dest, sup_src, bins, link=link)
-
-
-def _stage_certs(machines: list[dict], out: Path) -> int:
-    """Stage the dev mTLS certs into each target machine's manifest dir.
-
-    com↔GUI/rtdb run MUTUAL TLS when a CA is pinned. The dev cert set (CA +
-    server + client, self-signed) lives in deploy/certs/, generated ONCE by
-    tools/gen_dev_certs.sh and cached there (regenerating would invalidate any
-    running client). We copy ca.crt + server.{crt,key} + client.{crt,key} into
-    dist/manifest/<machine>/certs/, which the deploy bind-mounts at
-    /etc/theia/manifest/<machine>/certs/; run-supervisor.sh exports THEIA_COM_TLS_*
-    from there so the supervisor's com children serve mTLS, and rtdb/GUI point at
-    the same CA + client identity.
-
-    DEV certs only (self-signed, CN/SAN=localhost+127.0.0.1 — correct for the
-    network_mode:host cluster where clients dial 127.0.0.1). A real deployment
-    swaps in PKI-issued certs (or the crypto-FC engine slot, THEIA_COM_TLS_SLOT)."""
-    certs_src = WORKSPACE / "deploy" / "certs"
-    needed = ["ca.crt", "server.crt", "server.key", "client.crt", "client.key"]
-    if not all((certs_src / f).is_file() for f in needed):
-        gen = WORKSPACE / "tools" / "gen_dev_certs.sh"
-        if not gen.is_file():
-            print("theia manifest: no deploy/certs and no gen_dev_certs.sh — "
-                  "skipping mTLS cert staging (cluster runs INSECURE).",
-                  file=sys.stderr)
-            return 0
-        certs_src.mkdir(parents=True, exist_ok=True)
-        if (rc := _run(["bash", str(gen), str(certs_src), "localhost"])) != 0:
-            return rc
-    for m in machines:
-        if m.get("kind") == "host":
-            continue
-        dst = out / m["name"] / "certs"
-        dst.mkdir(parents=True, exist_ok=True)
-        for f in needed:
-            shutil.copy2(certs_src / f, dst / f)
-    print(f"theia manifest: staged dev mTLS certs → "
-          f"dist/manifest/<machine>/certs/ (from deploy/certs/)", file=sys.stderr)
-    return 0
 
 
 def _stage_local(dest: Path, supervisor_src: str,

@@ -2839,6 +2839,13 @@ def _bump_patch(ver: str) -> str:
     return f"{major}.{minor}.{patch + 1}"
 
 
+def _bump_minor(ver: str) -> str:
+    """major.MINOR.patch → major.(MINOR+1).0 — the config-MIGRATION step (a
+    minor bump within one runtime major). Non-numeric raises (caller reports)."""
+    major, minor, _patch = _semver_parts(ver)
+    return f"{major}.{minor + 1}.0"
+
+
 def _s3_latest_swp_version(s3_url: str, fleet: str, app: str) -> "str | None":
     """The highest published SWP semver for <app> on the package plane, ABI
     stripped (versions are stored as <ver>-<abi>). Reads
@@ -2982,11 +2989,15 @@ def cmd_release_swp(args: list[str]) -> int:
 
     fleet = _opt("--fleet", "theia-rig")
     # --swp-version is canonical; --app-version kept as a back-compat alias.
-    # --patch OVERRIDES both: auto-increment the app's latest published SWP. The app
-    # plane is a FREE swap on a FIXED runtime, so a PATCH bump is the default (no
-    # interface / .art change, no migration). --to gives an explicit target;
-    # crossing a MAJOR is an interface change and is refused without --migrate.
-    is_major = False        # a MAJOR (.art interface) bump — forces pin + migration
+    # VERSION MODEL (user, from the original design — no A/B partition):
+    #   MAJOR  is LINKED TO THE RUNTIME (ABI / .art interface). A major bump is a
+    #          RUNTIME swap → a FRESH deploy of the compatible SWP; config seeds
+    #          from defaults, migration NEVER runs across a major.
+    #   MINOR  is a CONFIG-shape change WITHIN one runtime major — the migratable
+    #          step. `--migrate` ships the config transform; from/to must share a
+    #          major (guarded below). The deploy sequences minors one at a time.
+    #   PATCH  is a FREE swap on a fixed runtime + fixed config shape (no --migrate).
+    is_migrate = "--migrate" in args
     if "--patch" in args:
         s3_for_latest = _opt("--s3")
         explicit_to = _opt("--to")
@@ -3003,41 +3014,36 @@ def cmd_release_swp(args: list[str]) -> int:
                           f"on {fleet!r} (or no --s3/aws) — starting from {base}.",
                           file=sys.stderr)
             try:
-                app_ver = _bump_patch(base)
+                app_ver = _bump_patch(base) if not is_migrate else _bump_minor(base)
             except ValueError:
                 print(f"theia release-swp --patch: base version {base!r} has a "
                       "non-numeric component — pass --to <version> explicitly.",
                       file=sys.stderr)
                 return 2
-        # MAJOR guard: an .art-level interface change is NOT a free app swap. Refuse
-        # to cross a major boundary (relative to the base/latest) without --migrate.
-        try:
-            base_major = _semver_parts(base or "0.0.0")[0]
-            new_major = _semver_parts(app_ver)[0]
-        except ValueError:
-            base_major = new_major = 0
-        is_major = new_major > base_major
-        if is_major and "--migrate" not in args:
-            print(f"theia release-swp --patch: {app_ver} crosses a MAJOR boundary "
-                  f"(from major {base_major}). A major bump is an INTERFACE / .art "
-                  "change — not a free app swap: it needs a migration + a matching "
-                  "runtime (no backward compat). Re-run with --migrate to confirm.",
-                  file=sys.stderr)
-            return 2
-        if is_major:
-            print(f"theia release-swp --patch: WARNING — {app_ver} is a MAJOR bump "
-                  "(.art interface change). --migrate given: a migration step + a "
-                  "runtime pin are REQUIRED; this is NOT a free version swap.",
-                  file=sys.stderr)
         print(f"theia release-swp: {app} {base or '?'} → v{app_ver} "
-              f"({'explicit --to' if explicit_to else 'patch bump'})",
+              f"({'explicit --to' if explicit_to else ('minor/migrate bump' if is_migrate else 'patch bump')})",
               file=sys.stderr)
     else:
         app_ver = _opt("--swp-version") or _opt("--app-version", "0.1.0")
-        # --migrate WITHOUT --patch (explicit --swp-version X.0.0): the operator is
-        # declaring a migration outright — treat it as a major bump (forces the
-        # pin + migration file below), the same contract as the --patch path.
-        is_major = "--migrate" in args
+
+    # MAJOR-BOUNDARY GUARD: config migration is a MINOR step; a --migrate whose
+    # FROM/TO cross a major is a RUNTIME swap, not a migration — deploy the new
+    # SWP FRESH (config seeds from defaults). Refuse it. (from = --from / the
+    # --patch base; without a FROM we can't check, so the gate's schema-diff
+    # below is the backstop.)
+    if is_migrate:
+        _from = (base if "--patch" in args else _opt("--from")) or ""
+        if _from:
+            try:
+                if _semver_parts(_from)[0] != _semver_parts(app_ver)[0]:
+                    print(f"theia release-swp --migrate: {_from} → {app_ver} "
+                          "crosses a MAJOR boundary. Config migration is a MINOR "
+                          "step within one runtime major; a major change is a "
+                          "RUNTIME swap — deploy the compatible SWP FRESH (config "
+                          "seeds from defaults), not a migration.", file=sys.stderr)
+                    return 2
+            except ValueError:
+                pass
     # --arch is a BOARD TARGET (host | rpi4 | jetson), NOT a bare cpu — because the
     # app plane is ABI-keyed exactly like the runtime plane: rpi4=bookworm-arm64 and
     # jetson=focal-arm64 are different aarch64 ABIs (different sysroots, non-
@@ -3059,7 +3065,7 @@ def cmd_release_swp(args: list[str]) -> int:
     # break. Both are MANDATORY on --migrate (the migration may be a no-op stub, but
     # it must EXIST — an explicit, reviewable, shippable artifact).
     migration_src: "Path | None" = None
-    if is_major:
+    if is_migrate:
         # (b) FORCE requires_runtime. A major app pins EXACTLY ONE runtime; refuse to
         # ship a major with an empty pin (the GS gate can't protect an unpinned app).
         if not requires_runtime:
@@ -3151,7 +3157,7 @@ def cmd_release_swp(args: list[str]) -> int:
     # docs/tasks/TODO/ota-config-migration.md.
     new_schema = _gen_swp_schema(app)
     config_steps: "list[dict]" = []
-    if is_major:
+    if is_migrate:
         from_ver_g = (base if "--patch" in args else _opt("--from")) or ""
         old_schema = _resolve_from_schema(
             _opt("--from-schema"), s3_url, fleet, app, from_ver_g, abi)
@@ -3413,8 +3419,11 @@ def cmd_release_swp(args: list[str]) -> int:
     # The plane-index fields the GS catalog reads, all DERIVED from the manifest.
     swp_meta = {"abi": abi, "arity": arity, "roles": roles, "on": swp_on,
                 "requires_runtime": requires_runtime,
-                # (d) record the migration + major flag on the index.
-                "migration": migration_name, "major": bool(is_major),
+                # (d) `major` on the index = "this SWP is runtime-PINNED and
+                # carries a config migration" (the GS pins it + gates on
+                # base_version). It's a --migrate MINOR bump, not a major
+                # version — the name is the GS-side flag for the pinned case.
+                "migration": migration_name, "major": bool(is_migrate),
                 # (e) the config transforms the SWP applies (GS catalog surface).
                 "config_transforms": [
                     {k: st[k] for k in ("config_type", "from_digest", "to_digest")}

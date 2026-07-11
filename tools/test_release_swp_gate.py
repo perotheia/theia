@@ -87,3 +87,18 @@ def test_gate_new_only_config_skipped(tmp_path, monkeypatch):
     new.write_text(json.dumps(_schema({"FRESH": "cfg_x"})))
     steps, errs = theia._config_migration_gate("demo", old, new)
     assert steps == [] and errs == []
+
+
+def test_bump_minor_is_migration_step():
+    """A config migration is a MINOR bump within one runtime major (--patch
+    --migrate → 1.0.0→1.1.0); a plain --patch is a PATCH free swap."""
+    assert theia._bump_patch("1.0.0") == "1.0.1"
+    assert theia._bump_minor("1.0.0") == "1.1.0"
+    assert theia._bump_minor("1.4.9") == "1.5.0"
+
+
+def test_major_is_a_runtime_boundary():
+    """A major change is a runtime swap — from/to majors differ ⇒ NOT a
+    migration (the release-swp guard refuses --migrate across it)."""
+    assert theia._semver_parts("2.0.0")[0] != theia._semver_parts("1.9.0")[0]
+    assert theia._semver_parts("1.5.0")[0] == theia._semver_parts("1.0.0")[0]

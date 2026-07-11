@@ -47,6 +47,18 @@ message GetReply {
 // feeds (a) the migration `add` rule when a field is introduced, and (b) the
 // first-boot config seed (so a node with no stored config starts here, not at
 // proto3 zeros).
+//
+// TAG STABILITY (the migration-safe evolution rule — grammar `reserved`, and
+// field ORDER = the positional proto tag, 1..N in body order). A wire-
+// compatible migration MUST keep every surviving field at its slot:
+//   * RENAME  → change the name IN PLACE (same slot = same tag = a byte no-op;
+//               the `rename` transform rule is bookkeeping for the decoder).
+//   * DELETE  → replace the field with `reserved <oldname>` (holds its tag so
+//               later fields do NOT shift; emits `reserved N;`).
+//   * ADD     → APPEND at the END (a new trailing tag; the `add` rule seeds it).
+// NEVER insert a field mid-body: that shifts every later field's tag and the
+// old payload decodes into the wrong fields (the tag-shift cascade the
+// gen-migration scaffold flags with `_review`, proven live 2026-07-11).
 message CounterConfig {
     uint32 step       = 1            // how much each Inc adds
     uint32 max_value  = 100          // saturate at this

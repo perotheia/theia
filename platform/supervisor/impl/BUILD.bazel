@@ -16,7 +16,6 @@ cc_library(
     name = "supervisor_state",
     hdrs = [
         "SupervisorCtl_state.hh",
-        "SupervisorWorker_state.hh",
     ],
     # The lib #includes these as "impl/<Node>_state.hh", so the include
     # root is the FC out_dir (one above impl/).

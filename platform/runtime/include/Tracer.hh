@@ -128,8 +128,15 @@ inline TraceKind trace_kind_of(TraceEvent e) noexcept {
 // a short mutex (emit() runs on many node threads).
 class TraceSubmitter {
 public:
-    // log[trace] TraceCollector — services/log/system/package.art.
-    static constexpr uint32_t kCollectorTipcType     = 0x80010013u;
+    // log[trace] trace-INGEST address — the SOCK_DGRAM socket TraceStreamPump
+    // binds for in_records. DELIBERATELY DISTINCT from the pump node's own
+    // .art address (0x80010013): that name is also published by the node's
+    // SEQPACKET mux binding, and TIPC anycasts a datagram across ALL
+    // publications of a name — records routed to the SEQPACKET publication
+    // are silently dropped (observed as a 100%-dead firehose). Two sockets,
+    // two names; never share a TIPC name between socket types (the same rule
+    // LogStreamPump's watcher socket follows).
+    static constexpr uint32_t kCollectorTipcType     = 0x80010113u;
     static constexpr uint32_t kCollectorTipcInstance = 0u;
 
     // service_id the collector's in_records registers: djb2_low16 of the

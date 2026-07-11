@@ -270,10 +270,15 @@ node runnable LogStreamPump {
 //     byte pipe: producers in, one multicast out. NO ring (tracecat is a live
 //     tail), NO Subscribe RPC, NO per-subscriber unicast registry.
 
-// Runnable: the raw record stream pump. tipc 0x80010013 (the address Tracer
-// submits to — kCollectorTipcType). `stream_out provides TraceRecordStream`
-// declares the TraceRecord type the pump multicasts — its wire NAME is the PG
-// group identity (msg_type_name<TraceRecord>()) observers pg_join.
+// Runnable: the raw record stream pump. tipc 0x80010013 is the NODE's control
+// address (the SEQPACKET mux bind); the DGRAM record INGEST every Tracer
+// submits to binds a SEPARATE well-known address (kCollectorTipcType =
+// 0x80010113, platform/runtime Tracer.hh) — TIPC anycasts a datagram across
+// all publications of a name, so sharing the node's name with the ingest
+// routed records into the SEQPACKET socket where they were silently dropped.
+// `stream_out provides TraceRecordStream` declares the TraceRecord type the
+// pump multicasts — its wire NAME is the PG group identity
+// (msg_type_name<TraceRecord>()) observers pg_join.
 node runnable TraceStreamPump {
     tipc type=0x80010013 instance=0
     tag = "LOG"

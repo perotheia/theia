@@ -2,7 +2,7 @@
 """Self-test the log[trace] PG migration end-to-end.
 
 Pipeline under test:
-  producer  --(SOCK_DGRAM submit TraceRecord)-->  TraceStreamPump (0x80010013)
+  producer  --(SOCK_DGRAM submit TraceRecord)-->  TraceStreamPump ingest (0x80010113)
             --(PG name-sequence multicast)-->  every observer that pg_joined
 
 Drives it with the LIVE supervisor (PG allocator) + log[trace] (the pump):
@@ -13,10 +13,11 @@ Drives it with the LIVE supervisor (PG allocator) + log[trace] (the pump):
                    all-receive case). Proves the migration kept multi-consumer.
 
 A "producer" here is a raw SOCK_DGRAM sendto of [TheiaMsgHeader][TraceRecord
-proto] to the pump's in_records address (0x80010013) — exactly what every FC's
+proto] to the pump's in_records address (0x80010113 — distinct from the pump
+node's 0x80010013 mux bind, see TraceStreamPump_handlers.cc) — what every FC's
 Tracer::TraceSubmitter does.
 
-Run with supervisor (0x80020001) + log[trace] (0x80010013) already up.
+Run with supervisor (0x80020001) + log[trace] already up.
 """
 import socket
 import sys
@@ -33,7 +34,7 @@ from artheia.observer.observer import TraceObserver             # noqa: E402
 
 LOG_ART = REPO / "system/services/log/component.art"
 PROTO = REPO / "platform/proto"
-PUMP_TYPE = 0x80010013          # TraceStreamPump in_records (Tracer submit addr)
+PUMP_TYPE = 0x80010113          # TraceStreamPump in_records (Tracer submit addr)
 _LOG_PKG = "system.services.log"
 _RECORD = "system_services_log_TraceRecord"
 

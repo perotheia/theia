@@ -15,7 +15,6 @@ package(default_visibility = ["//visibility:public"])
 cc_library(
     name = "diag_state",
     hdrs = [
-        "DoipServer_state.hh",
         "UdsRouter_state.hh",
         "DiagTester_state.hh",
     ],

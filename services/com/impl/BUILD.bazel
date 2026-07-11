@@ -41,7 +41,6 @@ cc_library(
     name = "com_state",
     hdrs = [
         "ComDaemon_state.hh",
-        "ComGrpcProxy_state.hh",
     ],
     # The lib #includes these as "impl/<Node>_state.hh", so the include
     # root is the FC out_dir (one above impl/).

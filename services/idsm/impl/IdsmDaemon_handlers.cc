@@ -5,7 +5,7 @@
 // IdsmDaemon manages the eBPF detector, drains its ring buffer on a tick,
 // normalizes each detection into a TraceRecord (kind=SECURITY), and SUBMITS it
 // to the trace firehose (the same TIPC SOCK_DGRAM path the runtime Tracer uses,
-// to log[trace] @ 0x80010013) so tdb/observer/GUI see security events inline
+// to the log[trace] ingest @ 0x80010113) so tdb/observer/GUI see security events inline
 // with dispatcher traces. Detections at/above escalate_severity also bump the
 // escalation counter (the PHM/SM escalation cast is a future hook). Never in the
 // packet path — the kernel detects, this manages + ingests.

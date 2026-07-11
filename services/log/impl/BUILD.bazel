@@ -16,7 +16,6 @@ cc_library(
     name = "log_state",
     hdrs = [
         "LogDaemon_state.hh",
-        "LogStreamPump_state.hh",
         # TraceStreamPump / LogStreamPump are GenRunnables — the LogStreamPump
         # State header is a write-once stub (runnable has no real state) but the
         # lib #includes it, so it lives in the state target.

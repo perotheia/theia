@@ -1,7 +1,12 @@
 // User do_* bodies for the runnable node TraceStreamPump — the trace hot path.
 //
 // HAND-OWNED. The pump owns its thread + its own AF_TIPC/SOCK_DGRAM receive
-// loop on in_records (0x80010013, the address every node's Tracer submits to).
+// loop on in_records (Tracer::TraceSubmitter::kCollectorTipcType — the address
+// every node's Tracer submits to). That ingest address is DISTINCT from this
+// node's .art address (0x80010013): the node's SEQPACKET mux binding publishes
+// that name too, and TIPC anycasts a datagram across ALL publications of a
+// name — a record routed to the SEQPACKET publication is silently dropped
+// (was a 100%-dead firehose). One name per socket, never shared across types.
 // For each inbound TraceRecord datagram it pulls the RAW proto-wire payload
 // (never decodes — TraceRecord strings/bytes are nanopb pb_callback fields) and
 // PG-MULTICASTS it VERBATIM to the TraceRecord group: one TIPC name-sequence
@@ -35,6 +40,8 @@
 
 #include "TheiaMsgHeader.hh"
 #include "PgClient.hh"          // PG name-sequence multicast egress
+#include "Tracer.hh"            // kCollectorTipcType/-Instance — the ingest addr
+                                // (single source shared with every submitter)
 #include "lib/log_codecs.hh"    // RemoteCodec<system_services_log_TraceRecord>
 
 namespace ara::log {
@@ -66,15 +73,18 @@ int bind_dgram(uint32_t type, uint32_t instance) {
 }  // namespace
 
 void TraceStreamPump::do_start() {
-    std::fprintf(stderr, "[%s] trace pump starting (bind 0x%08x)\n",
-                 kNodeName, kTipcType);
+    std::fprintf(stderr, "[%s] trace pump starting (ingest bind 0x%08x)\n",
+                 kNodeName,
+                 ::theia::runtime::TraceSubmitter::kCollectorTipcType);
 }
 
 void TraceStreamPump::do_loop() {
-    int fd = bind_dgram(kTipcType, kTipcInstance);
+    int fd = bind_dgram(::theia::runtime::TraceSubmitter::kCollectorTipcType,
+                        ::theia::runtime::TraceSubmitter::kCollectorTipcInstance);
     if (fd < 0) {
-        std::fprintf(stderr, "[%s] FAILED to bind 0x%08x — no traces\n",
-                     kNodeName, kTipcType);
+        std::fprintf(stderr, "[%s] FAILED to bind ingest 0x%08x — no traces\n",
+                     kNodeName,
+                     ::theia::runtime::TraceSubmitter::kCollectorTipcType);
         return;
     }
     // PG egress: the pump is the TraceRecord group's broadcaster. Resolve the

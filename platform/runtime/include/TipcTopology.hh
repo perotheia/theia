@@ -65,9 +65,6 @@ public:
     // Stop the thread + close the socket. Idempotent; called by the dtor.
     void stop();
 
-    // Is (type, instance) currently published anywhere in the cluster?
-    bool present(uint32_t type, uint32_t instance) const;
-
     // Snapshot of all currently-present instances of `type` (sorted). Empty if
     // none are up. Lets a consumer enumerate "which machines have shwa right now".
     std::vector<uint32_t> instances_of(uint32_t type) const;

@@ -128,11 +128,6 @@ void TipcTopology::stop() {
     present_.clear();
 }
 
-bool TipcTopology::present(uint32_t type, uint32_t instance) const {
-    std::lock_guard<std::mutex> lk(mu_);
-    return present_.count(key_(type, instance)) > 0;
-}
-
 std::vector<uint32_t> TipcTopology::instances_of(uint32_t type) const {
     std::vector<uint32_t> out;
     std::lock_guard<std::mutex> lk(mu_);

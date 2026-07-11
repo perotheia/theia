@@ -103,8 +103,6 @@ public:
         fd_ = -1;
     }
 
-    bool is_open() const { return fd_ >= 0; }
-
     // Cast one HeartbeatReport now. Best-effort: a send failure (supervisor
     // restarting / not yet bound) is silently dropped; the next tick retries.
     void send_once() {
@@ -192,8 +190,6 @@ public:
         wake_cv_.notify_all();        // break the period wait now, don't wait it out
         if (thread_.joinable()) thread_.join();
     }
-
-    uint64_t seq() const { return seq_.load(); }
 
 private:
     bool connect_locked_() {

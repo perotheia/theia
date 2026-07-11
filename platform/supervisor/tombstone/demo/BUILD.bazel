@@ -1,0 +1,12 @@
+load("@rules_cc//cc:defs.bzl", "cc_binary")
+
+# crasher — the tombstone demo daemon (docs/tombstone.md shows its output).
+# Orphaned since the cmake era (docs referenced a build path that no longer
+# existed); wired as a real target by the 2026-07 dead-code sweep so the demo
+# stays honest:  bazel run //platform/supervisor/tombstone/demo:crasher -- --mode segv
+cc_binary(
+    name = "crasher",
+    srcs = ["crasher.cpp"],
+    copts = ["-std=c++17", "-Wall"],
+    deps = ["//platform/supervisor/tombstone:tombstone"],
+)

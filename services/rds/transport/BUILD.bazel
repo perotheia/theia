@@ -17,7 +17,11 @@ cc_library(
     hdrs = ["//services/rds/include/ara/rds:headers"],
     # Apps include "ara/rds/stream.h" — the include root is services/rds/include.
     includes = ["../include"],
-    copts = ["-std=c++17", "-fPIC"],
+    # Debian iceoryx 2.x nests headers under a VERSIONED dir (1.x is flat
+    # /usr/include/iceoryx_binding_c). A non-existent -I is silently
+    # ignored, so listing the 2.x path is harmless on 1.x hosts. Proper
+    # fix later: hermetic iceoryx (bzlmod/vendored) instead of host apt.
+    copts = ["-std=c++17", "-fPIC", "-I/usr/include/iceoryx/v2.0.5"],
     # HOST-ONLY: the iceoryx C binding's headers + libs come from the host apt
     # (libiceoryx-*-dev) and are NOT staged in the aarch64 sysroots. RDS is a
     # DEFERRED service (not in any arm64 rig — see project-shwa-rds), so mark it

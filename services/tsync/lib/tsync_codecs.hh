@@ -26,8 +26,6 @@
 #include "RemoteCodec.hh"   // THEIA_DECLARE_REMOTE_CODEC
 #include "system/services/tsync/tsync.pb.h"
 
-#include "platform/msgs/nav/nav.pb.h"
-#include "platform/msgs/sensor/sensor.pb.h"
 #include "system/services/phm/phm.pb.h"
 
 
@@ -72,13 +70,17 @@ THEIA_DECLARE_REMOTE_CODEC(system_services_tsync_GmInfoReq)
 #define THEIA_CODEC_system_services_tsync_GrandmasterReply
 THEIA_DECLARE_REMOTE_CODEC(system_services_tsync_GrandmasterReply)
 #endif
-#ifndef THEIA_CODEC_platform_msgs_nav_GnssSolution
-#define THEIA_CODEC_platform_msgs_nav_GnssSolution
-THEIA_DECLARE_REMOTE_CODEC(platform_msgs_nav_GnssSolution)
+#ifndef THEIA_CODEC_system_services_tsync_RegisterTimeSourceReq
+#define THEIA_CODEC_system_services_tsync_RegisterTimeSourceReq
+THEIA_DECLARE_REMOTE_CODEC(system_services_tsync_RegisterTimeSourceReq)
 #endif
-#ifndef THEIA_CODEC_platform_msgs_sensor_Imu
-#define THEIA_CODEC_platform_msgs_sensor_Imu
-THEIA_DECLARE_REMOTE_CODEC(platform_msgs_sensor_Imu)
+#ifndef THEIA_CODEC_system_services_tsync_TsyncReply
+#define THEIA_CODEC_system_services_tsync_TsyncReply
+THEIA_DECLARE_REMOTE_CODEC(system_services_tsync_TsyncReply)
+#endif
+#ifndef THEIA_CODEC_system_services_tsync_TimeObservation
+#define THEIA_CODEC_system_services_tsync_TimeObservation
+THEIA_DECLARE_REMOTE_CODEC(system_services_tsync_TimeObservation)
 #endif
 #ifndef THEIA_CODEC_system_services_phm_FcHealthReport
 #define THEIA_CODEC_system_services_phm_FcHealthReport
@@ -100,5 +102,5 @@ inline constexpr SyncState LOCKED = system_services_tsync_SyncState_SyncState_LO
 using TimeSource = system_services_tsync_TimeSource;
 inline constexpr TimeSource SYSTEM = system_services_tsync_TimeSource_TimeSource_SYSTEM;
 inline constexpr TimeSource PTP = system_services_tsync_TimeSource_TimeSource_PTP;
-inline constexpr TimeSource GPS = system_services_tsync_TimeSource_TimeSource_GPS;
+inline constexpr TimeSource EXTERNAL = system_services_tsync_TimeSource_TimeSource_EXTERNAL;
 }  // namespace ara::tsync

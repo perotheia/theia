@@ -16,9 +16,6 @@ cc_library(
     name = "tsync_state",
     hdrs = [
         "TsyncCtl_state.hh",
-        # The GNSS driver seam (GnssFix) — shared by lib + impl without a cycle,
-        # the same way shwa_backend.hpp rides on shwa_state.
-        "gps_backend.hpp",
     ],
     # The lib #includes these as "impl/<Node>_state.hh", so the include
     # root is the FC out_dir (one above impl/).
@@ -33,26 +30,17 @@ cc_library(
         "TsyncCtl_handlers.cc",
         # PTP distribution daemons (node prebuilt) — fully-generated fork/drain/
         # reap of ptp4l + phc2sys. No _state.hh (prebuilt nodes carry no user
-        # state). gpsd + chronyd are GONE: GNSS is now an in-process driver below,
-        # and NTP is dropped.
+        # state). gpsd + chronyd are GONE, and so is the in-process GNSS driver
+        # (the tsync/location inversion): time sources REGISTER at runtime over
+        # TimeSourceRegistryIf — nothing is compiled in.
         "Ptp4lProvider_handlers.cc",
         "Phc2sysProvider_handlers.cc",
-    ] + select({
-        # The GNSS time-source driver — exactly ONE variant compiled in (module
-        # inclusion, NOT #ifdef), the same seam as shwa's host/jetson backend:
-        #   bazel build //services/tsync/... --define gps=rtk   → UBX-NAV-PVT (ZED-F9R)
-        #   bazel build //services/tsync/... --define gps=nmea  → $GxRMC/$GxGGA
-        #   (default, no --define)                              → synthetic FakeGPS
-        "//rules/config:gps_rtk": ["gps_rtk.cc"],
-        "//rules/config:gps_nmea": ["gps_nmea.cc"],
-        "//conditions:default": ["gps_fake.cc"],
-    }),
-    # The ptp4l poller (pmc CLI) + the GNSS driver seam, isolated behind headers
-    # so the gen_server TU stays clean. `..` resolves `#include "impl/*.hpp"` from
-    # the services/tsync/ root.
+    ],
+    # The ptp4l poller (pmc CLI), isolated behind a header so the gen_server TU
+    # stays clean. `..` resolves `#include "impl/*.hpp"` from the services/tsync/
+    # root.
     hdrs = [
         "ptp_backend.hpp",
-        "gps_backend.hpp",
     ],
     includes = [".."],
     copts = [
@@ -61,10 +49,6 @@ cc_library(
         "-Wextra",
         "-fPIC",
     ],
-    # NAV-ATT → quaternion uses std::cos/std::sin (TsyncCtl_handlers.cc). The host
-    # gcc links libm implicitly, but the aarch64 cross-link does not — propagate
-    # -lm to the final binary so `cos@@GLIBC` resolves on the rpi4 build.
-    linkopts = ["-lm"],
     deps = [
         "//services/tsync/lib:tsync_lib",
     ],

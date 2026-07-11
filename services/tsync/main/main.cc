@@ -308,6 +308,9 @@ int main(int argc, char** argv) {
             tsync_ctl_cfg, tsync_ctl);
         config_mux.register_call<GmInfoReq, GrandmasterReply>(
             tsync_ctl_cfg, tsync_ctl);
+        config_mux.register_call<RegisterTimeSourceReq, TsyncReply>(
+            tsync_ctl_cfg, tsync_ctl);
+        config_mux.register_cast<TimeObservation>(tsync_ctl_cfg, tsync_ctl);
         // ---- process groups (pg): MANUAL pub/sub control (OTP pg shape) ----
         // The node OWNS its membership: pg_join<T>() to CONSUME a group,
         // pg_watch<T>()/broadcast_*() to PRODUCE, pg_leave<T>() to stop — from its

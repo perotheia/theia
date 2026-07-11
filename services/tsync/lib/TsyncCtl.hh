@@ -52,8 +52,9 @@ using OffsetReq = system_services_tsync_OffsetReq;
 using OffsetReply = system_services_tsync_OffsetReply;
 using GmInfoReq = system_services_tsync_GmInfoReq;
 using GrandmasterReply = system_services_tsync_GrandmasterReply;
-using GnssSolution = platform_msgs_nav_GnssSolution;
-using Imu = platform_msgs_sensor_Imu;
+using RegisterTimeSourceReq = system_services_tsync_RegisterTimeSourceReq;
+using TsyncReply = system_services_tsync_TsyncReply;
+using TimeObservation = system_services_tsync_TimeObservation;
 using FcHealthReport = system_services_phm_FcHealthReport;
 
 
@@ -186,6 +187,8 @@ public:
     // gets emitted once. handle_call/handle_cast dispatch by
     // request type, not by port.
 
+    void handle_cast(const TimeObservation& msg, TsyncCtlState& s);
+
 
     SyncStatus handle_call(const SyncStatusReq& req,
                                             TsyncCtlState& s);
@@ -200,6 +203,9 @@ public:
                                             TsyncCtlState& s);
 
     GrandmasterReply handle_call(const GmInfoReq& req,
+                                            TsyncCtlState& s);
+
+    TsyncReply handle_call(const RegisterTimeSourceReq& req,
                                             TsyncCtlState& s);
 
 
@@ -232,10 +238,6 @@ public:
 
     // ---- send helpers — bodies in impl (the broadcast fan-out)
 
-    void broadcast_gnss_solution_solution(const GnssSolution& msg);
-
-    void broadcast_imu_imu(const Imu& msg);
-
     void broadcast_to_phm_report(const FcHealthReport& msg);
 
 
@@ -250,32 +252,6 @@ private:
 
 // Broadcast fan-out — OTP `[Pid ! Msg || Pid <- pg:get_members(group)]`. Defined
 // in the lib slice (auto-generated); the user touches handle_*/init in impl.
-
-inline void TsyncCtl::broadcast_gnss_solution_solution(const GnssSolution& msg) {
-    // Ensure we're monitoring the group (OTP pg:monitor — idempotent), then cast
-    // `msg` to EACH watched member. group identity = msg_type_name<GnssSolution>().
-    // The impl can call pg_members<GnssSolution>() first to skip work when the list
-    // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
-    pg_watch<GnssSolution>();
-    uint8_t _buf[8192];
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
-    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<GnssSolution>::fields(), &msg))
-        return;
-    pg_.broadcast_members<GnssSolution>(_buf, static_cast<uint16_t>(_os.bytes_written));
-}
-
-inline void TsyncCtl::broadcast_imu_imu(const Imu& msg) {
-    // Ensure we're monitoring the group (OTP pg:monitor — idempotent), then cast
-    // `msg` to EACH watched member. group identity = msg_type_name<Imu>().
-    // The impl can call pg_members<Imu>() first to skip work when the list
-    // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
-    pg_watch<Imu>();
-    uint8_t _buf[8192];
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
-    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<Imu>::fields(), &msg))
-        return;
-    pg_.broadcast_members<Imu>(_buf, static_cast<uint16_t>(_os.bytes_written));
-}
 
 inline void TsyncCtl::broadcast_to_phm_report(const FcHealthReport& msg) {
     // Ensure we're monitoring the group (OTP pg:monitor — idempotent), then cast

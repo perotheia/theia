@@ -1,31 +1,30 @@
 // Time Synchronization (ara::tsync / TSY) — Adaptive Platform Functional Cluster.
 //
-// A THIN control plane: the FC ACQUIRES time from a custom in-process GNSS
-// driver (the central GM source) and DISTRIBUTES it via linuxptp (ptp4l +
-// phc2sys, run as supervisor-owned prebuilt daemons). No gpsd, no chronyd/NTP:
-// GNSS is a built-in driver (bazel-selectable RTK/NMEA/Fake variant), PTP is the
-// distribution layer. The FC never touches ptp4l's API.
-// See docs/tasks/BACKLOG/TSYNC-cluster-whide.md, AUTOSAR-LINUX-mapping.md.
+// tsync owns TIME, NOTHING ELSE. A THIN control plane: time SOURCES are not
+// compiled in — they REGISTER at startup (TimeSourceRegistryIf) and cast
+// TimeObservation records; TsyncCtl selects the best live source, disciplines
+// CLOCK_REALTIME from it (gated), and DISTRIBUTES via linuxptp (ptp4l + phc2sys,
+// run as supervisor-owned prebuilt daemons — the built-in default/fallback
+// source). No gpsd, no chronyd/NTP, and NO in-process GNSS driver: a physical
+// GNSS receiver is one FEEDER of tsync — its driver FC registers the PPS/NMEA
+// time output HERE and registers the fix output with the LOCATION framework as a
+// position provider (one driver, two consumers, no cross-ownership — see
+// docs/tasks/PROGRESS/tsync-location-inversion.md and
+// theia_pkgs/location/docs/design.md). A sim rig registers a sim clock the same
+// way; nothing in tsync's deployment assumes a GNSS exists.
 //
 // Role (AUTOSAR TSY): a global time reference + deterministic timestamp
 // alignment across the platform — the clock the trace/log `ts_ns` and sensor
 // pipelines align to. Loss-of-lock is a health event (→ PHM).
 //
-// Time flow: GNSS driver → clock_settime(CLOCK_REALTIME) on central (gated by
-// config.discipline_clock) → phc2sys → PHC → ptp4l (grandmaster) → Ethernet →
-// compute's ptp4l (slave) → phc2sys → CLOCK_REALTIME. GRACEFULLY DEGRADES to the
-// system wall clock + reports UNAVAILABLE when no GPS fix / no ptp4l (the dev
-// host has neither; FakeGPS keeps the status path exercised without a clock step).
+// Time flow: registered source (GNSS PPS/NMEA, sim) → clock_settime(CLOCK_-
+// REALTIME) on central (gated by config.discipline_clock) → phc2sys → PHC →
+// ptp4l (grandmaster) → Ethernet → compute's ptp4l (slave) → phc2sys →
+// CLOCK_REALTIME. GRACEFULLY DEGRADES to the system wall clock + reports
+// UNAVAILABLE when no source is registered / no ptp4l (the dev host default;
+// a test registers a fake source via probe to exercise the status path).
 
 package system.services.tsync
-
-// the RTK-native GnssSolution (position+velocity+RTK quality, one frame) + the
-// receiver's Imu. The GNSS driver (UBX-NAV-PVT / rtklib solq) fills the solution;
-// the IMU comes from the receiver's inertial output. TsyncCtl re-publishes both.
-import system.platform.msgs.sensor.*    // Imu (RTK inertial output)
-import system.platform.msgs.nav.*       // GnssSolution, GnssSolutionSource/Status
-import system.platform.msgs.geometry.*  // Point, Vector3 (embedded by GnssSolution)
-import system.platform.msgs.std.*       // Header
 
 // PHM health edge (escalation model): tsync reports a health INDICATION to PHM on
 // the loss-of-lock fault EDGE (LOCKED ⇄ lower) — NOT a keep-alive stream. A
@@ -47,9 +46,12 @@ enum SyncState {
 
 // The time source backing the global reference.
 enum TimeSource {
-    SYSTEM = 0   // CLOCK_REALTIME (no discipline) — the degrade fallback
-    PTP    = 1   // ptp4l + phc2sys (IEEE 1588, NIC PHC) — distributes time
-    GPS    = 2   // the in-process GNSS driver (RTK/NMEA/Fake) — acquires UTC
+    SYSTEM   = 0   // CLOCK_REALTIME (no discipline) — the degrade fallback
+    PTP      = 1   // ptp4l + phc2sys (IEEE 1588, NIC PHC) — distributes time
+    // A REGISTERED external source (GNSS PPS/NMEA driver FC, sim clock) —
+    // acquires UTC. Wire tag 2 is stable (was GPS, renamed in place when the
+    // in-process GNSS driver moved out — the tsync/location inversion).
+    EXTERNAL = 2
 }
 
 // ─── Runtime config (etcd-backed via services/per) ─────────────────────────
@@ -62,9 +64,9 @@ message TsyncConfig {
     string ptp_interface = "" [max_size:32]
     // IEEE 1588 PTP domain number.
     uint32 ptp_domain    = 0
-    // Preferred source: "gps" | "ptp" | "system" (the degrade order anchor).
-    // central (GM) = "gps" (the in-process GNSS driver disciplines the clock);
-    // compute (slave) = "ptp" (locks to central over Ethernet).
+    // Preferred source: "external" | "ptp" | "system" (the degrade order
+    // anchor). central (GM) = "external" (a registered source disciplines the
+    // clock); compute (slave) = "ptp" (locks to central over Ethernet).
     string source        = "ptp" [max_size:16]
     // SUPERSEDED by the `poll_ms` PARAM (config/tsync.json) — the poll cadence is
     // a static deploy knob, not runtime config. Field kept for proto-tag
@@ -72,13 +74,17 @@ message TsyncConfig {
     uint32 poll_ms       = 1000
     // Offset (ns) above which LOCKED degrades to UNLOCKED (lock quality gate).
     uint32 lock_offset_ns = 100000
-    // Whether this node may STEP CLOCK_REALTIME from a GPS fix (clock_settime).
-    // FALSE by default so a dev/CI box (FakeGPS) never touches the host clock;
-    // central's gen-config flips it true (the GM owns the system clock). Even
-    // when true, an EPERM (no CAP_SYS_TIME) degrades gracefully.
+    // Whether this node may STEP CLOCK_REALTIME from a registered source's
+    // observation (clock_settime). FALSE by default so a dev/CI box never
+    // touches the host clock; central's gen-config flips it true (the GM owns
+    // the system clock). Even when true, an EPERM (no CAP_SYS_TIME) degrades
+    // gracefully.
     bool discipline_clock = false
-    // No GPS fix within this many ms → GPS source goes HOLDOVER (free-run).
-    uint32 gps_fix_timeout_ms = 3000
+    // No fresh observation from ANY registered source within this many ms →
+    // the EXTERNAL source goes from HOLDOVER (free-run) to dropped (fall back
+    // to PTP/system). Renamed IN PLACE from gps_fix_timeout_ms (tag 7 stable —
+    // the tsync/location inversion; renames are schema-digest no-ops).
+    uint32 source_timeout_ms = 3000
 }
 
 // ─── Status wire types ─────────────────────────────────────────────────────
@@ -140,28 +146,66 @@ interface clientServer TsyncCtlIf {
     operation GetGrandmasterInfo(in r: GmInfoReq)          returns GrandmasterReply
 }
 
-// ─── GNSS data streams (ROS-shaped pub/sub) ─────────────────────────────────
+// ─── Registrable time sources (the tsync/location inversion seam) ──────────
 //
-// On each poll TsyncCtl re-publishes the RTK receiver's fix as ROS-compatible
-// payloads — senderReceiver (fire-and-forget broadcast), the same pattern as
-// shwa's AccelTelemetry. A localization/fusion app subscribes; nothing is
-// required of TsyncCtl's time-discipline path (these are a parallel output).
+// Time sources are NOT compiled in. An external provider — the GNSS driver
+// FC's PPS/NMEA time output, a sim clock, a future PPS disciplinator —
+// registers at startup and then casts observations. Its POSITION output (fix,
+// velocity, attitude) is none of tsync's business: that registers with the
+// location framework's provider registry instead (GnssSolution et al. live in
+// platform.msgs.nav for it).
 //
-// GnssSolution = the RTK-NATIVE receiver solution (supersedes the former
-// NavSatFix(position)+Odometry(velocity) pair). ONE message carries position +
-// velocity in both ECEF and ENU with covariances, plus the RTK quality a
-// localizer needs: fix status (FIX/FLOAT/SBAS/DGPS/PPP), AR ratio, correction
-// age, DOPs, sat count. The RTK backend fills it natively from UBX-NAV-PVT /
-// rtklib solq; the NMEA/fake backends fill the lat/lon/vel/status subset.
-interface senderReceiver GnssSolutionStream {
-    data GnssSolution solution
+// THE REGISTRATION IDIOM (blessed here; the location framework's provider
+// registry uses the same shape — theia_pkgs/location/docs/design.md):
+//   1. the provider CALLS Register* on the manager's server port from its
+//      init() — an idempotent upsert, so a restarted provider just
+//      re-registers (no dedup ceremony);
+//   2. the provider then CASTS small observation records to the manager's
+//      receiver port (senderReceiver over PG — fire-and-forget, no RDS);
+//   3. liveness is two-layer: the supervisor heartbeat owns PROCESS death,
+//      and the manager owns DATA staleness via an expected-interval watchdog
+//      (3 missed intervals → stale → fall down the source ladder). No
+//      keep-alive RPCs; a provider that lost its device degrades to SILENCE.
+// (A generic registry-service codegen primitive was considered and NOT
+// extracted: the idiom is two messages + one op — cheaper to restate per
+// manager than to abstract.)
+
+message RegisterTimeSourceReq {
+    string name [max_size:32]     // unique source name ("gnss0", "sim", ...)
+    string kind [max_size:16]     // "pps" | "nmea" | "sim" | ... (status line only)
+    // Selection rank among LIVE registered sources — highest wins. The PTP
+    // fallback ranks below ANY live registered source (it is the distribution
+    // layer's lock, not an acquisition source).
+    uint32 priority
+    // Expected observation cadence (ms). 3 silent intervals → STALE (the
+    // staleness watchdog); config.source_timeout_ms then gates HOLDOVER→drop.
+    uint32 expected_interval_ms
 }
 
-// Imu = the RTK receiver's inertial output (sensor_msgs/Imu): angular velocity +
-// linear acceleration (+ orientation when the unit fuses one), with covariances.
-// Only the RTK backend with an IMU fills it; fake/NMEA leave it unpublished.
-interface senderReceiver ImuStream {
-    data Imu imu
+// Generic ack for the registry op. 0 = ok.
+message TsyncReply { uint32 status   string message [max_size:96] }
+
+// One time observation: the source's UTC captured against the local clock.
+// The (utc_ns, local_ns) PAIR lets TsyncCtl project the source's UTC to "now"
+// without assuming zero cast/queue latency: utc_now = utc_ns + (now - local_ns).
+message TimeObservation {
+    string name [max_size:32]     // the registered source this came from
+    uint64 utc_ns                 // source UTC at capture (epoch ns)
+    uint64 local_ns               // CLOCK_REALTIME at capture (epoch ns)
+    uint32 uncertainty_ns         // 1-sigma; 0 = unknown
+    bool   pps_aligned            // observation is PPS-edge-aligned
+}
+
+// Startup registration (idiom step 1). Separate interface from TsyncCtlIf —
+// audience split, same as per's PerClientIf/PerManagerIf: TsyncCtlIf is the
+// read surface every app polls; this is the provider-only write surface.
+interface clientServer TimeSourceRegistryIf {
+    operation RegisterTimeSource(in r: RegisterTimeSourceReq) returns TsyncReply
+}
+
+// Observation feed (idiom step 2) — providers cast, TsyncCtl receives.
+interface senderReceiver TimeObservationStream {
+    data TimeObservation obs
 }
 
 // ─── Nodes ─────────────────────────────────────────────────────────────────
@@ -173,10 +217,10 @@ interface senderReceiver ImuStream {
 // touch ptp4l/phc2sys; they call ara::tsync GetSyncStatus. We run, not reimplement,
 // the proven Linux daemons (run-and-wrap, never embed their source).
 //
-// The GNSS time SOURCE is NOT a prebuilt daemon (no gpsd, no chronyd): it's a
-// CUSTOM in-process driver compiled into TsyncCtl, with a bazel-selectable
-// variant (RTK / NMEA / FakeGPS — see impl/gps_backend.hpp). So there are only
-// TWO prebuilt nodes — the linuxptp pair that DISTRIBUTES time; acquisition +
+// Time ACQUISITION is neither a prebuilt daemon (no gpsd, no chronyd) nor an
+// in-process driver: external sources REGISTER over TimeSourceRegistryIf and
+// cast TimeObservation (the inversion seam above). So there are only TWO
+// prebuilt nodes — the linuxptp pair that DISTRIBUTES time; source selection +
 // clock discipline live inside TsyncCtl.
 
 // ptp4l — the IEEE-1588 PTP engine: disciplines the NIC's PHC (hardware clock)
@@ -217,46 +261,40 @@ node prebuilt Phc2sysProvider {
     }
 }
 
-// The Time-Sync control node. tipc 0x80010005. An atomic gen_server: on a self-
-// scheduled tick (handle_info) it polls the in-process GNSS driver
-// (impl/gps_backend.hpp — RTK/NMEA/Fake, chosen at build time) AND the ptp4l
-// backend (pmc), fuses them into the latest SyncStatus held in State, serves
-// GetSyncStatus, and emits a status line (loss-of-lock → a health event for PHM).
-// On central (config.discipline_clock=true) it STEPS CLOCK_REALTIME from a GPS
-// fix (clock_settime); phc2sys then carries that into the PHC ptp4l serves as
-// grandmaster. EPERM (no CAP_SYS_TIME) or no GPS/no ptp4l → graceful-degrade to
-// the system wall clock / UNAVAILABLE.
+// The Time-Sync control node. tipc 0x80010005. An atomic gen_server: providers
+// register (RegisterTimeSource call) and cast TimeObservation records; on a
+// self-scheduled tick (handle_info) it selects the best LIVE registered source
+// (highest priority among fresh ones — freshness = 3× the source's advertised
+// interval), falls back to the ptp4l backend (pmc) then the system wall clock,
+// fuses the pick into the latest SyncStatus held in State, serves
+// GetSyncStatus, and emits a status line (loss-of-lock → a health event for
+// PHM). On central (config.discipline_clock=true) it STEPS CLOCK_REALTIME from
+// the selected observation (clock_settime); phc2sys then carries that into the
+// PHC ptp4l serves as grandmaster. EPERM (no CAP_SYS_TIME) or no source/no
+// ptp4l → graceful-degrade to the system wall clock / UNAVAILABLE. NOTHING here
+// assumes a GNSS exists — a sim rig registers only the sim clock, a dev box
+// registers nothing.
 node atomic TsyncCtl {
     tipc type=0x80010005 instance=0
     requires_timers
     tag = "TSYN"
     config TsyncConfig
     ports {
-        server status provides TsyncCtlIf
-        // RTK-native GNSS broadcasts (the RTK backend fills them natively; the
-        // fake/NMEA backends fill the position/velocity/status subset of the
-        // solution + leave the IMU unpublished). A fusion app subscribes.
-        sender gnss_solution provides GnssSolutionStream
-        sender imu           provides ImuStream
-        sender to_phm        provides FcHealthReportIf   // health edge → PHM (loss-of-lock)
+        server status   provides TsyncCtlIf
+        // Provider-facing write surface (the registration idiom, step 1).
+        server registry provides TimeSourceRegistryIf
+        // Observation ingest (step 2) — registered sources cast here.
+        receiver time_obs requires TimeObservationStream
+        sender to_phm     provides FcHealthReportIf   // health edge → PHM (loss-of-lock)
     }
     // Static DEPLOY knobs (lifecycle: param, not runtime-observable config) —
     // serialized into config/tsync.json, read once at boot via the runtime
-    // config singleton. The GNSS receiver wiring + poll cadence are fixed per
-    // deployment (which tty, what baud the receiver's UART1 is flashed to, how
-    // often we drain it), so they're params, not the etcd-backed TsyncConfig.
-    // (Grammar order: config → ports → params.)
+    // config singleton. (Grammar order: config → ports → params.)
     params {
-        // Serial device the RTK/NMEA GNSS driver reads. "" → the driver default
-        // (/dev/serial0). FakeGPS ignores it.
-        gps_serial_dev : string = ""
-        // Baud the receiver's UART1 is configured for (ZED-F9R: 460800 after
-        // CFG-UART1-BAUDRATE). The driver sets the tty to this. 0 → driver
-        // default (38400). THEIA_GPS_BAUD still overrides at runtime.
-        gps_baud       : uint32 = 460800
-        // Poll cadence (ms) — how often TsyncCtl drains the receiver + republishes
-        // NavSatFix/Odometry. Match the receiver's nav rate (CFG-RATE-MEAS) for
-        // 1:1 publishing; 100 = 10 Hz. Supersedes TsyncConfig.poll_ms.
-        poll_ms        : uint32 = 100
+        // Source-selection tick cadence (ms). 100 = 10 Hz. Supersedes
+        // TsyncConfig.poll_ms. (Observations arrive asynchronously as casts;
+        // the tick only SELECTS/reports — device wiring knobs like tty/baud
+        // moved out with the GNSS driver to its provider FC.)
+        poll_ms : uint32 = 100
     }
 }

@@ -1,7 +1,8 @@
 // ptp_backend — queries linuxptp (ptp4l) for the current PTP discipline status.
 // This is the DISTRIBUTION side: on the compute (slave) board ptp4l locks to the
-// central grandmaster, and this reports that lock. The ACQUISITION side (GNSS) is
-// gps_backend.hpp. NTP/chrony is gone — the time source is GPS, not NTP.
+// central grandmaster, and this reports that lock. The ACQUISITION side is the
+// registered-time-source table (package.art TimeSourceRegistryIf — the
+// tsync/location inversion; no in-process driver). NTP/chrony is gone.
 //
 // v1 strategy (graceful degrade — the dev host has no linuxptp):
 //   1. PTP:  `pmc` (ptp4l management client) → port state + offset + GM identity.
@@ -22,8 +23,8 @@ namespace ara::tsync {
 
 // SyncState ordinals (.art): 0=UNAVAILABLE 1=UNLOCKED 2=HOLDOVER 3=LOCKED.
 enum SState : int { S_UNAVAILABLE = 0, S_UNLOCKED = 1, S_HOLDOVER = 2, S_LOCKED = 3 };
-// TimeSource ordinals (.art): 0=SYSTEM 1=PTP 2=GPS.
-enum TSource : int { T_SYSTEM = 0, T_PTP = 1, T_GPS = 2 };
+// TimeSource ordinals (.art): 0=SYSTEM 1=PTP 2=EXTERNAL (a registered source).
+enum TSource : int { T_SYSTEM = 0, T_PTP = 1, T_EXTERNAL = 2 };
 
 struct SyncSnapshot {
     int         state  = S_UNAVAILABLE;
@@ -37,7 +38,7 @@ struct SyncSnapshot {
 class PtpBackend {
 public:
     // Poll ptp4l. `iface` is the preferred PTP NIC (may be empty), `prefer` is
-    // "system" to skip PTP entirely (e.g. central, where GPS is the source),
+    // "system" to skip PTP entirely (e.g. central, where a registered source rules),
     // else PTP is tried and we degrade to the wall clock if there's no daemon.
     static SyncSnapshot poll(const std::string& iface,
                              const std::string& prefer,

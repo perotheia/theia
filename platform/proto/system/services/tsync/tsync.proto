@@ -14,7 +14,7 @@ enum SyncState {
 enum TimeSource {
     TimeSource_SYSTEM = 0;
     TimeSource_PTP = 1;
-    TimeSource_GPS = 2;
+    TimeSource_EXTERNAL = 2;
 }
 
 message TsyncConfig {
@@ -24,7 +24,7 @@ message TsyncConfig {
     uint32 poll_ms = 4;
     uint32 lock_offset_ns = 5;
     bool discipline_clock = 6;
-    uint32 gps_fix_timeout_ms = 7;
+    uint32 source_timeout_ms = 7;
 }
 
 message SyncStatusReq {
@@ -73,5 +73,25 @@ message OffsetReply {
 message GrandmasterReply {
     string grandmaster = 1;
     string interface = 2;
+}
+
+message RegisterTimeSourceReq {
+    string name = 1;
+    string kind = 2;
+    uint32 priority = 3;
+    uint32 expected_interval_ms = 4;
+}
+
+message TsyncReply {
+    uint32 status = 1;
+    string message = 2;
+}
+
+message TimeObservation {
+    string name = 1;
+    uint64 utc_ns = 2;
+    uint64 local_ns = 3;
+    uint32 uncertainty_ns = 4;
+    bool pps_aligned = 5;
 }
 

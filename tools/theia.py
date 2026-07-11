@@ -4305,8 +4305,11 @@ def cmd_init(args: list[str]) -> int:
         # tree. (The rig gets the services MANIFEST by path-load from
         # $THEIA_ROOT/manifest/, not from this .art link.)
         _link("system/services", services_pkg)
-        # service .art import system.platform.msgs.{std,geometry,sensor,nav}.* (e.g.
-        # tsync uses nav.GnssSolution) — one link covers all four subpackages
+        # ROS-shaped platform messages (system.platform.msgs.{std,geometry,
+        # sensor,nav}.*) — no service FC imports them anymore (tsync dropped
+        # nav.GnssSolution with the tsync/location inversion), but consuming
+        # PACKAGES do (e.g. the location framework's providers publish
+        # nav.GnssSolution) — one link covers all four subpackages
         # (FQN system.platform.msgs.<x> → msgs/<x>/).
         if msgs_pkg.exists():
             _link("system/platform/msgs", msgs_pkg)

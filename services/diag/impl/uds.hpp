@@ -23,7 +23,11 @@ enum Sid : uint8_t {
     SID_SecurityAccess           = 0x27,
     SID_WriteDataByIdentifier    = 0x2E,
     SID_ReadDTCInformation       = 0x19,
+    SID_TesterPresent            = 0x3E,   // the S3_server keep-alive
 };
+// TesterPresent sub-function 0x00 + the suppressPosRspMsgIndicationBit form.
+constexpr uint8_t kTpZeroSubFunction  = 0x00;
+constexpr uint8_t kSuppressPosRspBit  = 0x80;
 constexpr uint8_t kPositiveOffset = 0x40;   // response sid = request sid | 0x40
 constexpr uint8_t kNegativeResp   = 0x7F;
 

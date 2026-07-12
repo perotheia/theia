@@ -34,3 +34,11 @@ Diag Serves UDS Over DoIP
     ...                assert positive responses + NRCs. SKIP if diag isn't up.
     Require Diag Listening
     Run Diag DoIP Smoke
+
+Diag Enforces The S3 Session Timer
+    [Documentation]    ISO 14229 S3_server: TesterPresent beats hold an
+    ...                extended session past S3; tester silence > S3 reverts
+    ...                to DefaultSession. ~15s (two S3 windows). SKIP if diag
+    ...                isn't up.
+    Require Diag Listening
+    Run Diag S3 Timer Smoke

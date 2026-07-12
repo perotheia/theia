@@ -12,16 +12,24 @@
 
 #include <pb_decode.h>
 
-
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <map>
 #include <string>
 #include <vector>
 
+#include "TimerService.hh"        // send_after / process_timers — the S3 timer
+
 namespace ara::diag {
 
 namespace {
+
+uint64_t mono_now_ns() {
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+}
 
 // v1 static DID table (read-only). VIN (0xF190) + a couple of identification
 // DIDs. Phase-2 follow-up: read these from services/per (GetConfig) + a per-DID
@@ -56,12 +64,27 @@ void UdsRouter::init(UdsRouterState& s) {
 }
 
 void UdsRouter::handle_info(const char* info, UdsRouterState& s) {
-    // S3 session timeout: revert to the default session if the tester went quiet.
+    // S3_server expiry check (ISO 14229). The timer is activity-anchored: a
+    // request never cancels it, it just moves last_activity_ns forward — so
+    // when we fire we either really are quiet ≥ S3 (revert to DefaultSession)
+    // or we re-arm for exactly the remainder. At most one timer outstanding.
     if (info && std::strcmp(info, "s3_timeout") == 0) {
-        if (s.session != uds::SESS_Default) {
+        s.s3_armed = false;
+        if (s.session == uds::SESS_Default) return;   // already back — nothing to do
+        const uint64_t elapsed_ms =
+            (mono_now_ns() - s.last_activity_ns) / 1000000ULL;
+        if (elapsed_ms >= s.session_timeout_ms) {
             s.session = uds::SESS_Default;
-            this->log().info("S3 timeout — session → default");
+            this->log().info("S3_server timeout (" +
+                std::to_string(elapsed_ms) + "ms quiet) — session → default");
+            return;
         }
+        // Tester was active since the arm — sleep out the remainder.
+        s.s3_armed = true;
+        ::theia::runtime::send_after(
+            ::theia::runtime::process_timers(),
+            static_cast<uint32_t>(s.session_timeout_ms - elapsed_ms),
+            *this, "s3_timeout");
     }
 }
 
@@ -117,6 +140,23 @@ uds::Bytes svc_session(const uds::Bytes& req, UdsRouterState& s) {
     // Positive: sub + P2_server_max(2B) + P2*_server_max(2B) (50ms / 5000ms).
     uds::Bytes data = { sub, 0x00, 0x32, 0x01, 0xF4 };
     return uds::positive(uds::SID_DiagnosticSessionControl, data);
+}
+
+// 0x3E TesterPresent — the designated S3_server keep-alive: a tester holding a
+// non-default session open sends this on a < S3 cadence; the activity stamp in
+// handle_call resets the S3 window. Sub 0x00 gets the positive echo; the
+// suppressPosRspMsgIndicationBit form (0x80) is acknowledged but the response
+// is NOT suppressed in v1 (suppression is a DoIP-transport concern — DoipServer
+// forwards whatever we return; a tester tolerates the extra positive).
+uds::Bytes svc_tester_present(const uds::Bytes& req) {
+    if (req.size() < 2) return uds::negative(uds::SID_TesterPresent,
+                                             uds::NRC_IncorrectMessageLength);
+    const uint8_t sub = req[1];
+    if ((sub & ~uds::kSuppressPosRspBit) != uds::kTpZeroSubFunction)
+        return uds::negative(uds::SID_TesterPresent,
+                             uds::NRC_SubFunctionNotSupported);
+    uds::Bytes data = { uds::kTpZeroSubFunction };
+    return uds::positive(uds::SID_TesterPresent, data);
 }
 
 // DID ranges:
@@ -253,9 +293,28 @@ UdsReply UdsRouter::handle_call(
     case uds::SID_ReadDataByIdentifier:     resp = svc_read_did(in, s);  break;
     case uds::SID_WriteDataByIdentifier:    resp = svc_write_did(in);   break;
     case uds::SID_ReadDTCInformation:       resp = svc_read_dtc(in);    break;
+    case uds::SID_TesterPresent:            resp = svc_tester_present(in); break;
     default:
         resp = uds::negative(sid, uds::NRC_ServiceNotSupported);
         break;
+    }
+
+    // S3_server (ISO 14229): any correctly-received tester request while in a
+    // non-default session resets the S3 window (TesterPresent is just the
+    // designated no-op keep-alive). Stamp the activity anchor and make sure ONE
+    // timeout check is in flight; the handler in handle_info re-arms for the
+    // remainder as long as the tester stays active. Entering the session via
+    // the 0x10 that just dispatched counts as the first activity, so this same
+    // line arms the very first timer too.
+    if (s.session != uds::SESS_Default) {
+        s.last_activity_ns = mono_now_ns();
+        if (!s.s3_armed) {
+            s.s3_armed = true;
+            ::theia::runtime::send_after(
+                ::theia::runtime::process_timers(),
+                s.session_timeout_ms ? s.session_timeout_ms : 5000,
+                *this, "s3_timeout");
+        }
     }
 
     bool is_nrc = false;

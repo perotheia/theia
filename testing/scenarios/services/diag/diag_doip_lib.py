@@ -26,8 +26,13 @@ from robot.api.deco import keyword, library
 # diag[0] services[1] scenarios[2] testing[3] theia[4].
 _WS = Path(__file__).resolve().parents[4]
 _SMOKE = _WS / "services" / "diag" / "test" / "diag_doip_smoke.py"
+_S3_SMOKE = _WS / "services" / "diag" / "test" / "s3_timer_smoke.py"
 # diag's DoipServer TIPC service type (system.services.diag = 0x80010017).
-_DIAG_TIPC_DEC = 0x80010017
+# Readiness is checked on UdsRouter's binding (0x80010018): DoipServer is a
+# runnable owning a plain TCP server — it never BINDS its TIPC name, so keying
+# the check on 0x80010017 made this suite skip forever (found 2026-07-12 when
+# the S3 case landed). UdsRouter is the node the smokes actually exercise.
+_DIAG_TIPC_DEC = 0x80010018
 _DOIP_PORT = 13400
 
 
@@ -47,7 +52,7 @@ class DiagDoipLib:
                 ["tipc", "nametable", "show"],
                 capture_output=True, text=True, timeout=10,
             ).stdout
-            bound = str(_DIAG_TIPC_DEC) in out
+            bound = str(int(_DIAG_TIPC_DEC)) in out
         except (FileNotFoundError, subprocess.SubprocessError):
             logger.info("`tipc` unavailable — falling back to the port check.")
             bound = True   # defer to the port probe below
@@ -85,3 +90,26 @@ class DiagDoipLib:
                 f"diag DoIP smoke FAILED (exit {proc.returncode}):\n"
                 f"{proc.stdout}\n{proc.stderr}")
         logger.info("diag DoIP smoke PASSED.")
+
+    @keyword("Run Diag S3 Timer Smoke")
+    def run_diag_s3_timer_smoke(self) -> None:
+        """Run s3_timer_smoke.py (ISO 14229 S3_server keep-alive) against the
+        live diag FC: TesterPresent beats HOLD an extended session past S3;
+        tester silence > S3 REVERTS to DefaultSession (asserted on the node
+        log edge — v1 has no session-gated service to probe on the wire).
+        ~15s wall (two S3 windows at the 5000ms default)."""
+        if not _S3_SMOKE.is_file():
+            raise AssertionError(f"smoke test not found at {_S3_SMOKE}")
+        py = _WS / ".venv" / "bin" / "python"
+        proc = subprocess.run(
+            [str(py if py.exists() else sys.executable), str(_S3_SMOKE)],
+            cwd=str(_WS), capture_output=True, text=True, timeout=60,
+        )
+        logger.info(f"--- s3_timer_smoke.py stdout ---\n{proc.stdout}")
+        if proc.stderr.strip():
+            logger.info(f"--- stderr ---\n{proc.stderr}")
+        if proc.returncode != 0:
+            raise AssertionError(
+                f"diag S3 timer smoke FAILED (exit {proc.returncode}):\n"
+                f"{proc.stdout}\n{proc.stderr}")
+        logger.info("diag S3 timer smoke PASSED.")

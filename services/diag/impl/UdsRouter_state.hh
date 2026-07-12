@@ -21,7 +21,16 @@ struct UdsRouterState {
     uint8_t  session = 0x01;
 
     // ---- applied DiagConfig ------------------------------------------------
-    uint32_t session_timeout_ms = 5000;
+    uint32_t session_timeout_ms = 5000;   // ISO 14229 S3_server (ms)
+
+    // ---- S3_server bookkeeping (ISO 14229 §S3 timing) -----------------------
+    // The timer is ACTIVITY-ANCHORED, not cancel/re-arm churned: every tester
+    // request in a non-default session stamps last_activity_ns; one pending
+    // send_after("s3_timeout") checks the elapsed time when it fires and either
+    // reverts to DefaultSession (quiet ≥ S3) or re-arms for the remainder. A
+    // request never cancels a timer — it just moves the anchor.
+    uint64_t last_activity_ns = 0;   // CLOCK_MONOTONIC of the last request
+    bool     s3_armed = false;       // one outstanding s3_timeout at most
 
     // ---- running fault LOG (fed by phm's PhmDtcStream) ---------------------
     // Each PhmFaultEvent phm casts is appended here; 0x22 fault-log DIDs read by

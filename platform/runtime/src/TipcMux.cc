@@ -219,7 +219,16 @@ void TipcMux::loop_() {
                 std::lock_guard<std::mutex> lk(mu_);
                 auto sit = reply_sinks_.find(fd);
                 if (sit != reply_sinks_.end()) {
-                    ssize_t n = ::recv(fd, buf, sizeof(buf), 0);
+                    // MSG_DONTWAIT — NEVER block the mux on a recv. Epoll is
+                    // level-triggered and reply fds are closed by ~RemoteRef on
+                    // OTHER threads, so an event harvested in this batch can be
+                    // STALE: the fd closed + the NUMBER reused by a fresh socket
+                    // before we get here. A blocking recv on that fresh, quiet
+                    // fd wedges this loop FOREVER — the whole process's inbound
+                    // dispatch goes dark (found live: diag's UdsRouter died
+                    // after rapid DoIP calls + probe churn). Non-blocking turns
+                    // the stale event into EAGAIN → the transient path below.
+                    ssize_t n = ::recv(fd, buf, sizeof(buf), MSG_DONTWAIT);
                     if (n <= 0) {
                         // Peer closed (EOF n==0) or hard error (ECONNRESET n<0).
                         // Drop the sink + EPOLL_DEL so the dead fd stops firing
@@ -265,7 +274,10 @@ void TipcMux::loop_() {
             }
             if (!binding) continue;
 
-            ssize_t n = ::recv(fd, buf, sizeof(buf), 0);
+            // MSG_DONTWAIT for the same stale-event/fd-reuse reason as the
+            // reply path above — a blocking recv here wedges every node this
+            // mux serves. EAGAIN falls into the transient branch below.
+            ssize_t n = ::recv(fd, buf, sizeof(buf), MSG_DONTWAIT);
             if (n <= 0) {
                 // Close on EOF (n==0) AND on a hard error (n<0 that isn't a
                 // spurious EAGAIN/EWOULDBLOCK/EINTR) — a TIPC peer that

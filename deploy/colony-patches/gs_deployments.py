@@ -557,6 +557,13 @@ def deploy_distribution(req: DistDeployRequest) -> dict:
     # NAME. Model: exactly ONE master (the etcd/coordinator = assignment index 0),
     # the rest zonal workers. machine_instance = the assignment index (master=0,
     # workers=1,2,…) → the supervisor's per-board TIPC instance shift.
+    #
+    # etcd_machine: colony's etcd task fires ONLY when `machine == etcd_machine`.
+    # The MASTER role (index 0) is always the etcd coordinator, so pass
+    # etcd_machine=master — otherwise a fresh board runs no etcd and per SIGABRTs
+    # ("failed to create a watch connection"), taking services_sup down. This is
+    # the standalone-rig gap the exo (Orin) bring-up surfaced: an arity-1
+    # Distribution is a self-contained rig that must provision its own etcd.
     for _i, a in enumerate(req.assignments):
         role = roles[a.role]
         dev = devs[a.device_id]
@@ -571,6 +578,7 @@ def deploy_distribution(req: DistDeployRequest) -> dict:
             dep = colony_client(s).create(
                 rig, "orchestrate", host=ip,
                 extra={"role": orch_role, "machine_instance": _i,
+                       "etcd_machine": "master",
                        "runtime_version": role["runtime_build"]})
             # DO NOT tag base_version here — that was OPTIMISTIC (set at dispatch,
             # before orchestrate actually installed the deb), so a failed

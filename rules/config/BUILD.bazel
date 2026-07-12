@@ -86,6 +86,21 @@ config_setting(
     constraint_values = ["@platforms//cpu:aarch64"],
     values = {"define": "theia_target=jetson"},
 )
+# Jetson Orin (Nano) — jammy-arm64, built natively on the board. The platform +
+# config_setting exist for registry symmetry and any future jammy-specific
+# select; the native build needs no --platforms flag (host == target).
+platform(
+    name = "orin",
+    constraint_values = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:linux",
+    ],
+)
+config_setting(
+    name = "target_orin",
+    constraint_values = ["@platforms//cpu:aarch64"],
+    values = {"define": "theia_target=orin"},
+)
 config_setting(
     name = "target_rpi4",
     constraint_values = ["@platforms//cpu:aarch64"],

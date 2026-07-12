@@ -1528,6 +1528,10 @@ _TARGETS = {
                "deb_arch": "arm64", "libc_min": "2.36"},
     "jetson": {"cfg": "jetson", "cpu": "aarch64", "abi_key": "focal-arm64",
                "deb_arch": "arm64", "libc_min": "2.31"},
+    # Jetson Orin (Nano) — jammy/glibc 2.35, the third aarch64 ABI. Built
+    # NATIVELY on the board (no cross sysroot), like the jetson focal plane.
+    "orin":   {"cfg": "orin",   "cpu": "aarch64", "abi_key": "jammy-arm64",
+               "deb_arch": "arm64", "libc_min": "2.35"},
 }
 
 
@@ -2277,11 +2281,20 @@ def _release_runtime_plane(target: str, args: list[str]) -> int:
     rc_final = 0
     pushed = []
     # Group debs by KEY (<ver>-<abi>) — a mixed-arch runtime manifest lands each
-    # board's slice under its own key. abi from the deb's arch suffix.
+    # board's slice under its own key. The abi is the REGISTRY abi_key when
+    # --arch names a registry target (bookworm-arm64 vs focal-arm64 vs
+    # jammy-arm64 — three DIFFERENT aarch64 ABIs whose debs all end _arm64, so
+    # the filename suffix alone would collide them on the plane); the filename
+    # suffix is the fallback for the legacy bare-arch path.
     import hashlib
+    _abi_override = None
+    if arch_opt:
+        t = _target(arch_opt)
+        if t and t.get("abi_key"):
+            _abi_override = t["abi_key"]
     by_key: dict = {}
     for d in debs:
-        abi = d.stem.rsplit("_", 1)[-1]      # theia-runtime_0.2.2_amd64 → amd64
+        abi = _abi_override or d.stem.rsplit("_", 1)[-1]
         by_key.setdefault(f"{ver}-{abi}", []).append((d, abi))
     for key, entries in by_key.items():
         deb_meta = []

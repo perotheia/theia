@@ -56,6 +56,19 @@ TARGETS = {
         "sysroot": "third_party/sysroot/jetson",
         "abi_key": "focal-arm64", "libc_min": "2.31", "deb_arch": "arm64",
     },
+    # NVIDIA Jetson Orin (Nano) — aarch64, L4T r36 (Ubuntu 22.04 jammy,
+    # glibc 2.35). THIRD aarch64 ABI: bookworm binaries reference GLIBC_2.36
+    # (won't load on 2.35); focal binaries would load but their deb/distro
+    # story differs — jammy is its own key. Built NATIVELY on the board (the
+    # proven jetson path: jammy gcc-11 + a from-source grpc-1.51/protobuf-3.21
+    # closure in /usr/local; no cross sysroot), hence sysroot "" + no prefix.
+    # TIPC: the tegra kernel ships CONFIG_TIPC=n — tipc.ko is built out-of-tree
+    # on the board with the tipc_devmap shim (see the exo onboarding notes).
+    "orin": {
+        "cpu": "aarch64", "gcc_prefix": "",
+        "sysroot": "",
+        "abi_key": "jammy-arm64", "libc_min": "2.35", "deb_arch": "arm64",
+    },
 }
 
 def target_for_arch(arch):

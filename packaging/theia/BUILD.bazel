@@ -146,6 +146,11 @@ pkg_deb(
     # theia-runtime. See //rules/config:distro_ubuntu24.
     depends = select({
         "@pero_theia//rules/config:is_arm64": "theia-runtime",
+        # noble (24.04) fleet build — same soname-versioned names as ubuntu24;
+        # keyed on theia_target=noble (the `theia dist --arch noble` define) so a
+        # native noble build gets the RIGHT Depends, not the jammy default.
+        "@pero_theia//rules/config:target_noble":
+            "theia-runtime, libgrpc++1.51t64, libprotobuf32t64",
         "@pero_theia//rules/config:distro_ubuntu24":
             "theia-runtime, libgrpc++1.51t64, libprotobuf32t64",
         "//conditions:default":   # Ubuntu 22.04 host (the release box)

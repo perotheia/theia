@@ -144,3 +144,4 @@ services/idsm/bpf/vmlinux.h
 # S3 (`theia cert copy`). Ignore the whole dir (private .key + generated .pub).
 deploy/signing/
 /ci/.work/
+user.bazelrc

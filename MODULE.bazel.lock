@@ -233,12 +233,16 @@
   "moduleExtensions": {
     "//toolchains/aarch64_linux_gnu:extension.bzl%rpi4_sysroot_ext": {
       "general": {
-        "bzlTransitiveDigest": "vPUOmvA7iFkV4KbfvtSwGe1trJdoyY79zj1T836g6PI=",
+        "bzlTransitiveDigest": "XRRvMzi7TSrGppe/+9GGD96dDNzVIU4mxm/fFEG8ntg=",
         "usagesDigest": "c+Lo7liiauQ4krlH2fF8DhK0jNk1+DX5Oily/hOWTAs=",
         "recordedInputs": [],
         "generatedRepoSpecs": {
           "rpi4_sysroot": {
             "repoRuleId": "@@//toolchains/aarch64_linux_gnu:rpi4_sysroot.bzl%rpi4_sysroot",
+            "attributes": {}
+          },
+          "orin_sysroot": {
+            "repoRuleId": "@@//toolchains/aarch64_linux_gnu:rpi4_sysroot.bzl%orin_sysroot",
             "attributes": {}
           }
         }

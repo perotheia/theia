@@ -56,7 +56,7 @@ register_toolchains("//toolchains/ti_arm_cgt_18:cc_suite")
 # The sysroot's absolute path is captured by the @rpi4_sysroot repo rule (the
 # sysroot is gitignored host data; the cross-toolchain needs an absolute path).
 rpi4_sysroot_ext = use_extension("//toolchains/aarch64_linux_gnu:extension.bzl", "rpi4_sysroot_ext")
-use_repo(rpi4_sysroot_ext, "rpi4_sysroot")
+use_repo(rpi4_sysroot_ext, "rpi4_sysroot", "orin_sysroot")
 register_toolchains("//toolchains/aarch64_linux_gnu:cc_suite")
 
 # ── Hermetic proto codegen (@theia_codegen) ───────────────────────────────

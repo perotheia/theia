@@ -37,6 +37,13 @@ package(default_visibility = ["//visibility:public"])
 #     take this default branch — hence gating @theia_codegen on arm64_cross, not
 #     bare is_arm64.
 _PROTOC_SETUP = select({
+    # Orin cross: same staged x86 toolset (3.21/1.51 — matches the jammy
+    # sysroot's from-source closure).
+    "//rules/config:arm64_cross_orin": (
+        " protoc=$(location @theia_codegen//:protoc);" +
+        " grpc_plugin=$(location @theia_codegen//:grpc_cpp_plugin);" +
+        " export LD_LIBRARY_PATH=\"$$(dirname $$(dirname $$protoc))/lib:$${LD_LIBRARY_PATH:-}\";"
+    ),
     "//rules/config:arm64_cross": (
         " protoc=$(location @theia_codegen//:protoc);" +
         " grpc_plugin=$(location @theia_codegen//:grpc_cpp_plugin);" +
@@ -91,6 +98,11 @@ genrule(
     # stale-descriptor hole on the shipped path); host ignores these and uses
     # system protoc (harmless to list them on host). See _PROTOC_SETUP above.
     tools = select({
+        "//rules/config:arm64_cross_orin": [
+            "@theia_codegen//:protoc",
+            "@theia_codegen//:grpc_cpp_plugin",
+            "@theia_codegen//:libs",
+        ],
         "//rules/config:arm64_cross": [
             "@theia_codegen//:protoc",
             "@theia_codegen//:grpc_cpp_plugin",

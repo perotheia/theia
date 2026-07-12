@@ -17,10 +17,18 @@ package(default_visibility = ["//visibility:public"])
 # rule (@rpi4_sysroot//:path.bzl) at the workspace root, so it tracks wherever
 # the repo lives (dev host or /opt in CI).
 load("@rpi4_sysroot//:path.bzl", "RPI4_SYSROOT")
+load("@orin_sysroot//:path.bzl", "ORIN_SYSROOT")
 
+# ONE aarch64 toolchain, sysroot selected by --define theia_target (both
+# rpi4/bookworm and orin/jammy are cpu:aarch64 — toolchain RESOLUTION cannot
+# tell them apart, but the config's sysroot attr can select on the define,
+# mirroring the etcd foreign_cc branches).
 cc_toolchain_config(
     name = "aarch64_config",
-    sysroot = RPI4_SYSROOT,
+    sysroot = select({
+        "//rules/config:target_orin": ORIN_SYSROOT,
+        "//conditions:default": RPI4_SYSROOT,
+    }),
 )
 
 filegroup(name = "empty", srcs = [])

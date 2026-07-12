@@ -1528,8 +1528,9 @@ _TARGETS = {
                "deb_arch": "arm64", "libc_min": "2.36"},
     "jetson": {"cfg": "jetson", "cpu": "aarch64", "abi_key": "focal-arm64",
                "deb_arch": "arm64", "libc_min": "2.31"},
-    # Jetson Orin (Nano) — jammy/glibc 2.35, the third aarch64 ABI. Built
-    # NATIVELY on the board (no cross sysroot), like the jetson focal plane.
+    # Jetson Orin (Nano) — jammy/glibc 2.35, the third aarch64 ABI. CROSS-
+    # compiled from the dev box (setup_orin.sh sysroot + static grpc closure);
+    # an OTA-updated mobile target is never a build host.
     "orin":   {"cfg": "orin",   "cpu": "aarch64", "abi_key": "jammy-arm64",
                "deb_arch": "arm64", "libc_min": "2.35"},
 }
@@ -1976,8 +1977,14 @@ def _dist_runtime(mdir: Path, machines: list, arch_override) -> int:
                   f"(known: {', '.join(sorted(set(_RELEASE_ARCH) | set(_ARCH_PLATFORM)))})",
                   file=sys.stderr)
             return 1
+        # Registry targets beyond the aarch64 default (rpi4, which the .bazelrc
+        # `--define=theia_target=rpi4` default covers) must pass their define so
+        # the theia_target-keyed selects fire: the toolchain's sysroot pick, the
+        # etcd foreign_cc cross cache, com's codegen toolset.
+        _tgt_define = ([f"--define=theia_target={arch}"]
+                       if arch in _TARGETS and arch != "host" else [])
         if (rc := _run(["bazel", "build", *runtime_targets,
-                        f"--platforms={platform}"])) != 0:
+                        f"--platforms={platform}", *_tgt_define])) != 0:
             rc_final = rc
             continue
         # Collect the built .debs into dist/debian/<pkg>/ (bazel outputs are
@@ -2288,13 +2295,28 @@ def _release_runtime_plane(target: str, args: list[str]) -> int:
     # suffix is the fallback for the legacy bare-arch path.
     import hashlib
     _abi_override = None
+    _arch_filter = None
     if arch_opt:
         t = _target(arch_opt)
         if t and t.get("abi_key"):
             _abi_override = t["abi_key"]
+            _arch_filter = t["deb_arch"]
     by_key: dict = {}
     for d in debs:
-        abi = _abi_override or d.stem.rsplit("_", 1)[-1]
+        _fn_arch = d.stem.rsplit("_", 1)[-1]
+        # dist/debian/ accumulates debs across releases/arches; when releasing
+        # a specific registry target, only ITS deb_arch belongs under the abi
+        # key (a stale amd64 deb must never land under a jammy-arm64 key).
+        if _arch_filter and _fn_arch != _arch_filter:
+            print(f"theia release: skipping {d.name} (arch {_fn_arch} != "
+                  f"{_arch_filter} for --arch {arch_opt})", file=sys.stderr)
+            continue
+        # Also skip debs from a DIFFERENT version than the one being released.
+        if f"_{ver}_" not in d.name:
+            print(f"theia release: skipping {d.name} (version != {ver})",
+                  file=sys.stderr)
+            continue
+        abi = _abi_override or _fn_arch
         by_key.setdefault(f"{ver}-{abi}", []).append((d, abi))
     for key, entries in by_key.items():
         deb_meta = []
@@ -2957,8 +2979,12 @@ def cmd_release_swp(args: list[str]) -> int:
     #    cluster, NOT the proc; start_cmd renames the output to bin/<proc>. ────────
     cluster = app                        # gen-app's cc_binary name == the app/cluster
     fc_targets = sorted({f"//{proc_pkg[p]}/main:{cluster}" for p in app_procs})
+    # Non-default cross targets (orin) need their theia_target define so the
+    # sysroot/codegen selects fire (rpi4 rides the .bazelrc default define).
+    _swp_tgt_define = ([f"--define=theia_target={arch}"]
+                       if arch in _TARGETS and arch != "host" else [])
     if (rc := _run(["bazel", "build", *fc_targets,
-                    f"--platforms={platform}"])) != 0:
+                    f"--platforms={platform}", *_swp_tgt_define])) != 0:
         print("theia release-swp: SWP FC build failed.", file=sys.stderr)
         return rc
 
@@ -2988,7 +3014,7 @@ def cmd_release_swp(args: list[str]) -> int:
         so_targets = sorted({f"//apps/{app}/migrations:libper_migrate_"
                              f"{st['node']}.so" for st in config_steps})
         if (rc := _run(["bazel", "build", *so_targets,
-                        f"--platforms={platform}"])) != 0:
+                        f"--platforms={platform}", *_swp_tgt_define])) != 0:
             print("theia release-swp: migration-plugin build failed.",
                   file=sys.stderr)
             return rc

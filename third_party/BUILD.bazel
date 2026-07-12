@@ -11,6 +11,7 @@
 load("@rules_cc//cc:defs.bzl", "cc_library")
 load("@rules_foreign_cc//foreign_cc:defs.bzl", "cmake")
 load("@rpi4_sysroot//:path.bzl", "RPI4_SYSROOT")
+load("@orin_sysroot//:path.bzl", "ORIN_SYSROOT")
 load(":patch_tree.bzl", "patched_source_tree")
 
 package(default_visibility = ["//visibility:public"])
@@ -34,6 +35,27 @@ _ETCD_CROSS_CACHE = select({
     # config_setting (cpu + define) is strictly more specialized than is_arm64
     # (cpu only), so bazel picks it over the rpi4 sysroot branch on the Jetson.
     "//rules/config:target_jetson": {},
+    # Orin CROSS (jammy sysroot): same shape as rpi4 below; grpc/protobuf come
+    # from the sysroot's /usr/local STATIC closure (setup_orin.sh built it) —
+    # find_package resolves their cmake configs there. Codegen: the SAME staged
+    # x86 bookworm toolset (protoc 3.21 / plugin 1.51 — versions match the
+    # closure).
+    "//rules/config:arm64_cross_orin": {
+        "CMAKE_SYSROOT": ORIN_SYSROOT,
+        "CMAKE_FIND_ROOT_PATH": ORIN_SYSROOT,
+        "CMAKE_FIND_ROOT_PATH_MODE_PROGRAM": "NEVER",
+        "CMAKE_FIND_ROOT_PATH_MODE_LIBRARY": "ONLY",
+        "CMAKE_FIND_ROOT_PATH_MODE_INCLUDE": "ONLY",
+        "CMAKE_FIND_ROOT_PATH_MODE_PACKAGE": "ONLY",
+        "PKG_CONFIG_EXECUTABLE": "/usr/bin/pkg-config",
+        "Protobuf_PROTOC_EXECUTABLE": _CG_DIR + "/bin/protoc",
+        "_PROTOBUF_PROTOC": _CG_DIR + "/bin/protoc",
+        # The orin closure is built with gRPC_BUILD_CODEGEN=OFF → its cmake
+        # config exports NO gRPC::grpc_cpp_plugin target; the (Theia-patched)
+        # etcd CMakeLists honors this cache override instead of querying it.
+        "GRPC_CPP_PLUGIN": _CG_DIR + "/bin/grpc_cpp_plugin",
+        "_GRPC_CPP_PLUGIN_EXECUTABLE": _CG_DIR + "/bin/grpc_cpp_plugin",
+    },
     "//rules/config:arm64_cross": {
         "CMAKE_SYSROOT": RPI4_SYSROOT,
         "CMAKE_FIND_ROOT_PATH": RPI4_SYSROOT,
@@ -66,6 +88,13 @@ _ETCD_CROSS_ENV = select({
     # Jetson native: no sysroot pkg-config rewrite — find the host .pc's. (See
     # the matching target_jetson branch in _ETCD_CROSS_CACHE above.)
     "//rules/config:target_jetson": {"CCACHE_DISABLE": "1"},
+    "//rules/config:arm64_cross_orin": {
+        "CCACHE_DISABLE": "1",
+        "PKG_CONFIG_PATH": ORIN_SYSROOT + "/usr/lib/aarch64-linux-gnu/pkgconfig:" +
+                           ORIN_SYSROOT + "/usr/local/lib/pkgconfig",
+        "PKG_CONFIG_SYSROOT_DIR": ORIN_SYSROOT,
+        "LD_LIBRARY_PATH": _CG_DIR + "/lib",
+    },
     "//rules/config:arm64_cross": {
         "CCACHE_DISABLE": "1",
         "PKG_CONFIG_PATH": RPI4_SYSROOT + "/usr/lib/aarch64-linux-gnu/pkgconfig",

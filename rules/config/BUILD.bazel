@@ -118,6 +118,16 @@ config_setting(
     values = {"define": "theia_target=rpi4"},
 )
 
+# The orin CROSS build (jammy sysroot) — the second x86→aarch64 cross target.
+# Distinct from arm64_cross (rpi4/bookworm) so the etcd/com selects can point
+# at the right sysroot + codegen; distinct from target_orin only in intent
+# (same match today — kept separate for select-key symmetry with arm64_cross).
+config_setting(
+    name = "arm64_cross_orin",
+    constraint_values = ["@platforms//cpu:aarch64"],
+    values = {"define": "theia_target=orin"},
+)
+
 # Opt-in eBPF backend for services/idsm (the connect() ringbuf, Cat B v2). OFF by
 # default — the default build is exec-free + portable (no libbpf / CAP_BPF / BPF
 # compile needed). Enable with `bazel build --define theia_ebpf=on ...` on a host

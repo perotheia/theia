@@ -2,7 +2,7 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
 index 8c568a5..a56f580 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -116,13 +116,22 @@ if(Protobuf_PROTOC_EXECUTABLE)
+@@ -116,18 +116,39 @@
          endif()
      endif()
  endif()
@@ -32,6 +32,23 @@ index 8c568a5..a56f580 100644
  endif()
  
  find_package(gRPC QUIET)
+ if(gRPC_FOUND)
+     set(GRPC_LIBRARIES gRPC::gpr gRPC::grpc gRPC::grpc++)
++    # Theia patch: a sysroot grpc closure built with gRPC_BUILD_CODEGEN=OFF
++    # (the orin cross target) exports NO grpc_cpp_plugin imported target.
++    # Mirror the protobuf::protoc override above: materialize the target from
++    # _GRPC_CPP_PLUGIN_EXECUTABLE (the staged host-x86 plugin) so BOTH the
++    # LOCATION query below and grpc_generate_cpp's custom-command DEPENDS
++    # resolve (a missing imported target in DEPENDS breaks the generated
++    # makefile: "target pattern contains no %").
++    if(NOT TARGET gRPC::grpc_cpp_plugin AND _GRPC_CPP_PLUGIN_EXECUTABLE)
++        add_executable(gRPC::grpc_cpp_plugin IMPORTED)
++        set_target_properties(gRPC::grpc_cpp_plugin PROPERTIES
++            IMPORTED_LOCATION "${_GRPC_CPP_PLUGIN_EXECUTABLE}")
++    endif()
+     get_target_property(GRPC_CPP_PLUGIN gRPC::grpc_cpp_plugin LOCATION)
+     get_target_property(GRPC_INCLUDE_DIR gRPC::grpc INTERFACE_INCLUDE_DIRECTORIES)
+ else()
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
 index e77e92a..3db6354 100644
 --- a/src/CMakeLists.txt

@@ -57,6 +57,12 @@ def _impl(ctx):
             actions = _ALL_COMPILE,
             flag_groups = [flag_group(flags = [
                 "--sysroot=" + sysroot_abs,
+                # A cross gcc does NOT search <sysroot>/usr/local/include (the
+                # native-only LOCAL_INCLUDE_DIR) — but a sysroot carrying a
+                # from-source closure (orin: grpc/protobuf 3.21 in /usr/local,
+                # setup_orin.sh) serves its headers from there. Harmless when
+                # the dir is empty (rpi4/bookworm: everything is in /usr/include).
+                "-isystem", sysroot_abs + "/usr/local/include",
                 "-no-canonical-prefixes",
                 "-fPIC",
                 "-Wall",
@@ -100,6 +106,11 @@ def _impl(ctx):
         cxx_builtin_include_directories = [
             "/usr/lib/gcc-cross/" + _TRIPLE,
             "/usr/" + _TRIPLE + "/include",
+            # Consuming-workspace .bazelrc adds -I/usr/include/nanopb for the
+            # host pb.h layout; declare it builtin so the cross analysis accepts
+            # the flag (nanopb's pb.h is arch-neutral C — harmless either way).
+            "/usr/include/nanopb",
+            sysroot_abs + "/usr/local/include",
             sysroot_abs + "/usr/include",
             sysroot_abs + "/usr/include/" + _TRIPLE,
             sysroot_abs + "/../../etcd-cpp-apiv3",

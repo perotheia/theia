@@ -58,15 +58,18 @@ TARGETS = {
     },
     # NVIDIA Jetson Orin (Nano) — aarch64, L4T r36 (Ubuntu 22.04 jammy,
     # glibc 2.35). THIRD aarch64 ABI: bookworm binaries reference GLIBC_2.36
-    # (won't load on 2.35); focal binaries would load but their deb/distro
-    # story differs — jammy is its own key. Built NATIVELY on the board (the
-    # proven jetson path: jammy gcc-11 + a from-source grpc-1.51/protobuf-3.21
-    # closure in /usr/local; no cross sysroot), hence sysroot "" + no prefix.
-    # TIPC: the tegra kernel ships CONFIG_TIPC=n — tipc.ko is built out-of-tree
-    # on the board with the tipc_devmap shim (see the exo onboarding notes).
+    # (won't load on 2.35); focal binaries would load but jammy is its own
+    # distro key. CROSS-compiled from the dev box like rpi4 (an OTA-updated
+    # mobile target is never a build host): jammy sysroot bootstrapped by
+    # third_party/sysroot/setup_orin.sh, which also CROSS-builds the static
+    # grpc-1.51/protobuf-3.21 closure into <sysroot>/usr/local (jammy apt ships
+    # 1.30/3.12 — too old). The build host being jammy itself makes gcc-11
+    # aarch64 a perfect glibc/GLIBCXX match. TIPC on the board: the tegra
+    # kernel ships CONFIG_TIPC=n — tipc.ko is built out-of-tree with the
+    # tipc_devmap shim (net_device::tipc_ptr → RCU side table).
     "orin": {
-        "cpu": "aarch64", "gcc_prefix": "",
-        "sysroot": "",
+        "cpu": "aarch64", "gcc_prefix": "aarch64-linux-gnu-",
+        "sysroot": "third_party/sysroot/orin",
         "abi_key": "jammy-arm64", "libc_min": "2.35", "deb_arch": "arm64",
     },
 }

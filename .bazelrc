@@ -70,3 +70,10 @@ test:ci  --test_output=errors
 # bazel invocations (the jason lesson: a user.bazelrc that ISN'T imported is
 # silently ignored — this line makes it real).
 try-import %workspace%/user.bazelrc
+
+# ── Jetson Orin Nano (aarch64, Ubuntu jammy) — cross-compile ─────────────
+# Needs gcc-aarch64-linux-gnu + the sysroot at third_party/sysroot/orin
+# (setup_orin.sh — includes the static grpc-1.51 closure in its /usr/local).
+# Same sandbox exemption as rpi4: the sysroot is host data.
+build:orin --platforms=//rules/config:orin --define=theia_target=orin
+build:orin --strategy=CppCompile=local --strategy=CppLink=local

@@ -1524,6 +1524,13 @@ _MANIFEST_DIR = "dist/manifest"
 _TARGETS = {
     "host":   {"cfg": "host",   "cpu": "x86_64",  "abi_key": "amd64",
                "deb_arch": "amd64", "libc_min": ""},
+    # x86_64 fleet board on Ubuntu 24.04 noble (glibc 2.39) — native build.
+    # LSB-codenamed abi_key so the runtime plane key + GS distribution label
+    # pin the noble ABI (glibc 2.39 + system iceoryx 2.0.5 for RDS), distinct
+    # from a plain jammy/bookworm amd64. `host` (bare amd64) stays for the
+    # untracked dev/CI box.
+    "noble":  {"cfg": "host",   "cpu": "x86_64",  "abi_key": "noble-amd64",
+               "deb_arch": "amd64", "libc_min": "2.39"},
     "rpi4":   {"cfg": "rpi4",   "cpu": "aarch64", "abi_key": "bookworm-arm64",
                "deb_arch": "arm64", "libc_min": "2.36"},
     "jetson": {"cfg": "jetson", "cpu": "aarch64", "abi_key": "focal-arm64",
@@ -2332,7 +2339,14 @@ def _release_runtime_plane(target: str, args: list[str]) -> int:
         # The runtime-plane index the GS catalog reads (GET /api/planes/runtime →
         # <key>/index.json). WITHOUT it the debs upload but the GS never lists the
         # runtime — a Distribution can't reference it. Schema mirrors release-swp's.
-        _ver, _abi = key.rsplit("-", 1)
+        #
+        # `distro` = the FULL abi_key (noble-amd64 / jammy-arm64), taken from the
+        # grouped entries — NOT key.rsplit("-", 1), which split on the LAST hyphen
+        # and mangled a multi-part abi (0.3.0-jammy-arm64 → version "0.3.0-jammy",
+        # distro "arm64" — the LSB codename leaked into the version and the GS
+        # distribution label lost it). The abi is constant within a by_key group.
+        _abi = entries[0][1]
+        _ver = key[: -(len(_abi) + 1)] if key.endswith("-" + _abi) else ver
         idx = {"plane": "runtime", "version": _ver, "distro": _abi,
                "key": key, "debs": deb_meta}
         idx_path = deb_dir / f"index-{key}.json"

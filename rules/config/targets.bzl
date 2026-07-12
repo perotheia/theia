@@ -36,9 +36,27 @@ WHERE it is and HOW to drive the toolchain at it.
 #   deb_arch     dpkg arch for the .deb (amd64 | arm64).
 TARGETS = {
     # the workspace host — native x86, dev/CI box (NOT a shipped distro per se).
+    # abi_key "" → the plane key is a bare "<ver>-amd64" (no LSB codename). Fine
+    # for the dev/CI box, which is never a fleet target; a SHIPPED x86 board uses
+    # a codenamed target (noble) so its glibc/iceoryx ABI is pinned.
     "host": {
         "cpu": "x86_64", "gcc_prefix": "", "sysroot": "",
         "abi_key": "", "libc_min": "", "deb_arch": "amd64",
+    },
+    # x86_64 fleet board on Ubuntu 24.04 noble (glibc 2.39). Its OWN ABI: a
+    # noble binary links noble's system iceoryx 2.0.5 (RDS/Arc'teryx) + glibc
+    # 2.39 — NOT interchangeable with a jammy/bookworm amd64 build, exactly as
+    # bookworm≠focal≠jammy on aarch64. Built NATIVELY on the noble box (no
+    # sysroot). The LSB codename in abi_key is what makes the runtime plane key
+    # + GS distribution label distinguish it from a plain "amd64" build.
+    "noble": {
+        # cfg=host: noble is x86 NATIVE — same bazel platform constraints as the
+        # host build (cpu:x86_64 + os:linux); a native build on a noble box links
+        # noble's own libs. No separate platform() needed. abi_key is what
+        # distinguishes the SHIPPED plane from the dev box's bare amd64.
+        "cfg": "host",
+        "cpu": "x86_64", "gcc_prefix": "", "sysroot": "",
+        "abi_key": "noble-amd64", "libc_min": "2.39", "deb_arch": "amd64",
     },
     # Raspberry Pi 4 — aarch64, Debian 12 bookworm (glibc 2.36). The original
     # cross target; sysroot bootstrapped by third_party/sysroot/setup_rpi4.sh.

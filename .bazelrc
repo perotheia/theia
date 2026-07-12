@@ -63,3 +63,10 @@ test:ci  --test_output=errors
 # Host:     bazel build //... --config=linux
 # GCC FW:   bazel build //gateway/firmware/pero_cmp_ti:pero_cmp_ti.elf --config=cortex_r4f
 # TI FW:    bazel build //gateway/firmware/pero_cmp_ti:pero_cmp_ti.elf --config=ti_arm_cgt_18
+
+# Host-local overrides (NOT committed): a native-board build box (jetson/orin)
+# drops `build --linkopt=-L/usr/local/lib --host_linkopt=-L/usr/local/lib` here
+# so the from-source grpc/protobuf closure resolves inside `theia dist`'s own
+# bazel invocations (the jason lesson: a user.bazelrc that ISN'T imported is
+# silently ignored — this line makes it real).
+try-import %workspace%/user.bazelrc

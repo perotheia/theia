@@ -23,12 +23,15 @@ export THEIA_ROOT_DIR="${THEIA_ROOT_DIR:-/opt/theia}"
          "releases/<ver> + current symlink" >&2
     exit 1
 }
-# The supervised tree is read THROUGH `current` (two-plane OTA): with no SWP,
-# current → . so current/config = the runtime baseline; after an SWP rollout,
-# current → releases/<swp> so current/config = the SWP's self-contained executor.
-# One path, both states — the launcher never branches on "is an SWP active".
-# Back-compat: if current/config is absent (a legacy relocate-into-release layout
-# where config stayed flat), fall back to the flat $ROOT/config.
+# The supervised tree is read THROUGH `current` (two-plane OTA): current always
+# points at a REAL release dir — releases/runtime-<ver> for the resting runtime,
+# releases/<swp>-<ver> after an SWP rollout — each carrying its own config/. So
+# current/config is the active release's executor, whichever plane owns it. One
+# path, both states; the launcher never branches on "is an SWP active".
+# (current is NEVER `.` — that self-loops on any -L symlink walk and breaks the
+#  previous/rollback save. The runtime is a real release, not the tree root.)
+# Back-compat: a legacy relocate-into-release layout kept config flat; fall back
+# to $ROOT/config when the release dir carries no config/.
 _cfg_dir="$THEIA_ROOT_DIR/current/config"
 [[ -f "$_cfg_dir/executor.json" ]] || _cfg_dir="$THEIA_ROOT_DIR/config"
 [[ -f "$_cfg_dir/executor.json" ]] || {

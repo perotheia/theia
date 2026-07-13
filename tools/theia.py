@@ -5856,13 +5856,53 @@ def cmd_fleet(args: list[str]) -> int:
       theia fleet [list] [--fleet F | --group G]   every enrolled device
       theia fleet types                            the device Type options
       theia fleet groups                           the named groups + counts
+      theia fleet group <device> <group>           move a device into a group
+      theia fleet ungroup <device> [group]         remove a device from its group
 
-    The device rows show: name, fleet (hardware class), group, base_version (the
-    live-reported runtime), reachable IP, pinned. Env: $THEIA_GS_URL."""
+    The device rows show: name, fleet (hardware class), base_version (the
+    live-reported runtime), reachable IP, group, pinned. Env: $THEIA_GS_URL,
+    $THEIA_GS_KEY (group/ungroup mutate)."""
     if "-h" in args or "--help" in args:
         print(cmd_fleet.__doc__, file=sys.stderr)
         return 0
     sub = args[0] if args and not args[0].startswith("--") else "list"
+
+    if sub in ("group", "ungroup"):
+        if len(args) < 2:
+            print(f"theia fleet {sub}: needs <device>"
+                  f"{' <group>' if sub == 'group' else ' [group]'}.", file=sys.stderr)
+            return 2
+        did = _gs_device_id(args[1])
+        if not did:
+            print(f"theia fleet {sub}: no device '{args[1]}' known.", file=sys.stderr)
+            return 1
+        if sub == "group":
+            if len(args) < 3:
+                print("theia fleet group: needs <group>.", file=sys.stderr)
+                return 2
+            grp = args[2]
+            code, r = _gs("POST", f"/api/devices/{did}/group", {"group": grp})
+            if code != 200:
+                print(f"theia fleet group: [{code}] {r}", file=sys.stderr)
+                return 1
+            print(f"theia fleet: {args[1]} → group '{grp}'")
+            return 0
+        # ungroup — group name is the membership key; resolve from the device if omitted
+        grp = args[2] if len(args) > 2 else None
+        if not grp:
+            _c, devs = _gs("GET", "/api/devices")
+            rows = (devs.get("devices", []) if isinstance(devs, dict) else devs) or []
+            row = next((x for x in rows if isinstance(x, dict) and x.get("id") == did), {})
+            grp = row.get("group")
+            if not grp:
+                print(f"theia fleet ungroup: {args[1]} is in no group.", file=sys.stderr)
+                return 1
+        code, r = _gs("DELETE", f"/api/devices/{did}/group?group={grp}")
+        if code != 200:
+            print(f"theia fleet ungroup: [{code}] {r}", file=sys.stderr)
+            return 1
+        print(f"theia fleet: {args[1]} removed from group '{grp}'")
+        return 0
 
     if sub == "types":
         code, r = _gs("GET", "/api/devices/types")
@@ -5895,6 +5935,7 @@ def cmd_fleet(args: list[str]) -> int:
         return 1
     rows = (devs.get("devices", []) if isinstance(devs, dict) else devs) or []
     want_fleet, want_group = _gs_opt(args, "--fleet"), _gs_opt(args, "--group")
+    print(f"  {'NAME':<14} {'FLEET':<13} {'RUNTIME':<20} {'IP':<15} GROUP")
     shown = 0
     for r in rows:
         if not isinstance(r, dict):
@@ -5909,24 +5950,34 @@ def cmd_fleet(args: list[str]) -> int:
               f"{r.get('group') or ''}{pin}")
         shown += 1
     if not shown:
-        print("(no devices)")
+        print("(no devices match)")
     return 0
 
 
 def cmd_releases(args: list[str]) -> int:
-    """List published builds — the CLI analog of the GS Releases tab.
+    """List / delete published builds — the CLI analog of the GS Releases tab.
 
-    A release is a published, S3-vendored build. Three planes:
-      theia releases [runtime]   platform runtime builds (per ABI); locked=deployed
-      theia releases apps        Software Packages (fleet/app/version + requires_runtime)
-      theia releases roles       per-board role .mender bundles (L4-C campaign)
+    A release is a published, S3-vendored build. Four planes:
+      theia releases [runtime]        platform runtime builds (per ABI); L=deployed
+      theia releases apps             Software Packages (fleet/app/ver + requires_runtime)
+      theia releases roles            per-board role .mender bundles (L4-C campaign)
+      theia releases distributions    Distribution bundles (name/ver → per-role builds)
 
-    `locked` = the build has been deployed (UF immutability — re-iterate = a new
-    version, never a clobber). `pinned` = an operator guard against deletion.
-    Env: $THEIA_GS_URL."""
+    Delete a build (GUARDED — a pinned build must be unpinned first, S3-side):
+      theia releases delete runtime <key>              e.g. 0.3.0-noble-amd64
+      theia releases delete apps <fleet> <app> <ver>
+      theia releases delete distributions <name> <ver>
+
+    `L` = locked (deployed → immutable; re-iterate = a new version, never a
+    clobber). `P` = pinned (operator delete-guard). Env: $THEIA_GS_URL,
+    $THEIA_GS_KEY (delete mutates)."""
     if "-h" in args or "--help" in args:
         print(cmd_releases.__doc__, file=sys.stderr)
         return 0
+
+    if args and args[0] == "delete":
+        return _releases_delete(args[1:])
+
     plane = args[0] if args and not args[0].startswith("--") else "runtime"
 
     if plane == "runtime":
@@ -5979,9 +6030,82 @@ def cmd_releases(args: list[str]) -> int:
                 print(f"  [{lock} ] {ver}: {names}")
         return 0
 
-    print(f"theia releases: unknown plane '{plane}' (runtime|apps|roles).",
-          file=sys.stderr)
+    if plane in ("distributions", "dist"):
+        code, r = _gs("GET", "/api/planes/distributions")
+        if code != 200:
+            print(f"theia releases distributions: [{code}] {r}", file=sys.stderr)
+            return 1
+        dists = r.get("distributions", r) if isinstance(r, dict) else r
+        if not dists or not isinstance(dists, list):
+            print("(no distributions)")
+            return 0
+        print("distributions:")
+        for d in dists:
+            if not isinstance(d, dict) or "_error" in d:
+                continue
+            roles = d.get("roles", [])
+            rstr = ", ".join(f"{x.get('role')}:{x.get('abi','?')}→"
+                             f"{x.get('runtime_build','?')}"
+                             f"+{x.get('swp_build') or x.get('app_build','')}"
+                             for x in roles)
+            print(f"  {d.get('name')} {d.get('version')}  [{rstr}]")
+        return 0
+
+    print(f"theia releases: unknown plane '{plane}' "
+          f"(runtime|apps|roles|distributions).", file=sys.stderr)
     return 2
+
+
+def _releases_delete(args: list[str]) -> int:
+    """theia releases delete <plane> <ref...> — remove a published build.
+    Guarded GS-side: a pinned build 409s (unpin first). Roles have no delete route."""
+    if not args:
+        print("theia releases delete: needs <plane> (runtime|apps|distributions) "
+              "+ ref.", file=sys.stderr)
+        return 2
+    plane, rest = args[0], args[1:]
+
+    if plane == "runtime":
+        if len(rest) < 1:
+            print("theia releases delete runtime: needs <key> "
+                  "(e.g. 0.3.0-noble-amd64).", file=sys.stderr)
+            return 2
+        code, r = _gs("DELETE", "/api/planes/runtime", {"key": rest[0]})
+        label = rest[0]
+    elif plane == "apps":
+        if len(rest) < 3:
+            print("theia releases delete apps: needs <fleet> <app> <version>.",
+                  file=sys.stderr)
+            return 2
+        code, r = _gs("DELETE", "/api/planes/apps",
+                      {"fleet": rest[0], "app": rest[1], "version": rest[2]})
+        label = f"{rest[0]}/{rest[1]}/{rest[2]}"
+    elif plane in ("distributions", "dist"):
+        if len(rest) < 2:
+            print("theia releases delete distributions: needs <name> <version>.",
+                  file=sys.stderr)
+            return 2
+        code, r = _gs("DELETE", "/api/planes/distributions",
+                      {"name": rest[0], "version": rest[1]})
+        label = f"{rest[0]}:{rest[1]}"
+    elif plane == "roles":
+        print("theia releases delete: the roles plane has no delete action "
+              "(role bundles are pruned with their fleet/version).", file=sys.stderr)
+        return 2
+    else:
+        print(f"theia releases delete: unknown plane '{plane}' "
+              f"(runtime|apps|distributions).", file=sys.stderr)
+        return 2
+
+    if code != 200:
+        detail = str(r.get("detail", "")) if isinstance(r, dict) else str(r)
+        hint = "  (unpin it first)" if "pin" in detail.lower() else ""
+        print(f"theia releases delete {plane}: [{code}] {detail or r}{hint}",
+              file=sys.stderr)
+        return 1
+    n = r.get("deleted_objects", "?") if isinstance(r, dict) else "?"
+    print(f"theia releases: deleted {plane} {label} ({n} object(s))")
+    return 0
 
 
 def cmd_target(args: list[str]) -> int:
@@ -6104,10 +6228,10 @@ COMMANDS = {
     "release-app": (cmd_release_swp, "alias for release-swp (deprecated)"),
     "release-role": (cmd_release_role, "build + publish a per-board role .mender (L4-C vehicle campaign)"),
     "enroll":      (cmd_enroll,      "{pending|connect|preauth|identity|probe} — onboard a board into the fleet (GS Connect); stable identity + --watch"),
-    "fleet":       (cmd_fleet,       "[list|types|groups] — the enrolled-device table (GS Fleet view)"),
+    "fleet":       (cmd_fleet,       "[list|types|groups|group|ungroup] — the enrolled-device table + group actions (GS Fleet view)"),
     "deploy":      (cmd_deploy,      "<distribution> <device> [--publish --watch] | status [device] | --list — GS two-plane deploy (runtime+SWP)"),
     "rollout":     (cmd_rollout,     "{create|advance|status|abort|list|delete} — phased app-SWP rollout across a fleet (GS Rollouts)"),
-    "releases":    (cmd_releases,    "[runtime|apps|roles] — published S3 builds (GS Releases tab)"),
+    "releases":    (cmd_releases,    "[runtime|apps|roles|distributions] | delete <plane> <ref> — published S3 builds (GS Releases tab)"),
     "target":      (cmd_target,      "{list|pin|unpin|delete|clear} — manage/decommission a deploy target (GS Target actions)"),
     "cert":        (cmd_cert,        "{generate|copy} the SWP signing keypair; copy ships the PUBLIC verify key to colony via S3"),
     "compdb":      (cmd_compdb,      "regen compile_commands.json from bazel (clangd)"),

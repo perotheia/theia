@@ -84,31 +84,47 @@ identity to a UUID so Mender matches it by `device_id` (not a rotating MAC):
 restarts mender-auth). Pair it with `enroll preauth --id <same-uuid>` for a
 stable-identity onboard that survives reflash.
 
-## `theia fleet` — the device table (GS Fleet view)
+## `theia fleet` — the device table + group actions (GS Fleet view)
 
 ```
-theia fleet [list] [--fleet F | --group G]   # every enrolled device
+theia fleet [list] [--fleet F | --group G]   # every enrolled device (with header)
 theia fleet types                            # the Type dropdown options
 theia fleet groups                           # named groups + counts
+theia fleet group   <device> <group>         # move a device into a group
+theia fleet ungroup <device> [group]         # remove from its group (auto-resolved)
 ```
 
 Rows show `name  fleet  base_version  reachable_ip  group [📌 if pinned]`.
 `base_version` is the **live-reported** runtime (falls back to the recorded tag).
 `fleet` is the hardware-capability class (Mender `device_type`); `--fleet` /
-`--group` filter the list.
+`--group` filter the list. `group`/`ungroup` write the Mender inventory group —
+`ungroup` with no group name resolves it from the device.
 
 ## `theia releases` — published builds (GS Releases tab)
 
 ```
-theia releases [runtime]   # platform runtime builds, per ABI
-theia releases apps        # Software Packages (fleet/app/ver + requires_runtime)
-theia releases roles       # per-board role .mender bundles (L4-C campaign)
+theia releases [runtime]        # platform runtime builds, per ABI
+theia releases apps             # Software Packages (fleet/app/ver + requires_runtime)
+theia releases roles            # per-board role .mender bundles (L4-C campaign)
+theia releases distributions    # Distribution bundles (name/ver → per-role builds)
 ```
 
 The `[L P]` marks: **L**ocked (deployed → immutable, re-iterate = a new version,
 never a clobber) and **P**inned (operator guard against deletion). The `apps`
 plane also prints each SWP's `requires_runtime` — the runtime-plane version the
 deploy/rollout gate checks against (see the rollout gate below).
+
+**Delete a build** (GUARDED — a pinned build 409s, unpin first; delete is S3-side):
+
+```
+theia releases delete runtime <key>              # e.g. 0.3.0-noble-amd64
+theia releases delete apps <fleet> <app> <ver>
+theia releases delete distributions <name> <ver>
+```
+
+The `roles` plane has no delete (role bundles prune with their fleet/version).
+A `locked` (deployed) build should not be deleted — re-iterating makes a new
+version rather than clobbering the deployed one.
 
 ## `theia deploy` — one Distribution → one device
 
@@ -237,7 +253,9 @@ that rig. `<device>` is a NAME or GS id.
 | `enroll identity` | `POST /api/devices/set-identity` |
 | `enroll probe` | `GET /api/devices/probe?host=` |
 | `fleet` / `fleet types` / `fleet groups` | `GET /api/devices`, `/api/devices/types`, `/api/devices/groups/list` |
-| `releases runtime\|apps\|roles` | `GET /api/planes/runtime\|apps\|roles` |
+| `fleet group` / `fleet ungroup` | `POST` / `DELETE /api/devices/{id}/group` |
+| `releases runtime\|apps\|roles\|distributions` | `GET /api/planes/runtime\|apps\|roles\|distributions` |
+| `releases delete runtime\|apps\|distributions` | `DELETE /api/planes/runtime\|apps\|distributions` |
 | `deploy --list` | `GET /api/planes/distributions` |
 | `deploy` (resolve device) | `GET /api/devices` |
 | `deploy --publish` | `POST /api/planes/apps/publish` |

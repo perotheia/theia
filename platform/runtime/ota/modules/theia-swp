@@ -165,11 +165,16 @@ _stage_and_flip() {
         ln -sfn "$(readlink "$CURRENT")" "$PREVIOUS"
     fi
 
-    # Assemble releases/<ver>/{bin,config}: services bin + SWP FC bin; SWP config.
+    # Assemble releases/<ver>/{bin,lib,config}: services bin + SWP FC bin; the base
+    # release's lib (theia-run sets LD_LIBRARY_PATH=current/lib, so the dir must
+    # exist even when empty — services link system .so's + bundled libs from here);
+    # SWP config.
     stage="$RELEASES/$ver"
-    rm -rf "$stage"; mkdir -p "$stage/bin" "$stage/config"
+    rm -rf "$stage"; mkdir -p "$stage/bin" "$stage/lib" "$stage/config"
     cp -a "$base_rel_dir/bin/." "$stage/bin/" 2>/dev/null || true       # services baseline
+    [ -d "$base_rel_dir/lib" ] && cp -a "$base_rel_dir/lib/." "$stage/lib/" 2>/dev/null || true  # bundled libs
     [ -d "$work/bin" ] && cp -a "$work/bin/." "$stage/bin/" 2>/dev/null || true   # SWP FCs win
+    [ -d "$work/lib" ] && cp -a "$work/lib/." "$stage/lib/" 2>/dev/null || true   # SWP libs (if any)
     cp -a "$work/$mdir/executor.json" "$stage/config/executor.json"     # the SHADOWING config
     for f in "$work/$mdir/"*.json; do                                   # per-FC config profiles
         [ -f "$f" ] || continue

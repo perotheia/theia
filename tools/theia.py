@@ -5653,7 +5653,9 @@ def cmd_rollout(args: list[str]) -> int:
       theia rollout create <name> --app <app> --to <ver> [--fleet F | --group G]
                           [--from <ver>] [--phases N] [--scheduled]
       theia rollout advance <name>            launch the next phase
-      theia rollout status  <name>            phases + per-board SW compare
+      theia rollout status  <name> [--ucm]    phases + per-board SW compare;
+                                              --ucm adds the on-device UCM/SM
+                                              install FSM per device (over com)
       theia rollout abort   <name>            halt (deployed phases stay)
       theia rollout list                      every named rollout
       theia rollout delete  <name>            remove the entity
@@ -5756,13 +5758,35 @@ def cmd_rollout(args: list[str]) -> int:
               f"({ro.get('status','?')})")
         print(f"  target: {tgt.get('fleet') or tgt.get('group')}  "
               f"phase {cur}/{len(phases)}  ({ro.get('total_devices','?')} devices)")
+        # --ucm queries the ECU plane (ara::ucm FSM + ara::sm session over com) per
+        # phase, so `rollout status` shows the ON-DEVICE install lifecycle, not just
+        # Mender transport. A finished Mender deployment only means the bytes landed;
+        # UCM state (…→INSTALLING→VERIFYING→ACTIVE) is what confirms activation.
+        want_ucm = "--ucm" in args
         for ph in phases:
             if not isinstance(ph, dict):
                 continue
+            dep_id = ph.get("deployment_id")
             print(f"    phase {ph.get('phase')}: {ph.get('count')} device(s) "
                   f"— {ph.get('status', 'queued')}"
-                  + (f" (mender {str(ph.get('deployment_id'))[:12]})"
-                     if ph.get("deployment_id") else ""))
+                  + (f" (mender {str(dep_id)[:12]})" if dep_id else ""))
+            if want_ucm and dep_id:
+                ec, ed = _gs("GET", f"/api/deployments/{dep_id}/rollout")
+                ecu = (ed.get("ecu", []) if isinstance(ed, dict) else []) if ec == 200 else []
+                if ec != 200:
+                    print(f"      ucm: [{ec}] {ed}", file=sys.stderr)
+                for d in (ecu or []):
+                    if not isinstance(d, dict):
+                        continue
+                    dev = str(d.get("device", ""))[:12]
+                    if d.get("error"):
+                        print(f"      · {dev}: com unreachable ({d['error']})")
+                        continue
+                    p = d.get("progress", {}) or {}
+                    ucm = p.get("state_name") or (f"state {p.get('state')}"
+                                                  if p.get("state") is not None else "—")
+                    sm = p.get("sm_state_name") or ("ok" if p.get("sm_ok") else "—")
+                    print(f"      · {dev}: UCM {ucm}  ·  SM {sm}")
         for row in (r.get("sw_compare", []) if isinstance(r, dict) else []):
             if not isinstance(row, dict):
                 continue

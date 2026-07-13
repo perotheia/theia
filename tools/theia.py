@@ -5672,7 +5672,9 @@ def cmd_rollout(args: list[str]) -> int:
         return default
 
     sub = args[0]
-    name = args[1] if len(args) > 1 and not args[1].startswith("--") else None
+    # the rollout name is the first NON-flag positional after the subcommand, so
+    # `status --ucm chair-fix` and `status chair-fix --ucm` both resolve the name.
+    name = next((a for a in args[1:] if not a.startswith("--")), None)
 
     if sub == "list":
         code, r = _gs("GET", "/api/deployments/rollouts")

@@ -11,9 +11,11 @@
 #   theia-swp      an SWP as a release: releases/<swp>-<ver>/{bin,config}, built by
 #                  copying the CURRENT release's services bin + overlaying the SWP's
 #                  FC bin, and using the SWP's OWN executor.json (services + FCs) as
-#                  the release config. Then flip current → it. The supervisor reads
-#                  current/config/executor.json (via theia-run). bin/supervisor
-#                  stays flat — the release carries only the CHILDREN.
+#                  the release's config/executor.json. Then flip current → it +
+#                  re-point $ROOT/config/executor.json (a symlink) at it. The STOCK
+#                  launcher + binaries read the flat $ROOT/config/executor.json, so
+#                  NO launcher patch is needed. bin/supervisor stays flat — the
+#                  release carries only the CHILDREN; per-FC config stays flat.
 #
 # Why a full release (not a merge): the SWP already ships a complete
 # manifest/<machine>/executor.json (services baseline + its FC nodes), so we make
@@ -190,6 +192,19 @@ _stage_and_flip() {
     ln -sfn "releases/$ver" "$tmp"
     mv -T "$tmp" "$CURRENT"
     echo "theia-swp: current → releases/$ver (previous → $(readlink "$PREVIOUS" 2>/dev/null || echo none))"
+
+    # The STOCK launcher (unpatched theia-run) + the runtime binaries read the
+    # supervised tree from the FLAT $ROOT/config/executor.json, and per-FC config
+    # from flat $ROOT/config/<fc>.json (init_config anchors THEIA_CONFIG_DIR=config
+    # to $THEIA_ROOT_DIR — shared across releases). So the ONLY per-release config
+    # file is executor.json: keep $ROOT/config/executor.json a SYMLINK into the
+    # active release, so it follows this flip with no launcher change. Everything
+    # else in $ROOT/config (per-FC profiles, machine_instance, tipc_netid) stays
+    # flat + shared. (The release's config/*.json profiles are copied above for
+    # self-containment/debug but are not what the children read.)
+    ln -sfn "current/config/executor.json" "$THEIA_ROOT/.cfgexec.$$"
+    mv -T "$THEIA_ROOT/.cfgexec.$$" "$THEIA_ROOT/config/executor.json"
+    echo "theia-swp: \$ROOT/config/executor.json → current/config/executor.json (flat launcher path)"
 }
 
 # Allow sourcing for the helper functions (tests) without dispatching: a caller

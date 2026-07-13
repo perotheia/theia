@@ -2810,6 +2810,12 @@ def cmd_release_swp(args: list[str]) -> int:
                              ArtifactInstall, before the executor merge.
         --migration P    (with --migrate) the migration script to ship (default: the
                          conventional apps/<app>/migrations/v<F>-to-v<T>.py stub).
+        --null           build a NULL-SOFTWARE SWP: the services baseline with NO
+                         app FCs (drops applications_sup, no bin/). The day-2
+                         resting release for two-plane OTA — `current →
+                         releases/base-<ver>` is symmetric with a day-3 app SWP
+                         flip. Publish it as the `base` app (e.g. release-swp base
+                         --null --swp-version 0.1.0).
         --fleet F        the hardware-capability fleet / Mender device-group
                          (default theia-rig) — the S3 package-plane key + Mender
                          --device-type
@@ -2871,6 +2877,12 @@ def cmd_release_swp(args: list[str]) -> int:
     #          major (guarded below). The deploy sequences minors one at a time.
     #   PATCH  is a FREE swap on a fixed runtime + fixed config shape (no --migrate).
     is_migrate = "--migrate" in args
+    # --null: build a NULL-SOFTWARE SWP — the services baseline with NO app FCs (an
+    # empty/absent applications_sup), no bin/. The day-2 resting release in the
+    # two-plane OTA model (docs/design/two-plane-ota.md): current → releases/base-<ver>
+    # is symmetric with a day-3 app SWP, both current-flips. The app package still
+    # provides the machine/executor slice; --null strips the app nodes from it.
+    is_null = "--null" in args
     if "--patch" in args:
         s3_for_latest = _opt("--s3")
         explicit_to = _opt("--to")
@@ -3150,15 +3162,22 @@ def cmd_release_swp(args: list[str]) -> int:
     if stage.exists():
         shutil.rmtree(stage)
     (stage / "bin").mkdir(parents=True)
-    for p in app_procs:
-        src = WORKSPACE / "bazel-bin" / Path(proc_pkg[p]) / "main" / cluster
-        if not src.is_file():
-            print(f"theia release-swp: built binary missing: {src}",
-                  file=sys.stderr)
-            return 1
-        dst = stage / "bin" / p
-        shutil.copy2(src, dst)
-        dst.chmod(0o755)
+    if is_null:
+        # null software: no app binaries. The module assembles the release's bin
+        # from the current runtime release; the base SWP carries only the (stripped)
+        # executor + metadata.
+        print("theia release-swp: --null — no app FCs (services-baseline SWP)",
+              file=sys.stderr)
+    else:
+        for p in app_procs:
+            src = WORKSPACE / "bazel-bin" / Path(proc_pkg[p]) / "main" / cluster
+            if not src.is_file():
+                print(f"theia release-swp: built binary missing: {src}",
+                      file=sys.stderr)
+                return 1
+            dst = stage / "bin" / p
+            shutil.copy2(src, dst)
+            dst.chmod(0o755)
 
     # --asset <src>:<destdir> — stage extra support files into the app tree (e.g.
     # the gateway's PSP plugin: libpsp.so:psp → stage/psp/libpsp.so). The theia-app
@@ -3242,7 +3261,25 @@ def cmd_release_swp(args: list[str]) -> int:
             for fn in ("machine.json", "executor.json", "application.json"):
                 if (msrc / fn).is_file():
                     (stage / "manifest" / mname).mkdir(parents=True, exist_ok=True)
-                    _sh.copy2(msrc / fn, stage / "manifest" / mname / fn)
+                    dst_fn = stage / "manifest" / mname / fn
+                    if is_null and fn == "executor.json":
+                        # null software: drop applications_sup (the app nodes) →
+                        # the SWP executor is the services baseline only.
+                        _ex = json.loads((msrc / fn).read_text())
+
+                        def _strip_apps(n):
+                            if isinstance(n, dict):
+                                for k in ("children", "workers", "nodes"):
+                                    if n.get(k):
+                                        n[k] = [c for c in n[k]
+                                                if not (isinstance(c, dict)
+                                                        and c.get("name") == "applications_sup")]
+                                        for c in n[k]:
+                                            _strip_apps(c)
+                        _strip_apps(_ex)
+                        dst_fn.write_text(json.dumps(_ex, indent=2))
+                    else:
+                        _sh.copy2(msrc / fn, dst_fn)
     # The Mender artifact-name == the Distribution swp_build identifier == what the
     # GS per-role deploy hands Mender. ABI-keyed so central (bookworm-arm64) and
     # compute (focal-arm64) of the SAME SWP version are distinct, non-colliding

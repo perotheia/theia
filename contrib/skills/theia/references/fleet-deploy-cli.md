@@ -102,29 +102,58 @@ Rows show `name  fleet  base_version  reachable_ip  group [📌 if pinned]`.
 
 ## `theia releases` — published builds (GS Releases tab)
 
+A **release** is a single published build. Two kinds (+ roles):
+- **base** — the runtime plane: platform builds per ABI (key = `<ver>-<abi>`).
+- **app** — the SWP plane: the user's **Applications** (fleet/app/version).
+- **roles** — per-board role `.mender` bundles (L4-C campaign; list-only).
+
+> A `release` is ONE build. A **Distribution** COMBINES a base + app per role —
+> that's a separate verb, `theia distributions` (below). (The GS UI briefly
+> mislabeled the app catalog "Distributions"; it's **Applications**.)
+
 ```
-theia releases [runtime]        # platform runtime builds, per ABI
-theia releases apps             # Software Packages (fleet/app/ver + requires_runtime)
-theia releases roles            # per-board role .mender bundles (L4-C campaign)
-theia releases distributions    # Distribution bundles (name/ver → per-role builds)
+theia releases                 # base + app (the two deployable kinds)
+theia releases base            # runtime builds, per ABI
+theia releases app             # Application SWPs (+ requires base version)
+theia releases roles           # role bundles
 ```
+(`runtime`/`apps` are accepted aliases for `base`/`app`.)
 
 The `[L P]` marks: **L**ocked (deployed → immutable, re-iterate = a new version,
-never a clobber) and **P**inned (operator guard against deletion). The `apps`
-plane also prints each SWP's `requires_runtime` — the runtime-plane version the
-deploy/rollout gate checks against (see the rollout gate below).
+never a clobber) and **P**inned (operator delete-guard). The `app` kind prints
+each SWP's required base version (the deploy/rollout runtime-compat gate).
 
-**Delete a build** (GUARDED — a pinned build 409s, unpin first; delete is S3-side):
+**Pin / unpin** (the S3 delete-guard) and **delete** (GUARDED — a pinned build
+409s, unpin first):
 
 ```
-theia releases delete runtime <key>              # e.g. 0.3.0-noble-amd64
-theia releases delete apps <fleet> <app> <ver>
-theia releases delete distributions <name> <ver>
+theia releases pin    base <key>                 # e.g. 0.3.0-noble-amd64
+theia releases unpin  base <key>
+theia releases pin    app  <fleet> <app> <ver>
+theia releases unpin  app  <fleet> <app> <ver>
+theia releases delete base <key>
+theia releases delete app  <fleet> <app> <ver>
 ```
 
-The `roles` plane has no delete (role bundles prune with their fleet/version).
-A `locked` (deployed) build should not be deleted — re-iterating makes a new
-version rather than clobbering the deployed one.
+`roles` has no pin/delete (role bundles prune with their fleet/version). A
+`locked` (deployed) build should not be deleted — re-iterate to a new version
+rather than clobbering the deployed one.
+
+## `theia distributions` — combined bundles (GS Distributions tab)
+
+A **Distribution** binds per-role builds — `{name, version, roles:[{role, abi,
+base build, app build}]}` — into the one unit `theia deploy` consumes.
+
+```
+theia distributions [list]
+theia distributions create <name> <version> --role <role>:<abi>:<base_key>[:<app_swp>] ...
+theia distributions delete <name> <version>
+```
+
+`create` takes one `--role` per role (arity = role count); each is
+`role:abi:base_build[:app_swp]`, e.g.
+`--role central:noble-amd64:0.3.0-noble-amd64:base-0.1.0-noble-amd64`. GS
+enforces `role.abi == base_build abi == app_build abi`.
 
 ## `theia deploy` — one Distribution → one device
 
@@ -254,8 +283,12 @@ that rig. `<device>` is a NAME or GS id.
 | `enroll probe` | `GET /api/devices/probe?host=` |
 | `fleet` / `fleet types` / `fleet groups` | `GET /api/devices`, `/api/devices/types`, `/api/devices/groups/list` |
 | `fleet group` / `fleet ungroup` | `POST` / `DELETE /api/devices/{id}/group` |
-| `releases runtime\|apps\|roles\|distributions` | `GET /api/planes/runtime\|apps\|roles\|distributions` |
-| `releases delete runtime\|apps\|distributions` | `DELETE /api/planes/runtime\|apps\|distributions` |
+| `releases base\|app\|roles` | `GET /api/planes/runtime\|apps\|roles` |
+| `releases pin\|unpin base\|app` | `POST /api/planes/runtime\|apps/pin` |
+| `releases delete base\|app` | `DELETE /api/planes/runtime\|apps` |
+| `distributions list` | `GET /api/planes/distributions` |
+| `distributions create` | `POST /api/planes/distributions` |
+| `distributions delete` | `DELETE /api/planes/distributions` |
 | `deploy --list` | `GET /api/planes/distributions` |
 | `deploy` (resolve device) | `GET /api/devices` |
 | `deploy --publish` | `POST /api/planes/apps/publish` |

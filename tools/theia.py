@@ -5266,6 +5266,383 @@ src/impl/@CLS@Ctrl_handlers.cc (write-once, your bodies).
 '''
 
 
+# ── Fleet deploy + rollout (the CLI analog of the Ground Station UI) ──────────
+#
+# These verbs drive the SAME Ground Station API the GS web UI calls, so a
+# headless operator (CI, a script, a terminal) gets the exact deploy/rollout
+# flow without the browser. The GS orchestrates BOTH planes for a Distribution
+# deploy — colony (the runtime .debs over SSH) + Mender (the app SWP) — and owns
+# the stateful rollout entity; theia just wraps the HTTP.
+#
+#   base URL : $THEIA_GS_URL         (default http://10.0.0.99:8090)
+#   api key  : $THEIA_GS_KEY         (mutating routes need it; see gs-api
+#                                     GS_API_KEY. Read routes are open.)
+import json as _json_gs   # noqa: E402  (local alias; json is imported per-fn elsewhere)
+import urllib.request as _url_gs
+import urllib.error as _urlerr_gs
+
+_GS_URL = os.environ.get("THEIA_GS_URL", "http://10.0.0.99:8090").rstrip("/")
+_GS_KEY = os.environ.get("THEIA_GS_KEY", "")
+
+
+def _gs(method: str, path: str, body: dict | None = None, *, timeout: float = 120.0):
+    """Call the Ground Station API. Returns (status_code, parsed_json_or_text).
+    Mutating routes (POST/DELETE) send X-API-Key from $THEIA_GS_KEY."""
+    url = f"{_GS_URL}{path}"
+    data = _json_gs.dumps(body).encode() if body is not None else None
+    req = _url_gs.Request(url, data=data, method=method)
+    if data is not None:
+        req.add_header("Content-Type", "application/json")
+    if _GS_KEY:
+        req.add_header("X-API-Key", _GS_KEY)
+    try:
+        with _url_gs.urlopen(req, timeout=timeout) as r:
+            raw = r.read().decode(errors="replace")
+            code = r.status
+    except _urlerr_gs.HTTPError as e:
+        raw, code = e.read().decode(errors="replace"), e.code
+    except Exception as e:  # noqa: BLE001  (connection refused etc.)
+        return 0, str(e)
+    try:
+        return code, _json_gs.loads(raw)
+    except ValueError:
+        return code, raw
+
+
+def _gs_device_id(name_or_id: str) -> "str | None":
+    """Resolve a device NAME (exo/taycann) → its GS device id (UUID). A value
+    that is already an id (contains a '-' and matches a known id) passes through.
+    Returns None if no device matches."""
+    code, devs = _gs("GET", "/api/devices")
+    if code != 200 or not isinstance(devs, (list, dict)):
+        return None
+    rows = devs if isinstance(devs, list) else devs.get("devices", devs.get("rows", []))
+    for r in rows:
+        did = str(r.get("device_id") or r.get("id") or "")
+        if name_or_id in (r.get("name"), r.get("hostname"), did):
+            return did
+    return None
+
+
+def cmd_deploy(args: list[str]) -> int:
+    """Deploy a Distribution to a device — the CLI analog of the GS Deployment tab.
+
+    Usage:
+      theia deploy <distribution> <device> [--version V] [--ip IP]
+                   [--publish] [--watch]
+
+    <distribution> is a GS Distribution name (see `theia deploy --list`). <device>
+    is a device NAME (exo / taycann) or its GS id. This drives the SAME GS
+    two-plane deploy the UI does: colony orchestrate (the role's runtime_build via
+    SSH) + Mender (the app SWP). ABI compatibility is enforced GS-side (the
+    device's inferred abi must equal the role's).
+
+    Options:
+      --version V   the Distribution version (default: the newest for that name)
+      --ip IP       the device IP colony SSHes to (default: its reachable_ip)
+      --publish     bridge the app SWP .mender into the Mender store first (the
+                    GS `apps/publish` step) — needed the first time an app version
+                    is deployed, harmless to repeat.
+      --watch       poll BOTH planes to completion (colony action + Mender
+                    deployment) and print the terminal state.
+      --list        list the available Distributions and exit.
+
+    Env: $THEIA_GS_URL (default http://10.0.0.99:8090), $THEIA_GS_KEY (mutating)."""
+    if "-h" in args or "--help" in args:
+        print(cmd_deploy.__doc__, file=sys.stderr)
+        return 0
+
+    def _opt(name, default=None):
+        for i, a in enumerate(args):
+            if a == name and i + 1 < len(args):
+                return args[i + 1]
+        return default
+
+    if "--list" in args:
+        code, dists = _gs("GET", "/api/planes/distributions")
+        if code != 200:
+            print(f"theia deploy: GS distributions [{code}]: {dists}", file=sys.stderr)
+            return 1
+        rows = dists.get("distributions", dists) if isinstance(dists, dict) else dists
+        print("Distributions:")
+        for d in (rows if isinstance(rows, list) else []):
+            if not isinstance(d, dict) or "_error" in d:
+                continue
+            roles = d.get("roles", [])
+            rstr = ", ".join(f"{r['role']}:{r.get('abi','?')}→{r.get('runtime_build','?')}"
+                             f"+{r.get('swp_build') or r.get('app_build','')}" for r in roles)
+            print(f"  {d.get('name')} {d.get('version')}  [{rstr}]")
+        return 0
+
+    pos = [a for a in args if not a.startswith("--")
+           and args[max(0, args.index(a) - 1)] not in ("--version", "--ip")]
+    if len(pos) < 2:
+        print("theia deploy: need <distribution> <device> "
+              "(see `theia deploy --list` / `--help`).", file=sys.stderr)
+        return 2
+    dist_name, device = pos[0], pos[1]
+    version = _opt("--version")
+    ip = _opt("--ip")
+
+    # Resolve the distribution version (newest for the name) if not given.
+    code, dists = _gs("GET", "/api/planes/distributions")
+    if code != 200:
+        print(f"theia deploy: GS distributions [{code}]: {dists}", file=sys.stderr)
+        return 1
+    rows = dists.get("distributions", dists) if isinstance(dists, dict) else dists
+    cand = [d for d in rows if isinstance(d, dict) and d.get("name") == dist_name]
+    if not cand:
+        print(f"theia deploy: no Distribution named '{dist_name}' "
+              f"(see `theia deploy --list`).", file=sys.stderr)
+        return 1
+    if not version:
+        version = sorted(c.get("version", "") for c in cand)[-1]
+    dist = next((c for c in cand if str(c.get("version")) == str(version)), cand[0])
+
+    device_id = _gs_device_id(device)
+    if not device_id:
+        print(f"theia deploy: no device '{device}' known to the GS.", file=sys.stderr)
+        return 1
+
+    # Optional: bridge each role's app SWP into the Mender store first.
+    if "--publish" in args:
+        for role in dist.get("roles", []):
+            swp = role.get("swp_build") or role.get("app_build")
+            if not swp:
+                continue
+            # swp is <app>-<ver> (e.g. base-0.1.0-noble-amd64) → app, version.
+            app = swp.split("-", 1)[0]
+            ver = swp[len(app) + 1:]
+            pc, pr = _gs("POST", "/api/planes/apps/publish",
+                         {"app": app, "version": ver, "fleet": "theia-rig"})
+            tag = "ok" if pc == 200 else f"[{pc}] {pr}"
+            print(f"theia deploy: publish {swp} → mender: {tag}", file=sys.stderr)
+
+    # The deploy: ONE distribution, arity-1 here (a role → this device). A
+    # multi-role distribution would take repeated --device role=dev args; this
+    # verb handles the common arity-1 board case (extend when a multi-board CLI
+    # deploy is needed).
+    roles = dist.get("roles", [])
+    if len(roles) != 1:
+        print(f"theia deploy: distribution has {len(roles)} roles; the CLI verb "
+              f"deploys arity-1 (one role → one device). Use the GS UI for "
+              f"multi-role assignment.", file=sys.stderr)
+        return 2
+    assign = {"role": roles[0]["role"], "device_id": device_id}
+    if ip:
+        assign["ip"] = ip
+    code, res = _gs("POST", "/api/deployments/distribution",
+                    {"name": dist_name, "version": version, "assignments": [assign]})
+    if code != 200:
+        print(f"theia deploy: [{code}] {res}", file=sys.stderr)
+        return 1
+    steps = res.get("steps", []) if isinstance(res, dict) else []
+    print(f"theia deploy: {dist_name}:{version} → {device}")
+    colony_id = mender_id = None
+    for st in steps:
+        base = st.get("base", "—"); colony_id = st.get("colony_id") or colony_id
+        swp = st.get("swp") or st.get("app", "—"); mender_id = st.get("mender_id") or mender_id
+        print(f"  role {st.get('role')}: runtime {base} "
+              f"(colony {colony_id or '?'}) + swp {swp} (mender {mender_id or '?'})")
+        for k in ("base_error", "app_error"):
+            if st.get(k):
+                print(f"    {k}: {st[k]}", file=sys.stderr)
+
+    if "--watch" in args:
+        return _deploy_watch(colony_id, mender_id, device_id)
+    return 0
+
+
+def _deploy_watch(colony_id, mender_id, device_id) -> int:
+    """Poll the colony action + the Mender deployment device-status to terminal.
+    Best-effort: prints the final state of each plane, returns non-zero on a
+    failure of either. Both planes are read from GET /api/deployments (the GS
+    aggregates colony `base` rows + Mender `app` rows there, each with a
+    statistics.status)."""
+    import time
+
+    def _find_row(dep_id):
+        code, d = _gs("GET", "/api/deployments")
+        if code != 200:
+            return None
+        rows = d if isinstance(d, list) else (d.get("deployments", d.get("rows", []))
+                                              if isinstance(d, dict) else [])
+        return next((r for r in rows if isinstance(r, dict) and r.get("id") == dep_id), None)
+
+    rc = 0
+    # colony action (the runtime plane) — a `base`-authority row, status
+    # finished/failed with statistics.status success/failure counts.
+    if colony_id:
+        for _ in range(30):   # ~5 min cap
+            row = _find_row(colony_id) or {}
+            st = row.get("status") or ""
+            if st in ("finished", "failed"):
+                stats = (row.get("statistics", {}) or {}).get("status", {})
+                ok = stats.get("success", 0) and not stats.get("failure", 0)
+                print(f"  colony {colony_id[:12]}: {st} "
+                      f"({'ok' if ok else 'FAILED'})")
+                if not ok:
+                    rc = 1
+                break
+            time.sleep(10)
+        else:
+            print(f"  colony {colony_id[:12]}: still running after watch window")
+    # Mender deployment (the app plane) — device-level status via the dedicated
+    # per-deployment devices route (authoritative per-board terminal state).
+    if mender_id:
+        st = "pending"
+        for _ in range(40):   # ~7 min cap (download+install+commit)
+            code, devs = _gs("GET", f"/api/deployments/{mender_id}/devices")
+            rows = devs if isinstance(devs, list) else (
+                devs.get("devices", []) if isinstance(devs, dict) else [])
+            st = (rows[0].get("status") if rows and isinstance(rows[0], dict)
+                  else "") or "pending"
+            if st in ("success", "failure", "already-installed",
+                      "noartifact", "aborted"):
+                print(f"  mender {mender_id[:12]}: {st}")
+                if st in ("failure", "aborted"):
+                    rc = 1
+                break
+            time.sleep(10)
+        else:
+            print(f"  mender {mender_id[:12]}: still {st} after watch window")
+    return rc
+
+
+def cmd_rollout(args: list[str]) -> int:
+    """Phased app-SWP rollout across a fleet — the CLI analog of the GS Rollouts tab.
+
+    A rollout is a NAMED, STATEFUL entity: it splits the target fleet/group into N
+    phases, deploys phase 1 now, and the operator gates each next phase. APP PLANE
+    ONLY (a published app SWP) — the runtime/base is (re)provisioned, never rolled.
+
+    Subcommands:
+      theia rollout create <name> --app <app> --to <ver> [--fleet F | --group G]
+                          [--from <ver>] [--phases N] [--scheduled]
+      theia rollout advance <name>            launch the next phase
+      theia rollout status  <name>            phases + per-board SW compare
+      theia rollout abort   <name>            halt (deployed phases stay)
+      theia rollout list                      every named rollout
+      theia rollout delete  <name>            remove the entity
+
+    Env: $THEIA_GS_URL, $THEIA_GS_KEY."""
+    if "-h" in args or "--help" in args or not args:
+        print(cmd_rollout.__doc__, file=sys.stderr)
+        return 0 if ("-h" in args or "--help" in args) else 2
+
+    def _opt(name, default=None):
+        for i, a in enumerate(args):
+            if a == name and i + 1 < len(args):
+                return args[i + 1]
+        return default
+
+    sub = args[0]
+    name = args[1] if len(args) > 1 and not args[1].startswith("--") else None
+
+    if sub == "list":
+        code, r = _gs("GET", "/api/deployments/rollouts")
+        if code != 200:
+            print(f"theia rollout list: [{code}] {r}", file=sys.stderr)
+            return 1
+        rolls = r.get("rollouts", r) if isinstance(r, dict) else r
+        if not rolls or not isinstance(rolls, list):
+            print("(no rollouts)")
+            return 0
+        for ro in rolls:
+            if not isinstance(ro, dict) or "_error" in ro:
+                continue
+            tgt = ro.get("target", {}) or {}
+            nph = len(ro.get("phases", []) or [])
+            cur = ro.get("current_phase", 0)
+            print(f"  {ro.get('name')}  {ro.get('app')} → {ro.get('to_version')}  "
+                  f"phase {cur}/{nph}  "
+                  f"[{tgt.get('fleet') or tgt.get('group') or '?'}]  {ro.get('status','')}")
+        return 0
+
+    if not name:
+        print(f"theia rollout {sub}: needs a rollout <name>.", file=sys.stderr)
+        return 2
+
+    if sub == "create":
+        app = _opt("--app"); to = _opt("--to")
+        if not (app and to):
+            print("theia rollout create: --app <app> and --to <version> required.",
+                  file=sys.stderr)
+            return 2
+        body = {"name": name, "app": app, "to_version": to,
+                "phases": int(_opt("--phases", "2")),
+                "when": "scheduled" if "--scheduled" in args else "now"}
+        if _opt("--from"): body["from_version"] = _opt("--from")
+        if _opt("--fleet"): body["fleet"] = _opt("--fleet")
+        if _opt("--group"): body["group"] = _opt("--group")
+        if not (body.get("fleet") or body.get("group")):
+            body["fleet"] = "theia-rig"   # the lab fleet default
+        code, r = _gs("POST", "/api/deployments/rollouts", body)
+        if code != 200:
+            print(f"theia rollout create: [{code}] {r}", file=sys.stderr)
+            return 1
+        print(f"theia rollout: created '{name}' — {app} → {to}, "
+              f"{body['phases']} phase(s), "
+              f"{'scheduled (not launched)' if '--scheduled' in args else 'phase 1 launched'}")
+        return 0
+
+    if sub == "advance":
+        code, r = _gs("POST", "/api/deployments/rollouts/advance", {"name": name})
+        if code != 200:
+            print(f"theia rollout advance: [{code}] {r}", file=sys.stderr)
+            return 1
+        ph = r.get("phase") if isinstance(r, dict) else "?"
+        print(f"theia rollout: '{name}' advanced → phase {ph}")
+        return 0
+
+    if sub == "abort":
+        code, r = _gs("POST", f"/api/deployments/rollouts/{name}/abort", {})
+        print(f"theia rollout: abort '{name}' [{code}]"
+              + ("" if code == 200 else f" {r}"), file=sys.stderr)
+        return 0 if code == 200 else 1
+
+    if sub == "delete":
+        code, r = _gs("DELETE", f"/api/deployments/rollouts/{name}")
+        print(f"theia rollout: delete '{name}' [{code}]"
+              + ("" if code == 200 else f" {r}"), file=sys.stderr)
+        return 0 if code == 200 else 1
+
+    if sub == "status":
+        code, r = _gs("GET", f"/api/deployments/rollouts/{name}")
+        if code != 200:
+            print(f"theia rollout status: [{code}] {r}", file=sys.stderr)
+            return 1
+        ro = (r.get("rollout", r) if isinstance(r, dict) else r)
+        if not isinstance(ro, dict):
+            print(f"theia rollout status: unexpected response: {ro}", file=sys.stderr)
+            return 1
+        tgt = ro.get("target", {}) or {}
+        phases = ro.get("phases", []) or []
+        cur = ro.get("current_phase", 0)
+        print(f"rollout {ro.get('name')}: {ro.get('app')} → {ro.get('to_version')} "
+              f"({ro.get('status','?')})")
+        print(f"  target: {tgt.get('fleet') or tgt.get('group')}  "
+              f"phase {cur}/{len(phases)}  ({ro.get('total_devices','?')} devices)")
+        for ph in phases:
+            if not isinstance(ph, dict):
+                continue
+            print(f"    phase {ph.get('phase')}: {ph.get('count')} device(s) "
+                  f"— {ph.get('status', 'queued')}"
+                  + (f" (mender {str(ph.get('deployment_id'))[:12]})"
+                     if ph.get("deployment_id") else ""))
+        for row in (r.get("sw_compare", []) if isinstance(r, dict) else []):
+            if not isinstance(row, dict):
+                continue
+            mark = "✓" if row.get("at_target") else "·"
+            print(f"    {mark} {row.get('machine')}: {row.get('current')} → "
+                  f"{row.get('target')}")
+        return 0
+
+    print(f"theia rollout: unknown subcommand '{sub}' "
+          f"(create|advance|status|abort|list|delete).", file=sys.stderr)
+    return 2
+
+
 COMMANDS = {
     "init":        (cmd_init,        "scaffold the CWD as a Theia consuming workspace (source or /opt/theia)"),
     "rig":         (cmd_rig,         "docker compose {up|down|status} the deploy stack (status: containers + live rtdb cluster)"),
@@ -5284,6 +5661,8 @@ COMMANDS = {
     "release-swp": (cmd_release_swp, "build + publish a user-ws Software Package (day-2 Mender OTA, the package plane)"),
     "release-app": (cmd_release_swp, "alias for release-swp (deprecated)"),
     "release-role": (cmd_release_role, "build + publish a per-board role .mender (L4-C vehicle campaign)"),
+    "deploy":      (cmd_deploy,      "<distribution> <device> [--publish --watch] — GS two-plane deploy (runtime+SWP), CLI analog of the GS UI"),
+    "rollout":     (cmd_rollout,     "{create|advance|status|abort|list|delete} — phased app-SWP rollout across a fleet (GS Rollouts)"),
     "cert":        (cmd_cert,        "{generate|copy} the SWP signing keypair; copy ships the PUBLIC verify key to colony via S3"),
     "compdb":      (cmd_compdb,      "regen compile_commands.json from bazel (clangd)"),
     "observer":    (cmd_observer,    "launch the supervisor-GUI against the local cluster (always mTLS)"),

@@ -6027,12 +6027,21 @@ def cmd_target(args: list[str]) -> int:
         if sub == "delete":
             code, r = _gs("DELETE", f"/api/devices/{did}")
             if code != 200:
+                # the GS purge is honest now: a stuck/orphan record that couldn't
+                # be cleared returns 502 "decommission incomplete" (not a false
+                # 200). Surface the pin-guard hint + the incomplete case distinctly.
+                detail = str(r.get("detail", "")) if isinstance(r, dict) else str(r)
                 extra = ""
-                if isinstance(r, dict) and "pin" in str(r.get("detail", "")).lower():
-                    extra = "  (unpin it first: `theia target unpin " + args[1] + "`)"
-                print(f"theia target delete: [{code}] {r}{extra}", file=sys.stderr)
+                if "pin" in detail.lower():
+                    extra = f"  (unpin it first: `theia target unpin {args[1]}`)"
+                print(f"theia target delete: [{code}] {detail or r}{extra}",
+                      file=sys.stderr)
                 return 1
-            print(f"theia target: decommissioned {args[1]} — left the fleet")
+            # report what actually cleared — an orphaned accepted auth-set (a stale
+            # re-enrol) is purged too, so this is no longer a silent no-op.
+            cleared = r.get("auth_sets_cleared", []) if isinstance(r, dict) else []
+            tail = f" ({len(cleared)} auth-set(s) cleared)" if cleared else ""
+            print(f"theia target: decommissioned {args[1]} — left the fleet{tail}")
             return 0
         code, r = _gs("POST", f"/api/devices/{did}/pin", {"pinned": sub == "pin"})
         if code != 200:

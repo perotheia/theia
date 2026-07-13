@@ -2417,54 +2417,29 @@ def _release_runtime_plane(target: str, args: list[str]) -> int:
 
 
 def cmd_release(args: list[str]) -> int:
-    """Release the runtime plane to S3, or build the full package set.
+    """Push the runtime plane to S3 — MANIFEST-DRIVEN, a <target> is REQUIRED.
 
-    TWO modes:
-      theia release <target> [--s3 URL]   MANIFEST-DRIVEN — build the runtime
-        debs via `theia dist <target>` and push them to the S3 runtime plane
-        (s3://theia-runtime/<ver>-<abi>/). The counterpart to `theia release-swp`
-        (app plane). See _release_runtime_plane. This is the S3-push verb your
-        deploy chain uses.
-      theia release [--arch A] [--ipk]    FULL PACKAGE BUILD (no target) — the
-        legacy 4-step build below.
+      theia release <target> [--s3 URL]
 
-    The 4-step build (framework → runtime → services → package) that produces the
-    ROS2-style independent packages:
-      theia-framework  artheia + deps + rules → .deb (/opt/theia, setup.sh)
-      theia-runtime    runtime sources + supervisor + tombstone + tdb + protos
-      theia-services   com/per/sm/ucm/log/shwa binaries + services protos
-      theia-rf         rf_theia harness wheel (minus scenarios/_selftest)
-      (theia-tools — supervisor-GUI + rtdb — assembled when its CMake build is wired)
+    Builds the runtime debs via `theia dist <target>` (associating a runtime
+    manifest with the theia-runtime/theia-services Deb set) and pushes them to the
+    S3 runtime plane (s3://theia-runtime/<ver>-<abi>/). The S3-push counterpart to
+    the build-only `theia dist`, symmetric with `theia release-swp` (the app/SWP
+    plane). See _release_runtime_plane.
 
-    Each bazel package emits a .deb (dist/debian/) — the default + primary, since
-    Theia is always deployed on Debian-derived platforms. Pass `--ipk` to ALSO
-    emit the embedded/opkg .ipk (dist/ipkg/) — the opt-in hatch for a non-Debian
-    target. `--arch host,rpi4` builds several platforms (default: host); Python
-    wheels are arch-independent (built once). `--python-only` skips the C++/bazel
-    set (just the framework + rf wheels)."""
-    import json   # noqa: F401  (kept for parity / future manifest reads)
-    import shutil
+    To BUILD the local dev .deb set (framework/runtime/services/rf) — no S3, no
+    target — use `theia build-debs`. That used to be `theia release` with no
+    target; it was split out so this verb means exactly one thing (S3 push).
 
-    # NOTE: patch-versioning is an APP-PLANE concern and lives on `release-swp`
-    # (`theia release-swp <app> --patch`), NOT here. `theia release` ships the
-    # RUNTIME plane, which is FIXED per install — rolling it means a re-provision
-    # (colony/base plane), never a free version swap. Keep runtime fixed, exchange
-    # the app SWP freely: that split is the whole point (see cmd_release_swp).
-
+    NOTE: patch-versioning is an APP-PLANE concern and lives on `release-swp`. The
+    RUNTIME plane is FIXED per install — rolling it means a re-provision (colony/
+    base plane), never a free version swap."""
     if "-h" in args or "--help" in args:
         print(cmd_release.__doc__, file=sys.stderr)
         return 0
 
-    # MANIFEST-DRIVEN RELEASE: `theia release <target> [--s3 URL]` builds the
-    # runtime plane via `theia dist <target>` (which associates a runtime manifest
-    # with the theia-runtime/theia-services Deb set) and pushes it to S3. This is
-    # the S3-push counterpart to the build-only `theia dist` — symmetric with
-    # `theia release-swp` (the app/SWP plane). No positional target → the legacy
-    # full-package build below (framework + rf wheels + runtime + dev debs).
-    #
-    # A bare positional is the target — but SKIP option VALUES: `release --arch
-    # host` has "host" as --arch's value, NOT a target (that's the legacy full
-    # build). Track which tokens are consumed by a value-taking option.
+    # A bare positional is the target — but SKIP option VALUES (`--arch host` has
+    # "host" as the value, not a target). Track tokens consumed by a value-opt.
     _VALUE_OPTS = {"--arch", "--distro", "--version", "--s3", "--bucket"}
     _skip = set()
     for i, a in enumerate(args):
@@ -2472,8 +2447,44 @@ def cmd_release(args: list[str]) -> int:
             _skip.add(i + 1)
     target = next((a for i, a in enumerate(args)
                    if not a.startswith("-") and i not in _skip), None)
-    if target is not None:
-        return _release_runtime_plane(target, args)
+    if target is None:
+        print("theia release: needs a <target> (builds the runtime plane + pushes "
+              "to S3).\n  To build the local dev .deb set, use `theia build-debs`.",
+              file=sys.stderr)
+        return 2
+    return _release_runtime_plane(target, args)
+
+
+def cmd_build_debs(args: list[str]) -> int:
+    """Build the local dev .deb set — the installable ROS2-style Theia packages.
+
+      theia build-debs [--arch host,rpi4] [--distro ubuntu24] [--ipk]
+                       [--runtime] [--python-only]
+
+    NO S3, NO target — the local build (was `theia release` with no target; split
+    out so `release` unambiguously means the S3 runtime-plane push). Produces one
+    .deb per package under dist/debian/:
+      theia-framework  artheia + deps + rules → .deb (/opt/theia, setup.sh)
+      theia-runtime    runtime sources + supervisor + tombstone + tdb + protos
+      theia-services   com/per/sm/ucm/log/shwa binaries + services protos
+      theia-rf         rf_theia harness wheel (minus scenarios/_selftest)
+      (theia-tools — supervisor-GUI + rtdb — when its CMake build is wired)
+
+    Each bazel package emits a .deb (dist/debian/) — the default + primary, since
+    Theia is always deployed on Debian-derived platforms. Options:
+      --arch host,rpi4   build several platforms (default: host); wheels are
+                         arch-independent (built once).
+      --distro ubuntu24  on a 24.04 box — the theia-services deb Depends then name
+                         noble's soname'd grpc/protobuf (libgrpc++1.51t64 / …).
+      --ipk              ALSO emit the embedded/opkg .ipk under dist/ipkg/.
+      --runtime          ONLY the two on-device debs (theia-runtime +
+                         theia-services), skipping framework + rf + -dev.
+      --python-only      skip the C++/bazel set (just framework + rf wheels)."""
+    import shutil
+
+    if "-h" in args or "--help" in args:
+        print(cmd_build_debs.__doc__, file=sys.stderr)
+        return 0
 
     archs = ["host"]
     # The build-distro ABI tag for the x86 services .deb Depends (com/per link
@@ -2488,7 +2499,7 @@ def cmd_release(args: list[str]) -> int:
             distro = args[i + 1].strip()
     for a in archs:
         if a not in _RELEASE_ARCH:
-            print(f"theia release: unknown arch '{a}' "
+            print(f"theia build-debs: unknown arch '{a}' "
                   f"(known: {', '.join(_RELEASE_ARCH)})", file=sys.stderr)
             return 2
 
@@ -2514,7 +2525,7 @@ def cmd_release(args: list[str]) -> int:
         #    ROS2-style setup.sh). Arch-independent (Architecture: all). ──────
         fw_out.mkdir(parents=True, exist_ok=True)
         if (rc := _build_framework_deb(fw_out)) != 0:
-            print("theia release: framework .deb build failed.", file=sys.stderr)
+            print("theia build-debs: framework .deb build failed.", file=sys.stderr)
             return rc
 
         # ── Step 4 (python part): rf harness wheel (minus _selftest, per its
@@ -2523,11 +2534,11 @@ def cmd_release(args: list[str]) -> int:
         if (rc := _run([sys.executable, "-m", "pip", "wheel",
                         str(WORKSPACE / "rf-theia"), "--no-deps",
                         "-w", str(rf_out)])) != 0:
-            print("theia release: rf wheel build failed.", file=sys.stderr)
+            print("theia build-debs: rf wheel build failed.", file=sys.stderr)
             return rc
 
         if python_only:
-            print(f"theia release: python wheels → {fw_out}, {rf_out}",
+            print(f"theia build-debs: python wheels → {fw_out}, {rf_out}",
                   file=sys.stderr)
             return 0
 
@@ -2587,7 +2598,7 @@ def cmd_release(args: list[str]) -> int:
             shutil.copy2(f, dst / f.name)
             n_ipk += 1
 
-    msg = f"theia release: {n_deb} .deb → {deb_dir}/"
+    msg = f"theia build-debs: {n_deb} .deb → {deb_dir}/"
     if want_ipk:
         msg += f", {n_ipk} .ipk → {ipk_dir}/"
     print(f"{msg} (+ framework & rf wheels); arch={','.join(archs)}",
@@ -6049,7 +6060,8 @@ COMMANDS = {
     "call":        (cmd_call,        "call <node> <op> --data '{json}' [--instance N|--machine M] — prints reply (test/demo)"),
     "manifest":    (cmd_manifest,    "rig.py → dist/manifest/*.json (sole rig entry for deploy)"),
     "dist":        (cmd_dist,        "<target> [--arch A] — build debs from manifest (runtime deb-set or per-machine app bundle)"),
-    "release":     (cmd_release,     "<target> [--s3 URL] — push runtime plane to S3; or (no target) build the full package set"),
+    "build-debs":  (cmd_build_debs,  "[--arch A] [--distro D] [--ipk] — build the local dev .deb set (framework/runtime/services/rf → dist/debian/)"),
+    "release":     (cmd_release,     "<target> [--s3 URL] — push the runtime plane to S3 (target REQUIRED; local debs → `build-debs`)"),
     "release-swp": (cmd_release_swp, "build + publish a user-ws Software Package (day-2 Mender OTA, the package plane)"),
     "release-app": (cmd_release_swp, "alias for release-swp (deprecated)"),
     "release-role": (cmd_release_role, "build + publish a per-board role .mender (L4-C vehicle campaign)"),

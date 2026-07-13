@@ -108,8 +108,9 @@ import the harness as `rf_theia.TheiaTestLibrary`. Run via `robot` or the
 
 ## Packaging
 
-`theia release` builds the installable `.deb` set (framework / runtime / -dev /
-services / -dev) under `dist/debian/`. The framework deb ships artheia + rf-theia
+`theia build-debs` builds the installable `.deb` set (framework / runtime / -dev /
+services / -dev) under `dist/debian/`. (`theia release <target>` is the separate
+S3 runtime-plane push, not the local build.) The framework deb ships artheia + rf-theia
 as **wheels** under `/opt/theia/wheels` (the user installs them into their own
 venv) and makes `/opt/theia` a consumable Bazel module (`@pero_theia`). See
 [`docs/`](docs/) → deployment for the full split.

@@ -28,7 +28,7 @@ Read this page to orient. For a specific task, load the matching reference:
 | Regenerating the system: .art → manifests (stages 1–2) | [references/artheia-gen-system.md](references/artheia-gen-system.md) |
 | Bazel build: rig extension, FC daemons, bundles | [references/build-system.md](references/build-system.md) |
 | Provisioning & orchestration: the `theia manifest → dist → orchestrate` handoff flow (Ansible, per-machine `.deb`), **and the fleet path — the colony web API** (S3-exclusive, GS-driven provision/orchestrate/cleanup; role-keyed master/zonal) | [references/provision-orchestrate.md](references/provision-orchestrate.md) |
-| Deployment: the installable `.deb` framework (dev/runtime/services/workspace split, `theia release`, `/opt/theia`) | [references/deployment.md](references/deployment.md) |
+| Deployment: the installable `.deb` framework (dev/runtime/services/workspace split, `theia build-debs`, `/opt/theia`) | [references/deployment.md](references/deployment.md) |
 | Fleet ops from the CLI: `theia enroll` / `fleet` / `releases` / `deploy` / `rollout` / `target` — the command-line analog of the WHOLE GS web UI (onboard, inventory, releases, two-plane deploy, phased rollout, decommission) | [references/fleet-deploy-cli.md](references/fleet-deploy-cli.md) |
 | AUTOSAR PSP import: DBC/FIBEX → `.art` + netgraph | [references/autosar.md](references/autosar.md) |
 | Config schema migration: per-node `config <Msg>` evolution, transform.json, gen-transform plugin, the dev workflow + RF wrapper | [references/migration.md](references/migration.md) |

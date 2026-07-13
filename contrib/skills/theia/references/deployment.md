@@ -46,7 +46,7 @@ theia-framework  (artheia + rf wheels + bazel rules + setup.sh; Architecture: al
 ### What each package carries (authoritative: `packaging/theia/BUILD.bazel`)
 
 - **theia-runtime** — `/opt/theia/bin/supervisor` ONLY. `section misc`, no
-  build deps. (tdb, a Python probe, is added by `theia release`, not a bazel
+  build deps. (tdb, a Python probe, is added by `theia build-debs`, not a bazel
   artifact.)
 - **theia-runtime-dev** — runtime sources a workspace compiles against:
   `GenServer`/`GenStateM`/`GenRunnable` headers + `.cc`, tombstone, the
@@ -72,7 +72,7 @@ theia-framework  (artheia + rf wheels + bazel rules + setup.sh; Architecture: al
   `theia`/`artheia*` bin shims, and the POSIX `setup.sh`. The user drops the
   wheels into THEIR OWN venv (`pip install --find-links /opt/theia/wheels
   artheia rf-theia`) — Theia never writes system site-packages. `Architecture:
-  all`. Assembled by `theia release` (`_build_framework_deb` in `theia.py`),
+  all`. Assembled by `theia build-debs` (`_build_framework_deb` in `theia.py`),
   not a bazel target.
 - **theia-system-dev** — the `system/` `.art` contract tree **minus the services
   subtree** (`system.art` + supervisor + `tools/tdb` + platform msgs; the
@@ -91,21 +91,28 @@ theia-framework  (artheia + rf wheels + bazel rules + setup.sh; Architecture: al
 > diverge. Now services-dev owns the one FQN-mirrored copy and system-dev's
 > `art_sources_no_services` excludes it.
 
-## Building the packages — `theia release`
+## Building the packages — `theia build-debs`
 
 The **4-step build** (framework → runtime → services → package) is driven by
-one verb. `.deb` is the default and primary output (Theia is always deployed
-on Debian-derived platforms — no QNX); `--ipk` is an opt-in hatch that ALSO
-emits the embedded/opkg `.ipk`.
+one verb: **`theia build-debs`**. `.deb` is the default and primary output
+(Theia is always deployed on Debian-derived platforms — no QNX); `--ipk` is an
+opt-in hatch that ALSO emits the embedded/opkg `.ipk`.
+
+> Naming: `theia build-debs` builds the LOCAL dev .deb set (no S3). `theia
+> release <target>` is a DIFFERENT verb — it pushes the runtime plane to S3 and
+> REQUIRES a target. The build was split off the old no-target `theia release`
+> so each verb means exactly one thing.
 
 ```sh
-PATH="$PWD/.venv/bin:$PATH" theia release            # → dist/debian/*.deb
-theia release --ipk                                  # + dist/ipkg/*.ipk (embedded hatch)
-theia release --arch host,rpi4                       # cross-arch (amd64 + arm64)
-theia release --python-only                          # just framework + rf wheels
+PATH="$PWD/.venv/bin:$PATH" theia build-debs         # → dist/debian/*.deb
+theia build-debs --ipk                               # + dist/ipkg/*.ipk (embedded hatch)
+theia build-debs --arch host,rpi4                    # cross-arch (amd64 + arm64)
+theia build-debs --distro ubuntu24                   # 24.04 grpc/protobuf soname deps
+theia build-debs --runtime                           # only theia-runtime + theia-services
+theia build-debs --python-only                       # just framework + rf wheels
 ```
 
-What it does (`cmd_release` / `_RELEASE_BAZEL_PKGS` in `theia.py`):
+What it does (`cmd_build_debs` / `_RELEASE_BAZEL_PKGS` in `theia.py`):
 
 1. **framework** — `_build_framework_deb`: `pip wheel`s artheia + rf-theia and
    `pip download`s their deps into `/opt/theia/wheels` (no install), ships

@@ -9,14 +9,14 @@
 #   theia-services   com/per/sm/ucm/log/shwa binaries +        ← pkg_deb below
 #                    services protos
 #   theia-tools      supervisor-GUI + rtdb (need com gRPC)     (GUI is a CMake
-#                    build, staged by `theia release`)
+#                    build, staged by `theia build-debs`)
 #   theia-rf         rf_theia harness wheel (minus _selftest)  (built by `theia
-#                    release` — pure-Python `Architecture: all`)
+#                    build-debs` — pure-Python `Architecture: all`)
 #
 # The C++ packages (runtime, services) are bazel pkg_deb targets here, built per
 # --platforms=//rules/config:{host,rpi4} for amd64/arm64. The Python packages
 # (framework, rf) wrap a `pip wheel` artifact and the GUI a CMake binary — those
-# are assembled by `theia release` (theia.py), which also emits the matching
+# are assembled by `theia build-debs` (theia.py), which also emits the matching
 # .ipk under dist/ipkg/ for embedded targets.
 #
 # Layout convention: everything lands under /opt/theia (THEIA_ROOT_DIR), bin/
@@ -61,7 +61,7 @@ _VERSION = "0.3.0"
 
 # ── theia-runtime (machine) ──────────────────────────────────────────────────
 # Just the supervisor binary — the fabric an app system runs under. No build
-# artifacts. tdb (python probe) is added by `theia release` (no bazel artifact).
+# artifacts. tdb (python probe) is added by `theia build-debs` (no bazel artifact).
 # Architecture is derived from the target cpu (not the build host) so a native
 # arm64 build OR an x86→arm64 cross both stamp the right Debian arch. Without this
 # the rule's default "amd64" lands on arm64 debs (the binaries are aarch64 but the

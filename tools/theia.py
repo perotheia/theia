@@ -1952,6 +1952,87 @@ def _inject_services_config(services_deb: Path) -> int:
     return 0
 
 
+def _fix_deb_depends(deb: Path) -> int:
+    """Recompute a deb's SYSTEM-lib Depends from its own ELF binaries via
+    dpkg-shlibdeps, so the soname-versioned names (libgrpc++/libprotobuf) match
+    the BUILD HOST's Ubuntu — NOT the bazel select's hardcoded default.
+
+    Why: the packaging rule's `Depends:` is a jammy-default fallback keyed on
+    --define theia_target=noble / distro=ubuntu24. A NATIVE noble build that
+    forgets the define silently ships jammy names (libgrpc++1/libprotobuf23),
+    which don't exist on 24.04 → dpkg leaves theia-services unconfigured on the
+    board. Deriving the deps from the actual linked ELFs makes the plane
+    self-correct: build on noble → noble deps, no define to forget. Mirrors
+    .github/scripts/fix-deb-depends.sh (the CI path). Inter-package deps
+    (theia-*, libnanopb-dev, build-essential) are preserved; only system-lib
+    entries are re-resolved. No-op (returns 0) if dpkg-shlibdeps is unavailable
+    or the deb has no ELFs (arm64 static-links its closure — nothing to fix)."""
+    import shutil as _sh
+    import subprocess
+    import tempfile
+    if not _sh.which("dpkg-shlibdeps") or not _sh.which("dpkg-deb"):
+        return 0   # not on a dpkg host (e.g. a mac dev box) — leave the fallback
+    work = Path(tempfile.mkdtemp(prefix="fixdep-"))
+    try:
+        subprocess.run(["dpkg-deb", "-R", str(deb), str(work)], check=True,
+                       capture_output=True)
+        opt = work / "opt" / "theia"
+        elfs = []
+        for f in opt.rglob("*") if opt.exists() else []:
+            if not f.is_file():
+                continue
+            if "/bin/" not in str(f) and ".so" not in f.name:
+                continue
+            r = subprocess.run(["file", str(f)], capture_output=True, text=True)
+            if "ELF" in r.stdout:
+                elfs.append(str(f.relative_to(work)))
+        if not elfs:
+            return 0   # nothing linked (arm64 static closure) — keep the fallback
+        (work / "debian").mkdir(exist_ok=True)
+        (work / "debian" / "control").write_text("")
+        env = dict(os.environ, LD_LIBRARY_PATH="opt/theia/lib")
+        out = subprocess.run(["dpkg-shlibdeps", "-O", "--ignore-missing-info",
+                              "-e", *elfs], cwd=str(work), env=env,
+                             capture_output=True, text=True)
+        sysd = ""
+        for ln in out.stdout.splitlines():
+            if ln.startswith("shlibs:Depends="):
+                sysd = ln[len("shlibs:Depends="):]
+                break
+        if not sysd:
+            return 0   # shlibdeps found nothing usable — keep the fallback
+        # preserve the inter-package deps from the original control; swap the
+        # system-lib set for shlibdeps' host-correct resolution.
+        ctrl = work / "DEBIAN" / "control"
+        orig = ""
+        for ln in ctrl.read_text().splitlines():
+            if ln.startswith("Depends:"):
+                orig = ln[len("Depends:"):].strip()
+        keep = [d.strip() for d in orig.split(",")
+                if d.strip().startswith(("theia-", "libnanopb-dev", "build-essential"))]
+        newlist, seen = [], set()
+        for d in keep + [s.strip() for s in sysd.split(",")]:
+            name = d.split()[0] if d else ""
+            if name and name not in seen:
+                seen.add(name); newlist.append(d)
+        newdeps = ", ".join(newlist)
+        lines = []
+        for ln in ctrl.read_text().splitlines():
+            lines.append(f"Depends: {newdeps}" if ln.startswith("Depends:") else ln)
+        ctrl.write_text("\n".join(lines) + "\n")
+        subprocess.run(["dpkg-deb", "-b", str(work), str(deb)], check=True,
+                       capture_output=True)
+        print(f"theia dist: fixed {deb.name} Depends → {newdeps}")
+        return 0
+    except subprocess.CalledProcessError as e:
+        print(f"theia dist: shlibdeps fixup skipped for {deb.name}: "
+              f"{e.stderr.decode(errors='replace')[:160] if e.stderr else e}",
+              file=sys.stderr)
+        return 0   # non-fatal: fall back to the hardcoded Depends
+    finally:
+        _sh.rmtree(work, ignore_errors=True)
+
+
 def _dist_runtime(mdir: Path, machines: list, arch_override) -> int:
     """RUNTIME manifest → the framework theia-runtime + theia-services Deb set.
 
@@ -2017,6 +2098,11 @@ def _dist_runtime(mdir: Path, machines: list, arch_override) -> int:
             if pkg == "theia-services":
                 if (rc := _inject_services_config(dst_f)) != 0:
                     rc_final = rc
+            # Recompute the system-lib Depends from the ELFs on THIS build host so
+            # a native x86 plane (noble vs jammy) gets the right grpc/protobuf
+            # sonames regardless of the bazel --define. No-op for the arm64 cross
+            # build (static closure, no ELF sys-deps). See _fix_deb_depends.
+            _fix_deb_depends(dst_f)
     return rc_final
 
 

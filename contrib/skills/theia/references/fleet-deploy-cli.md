@@ -216,10 +216,10 @@ deliberately two-step). `clear` prunes finished colony actions from the shared
 Action History — no device = a GLOBAL prune; a device scopes the colony prune to
 that rig. `<device>` is a NAME or GS id.
 
-> Note: pin/unpin write a Mender `pinned` tag; the tag write is accepted
-> immediately but Mender inventory can lag reflecting a tag *deletion* — a
-> just-unpinned device may still read `pinned` for a short window (a GS/Mender
-> propagation characteristic, not a CLI defect).
+> Note: pin/unpin write a Mender `pinned` tag via the inventory `PUT .../tags`
+> endpoint, which is a TRUE REPLACE (Mender removes attributes not provided;
+> `PATCH` is the merge/upsert). Inventory can lag a few seconds reflecting the
+> write, so `fleet` may briefly show the old pin state after an unpin.
 
 ## GS route map (what each verb calls)
 

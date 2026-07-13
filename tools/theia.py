@@ -5330,6 +5330,8 @@ def cmd_deploy(args: list[str]) -> int:
     Usage:
       theia deploy <distribution> <device> [--version V] [--ip IP]
                    [--publish] [--watch]
+      theia deploy status [device]    the Action History (both planes)
+      theia deploy --list             the available Distributions
 
     <distribution> is a GS Distribution name (see `theia deploy --list`). <device>
     is a device NAME (exo / taycann) or its GS id. This drives the SAME GS
@@ -5357,6 +5359,37 @@ def cmd_deploy(args: list[str]) -> int:
             if a == name and i + 1 < len(args):
                 return args[i + 1]
         return default
+
+    # `theia deploy status [device]` — the Deployment tab's Action History. Lists
+    # the aggregated colony(base) + Mender(app) rows; a device filters to its own.
+    if args and args[0] == "status":
+        # optional device filter: the aggregate rows carry no device-id list, only
+        # a `name` (orchestrate-<dev> / <dev>-<swp>), so we match the device name as
+        # a substring — the same linkage the GS Action History surfaces.
+        want_name = args[1] if len(args) > 1 else None
+        code, d = _gs("GET", "/api/deployments")
+        if code != 200:
+            print(f"theia deploy status: [{code}] {d}", file=sys.stderr)
+            return 1
+        rows = d.get("deployments", []) if isinstance(d, dict) else (d if isinstance(d, list) else [])
+        if want_name:
+            rows = [r for r in rows if isinstance(r, dict)
+                    and want_name in (r.get("name") or "")]
+        if not rows:
+            print("(no deployments)")
+            return 0
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            auth = r.get("authority", "?")
+            stats = (r.get("statistics", {}) or {}).get("status", {}) or {}
+            tail = ""
+            if stats:
+                nz = {k: v for k, v in stats.items() if v}
+                tail = "  " + " ".join(f"{k}={v}" for k, v in nz.items()) if nz else ""
+            print(f"  [{auth:4}] {str(r.get('id',''))[:12]}  {r.get('status','?'):10} "
+                  f"{r.get('name') or r.get('artifact_name') or ''}{tail}")
+        return 0
 
     if "--list" in args:
         code, dists = _gs("GET", "/api/planes/distributions")
@@ -5643,6 +5676,365 @@ def cmd_rollout(args: list[str]) -> int:
     return 2
 
 
+def _gs_opt(args, name, default=None):
+    """--name VALUE lookup shared by the GS operator verbs."""
+    for i, a in enumerate(args):
+        if a == name and i + 1 < len(args):
+            return args[i + 1]
+    return default
+
+
+def cmd_enroll(args: list[str]) -> int:
+    """Onboard a board into the fleet — the CLI analog of the GS Connect / Create-Target flow.
+
+    A board must be enrolled before it can be a deploy target: GS accepts its
+    Mender auth-set (so Mender will deploy to it) and confirms it in the
+    Observability cluster. Two paths, matching the GS Connect modal:
+
+    Subcommands:
+      theia enroll pending
+          List boards Mender has seen but NOT yet accepted (Connect candidates,
+          keyed by MAC).
+
+      theia enroll connect <mac> [--name N] [--fleet F] [--group G] [--watch]
+          Accept a PENDING board by its MAC (it must already be checking in).
+          --name tags it (the display name, survives re-enrol — Mender ties it to
+          the immutable MAC). --watch polls until it shows present in the cluster.
+
+      theia enroll preauth [--id UUID] --pubkey <pem|@file> [--name N] [--fleet F]
+                           [--description D]
+          Pre-authorize a board BEFORE it checks in: it auto-accepts when it first
+          connects reporting the UUID identity + this key. --id defaults to a fresh
+          UUID (printed). --pubkey takes a PEM/openssh key or @path.
+
+      theia enroll identity <host> <uuid>
+          Give a REACHABLE board a STABLE mender identity = the UUID (via colony
+          SSH), so Mender matches it by device_id across reflashes. Pair with
+          preauth <same uuid> for a stable-identity onboard.
+
+      theia enroll probe <host>
+          SSH-probe a host for its MAC + hostname (prefill), no state change.
+
+    Env: $THEIA_GS_URL, $THEIA_GS_KEY (all mutating sub-verbs need the key)."""
+    if not args or "-h" in args or "--help" in args:
+        print(cmd_enroll.__doc__, file=sys.stderr)
+        return 0 if ("-h" in args or "--help" in args) else 2
+    sub = args[0]
+
+    if sub == "pending":
+        code, r = _gs("GET", "/api/devices/pending")
+        if code != 200:
+            print(f"theia enroll pending: [{code}] {r}", file=sys.stderr)
+            return 1
+        pend = r.get("pending", []) if isinstance(r, dict) else []
+        if not pend:
+            print("(no pending boards — none checking in unaccepted)")
+            return 0
+        print(f"pending ({len(pend)}):")
+        for p in pend:
+            print(f"  mac {p.get('mac')}  id {str(p.get('id',''))[:12]}  {p.get('status')}")
+        return 0
+
+    if sub == "probe":
+        if len(args) < 2:
+            print("theia enroll probe: needs <host>.", file=sys.stderr)
+            return 2
+        code, r = _gs("GET", f"/api/devices/probe?host={args[1]}")
+        if code != 200:
+            print(f"theia enroll probe: [{code}] {r}", file=sys.stderr)
+            return 1
+        print(f"probe {args[1]}: mac={r.get('mac')} hostname={r.get('hostname')}"
+              if isinstance(r, dict) else r)
+        return 0
+
+    if sub == "connect":
+        mac = args[1] if len(args) > 1 and not args[1].startswith("--") else None
+        if not mac:
+            print("theia enroll connect: needs <mac>.", file=sys.stderr)
+            return 2
+        body: dict = {"mac": mac}
+        for k, flag in (("name", "--name"), ("fleet", "--fleet"), ("group", "--group")):
+            v = _gs_opt(args, flag)
+            if v:
+                body[k] = v
+        code, r = _gs("POST", "/api/devices/connect", body)
+        if code != 200:
+            print(f"theia enroll connect: [{code}] {r}", file=sys.stderr)
+            return 1
+        did = r.get("device_id") if isinstance(r, dict) else None
+        newly = (r.get("mender", {}) or {}).get("newly_accepted") if isinstance(r, dict) else None
+        present = (r.get("observability", {}) or {}).get("present_in_cluster") if isinstance(r, dict) else None
+        print(f"theia enroll: connected {mac} → device {str(did or '')[:12]} "
+              f"({'accepted' if newly else 'already accepted'}); "
+              f"cluster-present={present}")
+        if "--watch" in args and did:
+            return _enroll_watch(did, mac)
+        return 0
+
+    if sub == "preauth":
+        pub = _gs_opt(args, "--pubkey")
+        if pub and pub.startswith("@"):
+            try:
+                with open(pub[1:], encoding="utf-8") as fh:
+                    pub = fh.read()
+            except OSError as e:
+                print(f"theia enroll preauth: --pubkey {e}", file=sys.stderr)
+                return 1
+        if not pub:
+            print("theia enroll preauth: --pubkey <pem|@file> required.", file=sys.stderr)
+            return 2
+        body: dict = {"pubkey": pub}
+        cid = _gs_opt(args, "--id")
+        if cid: body["controller_id"] = cid
+        for k, flag in (("name", "--name"), ("fleet", "--fleet"),
+                        ("description", "--description")):
+            v = _gs_opt(args, flag)
+            if v:
+                body[k] = v
+        code, r = _gs("POST", "/api/devices/preauthorize", body)
+        if code != 200:
+            print(f"theia enroll preauth: [{code}] {r}", file=sys.stderr)
+            return 1
+        cid = r.get("controller_id") if isinstance(r, dict) else None
+        print(f"theia enroll: preauthorized — controller id {cid} "
+              f"(board auto-accepts when it reports this identity + key)")
+        return 0
+
+    if sub == "identity":
+        if len(args) < 3:
+            print("theia enroll identity: needs <host> <uuid>.", file=sys.stderr)
+            return 2
+        code, r = _gs("POST", "/api/devices/set-identity",
+                      {"host": args[1], "controller_id": args[2]})
+        if code != 200:
+            print(f"theia enroll identity: [{code}] {r}", file=sys.stderr)
+            return 1
+        print(f"theia enroll: set identity of {args[1]} → {args[2]} "
+              f"(mender-auth restarted on the board)")
+        return 0
+
+    print(f"theia enroll: unknown subcommand '{sub}' "
+          f"(pending|connect|preauth|identity|probe).", file=sys.stderr)
+    return 2
+
+
+def _enroll_watch(device_id, mac) -> int:
+    """Poll the device's Observability presence until it warms up in the cluster.
+    Mender-accept is immediate; TIPC/com presence appears on the next self-publish
+    poll. Best-effort; returns 0 either way (accept already succeeded)."""
+    import time
+    for _ in range(18):   # ~3 min
+        _code, devs = _gs("GET", "/api/devices")
+        rows = (devs.get("devices", []) if isinstance(devs, dict) else devs) or []
+        row = next((r for r in rows if isinstance(r, dict) and r.get("id") == device_id), None)
+        obs = (devs.get("observed", {}) if isinstance(devs, dict) else {}) or {}
+        present = bool(row and row.get("base_version")) or \
+            any(obs.get("by_name", {}).values()) if isinstance(obs, dict) else False
+        if present:
+            print(f"  {mac}: present in Observability cluster")
+            return 0
+        time.sleep(10)
+    print(f"  {mac}: accepted, but not yet visible in the cluster (warms up on next poll)")
+    return 0
+
+
+def cmd_fleet(args: list[str]) -> int:
+    """List the fleet — the CLI analog of the GS device table (the Fleet view).
+
+    Subcommands (default: list):
+      theia fleet [list] [--fleet F | --group G]   every enrolled device
+      theia fleet types                            the device Type options
+      theia fleet groups                           the named groups + counts
+
+    The device rows show: name, fleet (hardware class), group, base_version (the
+    live-reported runtime), reachable IP, pinned. Env: $THEIA_GS_URL."""
+    if "-h" in args or "--help" in args:
+        print(cmd_fleet.__doc__, file=sys.stderr)
+        return 0
+    sub = args[0] if args and not args[0].startswith("--") else "list"
+
+    if sub == "types":
+        code, r = _gs("GET", "/api/devices/types")
+        if code != 200:
+            print(f"theia fleet types: [{code}] {r}", file=sys.stderr)
+            return 1
+        print("types: " + ", ".join(r.get("types", []) if isinstance(r, dict) else []))
+        return 0
+
+    if sub == "groups":
+        code, r = _gs("GET", "/api/devices/groups/list")
+        if code != 200:
+            print(f"theia fleet groups: [{code}] {r}", file=sys.stderr)
+            return 1
+        groups = r.get("groups", []) if isinstance(r, dict) else []
+        if not groups:
+            print("(no groups)")
+            return 0
+        for g in groups:
+            if isinstance(g, dict):
+                print(f"  {g.get('name')}  ({g.get('count', '?')} device(s))")
+            else:
+                print(f"  {g}")
+        return 0
+
+    # list
+    code, devs = _gs("GET", "/api/devices")
+    if code != 200:
+        print(f"theia fleet: [{code}] {devs}", file=sys.stderr)
+        return 1
+    rows = (devs.get("devices", []) if isinstance(devs, dict) else devs) or []
+    want_fleet, want_group = _gs_opt(args, "--fleet"), _gs_opt(args, "--group")
+    shown = 0
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        if want_fleet and r.get("fleet") != want_fleet:
+            continue
+        if want_group and r.get("group") != want_group:
+            continue
+        pin = " 📌" if r.get("pinned") else ""
+        print(f"  {r.get('name',''):<14} {r.get('fleet') or '-':<13} "
+              f"{r.get('base_version') or '-':<20} {r.get('reachable_ip') or '-':<15} "
+              f"{r.get('group') or ''}{pin}")
+        shown += 1
+    if not shown:
+        print("(no devices)")
+    return 0
+
+
+def cmd_releases(args: list[str]) -> int:
+    """List published builds — the CLI analog of the GS Releases tab.
+
+    A release is a published, S3-vendored build. Three planes:
+      theia releases [runtime]   platform runtime builds (per ABI); locked=deployed
+      theia releases apps        Software Packages (fleet/app/version + requires_runtime)
+      theia releases roles       per-board role .mender bundles (L4-C campaign)
+
+    `locked` = the build has been deployed (UF immutability — re-iterate = a new
+    version, never a clobber). `pinned` = an operator guard against deletion.
+    Env: $THEIA_GS_URL."""
+    if "-h" in args or "--help" in args:
+        print(cmd_releases.__doc__, file=sys.stderr)
+        return 0
+    plane = args[0] if args and not args[0].startswith("--") else "runtime"
+
+    if plane == "runtime":
+        code, r = _gs("GET", "/api/planes/runtime")
+        if code != 200:
+            print(f"theia releases runtime: [{code}] {r}", file=sys.stderr)
+            return 1
+        rel = r.get("releases", []) if isinstance(r, dict) else []
+        print("runtime releases:")
+        for x in rel:
+            if not isinstance(x, dict) or "_error" in x:
+                continue
+            marks = ("L" if x.get("locked") else " ") + ("P" if x.get("pinned") else " ")
+            print(f"  [{marks}] {x.get('key') or x.get('version')}")
+        return 0
+
+    if plane == "apps":
+        code, r = _gs("GET", "/api/planes/apps")
+        if code != 200:
+            print(f"theia releases apps: [{code}] {r}", file=sys.stderr)
+            return 1
+        tree = r.get("tree", {}) if isinstance(r, dict) else {}
+        if not tree:
+            print("(no apps)")
+            return 0
+        for fleet, apps in tree.items():
+            print(f"{fleet}:")
+            for app, vers in apps.items():
+                for v in vers:
+                    marks = ("L" if v.get("locked") else " ") + ("P" if v.get("pinned") else " ")
+                    req = v.get("requires_runtime") or "-"
+                    print(f"  [{marks}] {app} {v.get('version')}  "
+                          f"(arity {v.get('arity')}, needs runtime {req})")
+        return 0
+
+    if plane == "roles":
+        code, r = _gs("GET", "/api/planes/roles")
+        if code != 200:
+            print(f"theia releases roles: [{code}] {r}", file=sys.stderr)
+            return 1
+        tree = r.get("tree", {}) if isinstance(r, dict) else {}
+        if not tree:
+            print("(no roles)")
+            return 0
+        for fleet, vers in tree.items():
+            print(f"{fleet}:")
+            for ver, roles in vers.items():
+                names = ", ".join(x.get("role", "?") for x in roles)
+                lock = "L" if any(x.get("locked") for x in roles) else " "
+                print(f"  [{lock} ] {ver}: {names}")
+        return 0
+
+    print(f"theia releases: unknown plane '{plane}' (runtime|apps|roles).",
+          file=sys.stderr)
+    return 2
+
+
+def cmd_target(args: list[str]) -> int:
+    """Manage a deploy target device — the CLI analog of the GS Target actions.
+
+    Subcommands:
+      theia target pin   <device>      guard the device from deletion
+      theia target unpin <device>      remove the guard
+      theia target delete <device>     decommission (Mender delete) — GUARDED:
+                                       a pinned device must be unpinned first
+      theia target clear  [device]     clear FINISHED deploy history (Action
+                                       History). No device = GLOBAL prune.
+
+    <device> is a NAME (exo/taycann) or GS id. delete is the inverse of enroll —
+    the board leaves the fleet. Env: $THEIA_GS_URL, $THEIA_GS_KEY."""
+    if not args or "-h" in args or "--help" in args:
+        print(cmd_target.__doc__, file=sys.stderr)
+        return 0 if ("-h" in args or "--help" in args) else 2
+    sub = args[0]
+
+    if sub == "clear":
+        body = {}
+        if len(args) > 1 and not args[1].startswith("--"):
+            # scope the colony prune to this device's rig name
+            body["rig"] = args[1]
+        code, r = _gs("POST", "/api/deployments/clear", body)
+        if code != 200:
+            print(f"theia target clear: [{code}] {r}", file=sys.stderr)
+            return 1
+        n = r.get("colony_pruned", "?") if isinstance(r, dict) else "?"
+        scope = "global" if not body.get("rig") else body["rig"]
+        print(f"theia target: cleared finished history ({scope}) — {n} base action(s) pruned")
+        return 0
+
+    if sub in ("pin", "unpin", "delete"):
+        if len(args) < 2:
+            print(f"theia target {sub}: needs <device>.", file=sys.stderr)
+            return 2
+        did = _gs_device_id(args[1])
+        if not did:
+            print(f"theia target {sub}: no device '{args[1]}' known.", file=sys.stderr)
+            return 1
+        if sub == "delete":
+            code, r = _gs("DELETE", f"/api/devices/{did}")
+            if code != 200:
+                extra = ""
+                if isinstance(r, dict) and "pin" in str(r.get("detail", "")).lower():
+                    extra = "  (unpin it first: `theia target unpin " + args[1] + "`)"
+                print(f"theia target delete: [{code}] {r}{extra}", file=sys.stderr)
+                return 1
+            print(f"theia target: decommissioned {args[1]} — left the fleet")
+            return 0
+        code, r = _gs("POST", f"/api/devices/{did}/pin", {"pinned": sub == "pin"})
+        if code != 200:
+            print(f"theia target {sub}: [{code}] {r}", file=sys.stderr)
+            return 1
+        print(f"theia target: {args[1]} {'pinned' if sub == 'pin' else 'unpinned'}")
+        return 0
+
+    print(f"theia target: unknown subcommand '{sub}' (pin|unpin|delete|clear).",
+          file=sys.stderr)
+    return 2
+
+
 COMMANDS = {
     "init":        (cmd_init,        "scaffold the CWD as a Theia consuming workspace (source or /opt/theia)"),
     "rig":         (cmd_rig,         "docker compose {up|down|status} the deploy stack (status: containers + live rtdb cluster)"),
@@ -5661,8 +6053,12 @@ COMMANDS = {
     "release-swp": (cmd_release_swp, "build + publish a user-ws Software Package (day-2 Mender OTA, the package plane)"),
     "release-app": (cmd_release_swp, "alias for release-swp (deprecated)"),
     "release-role": (cmd_release_role, "build + publish a per-board role .mender (L4-C vehicle campaign)"),
-    "deploy":      (cmd_deploy,      "<distribution> <device> [--publish --watch] — GS two-plane deploy (runtime+SWP), CLI analog of the GS UI"),
+    "enroll":      (cmd_enroll,      "{pending|connect|preauth|identity|probe} — onboard a board into the fleet (GS Connect); stable identity + --watch"),
+    "fleet":       (cmd_fleet,       "[list|types|groups] — the enrolled-device table (GS Fleet view)"),
+    "deploy":      (cmd_deploy,      "<distribution> <device> [--publish --watch] | status [device] | --list — GS two-plane deploy (runtime+SWP)"),
     "rollout":     (cmd_rollout,     "{create|advance|status|abort|list|delete} — phased app-SWP rollout across a fleet (GS Rollouts)"),
+    "releases":    (cmd_releases,    "[runtime|apps|roles] — published S3 builds (GS Releases tab)"),
+    "target":      (cmd_target,      "{pin|unpin|delete|clear} — manage/decommission a deploy target (GS Target actions)"),
     "cert":        (cmd_cert,        "{generate|copy} the SWP signing keypair; copy ships the PUBLIC verify key to colony via S3"),
     "compdb":      (cmd_compdb,      "regen compile_commands.json from bazel (clangd)"),
     "observer":    (cmd_observer,    "launch the supervisor-GUI against the local cluster (always mTLS)"),

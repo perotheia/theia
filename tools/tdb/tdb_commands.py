@@ -440,6 +440,11 @@ def cmd_info(args, sup, _tf) -> int:
         ("uptime",         _fmt_uptime(_g(info, "uptime_sec", 0))),
         ("theia_git_sha",  _g(info, "theia_git_sha", "") or "(unstamped)"),
         ("build_ts",       _g(info, "build_timestamp", "") or "(unstamped)"),
+        # The deployed release/SWP the supervisor runs — derived on-device from
+        # the /opt/theia/current symlink target (releases/<ver>). This is the APP
+        # plane (what a deploy/rollout installs), distinct from theia_git_sha/
+        # build_ts above, which are the RUNTIME (supervisor) build.
+        ("release",        _g(info, "release_version", "") or "(no release symlink)"),
         ("started",        _fmt_epoch_ms(_g(info, "start_timestamp_ms", 0))),
     ]
     for k, v in rows:

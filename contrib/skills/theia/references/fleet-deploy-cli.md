@@ -204,11 +204,17 @@ current→target with a ✓ when a board is already at target.
 ## `theia target` — manage / decommission a device (GS Target actions)
 
 ```
+theia target list                # every target + manageable state (pin/runtime)
 theia target pin    <device>     # guard from deletion
 theia target unpin  <device>
 theia target delete <device>     # decommission (Mender delete) — GUARDED
 theia target clear  [device]     # clear FINISHED deploy history (Action History)
 ```
+
+`target list` is the management view (id + runtime + pin + auth state). Unlike
+`fleet`, it flags **GHOST** rows — an accepted auth-set with no inventory/runtime
+(a stale re-enrol orphan). Those are hidden from `fleet` but ARE deletable
+targets; `target delete` purges the orphan auth-set (see the decommission note).
 
 `delete` is the **inverse of enroll** — the board leaves the fleet. It is
 GUARDED: a pinned device must be `unpin`'d first (the destructive op is
@@ -237,6 +243,7 @@ that rig. `<device>` is a NAME or GS id.
 | `deploy --publish` | `POST /api/planes/apps/publish` |
 | `deploy` | `POST /api/deployments/distribution` |
 | `deploy status` / `--watch` | `GET /api/deployments`, `GET /api/deployments/{id}/devices` |
+| `target list` | `GET /api/devices` |
 | `target pin\|unpin` | `POST /api/devices/{id}/pin` |
 | `target delete` | `DELETE /api/devices/{id}` |
 | `target clear` | `POST /api/deployments/clear` |

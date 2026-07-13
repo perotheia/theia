@@ -5988,6 +5988,7 @@ def cmd_target(args: list[str]) -> int:
     """Manage a deploy target device — the CLI analog of the GS Target actions.
 
     Subcommands:
+      theia target list                every target + its manageable state
       theia target pin   <device>      guard the device from deletion
       theia target unpin <device>      remove the guard
       theia target delete <device>     decommission (Mender delete) — GUARDED:
@@ -6001,6 +6002,34 @@ def cmd_target(args: list[str]) -> int:
         print(cmd_target.__doc__, file=sys.stderr)
         return 0 if ("-h" in args or "--help" in args) else 2
     sub = args[0]
+
+    if sub == "list":
+        code, devs = _gs("GET", "/api/devices")
+        if code != 200:
+            print(f"theia target list: [{code}] {devs}", file=sys.stderr)
+            return 1
+        rows = (devs.get("devices", []) if isinstance(devs, dict) else devs) or []
+        if not rows:
+            print("(no targets)")
+            return 0
+        # target-management view: id + manageable state (pin/runtime/app) + a
+        # ghost flag for empty-inventory orphans (accepted auth-set, no runtime —
+        # the `fleet` view hides these, but they ARE deletable targets).
+        print(f"  {'NAME':<20} {'ID':<14} {'RUNTIME':<20} {'PIN':<4} STATE")
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            name = r.get("name") or r.get("mac") or "?"
+            did = str(r.get("id") or "")[:12]
+            runtime = r.get("base_version") or "—"
+            pin = "📌" if r.get("pinned") else ""
+            # ghost = accepted in deviceauth but no inventory (no fleet/runtime) —
+            # a stale re-enrol orphan; `target delete` purges it.
+            ghost = (not r.get("fleet")) and (not r.get("base_version")) \
+                and r.get("auth_status") == "accepted"
+            state = "GHOST (deletable orphan)" if ghost else (r.get("auth_status") or "")
+            print(f"  {name:<20} {did:<14} {runtime:<20} {pin:<4} {state}")
+        return 0
 
     if sub == "clear":
         body = {}
@@ -6050,7 +6079,7 @@ def cmd_target(args: list[str]) -> int:
         print(f"theia target: {args[1]} {'pinned' if sub == 'pin' else 'unpinned'}")
         return 0
 
-    print(f"theia target: unknown subcommand '{sub}' (pin|unpin|delete|clear).",
+    print(f"theia target: unknown subcommand '{sub}' (list|pin|unpin|delete|clear).",
           file=sys.stderr)
     return 2
 
@@ -6079,7 +6108,7 @@ COMMANDS = {
     "deploy":      (cmd_deploy,      "<distribution> <device> [--publish --watch] | status [device] | --list — GS two-plane deploy (runtime+SWP)"),
     "rollout":     (cmd_rollout,     "{create|advance|status|abort|list|delete} — phased app-SWP rollout across a fleet (GS Rollouts)"),
     "releases":    (cmd_releases,    "[runtime|apps|roles] — published S3 builds (GS Releases tab)"),
-    "target":      (cmd_target,      "{pin|unpin|delete|clear} — manage/decommission a deploy target (GS Target actions)"),
+    "target":      (cmd_target,      "{list|pin|unpin|delete|clear} — manage/decommission a deploy target (GS Target actions)"),
     "cert":        (cmd_cert,        "{generate|copy} the SWP signing keypair; copy ships the PUBLIC verify key to colony via S3"),
     "compdb":      (cmd_compdb,      "regen compile_commands.json from bazel (clangd)"),
     "observer":    (cmd_observer,    "launch the supervisor-GUI against the local cluster (always mTLS)"),

@@ -30,7 +30,7 @@ jobs:
 
       - name: Check out submodules over HTTPS
         run: |
-          # artheia + rf-theia (theia release builds both wheels for the
+          # artheia + rf-theia (theia build-debs builds both wheels for the
           # framework deb) + etcd (the per service links it). Override the
           # SSH submodule URLs with their public HTTPS equivalents.
           git config submodule.artheia.url https://github.com/perotheia/artheia.git
@@ -92,11 +92,12 @@ jobs:
           # dep); install it into the venv so it's on PATH for the bazel build.
           ./.venv/bin/pip install nanopb
 
-      - name: Build the .deb set (theia release)
+      - name: Build the .deb set (theia build-debs)
         run: |
           export PATH="$PWD/.venv/bin:$PATH"
           # theia.py lives at tools/theia.py; the `./theia` shim execs it.
-          ./theia release --arch host
+          # build-debs = the local dev .deb build (was no-target `theia release`).
+          ./theia build-debs --arch host
 
       - name: Fix per-release runtime Depends (dpkg-shlibdeps)
         run: |

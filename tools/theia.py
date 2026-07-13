@@ -1766,7 +1766,7 @@ def cmd_dist(args: list[str]) -> int:
         ASSOCIATED with the framework runtime Deb set. Builds the versioned
         theia-runtime + theia-services .debs (packaging/theia) per arch — the
         artifacts colony installs on a fresh board (mirrors the old
-        `theia release --arch`, which was a build-only misnomer).
+        `theia build-debs --arch`, which was a build-only misnomer).
 
       APP manifest (apps: [...] — e.g. `theia dist single`): NO Deb-set
         association, so pack EVERYTHING for the machine into ONE .deb per machine
@@ -2021,7 +2021,7 @@ def _dist_runtime(mdir: Path, machines: list, arch_override) -> int:
 
 
 
-# ── theia release — build the installable package set (.deb + .ipk) ──────────
+# ── theia build-debs — build the installable package set (.deb + .ipk) ───────
 _DIST_DEBIAN = "dist/debian"
 _DIST_IPKG = "dist/ipkg"
 
@@ -2032,7 +2032,7 @@ _RELEASE_ARCH = {a: _platform_label(a, qualified=False) for a in _TARGETS}
 
 # The bazel-buildable package targets: (deb_target, ipk_target). Python wheels
 # (framework, rf) + the CMake GUI are handled out-of-band below. The .ipk is the
-# opt-in hatch (theia release --ipk); .deb is the default. Runtime/services split
+# opt-in hatch (theia build-debs --ipk); .deb is the default. Runtime/services split
 # into machine + -dev: the .ipk (embedded) is machine-only — a -dev package is
 # build-time, never shipped to an embedded target, so it has no .ipk.
 _RELEASE_BAZEL_PKGS = [
@@ -2683,7 +2683,7 @@ def cmd_release_swp(args: list[str]) -> int:
     executable across ALL the SWP's compositions (one composition == one
     executable), bundled as ONE Mender overlay. It is NOT a single composition.
 
-    The runtime/SWP dichotomy: `theia release [--runtime]` ships the UNIVERSAL
+    The runtime/SWP dichotomy: `theia build-debs [--runtime]` ships the UNIVERSAL
     platform (supervisor + services) to the runtime plane (colony factory-installs
     it). `theia release-swp` ships ONLY the user's FCs — the day-2 delivery unit
     Mender installs as an OVERLAY into the running release (services + the

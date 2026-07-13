@@ -2020,6 +2020,9 @@ def _fix_deb_depends(deb: Path) -> int:
         for ln in ctrl.read_text().splitlines():
             lines.append(f"Depends: {newdeps}" if ln.startswith("Depends:") else ln)
         ctrl.write_text("\n".join(lines) + "\n")
+        # The staged deb is a copy of a bazel output — read-only (0555); make it
+        # writable so dpkg-deb can rebuild in place (else "Permission denied").
+        deb.chmod(0o644)
         subprocess.run(["dpkg-deb", "-b", str(work), str(deb)], check=True,
                        capture_output=True)
         print(f"theia dist: fixed {deb.name} Depends → {newdeps}")

@@ -21,6 +21,10 @@ package(default_visibility = ["//visibility:public"])
 # <ws>/third_party/codegen-bookworm-x86 (gitignored host data; see
 # services/com/BUILD.bazel for the same prefix used by the proto genrules).
 _CG_DIR = RPI4_SYSROOT + "/../../codegen-bookworm-x86"
+# The SAME codegen dir, reached via the ORIN sysroot for the orin cross build —
+# so an orin-only build box (with sysroot/orin but no sysroot/rpi4) resolves the
+# path without needing the rpi4 sysroot to exist for the `../..` traversal.
+_CG_DIR_ORIN = ORIN_SYSROOT + "/../../codegen-bookworm-x86"
 
 # Cross-compile cache entries for the etcd_cpp foreign_cc CMake build. On the
 # host (x86) the empty default lets CMake find_package() the host -dev packages.
@@ -48,13 +52,15 @@ _ETCD_CROSS_CACHE = select({
         "CMAKE_FIND_ROOT_PATH_MODE_INCLUDE": "ONLY",
         "CMAKE_FIND_ROOT_PATH_MODE_PACKAGE": "ONLY",
         "PKG_CONFIG_EXECUTABLE": "/usr/bin/pkg-config",
-        "Protobuf_PROTOC_EXECUTABLE": _CG_DIR + "/bin/protoc",
-        "_PROTOBUF_PROTOC": _CG_DIR + "/bin/protoc",
+        # Codegen path via the ORIN sysroot (not RPI4) so an orin build doesn't
+        # require sysroot/rpi4 to exist for the `../..` traversal.
+        "Protobuf_PROTOC_EXECUTABLE": _CG_DIR_ORIN + "/bin/protoc",
+        "_PROTOBUF_PROTOC": _CG_DIR_ORIN + "/bin/protoc",
         # The orin closure is built with gRPC_BUILD_CODEGEN=OFF → its cmake
         # config exports NO gRPC::grpc_cpp_plugin target; the (Theia-patched)
         # etcd CMakeLists honors this cache override instead of querying it.
-        "GRPC_CPP_PLUGIN": _CG_DIR + "/bin/grpc_cpp_plugin",
-        "_GRPC_CPP_PLUGIN_EXECUTABLE": _CG_DIR + "/bin/grpc_cpp_plugin",
+        "GRPC_CPP_PLUGIN": _CG_DIR_ORIN + "/bin/grpc_cpp_plugin",
+        "_GRPC_CPP_PLUGIN_EXECUTABLE": _CG_DIR_ORIN + "/bin/grpc_cpp_plugin",
     },
     "//rules/config:arm64_cross": {
         "CMAKE_SYSROOT": RPI4_SYSROOT,

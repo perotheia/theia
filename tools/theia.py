@@ -2772,6 +2772,60 @@ def _s3_latest_swp_version(s3_url: str, fleet: str, app: str) -> "str | None":
     return latest.split("-", 1)[0]
 
 
+def _build_swp_deb(stage: Path, swp_name: str, app_ver: str, deb_arch: str,
+                   ver_key: str, out_dir: Path) -> "Path | None":
+    """Wrap a staged SWP payload as a HOST-LOCAL release deb.
+
+    Same {bin,config,version.txt,…} payload as the .mender, but packaged so a
+    plain `dpkg -i` unpacks it to /opt/theia/releases/<swp_name>-<ver_key>/ — a
+    versioned, on-host, intermediary release for regression A/B testing on a dev
+    box (NOT a Mender/OTA path). The release becomes flip-able: `theia
+    release-flip <swp_name>-<ver_key>` re-aims current → it. See `release-list`.
+
+    Package: theia-swp-<swp_name>_<app_ver>_<deb_arch>.deb, Depends theia-runtime
+    (the release forks the installed services/supervisor baseline via current).
+    Returns the .deb path, or None on failure (dpkg-deb absent)."""
+    import subprocess
+    if not shutil.which("dpkg-deb"):
+        print("theia release-swp: dpkg-deb not found — cannot build --deb "
+              "(install dpkg-dev).", file=sys.stderr)
+        return None
+    rel_id = f"{swp_name}-{ver_key}"                 # the releases/<id> dir name
+    pkg = f"theia-swp-{swp_name}"
+    work = out_dir / f"{pkg}_{app_ver}_{deb_arch}"
+    if work.exists():
+        shutil.rmtree(work)
+    # data: the payload under /opt/theia/releases/<rel_id>/ (the flip target).
+    data_root = work / "opt" / "theia" / "releases" / rel_id
+    data_root.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(stage, data_root)
+    # control — Depends theia-runtime so the services/supervisor baseline the
+    # release forks (current/bin) is present; no postinst (a plain overlay dir).
+    ctrl = work / "DEBIAN"
+    ctrl.mkdir(parents=True, exist_ok=True)
+    (ctrl / "control").write_text(
+        f"Package: {pkg}\n"
+        f"Version: {app_ver}\n"
+        f"Architecture: {deb_arch}\n"
+        "Maintainer: Theia <theia@perotheia>\n"
+        "Depends: theia-runtime\n"
+        "Section: misc\n"
+        "Priority: optional\n"
+        f"Description: Theia host-local SWP release {rel_id} (dev A/B; flip by "
+        "`theia release-flip`)\n")
+    deb = out_dir / f"{pkg}_{app_ver}_{deb_arch}.deb"
+    rc = subprocess.run(["dpkg-deb", "--build", "--root-owner-group",
+                         str(work), str(deb)]).returncode
+    shutil.rmtree(work)
+    if rc != 0:
+        print("theia release-swp: dpkg-deb --build failed.", file=sys.stderr)
+        return None
+    print(f"theia release-swp: wrote {deb.relative_to(WORKSPACE)} → unpacks to "
+          f"/opt/theia/releases/{rel_id}/ (dpkg -i; then `theia release-flip "
+          f"{rel_id}`)", file=sys.stderr)
+    return deb
+
+
 def cmd_release_swp(args: list[str]) -> int:
     """Build + publish a USER-WS SOFTWARE PACKAGE (SWP) for day-2 Mender OTA.
 
@@ -2837,6 +2891,12 @@ def cmd_release_swp(args: list[str]) -> int:
         --s3 URL         publish to the package plane on this MinIO/S3 (e.g.
                          http://10.0.0.99:9000); omit to only build the .mender
         --mender-only    just write dist/apps/<app>/<app>-<V>.mender (no S3 push)
+        --deb            build a HOST-LOCAL RELEASE deb instead of the .mender:
+                         theia-swp-<app>_<V>_<arch>.deb unpacks (dpkg -i) to
+                         /opt/theia/releases/<app>-<V>/{bin,config}. A dev-box
+                         regression-A/B path — install several versions, then
+                         `theia release-flip <app>-<V>` re-aims current by hand.
+                         NOT an OTA/Mender path; no S3, no GS.
 
     Output (ABI-keyed — <V> below is <swp-version>-<abi> for cross-built boards):
       dist/apps/<app>/<app>-<V>.mender   the Mender artifact (theia-swp module)
@@ -2951,6 +3011,10 @@ def cmd_release_swp(args: list[str]) -> int:
     requires_runtime = _opt("--requires-runtime", "")
     s3_url = _opt("--s3")
     mender_only = "--mender-only" in args or not s3_url
+    # --deb: ALSO wrap the staged payload as a host-local release deb (dpkg -i →
+    # /opt/theia/releases/<name>-<ver>/, flip by hand with `theia release-flip`).
+    # A dev-box regression-A/B path — NOT Mender/OTA. Implies no S3 requirement.
+    want_deb = "--deb" in args
 
     # ── MAJOR (.art interface change): FORCE the runtime pin + a migration part. ──
     # A major SWP is not a free swap; it depends on a specific runtime and needs a
@@ -3358,6 +3422,16 @@ def cmd_release_swp(args: list[str]) -> int:
     import tarfile
     with tarfile.open(tarball, "w:gz") as tf:
         tf.add(stage, arcname=".")
+
+    # --deb: wrap the SAME staged payload as a host-local release deb (dpkg -i →
+    # /opt/theia/releases/<name>-<ver_key>/; flip by hand). Dev regression A/B, no
+    # OTA. Built alongside the tarball; the .mender pack below still runs (both
+    # artifacts share the stage). Returns early after — this is the dev path.
+    if want_deb:
+        deb = _build_swp_deb(stage, swp_name, app_ver, tgt["deb_arch"],
+                             ver_key, out_dir)
+        return 0 if deb else 1
+
     ma = _mender_artifact_bin()    # prefers the OpenSSL-1.1-shim wrapper on a host
     if ma:                          # running OpenSSL 3 (mender-artifact links 1.1).
         # SIGN the artifact (public-key authenticity, not just the S3 sha256
@@ -3411,6 +3485,128 @@ def cmd_release_swp(args: list[str]) -> int:
         if rc != 0:
             return rc
     return 0
+
+
+def cmd_release_list(args: list[str]) -> int:
+    """List the host-local releases under /opt/theia/releases + mark current.
+
+      theia release-list [--root DIR]
+
+    Shows every releases/<id> dir (installed by `dpkg -i` of a `release-swp --deb`
+    build, or laid by colony/OTA) and flags the one `current` points at. Pair
+    with `release-flip` to A/B stable host builds for regression testing."""
+    if "-h" in args or "--help" in args:
+        print(cmd_release_list.__doc__, file=sys.stderr)
+        return 0
+    def _opt(name, default=None):
+        for i, a in enumerate(args):
+            if a == name and i + 1 < len(args):
+                return args[i + 1]
+        return default
+    root = Path(_opt("--root", "/opt/theia"))
+    rel_dir = root / "releases"
+    if not rel_dir.is_dir():
+        print(f"theia release-list: no {rel_dir} (not a provisioned/OTA install).",
+              file=sys.stderr)
+        return 1
+    cur = (root / "current")
+    cur_target = cur.resolve().name if cur.is_symlink() or cur.exists() else None
+    entries = sorted(p.name for p in rel_dir.iterdir()
+                     if p.is_dir() or p.is_symlink())
+    if not entries:
+        print(f"theia release-list: {rel_dir} is empty.", file=sys.stderr)
+        return 0
+    for e in entries:
+        mark = "*" if e == cur_target else " "
+        cur_note = "  (current)" if e == cur_target else ""
+        print(f"{mark} {e}{cur_note}")
+    if cur_target and cur_target not in entries:
+        # current points OUTSIDE releases/ (e.g. the anchored runtime → ..) — show it.
+        print(f"* {cur_target}  (current, outside releases/)")
+    return 0
+
+
+def cmd_release_flip(args: list[str]) -> int:
+    """Flip current → a host-local release (dev A/B; manual regression testing).
+
+      theia release-flip <release-id> [--root DIR] [--no-restart]
+
+    Atomically re-aims /opt/theia/current → releases/<release-id>, records the
+    prior target as `previous` (so a flip back is trivial), then restarts the
+    supervisor so it adopts the flipped current/config/executor.json. <release-id>
+    is a dir name under releases/ (see `release-list`), e.g. myapp-0.2.3. This is
+    the by-hand dev counterpart of a Mender rollout — no OTA, no GS."""
+    if "-h" in args or "--help" in args:
+        print(cmd_release_flip.__doc__, file=sys.stderr)
+        return 0
+    def _opt(name, default=None):
+        for i, a in enumerate(args):
+            if a == name and i + 1 < len(args):
+                return args[i + 1]
+        return default
+    root = Path(_opt("--root", "/opt/theia"))
+    no_restart = "--no-restart" in args
+    rel_id = next((a for a in args if not a.startswith("-")
+                   and a != _opt("--root")), None)
+    if not rel_id:
+        print("theia release-flip: needs a <release-id> (see `theia "
+              "release-list`).", file=sys.stderr)
+        return 2
+    target = root / "releases" / rel_id
+    if not (target.is_dir() or target.is_symlink()):
+        print(f"theia release-flip: no release {target} — run `theia "
+              "release-list` to see installed releases.", file=sys.stderr)
+        return 1
+    if not (target / "config" / "executor.json").is_file():
+        print(f"theia release-flip: {rel_id} has no config/executor.json — not a "
+              "forkable release.", file=sys.stderr)
+        return 1
+    cur = root / "current"
+    prev = root / "previous"
+    # Record previous = the current target (for a quick flip-back), then atomically
+    # re-aim current via a temp symlink + rename(2) — the same flip theia-swp does.
+    if cur.is_symlink():
+        old = os.readlink(str(cur))
+        _run(["ln", "-sfn", old, str(prev)])
+    tmp = root / f".current.flip.{os.getpid()}"
+    rc = _run(["ln", "-sfn", f"releases/{rel_id}", str(tmp)])
+    if rc == 0:
+        rc = _run(["mv", "-T", str(tmp), str(cur)])
+    if rc != 0:
+        # Needs root on a /opt/theia owned by theia:theia or root — retry via sudo.
+        _run(["sudo", "ln", "-sfn", f"releases/{rel_id}", str(tmp)])
+        rc = _run(["sudo", "mv", "-T", str(tmp), str(cur)])
+    if rc != 0:
+        print("theia release-flip: could not re-aim current (permissions?).",
+              file=sys.stderr)
+        return 1
+    print(f"theia release-flip: current → releases/{rel_id} "
+          f"(previous → {os.readlink(str(prev)) if prev.is_symlink() else 'none'})",
+          file=sys.stderr)
+    if no_restart:
+        print("theia release-flip: --no-restart — restart the supervisor to adopt "
+              "the flip (systemctl restart theia-supervisor, or `tdb reload`).",
+              file=sys.stderr)
+        return 0
+    # Adopt the flip: prefer tdb reload, then systemd. The supervisor re-reads
+    # current/config/executor.json on restart (static tree, no hot-reload).
+    if _sh_which_ok("tdb") and _run(["tdb", "reload"]) == 0:
+        print("theia release-flip: supervisor reloaded (tdb).", file=sys.stderr)
+        return 0
+    if _sh_which_ok("systemctl"):
+        rc = _run(["sudo", "systemctl", "restart", "theia-supervisor"])
+        if rc == 0:
+            print("theia release-flip: supervisor restarted (systemd) — adopting "
+                  f"releases/{rel_id}.", file=sys.stderr)
+            return 0
+    print("theia release-flip: flipped, but could not restart the supervisor — do "
+          "it by hand (systemctl restart theia-supervisor).", file=sys.stderr)
+    return 0
+
+
+def _sh_which_ok(name: str) -> bool:
+    """True if `name` is on PATH (thin wrapper so the flip verb reads clean)."""
+    return shutil.which(name) is not None
 
 
 def _extract_swp_subtree(executor: dict, app: str, procs: list[str]):
@@ -6516,9 +6712,11 @@ COMMANDS = {
     "dist":        (cmd_dist,        "<target> [--arch A] — build debs from manifest (runtime deb-set or per-machine app bundle)"),
     "build-debs":  (cmd_build_debs,  "[--arch A] [--distro D] [--ipk] — build the local dev .deb set (framework/runtime/services/rf → dist/debian/)"),
     "release":     (cmd_release,     "<target> [--s3 URL] — push the runtime plane to S3 (target REQUIRED; local debs → `build-debs`)"),
-    "release-swp": (cmd_release_swp, "build + publish a user-ws Software Package (day-2 Mender OTA, the package plane)"),
+    "release-swp": (cmd_release_swp, "build + publish a user-ws Software Package (day-2 Mender OTA; --deb → host-local release deb)"),
     "release-app": (cmd_release_swp, "alias for release-swp (deprecated)"),
     "release-role": (cmd_release_role, "build + publish a per-board role .mender (L4-C vehicle campaign)"),
+    "release-list": (cmd_release_list, "list host-local releases under /opt/theia/releases + mark current (dev A/B)"),
+    "release-flip": (cmd_release_flip, "flip current → a host-local release + restart supervisor (dev regression A/B)"),
     "enroll":      (cmd_enroll,      "{pending|connect|preauth|identity|probe} — onboard a board into the fleet (GS Connect); stable identity + --watch"),
     "fleet":       (cmd_fleet,       "[list|types|groups|group|ungroup] — the enrolled-device table + group actions (GS Fleet view)"),
     "deploy":      (cmd_deploy,      "<distribution> <device> [--publish --watch] | status [device] | --list — GS two-plane deploy (runtime+SWP)"),

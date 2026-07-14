@@ -50,6 +50,11 @@ def _impl(ctx):
     ]
 
 
+    # The cross-gcc's own builtin include dirs (host-provided by gcc-cross).
+    # <gcc_cross>/11 is the compiler-version root; libstdc++ and the multiarch
+    # libc headers hang off it. See the include-search-order note below.
+    _gcc_cross = "/usr/lib/gcc-cross/" + _TRIPLE + "/11"
+
     compile_flags = feature(
         name = "default_compile_flags",
         enabled = True,
@@ -57,12 +62,35 @@ def _impl(ctx):
             actions = _ALL_COMPILE,
             flag_groups = [flag_group(flags = [
                 "--sysroot=" + sysroot_abs,
+                # GLIBC-VERSION LEAK FIX (orin/jammy cross on a noble build host):
+                # `--sysroot` ADDS the sysroot's headers but does NOT remove the
+                # cross-gcc's baked-in multiarch dir /usr/<triple>/include, which
+                # on a noble host ships glibc 2.39 headers. Those headers redirect
+                # strtol()→__isoc23_strtol() (a GLIBC_2.38 symbol) — so binaries
+                # cross-built here reference GLIBC_2.38 and fail to run on the
+                # jammy target (glibc 2.35). The dir sorts BEFORE the sysroot's
+                # /usr/include, so it wins. `-nostdinc` drops ALL default include
+                # dirs; we then re-add exactly the ones we want, in order, EXCEPT
+                # the noble multiarch dir — so <stdlib.h> resolves from the jammy
+                # sysroot (2.35, no __isoc23_ redirect). The libstdc++ headers
+                # (arch-neutral template code, gcc-11 → GLIBCXX 3.4.30-max) and
+                # gcc's own builtin C headers stay. Order mirrors g++'s native
+                # search list with the one host-glibc entry removed.
+                "-nostdinc",
+                "-isystem", _gcc_cross + "/../../../../" + _TRIPLE + "/include/c++/11",
+                "-isystem", _gcc_cross + "/../../../../" + _TRIPLE + "/include/c++/11/" + _TRIPLE,
+                "-isystem", _gcc_cross + "/../../../../" + _TRIPLE + "/include/c++/11/backward",
+                "-isystem", _gcc_cross + "/include",
+                "-isystem", _gcc_cross + "/include-fixed",
+                # (noble /usr/<triple>/include DELIBERATELY OMITTED — the leak.)
                 # A cross gcc does NOT search <sysroot>/usr/local/include (the
                 # native-only LOCAL_INCLUDE_DIR) — but a sysroot carrying a
                 # from-source closure (orin: grpc/protobuf 3.21 in /usr/local,
                 # setup_orin.sh) serves its headers from there. Harmless when
                 # the dir is empty (rpi4/bookworm: everything is in /usr/include).
                 "-isystem", sysroot_abs + "/usr/local/include",
+                "-isystem", sysroot_abs + "/usr/include/" + _TRIPLE,
+                "-isystem", sysroot_abs + "/usr/include",
                 "-no-canonical-prefixes",
                 "-fPIC",
                 "-Wall",
@@ -105,6 +133,10 @@ def _impl(ctx):
         # external system-style headers) is what builtin-include-dirs is for.
         cxx_builtin_include_directories = [
             "/usr/lib/gcc-cross/" + _TRIPLE,
+            # Noble host multiarch dir — NO LONGER on the compile search path
+            # (see the -nostdinc GLIBC-leak fix above) but kept declared so any
+            # stray reference is still accepted by the strict header scan rather
+            # than erroring; it is simply never reached during compiles now.
             "/usr/" + _TRIPLE + "/include",
             # Consuming-workspace .bazelrc adds -I/usr/include/nanopb for the
             # host pb.h layout; declare it builtin so the cross analysis accepts

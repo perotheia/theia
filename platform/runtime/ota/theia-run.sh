@@ -23,39 +23,26 @@ export THEIA_ROOT_DIR="${THEIA_ROOT_DIR:-/opt/theia}"
          "releases/<ver> + current symlink" >&2
     exit 1
 }
-# The supervised tree is read THROUGH `current` (two-plane OTA): current always
-# points at a REAL release dir — releases/runtime-<ver> for the resting runtime,
-# releases/<swp>-<ver> after an SWP rollout — each carrying its own config/. So
-# current/config is the active release's executor, whichever plane owns it. One
-# path, both states; the launcher never branches on "is an SWP active".
-# (current is NEVER `.` — that self-loops on any -L symlink walk and breaks the
-#  previous/rollback save. The runtime is a real release, not the tree root.)
-# Back-compat: a legacy relocate-into-release layout kept config flat; fall back
-# to $ROOT/config when the release dir carries no config/.
-_cfg_dir="$THEIA_ROOT_DIR/current/config"
-[[ -f "$_cfg_dir/executor.json" ]] || _cfg_dir="$THEIA_ROOT_DIR/config"
-[[ -f "$_cfg_dir/executor.json" ]] || {
-    echo "theia-run: no manifest at $THEIA_ROOT_DIR/current/config/executor.json" \
-         "(nor the flat $THEIA_ROOT_DIR/config/executor.json)" >&2
+# Two-plane OTA (docs/design/two-plane-ota.md): EVERYTHING is read through
+# `current` — the executor tree AND the per-FC config (init_config resolves the
+# relative THEIA_CONFIG_DIR=config against CWD=current). Day-1 current points at
+# the runtime release (→ $ROOT), day-2/3 at an SWP release; either way
+# current/config is the ACTIVE release's config, and a rollout/rollback is one
+# symlink flip. So the launcher reads current/config, not a shared flat $ROOT/config.
+[[ -f "$THEIA_ROOT_DIR/current/config/executor.json" ]] || {
+    echo "theia-run: no manifest at $THEIA_ROOT_DIR/current/config/executor.json" >&2
     exit 1
 }
 
-# THEIA_INSTALL_DIR: the release-dir the supervisor scans to resolve child bins.
-# For OTA this is always $THEIA_ROOT_DIR/current (UCM flips this symlink; with
-# current → . the runtime's own $ROOT/bin resolves).
+# THEIA_INSTALL_DIR: the release-dir the supervisor forks children from + resolves
+# child bins/config against (CWD = this). Always $THEIA_ROOT_DIR/current; a flip
+# re-aims the symlink.
 export THEIA_INSTALL_DIR="${THEIA_INSTALL_DIR:-$THEIA_ROOT_DIR/current}"
-export THEIA_SUPERVISOR_MANIFEST="$_cfg_dir/executor.json"
-# THEIA_MACHINE_MANIFEST: the dir holding machines.json, which com reads for the
-# AUTHORITATIVE instance→machine_index→name map (the unique runtime identity com
-# and the GUI key on). Point it at config/ when machines.json is staged there
-# (provision copies it alongside executor.json). Without it com falls back to the
-# per-supervisor SystemInfo.machine_name — correct once the rig uses unique names,
-# but the manifest map resolves a machine even before its supervisor answers.
-# Read machines.json from the SAME dir as executor.json ($_cfg_dir, through
-# current) so an SWP that ships its own machines.json is honored; falls back to
-# the flat config dir.
-if [[ -f "$_cfg_dir/machines.json" ]]; then
-    export THEIA_MACHINE_MANIFEST="${THEIA_MACHINE_MANIFEST:-$_cfg_dir}"
+export THEIA_SUPERVISOR_MANIFEST="$THEIA_ROOT_DIR/current/config/executor.json"
+# THEIA_MACHINE_MANIFEST: the dir holding machines.json (com's instance→name map),
+# read from the active release's config (current) like everything else.
+if [[ -f "$THEIA_ROOT_DIR/current/config/machines.json" ]]; then
+    export THEIA_MACHINE_MANIFEST="${THEIA_MACHINE_MANIFEST:-$THEIA_ROOT_DIR/current/config}"
 fi
 
 # THEIA_MACHINE_INSTANCE persistence: the board's TIPC instance is a DEPLOY fact

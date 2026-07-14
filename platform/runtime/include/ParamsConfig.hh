@@ -220,12 +220,14 @@ private:
 //   ./config/<name>.json                                   -> CWD default
 // A missing file is fine (every lookup returns its default).
 //
-// THEIA_CONFIG_DIR is "config" (RELATIVE) in the executor env. But the supervisor
-// forks each child with CWD = $THEIA_ROOT_DIR/current (the release dir, so
-// ./bin/<svc> resolves) — NOT $THEIA_ROOT_DIR. So a relative "config" would
-// resolve to current/config/ (which doesn't exist) and EVERY per-FC param would
-// silently fall back to defaults. Anchor a relative config dir to THEIA_ROOT_DIR
-// (where config/ actually lives, shared across releases) so the real config loads.
+// THEIA_CONFIG_DIR is "config" (RELATIVE) in the executor env. The supervisor
+// forks each child with CWD = THEIA_INSTALL_DIR = $THEIA_ROOT_DIR/current (the
+// active release — day-1 the runtime, day-2/3 an SWP release; two-plane OTA, see
+// docs/design/two-plane-ota.md). So a relative "config" resolves to
+// current/config/ — the ACTIVE release's config, which follows a `current` flip.
+// This is the model: EVERYTHING is read through `current` (executor + per-FC
+// config), so a rollout/rollback is a single symlink flip. A relative dir stays
+// relative to CWD (current); an absolute THEIA_CONFIG_DIR / THEIA_CONFIG wins.
 inline bool init_config(const std::string& fc_name) {
     if (const char* full = std::getenv("THEIA_CONFIG")) {
         return ParamsConfig::instance().load(full);
@@ -235,12 +237,9 @@ inline bool init_config(const std::string& fc_name) {
         name = pn;                       // supervised: the per-process file wins
     std::string dir = "config";
     if (const char* d = std::getenv("THEIA_CONFIG_DIR")) dir = d;
-    // Relative dir + a deployed root → anchor to the root (config/ is at
-    // $THEIA_ROOT_DIR/config, not under the per-release CWD). Absolute dir wins.
-    if (!dir.empty() && dir.front() != '/') {
-        if (const char* root = std::getenv("THEIA_ROOT_DIR"); root && *root)
-            dir = std::string(root) + "/" + dir;
-    }
+    // A relative dir resolves against CWD (= current, the active release). Do NOT
+    // anchor to $THEIA_ROOT_DIR — that pinned config to a shared flat dir that an
+    // SWP flip couldn't change. Absolute dir is used verbatim.
     return ParamsConfig::instance().load(dir + "/" + name + ".json");
 }
 

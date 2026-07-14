@@ -185,6 +185,15 @@ _stage_and_flip() {
     echo "$ver" > "$stage/.mender_version"
     echo "theia-swp: staged SWP release $ver → $stage (services from $(basename "$base_rel_dir"))"
 
+    # Non-root supervisor: this module runs as root (the Mender/UCM agent), so a
+    # fresh release it lays is root-owned. When the rig adopted the theia:theia
+    # model (deb postinst created the user + chowned /opt/theia), hand this new
+    # release to theia too — else the non-root supervisor can't read the flipped
+    # bin/config it's about to run. No-op on a root-run rig (no theia user).
+    if getent passwd theia >/dev/null 2>&1; then
+        chown -R theia:theia "$stage" 2>/dev/null || true
+    fi
+
     # Atomic re-aim: temp symlink + rename(2) over current.
     tmp="$THEIA_ROOT/.current.$$"
     ln -sfn "releases/$ver" "$tmp"

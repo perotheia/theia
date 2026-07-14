@@ -28,16 +28,42 @@ load("//rules:opkg.bzl", "pkg_opkg")
 
 package(default_visibility = ["//visibility:public"])
 
-# ── theia-runtime postinst: setcap the supervisor ONCE, at install ───────────
-# The supervisor needs cap_sys_nice (RT sched + CPU affinity on FC node threads)
-# and cap_net_admin (TIPC `node set clusterid` + topology presence). Setting the
-# caps HERE — on /opt/theia/bin/supervisor, as root, at dpkg install — means a
-# local `theia install` can SYMLINK the capped binary instead of copying it and
-# running `sudo setcap` on every install. Result: the user never needs sudo
-# while working with a local theia install. Non-fatal if setcap/libcap2-bin is
-# absent (the supervisor still runs, just without RT priority / cluster isolation).
+# ── theia-runtime postinst: theia:theia user + setcap the supervisor ─────────
+# The supervisor runs as the UNPRIVILEGED `theia` system user, NOT root. It gets
+# its two caps from FILE capabilities on the binary (setcap +eip below), which
+# the kernel honors on exec for ANY user — so no root, no systemd
+# AmbientCapabilities. Dropping root also frees host resources the old root
+# supervisor squatted (e.g. a root-owned listener socket another tool wanted).
+#
+#   cap_sys_nice  — RT sched (SCHED_FIFO/RR) + CPU affinity on FC node threads
+#   cap_net_admin — TIPC `node set netid` (rig isolation) + topology presence
+#
+# The `theia` user OWNS /opt/theia so the non-root supervisor can write its
+# device-state (config/machine_instance, config/tipc_netid via theia-run) and
+# read the release tree. The OTA agent (Mender, root) still lays releases/<ver>
+# + flips `current`; a redeploy's chown re-asserts ownership. Idempotent — safe
+# on upgrade/reinstall. Non-fatal if setcap/libcap2-bin is absent (the
+# supervisor still runs, just without RT priority / TIPC cluster isolation).
 _RUNTIME_POSTINST = """#!/bin/sh
 set -e
+
+# 1. The unprivileged service account (system user, no login, no home).
+if ! getent group theia >/dev/null 2>&1; then
+    groupadd --system theia
+fi
+if ! getent passwd theia >/dev/null 2>&1; then
+    useradd --system --gid theia --no-create-home \\
+            --home-dir /opt/theia --shell /usr/sbin/nologin theia
+    echo "theia-runtime: created system user theia:theia"
+fi
+
+# 2. theia owns the install root so the non-root supervisor can write its
+#    device-state under /opt/theia/config and read the release tree.
+if [ -d /opt/theia ]; then
+    chown -R theia:theia /opt/theia 2>/dev/null || true
+fi
+
+# 3. File caps on the supervisor — the source of its privilege, not root.
 SUP=/opt/theia/bin/supervisor
 SETCAP=$(command -v setcap || echo /usr/sbin/setcap)
 if [ -x "$SETCAP" ] && [ -f "$SUP" ]; then
@@ -47,6 +73,25 @@ if [ -x "$SETCAP" ] && [ -f "$SUP" ]; then
         echo "theia-runtime: setcap on $SUP failed (libcap2-bin?) — supervisor"\\
              "runs without RT priority / TIPC cluster isolation." >&2
     fi
+fi
+exit 0
+"""
+
+# ── theia-services postinst: re-assert theia ownership ───────────────────────
+# theia-services Depends on theia-runtime, so dpkg installs runtime FIRST (its
+# postinst creates the theia user + chowns /opt/theia), THEN unpacks the service
+# binaries — which land root-owned. Re-chown here so com/per/sm/… are owned by
+# the non-root theia user too. The user already exists (runtime made it); guard
+# anyway so a manual services-only install still works. Idempotent.
+_SERVICES_POSTINST = """#!/bin/sh
+set -e
+if ! getent passwd theia >/dev/null 2>&1; then
+    getent group theia >/dev/null 2>&1 || groupadd --system theia
+    useradd --system --gid theia --no-create-home \\
+            --home-dir /opt/theia --shell /usr/sbin/nologin theia
+fi
+if [ -d /opt/theia ]; then
+    chown -R theia:theia /opt/theia 2>/dev/null || true
 fi
 exit 0
 """
@@ -135,6 +180,7 @@ pkg_deb(
     description = "Theia ARA platform services: com, per, sm, ucm, log, shwa (binaries)",
     section = "misc",
     arch = _DEB_ARCH,
+    postinst = _SERVICES_POSTINST,
     # System .so's per's etcd stack pulls in at load time: grpc++ + the
     # reflection-capable protobuf + openssl (via libssl). The etcd client itself
     # is now STATICALLY linked into per (//third_party:etcd_cc → cmake()

@@ -523,14 +523,11 @@ def cmd_start(args: list[str]) -> int:
         **os.environ,
         "THEIA_SUPERVISOR_MANIFEST": "config/executor.json",
         "THEIA_INSTALL_DIR": _install_dirs,
-        # The deploy root the children anchor their config/ to. A forked FC runs
-        # with cwd=<dest>/releases/local (the release symlink), so its
-        # init_config("<fc>") + THEIA_CONFIG_DIR=config (relative) would look under
-        # releases/local/config/ — which does NOT exist (config/ is at <dest>/
-        # config/). init_config anchors a RELATIVE THEIA_CONFIG_DIR to
-        # THEIA_ROOT_DIR (mirrors platform/runtime/ota/theia-run.sh on a real rig,
-        # where it's /opt/theia). Without this, a node's per-rig params (e.g.
-        # <node>.enabled=false) silently fall back to their .art defaults.
+        # Per-FC config is read THROUGH current: a forked FC (cwd=releases/local)
+        # with the executor's relative THEIA_CONFIG_DIR=config resolves to
+        # releases/local/config → ../../config = <dest>/config (the symlink
+        # _stage_local lays). No $ROOT anchoring — matches the two-plane OTA model
+        # (init_config resolves relative config against CWD=current).
         "THEIA_ROOT_DIR": _dest_abs,
         "THEIA_SUPERVISOR_INSTANCE": instance,
         # The cluster machine index — a supervisor BOOT knob (not a node address):
@@ -1433,6 +1430,17 @@ def _stage_local(dest: Path, supervisor_src: str,
     # current→releases/<ver>; locally there's one release ("local").
     rel = dest / "releases" / "local"
     (rel / "bin").mkdir(parents=True, exist_ok=True)
+    # config is read THROUGH current (the two-plane OTA model: init_config resolves
+    # the relative THEIA_CONFIG_DIR=config against CWD=current). The dev loop keeps
+    # config flat at <dest>/config, so symlink releases/local/config → ../../config
+    # → current/config = <dest>/config. A forked FC (cwd=releases/local) then finds
+    # its params at config/<fc>.json without the old $ROOT anchoring.
+    _lcfg = rel / "config"
+    if _lcfg.is_symlink() or _lcfg.exists():
+        try: _lcfg.unlink()
+        except (PermissionError, IsADirectoryError):
+            _run(["sudo", "rm", "-rf", str(_lcfg)])
+    _lcfg.symlink_to(Path("..") / ".." / "config")
     cur = dest / "current"
     # Atomically (re)point current → releases/local.
     if cur.is_symlink() or cur.exists():

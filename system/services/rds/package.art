@@ -40,12 +40,25 @@ interface clientServer RdsCtl_If {
 // ─── Nodes ──────────────────────────────────────────────────────────────────
 
 // The iceoryx broker. A `node prebuilt`: gen-app emits a fully-generated
-// GenRunnable that forks+execvp's `path` (iox-roudi runs argless), drains its
+// GenRunnable that forks+execvp's `path` with the `args` tail, drains its
 // stdout/stderr into the node logger, and SIGTERM+reaps on stop. tipc 0x80010099.
 node prebuilt RoudiBroker {
     tipc type=0x80010099 instance=0
     path = "/usr/bin/iox-roudi"
     reporting = false
+    params {
+        // RouDi mempool config. iceoryx 2.0.5 logs an auto-discovered path but
+        // only LOADS the pools via an EXPLICIT `-c` — WITHOUT this it forks bare
+        // (10×4MB default) and a multi-camera app (4×4MB frames) starves the
+        // pool immediately (MEPOO__…RUNNING_OUT_OF_CHUNKS → dropped frames). The
+        // roudi_config.toml (a chair-sized 64-chunk / 375MB segment) ships with
+        // the app packs to /etc/iceoryx/. Baked as the .art DEFAULT, not a
+        // config-override, because rds's per-node config-dir resolution is
+        // unreliable (cwd /home/axadmin, THEIA_CONFIG_DIR unapplied — see
+        // docs/tasks base-runtime-roudi-mempool.md); a per-machine
+        // config/rds.json roudi.args STILL overrides this default when it loads.
+        args : string = "-c /etc/iceoryx/roudi_config.toml"
+    }
 }
 
 // The RDS status FC. tipc 0x80010098. A reporting=true atomic node serving

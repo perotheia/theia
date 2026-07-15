@@ -5883,6 +5883,201 @@ def _deploy_watch(colony_id, mender_id, device_id) -> int:
     return rc
 
 
+def _models_env():
+    """MinIO/S3 creds env for the model plane (mirrors the runtime/SWP planes)."""
+    import os
+    return {**os.environ,
+            "AWS_ACCESS_KEY_ID": os.environ.get("MINIO_USER", "theia"),
+            "AWS_SECRET_ACCESS_KEY": os.environ.get("MINIO_PASSWORD", "theiaminio"),
+            "AWS_DEFAULT_REGION": "us-east-1"}
+
+
+def cmd_models(args: list[str]) -> int:
+    """The MODEL PLANE — versioned ML artifacts (onnx / TensorRT engines / LUTs)
+    on S3, delivered to a rig OUT-OF-BAND from code (percept needs a YOLO engine
+    + geometry LUTs without git-LFS and without building TensorRT on the target).
+
+    Models are DATA, independent of the SWP/Deb: an SWP declares which models it
+    needs (a model descriptor); the rig pulls them after the SWP lands. See
+    docs/tasks/PROGRESS/theia-models-plane.md.
+
+      theia models push <category>/<name>[@<ver>] [opts]   (from a registry host)
+        --registry DIR   model registry root (default /bigdata/models)
+        --fleet F        the fleet key (default theia-rig) — s3 dir is per-fleet
+        --s3 URL         MinIO/S3 endpoint (default $THEIA_S3 or 10.0.0.99:9000)
+        --bucket B       plane bucket (default theia-models)
+      theia models list [<category>] [--fleet F] [--s3 URL] [--bucket B]
+        what's in the plane (per fleet), by category/name/version.
+
+    v1 scope (this slice): push copies the PORTABLE artifacts — export/model.onnx
+    + the registry's metadata/ + a synthesized metadata.json — to
+    s3://<bucket>/<fleet>/<category>/<name>/<ver>/ and writes an index.json.
+    Arch-keyed engine build (trtexec) + on-device `pull`/`gc` land next."""
+    import os
+    import json
+    import hashlib
+    import subprocess
+    if not args or args[0] in ("-h", "--help"):
+        print(cmd_models.__doc__, file=sys.stderr)
+        return 0
+    sub = args[0]
+    rest = args[1:]
+
+    def _opt(name, default=None):
+        for i, a in enumerate(rest):
+            if a == name and i + 1 < len(rest):
+                return rest[i + 1]
+        return default
+
+    fleet = _opt("--fleet", "theia-rig")
+    s3_url = _opt("--s3") or os.environ.get("THEIA_S3", "http://10.0.0.99:9000")
+    bucket = _opt("--bucket") or os.environ.get("THEIA_MODELS_BUCKET",
+                                                "theia-models")
+    if not shutil.which("aws"):
+        print("theia models: aws cli not found (install awscli).", file=sys.stderr)
+        return 1
+    env = _models_env()
+    aws = ["aws", "--endpoint-url", s3_url, "s3"]
+
+    def _split_ref(ref):
+        """<category>/<name>[@<ver>] → (category, name, ver|None)."""
+        ver = None
+        if "@" in ref:
+            ref, ver = ref.split("@", 1)
+        cat, _, name = ref.partition("/")
+        return cat, name, ver
+
+    if sub == "push":
+        ref = next((a for a in rest if not a.startswith("-")), None)
+        if not ref or "/" not in ref:
+            print("theia models push: needs <category>/<name>[@<ver>] "
+                  "(e.g. yolo/yolo26n@v2).", file=sys.stderr)
+            return 2
+        registry = Path(_opt("--registry", "/bigdata/models"))
+        cat, name, ver = _split_ref(ref)
+        # Resolve the model dir in the registry. The registry lays models under
+        # <modality>/<family>/<name>/<ver>/; the plane's <category> is the family
+        # (yolo/lut/…). Search for the <name> dir under the registry so the caller
+        # need not spell the full modality/family path.
+        hits = list(registry.glob(f"*/{cat}/{name}")) \
+            or list(registry.glob(f"*/*/{name}")) \
+            or ([registry / cat / name] if (registry / cat / name).is_dir() else [])
+        model_root = next((h for h in hits if h.is_dir()), None)
+        if not model_root:
+            print(f"theia models push: no model '{name}' under {registry} "
+                  f"(looked for */{cat}/{name}).", file=sys.stderr)
+            return 1
+        # Version: explicit @ver, else the highest v<N> dir present.
+        vers = sorted((p.name for p in model_root.iterdir()
+                       if p.is_dir() and p.name.startswith("v")),
+                      key=lambda s: int(s[1:]) if s[1:].isdigit() else -1)
+        if ver is None:
+            ver = vers[-1] if vers else None
+        if not ver or not (model_root / ver).is_dir():
+            print(f"theia models push: no version {ver or '(any)'} for {name} "
+                  f"(have: {', '.join(vers) or 'none'}).", file=sys.stderr)
+            return 1
+        vdir = model_root / ver
+        key = f"{fleet}/{cat}/{name}/{ver}"
+        subprocess.run([*aws, "mb", f"s3://{bucket}"], env=env,
+                       capture_output=True)   # idempotent
+        pushed, meta_files = [], []
+
+        # 1. The portable ONNX (export/model.onnx, else weights/best.onnx).
+        onnx = next((vdir / p for p in ("export/model.onnx",
+                                        "weights/best.onnx")
+                     if (vdir / p).is_file()), None)
+        if onnx:
+            dst = f"s3://{bucket}/{key}/model.onnx"
+            print(f"$ aws cp model.onnx {dst}", file=sys.stderr)
+            if subprocess.run([*aws, "cp", str(onnx), dst], env=env).returncode == 0:
+                pushed.append("model.onnx")
+        else:
+            print(f"theia models push: WARNING — no onnx under {vdir} "
+                  "(export/ or weights/); pushing metadata only.", file=sys.stderr)
+
+        # 2. The registry metadata/ tree (classes/metrics/system/git → descriptor).
+        mdir = vdir / "metadata"
+        descriptor = {"category": cat, "name": name, "version": ver,
+                      "fleet": fleet, "registry": str(model_root)}
+        if mdir.is_dir():
+            for f in sorted(mdir.iterdir()):
+                if not f.is_file():
+                    continue
+                dst = f"s3://{bucket}/{key}/metadata/{f.name}"
+                subprocess.run([*aws, "cp", str(f), dst], env=env,
+                               capture_output=True)
+                meta_files.append(f.name)
+                # Fold JSON metadata into the descriptor for a single-file read.
+                if f.suffix == ".json":
+                    try:
+                        descriptor[f.stem] = json.loads(f.read_text())
+                    except (ValueError, OSError):
+                        pass
+        if onnx:
+            descriptor["onnx_sha256"] = hashlib.sha256(
+                onnx.read_bytes()).hexdigest()
+            descriptor["onnx_bytes"] = onnx.stat().st_size
+
+        # 3. metadata.json — the single descriptor (registry entry + provenance).
+        desc_local = WORKSPACE / "dist" / "models" / cat / name / ver \
+            / "metadata.json"
+        desc_local.parent.mkdir(parents=True, exist_ok=True)
+        desc_local.write_text(json.dumps(descriptor, indent=2) + "\n")
+        subprocess.run([*aws, "cp", str(desc_local),
+                        f"s3://{bucket}/{key}/metadata.json"], env=env,
+                       capture_output=True)
+
+        # 4. index.json — versions + which engine arch-keys exist (none yet in v1).
+        idx = {"plane": "models", "fleet": fleet, "category": cat, "name": name,
+               "version": ver, "artifacts": pushed, "metadata": meta_files,
+               "engines": []}
+        idx_local = desc_local.parent / "index.json"
+        idx_local.write_text(json.dumps(idx, indent=2) + "\n")
+        subprocess.run([*aws, "cp", str(idx_local),
+                        f"s3://{bucket}/{key}/index.json"], env=env,
+                       capture_output=True)
+        print(f"theia models: pushed {cat}/{name}@{ver} → "
+              f"s3://{bucket}/{key}/ ({', '.join(pushed) or 'metadata only'})",
+              file=sys.stderr)
+        return 0
+
+    if sub == "list":
+        cat = next((a for a in rest if not a.startswith("-")), None)
+        prefix = f"{fleet}/{cat}/" if cat else f"{fleet}/"
+        r = subprocess.run([*aws, "ls", "--recursive",
+                            f"s3://{bucket}/{prefix}"],
+                           env=env, capture_output=True, text=True)
+        if r.returncode != 0:
+            print(f"theia models list: nothing under s3://{bucket}/{prefix} "
+                  "(empty plane / wrong fleet?).", file=sys.stderr)
+            return 0
+        # Collapse the object listing to category/name/version rows.
+        seen = {}
+        for line in r.stdout.splitlines():
+            parts = line.split()
+            if len(parts) < 4:
+                continue
+            objkey = parts[3]                      # <fleet>/<cat>/<name>/<ver>/…
+            segs = objkey.split("/")
+            if len(segs) >= 4:
+                c, n, v = segs[1], segs[2], segs[3]
+                seen.setdefault((c, n, v), []).append(segs[-1])
+        if not seen:
+            print(f"  (no models under fleet '{fleet}'"
+                  + (f" category '{cat}'" if cat else "") + ")")
+            return 0
+        print(f"models plane (fleet {fleet}):")
+        for (c, n, v) in sorted(seen):
+            has_onnx = "model.onnx" in seen[(c, n, v)]
+            print(f"  {c}/{n}@{v}" + ("  [onnx]" if has_onnx else "  [meta]"))
+        return 0
+
+    print(f"theia models: unknown subcommand '{sub}' (push | list).",
+          file=sys.stderr)
+    return 2
+
+
 def cmd_rollout(args: list[str]) -> int:
     """Phased app-SWP rollout across a fleet — the CLI analog of the GS Rollouts tab.
 
@@ -6721,6 +6916,7 @@ COMMANDS = {
     "fleet":       (cmd_fleet,       "[list|types|groups|group|ungroup] — the enrolled-device table + group actions (GS Fleet view)"),
     "deploy":      (cmd_deploy,      "<distribution> <device> [--publish --watch] | status [device] | --list — GS two-plane deploy (runtime+SWP)"),
     "rollout":     (cmd_rollout,     "{create|advance|status|abort|list|delete} — phased app-SWP rollout across a fleet (GS Rollouts)"),
+    "models":      (cmd_models,      "{push|list} — versioned ML model plane (onnx/engines/LUTs) on S3, out-of-band from code"),
     "releases":    (cmd_releases,    "[base|app|roles] | {pin|unpin|delete} <kind> <ref> — published S3 builds (GS Releases tab)"),
     "distributions": (cmd_distributions, "{list|create|delete} — Distribution bundles (base+app per role) (GS Distributions tab)"),
     "target":      (cmd_target,      "{list|pin|unpin|delete|clear} — manage/decommission a deploy target (GS Target actions)"),

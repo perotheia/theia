@@ -37,6 +37,14 @@ struct GetReply  { int32_t value; };
 struct DelayedAnswer       { int ms; int32_t tag; };
 struct DelayedAnswerReply  { int32_t tag; };
 
+// A periodic STATE-LIKE feed update carrying a freshness `seq` (a corridor /
+// pose / frame — only the newest matters). `handle_cast(Feed)` sleeps `work_ms`
+// to model a consumer slower than the producer, and records EVERY seq it
+// processes — so a test can show a plain FIFO mailbox drains all stale updates
+// (the conflating-mailbox failure) vs. an opt-in conflating port that would keep
+// only the latest. See docs/tasks genserver-conflating-mailbox.
+struct Feed { uint32_t seq; int work_ms; };
+
 // ---- Server ------------------------------------------------------------
 
 struct TestServerState {
@@ -45,6 +53,10 @@ struct TestServerState {
     std::atomic<uint32_t> casts_received{0};
     std::atomic<uint32_t> infos_received{0};
     std::string last_info;
+    // Feed-conflation observability: the ordered seqs handle_cast(Feed) actually
+    // processed, and the newest seq ever enqueued (stamped by the producer).
+    std::vector<uint32_t> feed_seqs_handled;
+    std::atomic<uint32_t> feed_seq_enqueued{0};
 };
 
 class TestServer
@@ -62,6 +74,16 @@ public:
     void handle_cast(const Inc& msg, TestServerState& s) {
         s.counter += msg.n;
         s.casts_received.fetch_add(1);
+    }
+    // Slow state-like feed handler: record the seq, then sleep to model a
+    // consumer slower than the producer. On a FIFO mailbox this drains every
+    // stale seq in order (the failure); a conflating port would only ever see
+    // the newest pending seq.
+    void handle_cast(const Feed& msg, TestServerState& s) {
+        s.feed_seqs_handled.push_back(msg.seq);
+        if (msg.work_ms > 0)
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(msg.work_ms));
     }
     void handle_info(const char* info, TestServerState& s) {
         s.last_info = info;

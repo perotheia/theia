@@ -463,8 +463,26 @@ TreeSnapshot SupervisorCtl::handle_call(
     TreeSnapshot snap{};
     const pb_size_t cap =
         static_cast<pb_size_t>(sizeof(snap.children) / sizeof(snap.children[0]));
+    // total_children = what the walk WOULD emit; children_count = what fits.
+    // A client compares the two to render "N of M" instead of a short tree it
+    // cannot tell from a healthy one.
+    snap.total_children = static_cast<uint32_t>(rows.size());
+    snap.truncated      = rows.size() > cap;
+    if (snap.truncated) {
+        // NOT "logged on encode" (the old comment here was wrong): rows dropped
+        // in this loop never reach pb_encode, so nanopb cannot warn about them.
+        // Say it once, here — otherwise the cut is invisible and a
+        // services-only reply reads as "the app FCs are dead". It did exactly
+        // that: a 99-row rig against a 64 cap showed services and no apps.
+        this->log().warn(
+            "GetTree: tree has " + std::to_string(rows.size()) +
+            " rows but the wire cap is " + std::to_string(cap) +
+            " — reply TRUNCATED, " + std::to_string(rows.size() - cap) +
+            " rows dropped (raise TreeSnapshot.children max_count in "
+            "system/supervisor/package.art, or paginate GetTree)");
+    }
     for (const auto& r : rows) {
-        if (snap.children_count >= cap) break;  // truncate (logged on encode)
+        if (snap.children_count >= cap) break;  // counted + logged above
         auto& c = snap.children[snap.children_count++];
         c = ChildState{};
         std::snprintf(c.name, sizeof(c.name), "%s", r.name.c_str());

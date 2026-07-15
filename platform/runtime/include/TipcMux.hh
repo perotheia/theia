@@ -223,12 +223,19 @@ public:
                 }
 
                 // Reply encode buffer. Sized for the LARGEST reply any op
-                // returns — the supervisor's TreeSnapshot (up to 64 ChildState
-                // rows) is ~24 KB, so 256 (the old cap) silently dropped it:
-                // pb_encode overflowed → `return` → no reply → the caller timed
-                // out. proto_len is u16 (64 KB ceiling); 48 KB covers every
-                // current reply. Heap, not stack (too big to stack per call).
-                static constexpr size_t kReplyCap = 48 * 1024;
+                // returns — the supervisor's TreeSnapshot (ChildState rows at
+                // ~418 B worst case) is the driver: 256 (the original cap)
+                // silently dropped it (pb_encode overflowed → `return` → no
+                // reply → the caller timed out), 48 KB covered the old 64-row
+                // cap, and 64 KB covers the current 128-row cap (~52 KB).
+                // proto_len is u16 and is assigned by a NARROWING cast below,
+                // so the cap must stay <= 65535: at exactly 64 KB a full buffer
+                // would wrap proto_len to 0 and ship a silently corrupt frame.
+                // 65535 is the HARD ceiling — a tree past ~160 rows cannot ride
+                // one reply at all, and GetTree must paginate (or move to the
+                // NodeEdge/NodeState firehose) rather than grow this further.
+                // Heap, not stack (too big to stack per call).
+                static constexpr size_t kReplyCap = 64 * 1024 - 1;
                 std::vector<uint8_t> buf(kReplyCap);
                 pb_ostream_t os = pb_ostream_from_buffer(buf.data(), kReplyCap);
                 if (!pb_encode(&os, RemoteCodec<Reply>::fields(), &reply))

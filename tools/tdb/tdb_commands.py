@@ -36,6 +36,26 @@ def _g(obj, field, default=None):
     return getattr(obj, field, default)
 
 
+def _truncation_note(reply) -> str:
+    """The supervisor's TreeSnapshot.children is a FIXED nanopb array; a tree
+    bigger than the cap arrives CUT SHORT. Never render the short tree silently
+    — it is indistinguishable from a healthy small one (a 99-row rig against a
+    64 cap showed all services and NONE of the app FCs, which reads as "the apps
+    are dead"). Empty string when the reply is whole."""
+    if not _g(reply, "truncated", False):
+        return ""
+    shown = len(list(_g(reply, "children", []) or []))
+    total = _g(reply, "total_children", 0) or 0
+    missing = (total - shown) if total else 0
+    return (f"!! TRUNCATED: showing {shown} of {total} rows"
+            f"{f' ({missing} dropped)' if missing else ''} — the supervisor's"
+            f" wire cap cut the tree. Rows are emitted in config order, so the"
+            f" LAST entries (typically the app FCs) are the ones missing;"
+            f" they may be running fine. Raise TreeSnapshot.children max_count"
+            f" in system/supervisor/package.art, or use"
+            f" `ps -eo pid,ppid,cmd | grep current/bin/`.")
+
+
 def _render_tree(rows) -> str:
     """rows = flat [{name,parent_name,kind,pid,state,...}] (dict or pb message);
     rebuild the hierarchy by parent_name + indent."""
@@ -47,8 +67,18 @@ def _render_tree(rows) -> str:
     # kind: 1=supervisor, 0=worker (process), 2=node (thread in the process).
     _KIND = {1: "sup", 0: "proc", 2: "node"}
 
+    # The hierarchy is keyed by NAME, but a name is not unique: a node may carry
+    # its process's name (percept/percept, arbiter/arbiter, telecast/telecast are
+    # all real). Such a row is its own parent by name, so a naive recursive walk
+    # never terminates. Recurse on IDENTITY (the row object) and only into rows
+    # that can actually parent something — a node (kind 2) is a leaf.
+    seen: set[int] = set()
+
     def walk(parent: str, depth: int) -> None:
         for r in by_parent.get(parent, []):
+            if id(r) in seen:      # cycle guard: self-parenting name collision
+                continue
+            seen.add(id(r))
             kind = _KIND.get(_g(r, "kind"), "node")
             pid = _g(r, "pid", -1)
             st = _STATE.get(_g(r, "state", 0), str(_g(r, "state")))
@@ -56,7 +86,8 @@ def _render_tree(rows) -> str:
             pidstr = f"pid={pid}" if pid and pid > 0 else ""
             out.append(f"{'  ' * depth}{_g(r, 'name')} [{kind}] {st} {pidstr}"
                        f"{('  ' + tag) if tag else ''}".rstrip())
-            walk(_g(r, "name"), depth + 1)
+            if kind != "node":     # nodes are leaves; never recurse into one
+                walk(_g(r, "name"), depth + 1)
 
     walk("", 0)
     return "\n".join(out) if out else "(empty tree)"
@@ -278,7 +309,9 @@ def cmd_apps(args, sup, _tf) -> int:
             if ch is None:
                 return f"no process/node named {name!r} in the supervisor tree"
             return _render_proc(ch)
-        return _render_tree(list(_g(reply, "children", []) or []))
+        body = _render_tree(list(_g(reply, "children", []) or []))
+        note = _truncation_note(reply)
+        return (note + "\n\n" + body) if note else body
 
     if not follow:
         print(render())
@@ -320,7 +353,9 @@ def cmd_ps(args, sup, _tf) -> int:
             if ch is None:
                 return f"no process/node named {name!r} in the supervisor tree"
             return _render_proc(ch)
-        return _render_ps(list(_g(reply, "children", []) or []))
+        body = _render_ps(list(_g(reply, "children", []) or []))
+        note = _truncation_note(reply)
+        return (note + "\n\n" + body) if note else body
 
     if not follow:
         print(render())

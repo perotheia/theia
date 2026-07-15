@@ -16,7 +16,7 @@ system_supervisor.ChildState.sockets   max_count:0
 system_supervisor.SocketInfo.local   max_size:20
 system_supervisor.SocketInfo.remote   max_size:20
 system_supervisor.ThreadSample.comm   max_size:16
-system_supervisor.TreeSnapshot.children   max_count:64
+system_supervisor.TreeSnapshot.children   max_count:128
 system_supervisor.NodeEdge.parent_name   max_size:64
 system_supervisor.NodeEdge.name   max_size:64
 system_supervisor.NodeState.name   max_size:64

@@ -58,6 +58,8 @@ message TreeSnapshot {
     uint64 generation = 1;
     uint64 timestamp_ms = 2;
     repeated ChildState children = 3;
+    bool truncated = 4;
+    uint32 total_children = 5;
 }
 
 message SnapshotBegin {

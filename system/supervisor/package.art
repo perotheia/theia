@@ -152,10 +152,25 @@ message ThreadSample {
 
 // Full tree snapshot — flat list of ChildState rows; the GUI reconstructs
 // the hierarchy via parent_name links.
+//
+// SIZING (children[] is a FIXED nanopb array — a bigger tree is CUT SHORT):
+// the walk emits one row per supervisor, per process, per node, PLUS a
+// synthesized <proc>_sup wrapper per process — so a process costs 2 rows +
+// 1/node. The old cap of 64 fit a services-only rig exactly and silently
+// dropped everything after it: a 15-service + 7-app rig needs 99 rows, so
+// `tdb ps` showed the services and NONE of the apps while they ran fine.
+// 128 covers that with headroom. It cannot grow much further on this
+// transport: ChildState is ~418 B/row worst case, so 128 rows is ~52 KB
+// against TipcMux kReplyCap (64 KB) and the u16 proto_len ceiling (64 KB) —
+// ~160 rows is the wall. Past that, GetTree must paginate or move to the
+// NodeEdge/NodeState firehose. When the cut happens, TreeSnapshot.truncated
+// + total_children report it rather than lying by omission.
 message TreeSnapshot {
     uint64  generation       // monotonically increasing
     uint64  timestamp_ms     // wallclock at snapshot time
-    repeated ChildState children [max_count:64]
+    repeated ChildState children [max_count:128]
+    bool    truncated        // children[] was cut short (tree > max_count)
+    uint32  total_children   // rows the walk WOULD have emitted
 }
 
 // ---- #429 topo-pair firehose stream --------------------------------------

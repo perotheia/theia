@@ -47,8 +47,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <deque>
 #include <functional>
+#include <list>
+#include <unordered_map>
 #include <future>
 #include <memory>
 #include <type_traits>
@@ -167,9 +168,42 @@ public:
     void enqueue(MailboxFn fn) {
         {
             std::lock_guard<std::mutex> lk(mu_);
-            mailbox_.push_back(std::move(fn));
+            mailbox_.push_back(Entry{0, std::move(fn)});
         }
         cv_.notify_one();
+    }
+
+    // CONFLATING enqueue (keep-latest) for a periodic STATE-LIKE feed. `key`
+    // is the message-type demux id (service_id / djb2("Msg")); a NON-ZERO key
+    // whose prior cast is still queued-but-unhandled is OVERWRITTEN IN PLACE
+    // instead of appended — so a consumer slower than the producer sees only
+    // the NEWEST pending value, not the whole stale backlog (docs/tasks
+    // genserver-conflating-mailbox). key==0 is the non-conflated path (use
+    // enqueue()). Calls are NEVER conflated — only fire-and-forget casts.
+    // FIFO position is preserved: an overwrite keeps the original slot's place
+    // in line (a feed that was already ahead of a later call stays ahead), we
+    // only swap its payload for the fresher one.
+    void enqueue_conflated(uint16_t key, MailboxFn fn) {
+        {
+            std::lock_guard<std::mutex> lk(mu_);
+            auto it = conflate_slots_.find(key);
+            if (it != conflate_slots_.end()) {
+                // A pending cast of this type is still queued — replace its
+                // payload with the fresher one (keep-latest), same position.
+                it->second->fn = std::move(fn);
+                ++conflated_drops_;   // observability: a stale value was dropped
+                return;               // no notify — the slot is already pending
+            }
+            mailbox_.push_back(Entry{key, std::move(fn)});
+            conflate_slots_[key] = std::prev(mailbox_.end());
+        }
+        cv_.notify_one();
+    }
+
+    // Count of stale casts dropped by conflation (for a trace/diagnostic).
+    uint64_t conflated_drops() const {
+        std::lock_guard<std::mutex> lk(mu_);
+        return conflated_drops_;
     }
 
     // Public forwarder used by post_info() lambdas. The actual typed
@@ -230,7 +264,13 @@ private:
                     return !running_.load() || !mailbox_.empty();
                 });
                 if (!running_.load() && mailbox_.empty()) break;
-                fn = std::move(mailbox_.front());
+                Entry& front = mailbox_.front();
+                // Drop this slot's conflation reservation BEFORE we dispatch:
+                // once it leaves the queue a same-key cast must append fresh,
+                // not overwrite an entry we're about to hand to the handler.
+                if (front.conflate_key != 0)
+                    conflate_slots_.erase(front.conflate_key);
+                fn = std::move(front.fn);
                 mailbox_.pop_front();
             }
             fn(this);  // dispatches into Derived via the captured lambda
@@ -250,11 +290,24 @@ private:
         if (thread_.joinable()) thread_.join();
     }
 
+    // One queued mailbox item. `conflate_key` is 0 for a normal FIFO item;
+    // a non-zero key (the msg-type service_id) marks a conflatable cast whose
+    // slot enqueue_conflated() overwrites in place while it's still pending.
+    struct Entry {
+        uint16_t  conflate_key;
+        MailboxFn fn;
+    };
+
     std::atomic<bool>      running_{false};
     std::thread            thread_;
-    std::mutex             mu_;
+    mutable std::mutex     mu_;               // mutable: const conflated_drops()
     std::condition_variable cv_;
-    std::deque<MailboxFn>  mailbox_;
+    // std::list (not deque) so a conflatable slot's iterator stays valid across
+    // other enqueues/pops — enqueue_conflated() overwrites via a stored iterator.
+    std::list<Entry>       mailbox_;
+    // key → the pending (queued-but-unhandled) slot for that conflatable type.
+    std::unordered_map<uint16_t, std::list<Entry>::iterator> conflate_slots_;
+    uint64_t               conflated_drops_{0};   // stale casts dropped by conflation
     // Touched only on the server thread (in loop_'s post-drain phase
     // and the stop-sentinel lambda) — no synchronization needed.
     std::string                          terminate_reason_{"normal"};

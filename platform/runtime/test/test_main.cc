@@ -231,7 +231,7 @@ static std::string case_cast_returns_immediately() {
 // REPRODUCES the conflating-mailbox failure (docs/tasks
 // genserver-conflating-mailbox): a periodic STATE-LIKE feed into a consumer
 // slower than the producer. The mailbox is a faithful-OTP unbounded FIFO
-// (std::deque, enqueue=push_back), so it queues EVERY stale update and the
+// (a std::list FIFO via enqueue(), key 0), so it queues EVERY stale update and the
 // consumer processes them all in order — decisions lag reality by the whole
 // backlog. For a corridor/pose/frame only the NEWEST matters; the backlog is
 // pure harm. This test DOCUMENTS the current (buggy) behavior so a future
@@ -259,12 +259,42 @@ static std::string case_feed_conflation_backlog() {
     EXPECT(handled.front() == 1 && handled.back() == N,
            "consumer processed oldest→newest, lagging reality by the backlog");
 
-    // What a CONFLATING port SHOULD yield (the fix, once implemented): the
-    // handler sees only the newest pending seq while it was busy — handled.size()
-    // would be small (≈2: the first, then the coalesced latest), and
-    // handled.back() == feed_seq_enqueued. Flip these when `[conflate]` lands.
-    //   EXPECT(handled.size() < N, "conflating port drops stale updates");
-    //   EXPECT(handled.back() == s.state().feed_seq_enqueued.load(), "newest wins");
+    // (The CONFLATING counterpart — keep-latest — is exercised by
+    // case_feed_conflation_keep_latest below via enqueue_conflated.)
+    s.stop();
+    return {};
+}
+
+// The FIX: enqueue_conflated(key, fn) keep-latest. Same slow-consumer burst as
+// above, but each Feed is enqueued CONFLATED under one key. While the handler is
+// busy on the first, later casts overwrite the single pending slot in place — so
+// the consumer sees only the FIRST (in flight when the burst started) then the
+// NEWEST, never the stale middle. This is what a `[conflate]` port yields.
+static std::string case_feed_conflation_keep_latest() {
+    TestServer s; start_node(s);
+    const uint32_t N = 20;
+    const uint16_t kFeedKey = 0xF33D;   // stand-in for the msg-type service_id
+    for (uint32_t i = 1; i <= N; ++i) {
+        s.state().feed_seq_enqueued.store(i);
+        // Enqueue the SAME work the typed cast would, under a conflation key.
+        s.enqueue_conflated(kFeedKey, [i](rt::GenServerBase* base) {
+            auto* self = static_cast<TestServer*>(base);
+            self->handle_cast(Feed{i, /*work_ms*/15}, self->state());
+        });
+    }
+    // Drain behind a NON-conflated sync probe (key 0 → normal FIFO tail).
+    rt::call<GetReply>(s, Get{}, CallAct{0}, /*timeout*/5000);
+    const auto& handled = s.state().feed_seqs_handled;
+
+    // Keep-latest: FAR fewer than N handled (the stale middle was coalesced),
+    // and the LAST one handled is the newest seq that was ever enqueued.
+    EXPECT(handled.size() < N,
+           "conflating mailbox drops stale feed updates (not all N handled)");
+    EXPECT(!handled.empty() && handled.back() == s.state().feed_seq_enqueued.load(),
+           "the NEWEST enqueued seq is the last one handled (keep-latest)");
+    // The drop counter accounts for every coalesced stale cast.
+    EXPECT(s.conflated_drops() == N - handled.size(),
+           "conflated_drops() == the number of stale casts overwritten");
     s.stop();
     return {};
 }
@@ -1355,6 +1385,7 @@ int main() {
     CASE(stat, cast_basic) { return case_cast_basic(); });
     CASE(stat, cast_returns_immediately) { return case_cast_returns_immediately(); });
     CASE(stat, feed_conflation_backlog) { return case_feed_conflation_backlog(); });
+    CASE(stat, feed_conflation_keep_latest) { return case_feed_conflation_keep_latest(); });
     CASE(stat, info_basic) { return case_info_basic(); });
     CASE(stat, send_request_basic) { return case_send_request_basic(); });
     CASE(stat, send_request_check) { return case_send_request_check(); });

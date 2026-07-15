@@ -100,11 +100,18 @@ public:
     // Register a remote handle_cast handler for typed message Msg on
     // the given binding. Sender stamps service_id = djb2_low16("Msg");
     // receiver's `node` exposes handle_cast(const Msg&, State&).
+    //
+    // `conflate` (from a `[conflate]` .art port attr, gen-app-emitted): a
+    // periodic STATE-LIKE feed where only the newest matters. The enqueue routes
+    // through enqueue_conflated(service_id, …) so a cast whose predecessor is
+    // still queued OVERWRITES it in place — a slow consumer sees the latest, not
+    // the stale backlog (docs/tasks genserver-conflating-mailbox). The
+    // service_id IS the conflation key: one slot per message type.
     template <typename Msg, typename NodeT>
-    void register_cast(NodeBinding* b, NodeT& node) {
+    void register_cast(NodeBinding* b, NodeT& node, bool conflate = false) {
         InboundEntry e;
         e.kind = InboundEntry::Kind::Cast;
-        e.dispatch = [&node](const uint8_t* payload, uint16_t len,
+        e.dispatch = [&node, conflate](const uint8_t* payload, uint16_t len,
                               int /*reply_fd*/, uint32_t corr) {
             // Inbound trace: Recv with the wire-level corr_id (which
             // is 0 for casts). Payload is the encoded request bytes
@@ -118,7 +125,7 @@ public:
             Msg msg{};
             pb_istream_t is = pb_istream_from_buffer(payload, len);
             if (!pb_decode(&is, RemoteCodec<Msg>::fields(), &msg)) return;
-            node.enqueue([msg = std::move(msg), corr](GenServerBase* base) {
+            auto handler = [msg = std::move(msg), corr](GenServerBase* base) {
                 auto* self = static_cast<NodeT*>(base);
                 auto& tr2 = ::theia::runtime::tracer_for(NodeT::kNodeName);
                 if (tr2.enabled()) {
@@ -132,7 +139,12 @@ public:
                              ::theia::runtime::msg_type_name<Msg>(),
                              corr, nullptr, 0);
                 }
-            });
+            };
+            if (conflate)
+                node.enqueue_conflated(RemoteCodec<Msg>::service_id,
+                                       std::move(handler));
+            else
+                node.enqueue(std::move(handler));
         };
         b->entries[RemoteCodec<Msg>::service_id] = std::move(e);
     }

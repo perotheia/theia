@@ -135,6 +135,16 @@ node runnable ComGrpcProxy {
         // PHM's (imported below).
         sender to_phm provides FcHealthReportIf
     }
+    params {
+        // gRPC listen address for the SupervisorView/rtdb/GUI bridge. A deploy
+        // knob so two stacks sharing ONE host/network namespace (a dev stack
+        // beside a deployed base) don't collide on the port — override via
+        // deploy/config/<machine>/com.json. Read by listen_addr()
+        // (ComGrpcProxy_handlers.cc); $THEIA_COM_LISTEN still wins over this for
+        // an ad-hoc shift. Default = the historical 0.0.0.0:7700 the GUI/tdb/
+        // rf-theia connect to.
+        grpc_listen : string = "0.0.0.0:7700"
+    }
 }
 
 // ---- TraceForwarder (the trace EGRESS gRPC thread) ----------------------

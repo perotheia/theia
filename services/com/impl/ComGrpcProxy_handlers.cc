@@ -47,6 +47,7 @@
 #include "impl/shwa_link.hpp"     // SHWA AccelTelemetry egress receiver (GPU/host)
 #include "impl/machine_manifest.hpp"  // cluster index→name map (per-machine label)
 #include "impl/com_tls.hpp"       // shared TLS-or-insecure ServerCredentials
+#include "ParamsConfig.hh"        // get_config() — static param grpc_listen
 
 #include "TipcTopology.hh"        // Stage 3: live supervisor-instance discovery
 #include "PgClient.hh"            // PG egress for the FcHealthReport → PHM edge
@@ -95,12 +96,16 @@ constexpr uint32_t kOpConfigureTrace    = 9;   // #361 (trace control path)
 constexpr uint32_t kOpGetTraceConfig    = 10;  // crash-investigation read-back
 constexpr uint32_t kOpConfigureLogLevel = 11;  // #385
 
-// Listen address. Overridable via THEIA_COM_LISTEN (the rig/executor sets it
-// from the machine manifest's com gRPC endpoint); defaults to the historical
-// 0.0.0.0:7700 that supervisor-gui + tdb + rf-theia connect to.
+// Listen address. Precedence: $THEIA_COM_LISTEN (ad-hoc shift, e.g. a dev
+// stack) > the `grpc_listen` static param (deploy/config/<machine>/com.json —
+// the rig knob so two stacks sharing one host/net namespace don't collide on
+// the port) > the historical default 0.0.0.0:7700 that supervisor-gui + tdb +
+// rf-theia connect to. Read once at server bootstrap (static param).
 std::string listen_addr() {
     if (const char* e = std::getenv("THEIA_COM_LISTEN")) return e;
-    return "0.0.0.0:7700";
+    return ::theia::runtime::get_config()
+        .node(ComGrpcProxy::kNodeName)
+        .str("grpc_listen", "0.0.0.0:7700");
 }
 
 // ---- SHWA AccelTelemetry fold-in (gated at com) --------------------------

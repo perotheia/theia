@@ -228,6 +228,47 @@ static std::string case_cast_returns_immediately() {
     return {};
 }
 
+// REPRODUCES the conflating-mailbox failure (docs/tasks
+// genserver-conflating-mailbox): a periodic STATE-LIKE feed into a consumer
+// slower than the producer. The mailbox is a faithful-OTP unbounded FIFO
+// (std::deque, enqueue=push_back), so it queues EVERY stale update and the
+// consumer processes them all in order — decisions lag reality by the whole
+// backlog. For a corridor/pose/frame only the NEWEST matters; the backlog is
+// pure harm. This test DOCUMENTS the current (buggy) behavior so a future
+// conflating-port fix can flip the assertion to "only the latest is handled".
+static std::string case_feed_conflation_backlog() {
+    TestServer s; start_node(s);
+    // Burst 20 feed updates, each needing ~15ms of work → the producer outruns
+    // the consumer and the mailbox backs up. seqs 1..20; newest is 20.
+    const uint32_t N = 20;
+    for (uint32_t i = 1; i <= N; ++i) {
+        s.state().feed_seq_enqueued.store(i);
+        rt::cast(s, Feed{i, /*work_ms*/15});
+    }
+    // Drain: a sync call sits BEHIND the whole feed backlog in the FIFO, so when
+    // it returns every queued Feed has been handled.
+    rt::call<GetReply>(s, Get{}, CallAct{0}, /*timeout*/5000);
+    const auto& handled = s.state().feed_seqs_handled;
+
+    // CURRENT (FIFO) BEHAVIOR — the bug: EVERY stale seq was processed, in order.
+    EXPECT(handled.size() == N,
+           "FIFO mailbox drains ALL stale feed updates (the conflation bug)");
+    for (uint32_t i = 0; i < N; ++i)
+        EXPECT(handled[i] == i + 1, "FIFO processes stale updates in order");
+    // The consumer wasted work on 19 stale corridors before reaching the newest.
+    EXPECT(handled.front() == 1 && handled.back() == N,
+           "consumer processed oldest→newest, lagging reality by the backlog");
+
+    // What a CONFLATING port SHOULD yield (the fix, once implemented): the
+    // handler sees only the newest pending seq while it was busy — handled.size()
+    // would be small (≈2: the first, then the coalesced latest), and
+    // handled.back() == feed_seq_enqueued. Flip these when `[conflate]` lands.
+    //   EXPECT(handled.size() < N, "conflating port drops stale updates");
+    //   EXPECT(handled.back() == s.state().feed_seq_enqueued.load(), "newest wins");
+    s.stop();
+    return {};
+}
+
 static std::string case_info_basic() {
     TestServer s; start_node(s);
     rt::post_info(s, "hello");
@@ -1313,6 +1354,7 @@ int main() {
     CASE(stat, call_sync_timeout) { return case_call_sync_timeout(); });
     CASE(stat, cast_basic) { return case_cast_basic(); });
     CASE(stat, cast_returns_immediately) { return case_cast_returns_immediately(); });
+    CASE(stat, feed_conflation_backlog) { return case_feed_conflation_backlog(); });
     CASE(stat, info_basic) { return case_info_basic(); });
     CASE(stat, send_request_basic) { return case_send_request_basic(); });
     CASE(stat, send_request_check) { return case_send_request_check(); });

@@ -42,9 +42,36 @@ from artheia.manifest.deployment import (
     MachineLayer, MachineSetLayer, ProcessLayer, _members,
 )
 from manifest.services.manifest import DEPLOYMENT as BASE
-from manifest.services.manifest import PROCESS_NODES  # noqa: F401  (re-export → executor.json nodes)
+from manifest.services.manifest import PROCESS_NODES as _BASE_PROCESS_NODES
 from manifest.services.manifest import PROCESS_PARAMS  # noqa: F401  (re-export → config/<fc>.json)
 from manifest.services.manifest import PROCESS_CONFIG_DEFAULTS  # noqa: F401  (re-export → config-defaults.json)
+
+# ── Provisioning-time boot gate (run_on_start=false) ────────────────────────
+# This RIG's executor.json is the RUNTIME (base) plane a rig runs AFTER
+# `theia provision` but BEFORE its SWP lands. A few services can't do useful
+# work until the SWP supplies the rig's real config — its known eth/wifi
+# interface names, the site nftables policy, the PTP interface:
+#   nm     — needs the real interface names + CAP_NET_ADMIN; touches live NICs.
+#   fw     — applies nftables to real interfaces; the SWP ships the site policy
+#            (fw stays enabled=true by default — provisioning has no SWP config
+#            to lock down yet, so there is nothing for it to enforce, and it
+#            would only default-drop against interfaces it doesn't know).
+#   tsync  — the PTP/PHC interface comes from the SWP; bare, it just degrades
+#            to the wall clock, so booting it pre-SWP buys nothing.
+# per is deliberately NOT gated: UCM needs it to persist SWP update state, and a
+# provisioned rig already has host etcd, so per works from first boot.
+#
+# These are DEFINED in the tree but not booted (spec.cpp: run_on_start=false =
+# define-but-don't-boot). The SWP's OWN executor.json carries the full tree with
+# every node run_on_start=true, and REPLACES this one on deploy — so the SWP
+# re-enables them with no undo step here. serialize-manifest reads run_on_start
+# from PROCESS_NODES meta (cli.py), so augmenting the re-exported dict is all it
+# takes; the generated manifest.py stays untouched.
+_PROVISION_DISABLED = ("nm", "fw", "tsync")
+PROCESS_NODES = {
+    name: ({**meta, "run_on_start": False} if name in _PROVISION_DISABLED else meta)
+    for name, meta in _BASE_PROCESS_NODES.items()
+}
 
 # Every framework service (no apps). The full platform the master installs.
 ALL = {p.name for p in _members(BASE.execution.processes)}

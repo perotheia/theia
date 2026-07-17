@@ -26,6 +26,19 @@ message Vec2 {
     float y
 }
 
+// Pose2D — the optimized planar pose. The `{x, y, yaw}` triple recurs in
+// every workspace (gplan EgoPose, location FusedLocation, wayplan
+// ActorState, the odom PODs) — NEW interfaces embed this instead of
+// re-flattening it. EXISTING flat messages stay flat: embedding is a
+// length-delimited field on the wire, so migrating a flat message is a
+// WIRE BREAK, not a rename. Same doctrine as Vec2: float (planar
+// telemetry), no added fields, Pose covers precision 3-D.
+message Pose2D {
+    float x
+    float y
+    float yaw
+}
+
 message Vector3 {
     double x
     double y

@@ -11,6 +11,12 @@ message Vec2 {
     float y = 2;
 }
 
+message Pose2D {
+    float x = 1;
+    float y = 2;
+    float yaw = 3;
+}
+
 message Vector3 {
     double x = 1;
     double y = 2;

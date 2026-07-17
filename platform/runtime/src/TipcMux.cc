@@ -326,7 +326,7 @@ void TipcMux::loop_() {
             }
             // Clamp the wire proto_len to what we actually recv'd into buf so a
             // truncated or lying frame can't make dispatch read past the buffer
-            // (kRecvBuf=4096; a SEQPACKET datagram larger than that arrives
+            // (kRecvBuf is 48 KB; a SEQPACKET datagram larger than that arrives
             // truncated, but hdr.proto_len still claims the original length).
             uint16_t avail = (uint16_t)(n - sizeof(TheiaMsgHeader));
             uint16_t plen = hdr.proto_len < avail ? hdr.proto_len : avail;

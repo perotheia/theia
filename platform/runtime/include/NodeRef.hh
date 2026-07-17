@@ -188,11 +188,11 @@ public:
     template <typename Msg>
     bool cast_(const Msg& msg) {
         using Codec = RemoteCodec<Msg>;
-        uint8_t buf[256];
+        uint8_t buf[kMaxCastPayload];
         pb_ostream_t os = pb_ostream_from_buffer(buf, sizeof(buf));
         if (!pb_encode(&os, Codec::fields(), &msg)) {
             // LOUD: a cast is fire-and-forget, so this false return is routinely
-            // ignored — an oversized message (256 B encode buffer) would vanish
+            // ignored — an oversized message (kMaxCastPayload encode buffer) would vanish
             // SILENTLY otherwise (observed in the field: a large periodic feed
             // cast that never arrived). Big payloads belong on the pg
             // broadcast_* path, where the caller encodes into its own
@@ -247,7 +247,7 @@ public:
             };
         }
 
-        uint8_t buf[256];
+        uint8_t buf[kMaxCastPayload];
         pb_ostream_t os = pb_ostream_from_buffer(buf, sizeof(buf));
         if (!pb_encode(&os, Codec::fields(), &req)) {
             std::lock_guard<std::mutex> lk(pending_mu_);
@@ -376,11 +376,11 @@ void cast(Daemon& /*self*/, const Msg& msg, TipcAddr addr,
     TipcClient client;
     if (!client.connect(addr.type, addr.instance, connect_timeout_ms)) return;
 
-    uint8_t buf[256];
+    uint8_t buf[kMaxCastPayload];
     pb_ostream_t os = pb_ostream_from_buffer(buf, sizeof(buf));
     if (!pb_encode(&os, Codec::fields(), &msg)) {
-        // LOUD: this path returns void — an oversized message (256 B encode
-        // buffer) would vanish with NO signal at all (observed in the field: a
+        // LOUD: this path returns void — an oversized message (kMaxCastPayload
+        // encode buffer) would vanish with NO signal at all (observed in the field: a
         // big netgraph-cast feed that never arrived; consumers starved
         // silently). Big payloads belong on the pg broadcast_* path (the caller
         // encodes into its own right-sized buffer, consumers pg_join in init()).

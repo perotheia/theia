@@ -87,5 +87,23 @@ static_assert(sizeof(TheiaRpcMeta)   == 8,  "TheiaRpcMeta must be 8 bytes");
 static_assert(sizeof(TheiaTipcMeta)  == 4,  "TheiaTipcMeta must be 4 bytes");
 static_assert(sizeof(TheiaMsgHeader) == 24, "TheiaMsgHeader must be 24 bytes — wire contract");
 
+// Max protobuf payload on an OUTBOUND frame (cast / call request). THE single
+// source of truth: TipcClient::send_frame enforces it, the NodeRef encode
+// buffers are sized by it, and artheia's probe mirrors it in
+// gen_server/probe/wire.py (MAX_PAYLOAD) — keep the three in step.
+//
+// Was 256 B, hardcoded at each site. That bit two consumers: a netgraph
+// cast<> of a feed-sized message pb_encode-failed, and the probe refused an
+// 80-waypoint route (978 B). The receive side never had this ceiling —
+// TipcMux's inbound buffer is kRecvBuf (48 KB) and replies go out at
+// kReplyCap (64 KB-1) — so the send path was the odd one out, not the wire.
+//
+// 4 KB, not larger: these are STACK buffers on the caller's thread (the reply
+// path can afford 64 KB because it heap-allocates a std::vector). Payloads
+// beyond this belong on the pg broadcast_* path, which encodes into its own
+// right-sized buffer. It stays well inside proto_len's uint16_t range, so no
+// narrowing-cast hazard here (cf. the kReplyCap 64*1024-1 note in TipcMux).
+static constexpr size_t kMaxCastPayload = 4 * 1024;
+
 }  // namespace runtime
 }  // namespace theia

@@ -91,7 +91,7 @@ void TipcClient::disconnect() {
 bool TipcClient::send_frame(const TheiaMsgHeader& hdr,
                              const uint8_t* payload, uint16_t proto_len) {
     if (fd_ < 0) return false;
-    uint8_t buf[sizeof(TheiaMsgHeader) + 256];
+    uint8_t buf[sizeof(TheiaMsgHeader) + kMaxCastPayload];
     size_t total = sizeof(TheiaMsgHeader) + proto_len;
     if (total > sizeof(buf)) return false;
     std::memcpy(buf, &hdr, sizeof(TheiaMsgHeader));

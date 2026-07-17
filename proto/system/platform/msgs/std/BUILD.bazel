@@ -1,0 +1,5 @@
+# ALIAS package — see ../geometry/BUILD.bazel.
+package(default_visibility = ["//visibility:public"])
+
+alias(name = "std_proto",
+      actual = "//platform/proto:platform_protos")

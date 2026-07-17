@@ -90,7 +90,14 @@ def main() -> int:
     a = ap.parse_args()
 
     cfgdef = json.loads(a.defaults.read_text())
-    per = PerClient.from_workspace(str(a.workspace))
+    # The probe needs TWO proto roots: the FRAMEWORK checkout (_FRAMEWORK — owns
+    # tdb.art + platform/proto, the codec's fallback) and, for an APP config, the
+    # CONSUMING WORKSPACE's proto/ where <app>.proto lives. Pass the workspace
+    # proto explicitly so seeding an app config from a consuming ws resolves
+    # without hand-copying protos into the framework tree.
+    ws_proto = a.workspace / "proto"
+    app_proto = str(ws_proto) if ws_proto.is_dir() else None
+    per = PerClient.from_workspace(str(_FRAMEWORK), app_proto=app_proto)
     try:
         seed_defaults(per, cfgdef)
         return 0

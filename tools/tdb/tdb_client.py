@@ -29,12 +29,24 @@ _ART = "system/tools/tdb/tdb.art"
 _PROTO = "platform/proto"
 
 
-def _ctx(repo: str | Path):
+def _ctx(repo: str | Path, proto_root: "str | Path | None" = None):
+    """Build a probe context. tdb.art resolves under `repo` (the framework
+    checkout, which owns system/tools/tdb/tdb.art). proto_root defaults to the
+    framework's platform/proto; pass a CONSUMING WORKSPACE's proto/ dir to seed
+    or probe an APP config whose .proto lives there — the codec keeps
+    $THEIA_ROOT/platform/proto as a fallback root, so platform common types
+    (and the tdb.art node protos) still resolve. See the codec include-root list."""
+    import os
     import sys
     repo = Path(repo)
     sys.path.insert(0, str(repo / "artheia"))
     from artheia.gen_server.probe import ArtheiaContext
-    return ArtheiaContext(str(repo / _ART), proto_root=str(repo / _PROTO))
+    # Ensure the framework proto is reachable as the codec's fallback root even
+    # when proto_root points at a workspace (env.sh exports THEIA_ROOT; default
+    # it to `repo` so the fallback is present in a bare invocation).
+    os.environ.setdefault("THEIA_ROOT", str(repo))
+    root = Path(proto_root) if proto_root else repo / _PROTO
+    return ArtheiaContext(str(repo / _ART), proto_root=str(root))
 
 
 def _unique_instance() -> int:
@@ -155,9 +167,15 @@ class PerClient:
         self.probe = ctx.probe("TdbPer", instance=_unique_instance()).start()
 
     @classmethod
-    def from_workspace(cls, repo: str | Path) -> "PerClient":
+    def from_workspace(cls, repo: str | Path,
+                       app_proto: "str | Path | None" = None) -> "PerClient":
+        """repo = the framework checkout (owns tdb.art). app_proto = a CONSUMING
+        WORKSPACE's proto/ dir, when driving an APP config whose .proto lives
+        there (seed.py --workspace); the codec keeps the framework platform/proto
+        as a fallback root so platform + tdb node types still resolve. Omit
+        app_proto for framework-only configs (services)."""
         repo = Path(repo)
-        return cls(_ctx(repo), repo)
+        return cls(_ctx(repo, proto_root=app_proto), repo)
 
     def snapshot(self, label: str, timeout: float = 3.0) -> dict[str, Any]:
         return self.probe.call("PerManager", "Snapshot", timeout=timeout,

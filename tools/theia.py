@@ -494,8 +494,10 @@ def cmd_start(args: list[str]) -> int:
     # it. Since TIPC name binds are SEQPACKET-anycast, two co-bound supervisors
     # make a probe (tdb ps / GetTree) land nondeterministically on either one (or
     # time out if one is crash-looping). One host = one supervisor per address:
-    # distinct dev stacks must use distinct tipc_cluster_id (or a distinct
-    # machine_index). Refuse to start rather than silently co-bind.
+    # two dev stacks that must coexist need distinct TIPC NETIDs — the netid is
+    # per network namespace, so a distinct netid puts each stack in its own TIPC
+    # cluster and the addresses stop colliding. Refuse to start rather than
+    # silently co-bind.
     _sup_bound = _tipc_addr_bound(0x80020001, int(machine_instance))
     if _sup_bound:
         print(f"theia: a supervisor is ALREADY bound at TIPC 0x80020001:"
@@ -503,8 +505,13 @@ def cmd_start(args: list[str]) -> int:
               f"pidfile is separate).\n"
               f"  Two supervisors sharing one TIPC address anycast-collide: "
               f"`tdb ps` / probes hit the wrong one or time out.\n"
-              f"  Stop the other stack (`theia stop` in its workspace), or give "
-              f"this rig a distinct Machine.tipc_cluster_id / machine_index.",
+              f"  Fix: stop the other stack (`theia stop` in its workspace).\n"
+              f"  To run both at once they need separate TIPC clusters — the "
+              f"netid is per NETWORK NAMESPACE, so either give each stack its "
+              f"own netns, or move one to a distinct netid "
+              f"(`sudo tipc node set netid <n>`, only settable while no TIPC "
+              f"sockets/bearers are up; the deploy path passes THEIA_TIPC_NETID "
+              f"— see platform/runtime/ota/theia-run.sh).",
               file=sys.stderr)
         return 1
 

@@ -14,6 +14,18 @@ package platform.msgs.geometry
 import system.platform.msgs.std.*   // Header, embedded by the *Stamped variants
 
 // ── Linear primitives ───────────────────────────────────────────────────────
+
+// Vec2 — the ONE optimized planar point for high-count telemetry (routes,
+// frontier sets, traces, corridor spines: float x/y = 8 B/point on the wire
+// vs Point's 24). Workspace clones (wayplan Vec2, gplan GVec2, chariot
+// CVec2) migrate HERE — wire-compatible (two float fields, tags 1/2); do
+// not add fields (a planar point is complete) and do not add a double
+// variant (Point already covers precision-critical 3-D).
+message Vec2 {
+    float x
+    float y
+}
+
 message Vector3 {
     double x
     double y

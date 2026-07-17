@@ -6,6 +6,11 @@ package platform_msgs_geometry;
 
 import "platform/msgs/std/std.proto";
 
+message Vec2 {
+    float x = 1;
+    float y = 2;
+}
+
 message Vector3 {
     double x = 1;
     double y = 2;

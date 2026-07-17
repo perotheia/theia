@@ -79,5 +79,16 @@ template <typename T>
 typename std::enable_if<!has_remote_codec_<T>::value, uint16_t>::type
 encode_for_trace(const T&, uint8_t*, uint16_t) noexcept { return 0; }
 
+// The service_id (djb2 demux key) for a type, or 0 if it has no RemoteCodec.
+// SFINAE so a codec-less local-only cast type still compiles (it is never
+// conflatable — conflation is a receiver-port property, and ports carry codecs).
+template <typename T>
+constexpr typename std::enable_if<has_remote_codec_<T>::value, uint16_t>::type
+codec_service_id() noexcept { return RemoteCodec<T>::service_id; }
+
+template <typename T>
+constexpr typename std::enable_if<!has_remote_codec_<T>::value, uint16_t>::type
+codec_service_id() noexcept { return 0; }
+
 }  // namespace runtime
 }  // namespace theia

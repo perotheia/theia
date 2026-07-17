@@ -12,3 +12,4 @@
 THEIA_DECLARE_REMOTE_CODEC(platform_runtime_test_Inc);
 THEIA_DECLARE_REMOTE_CODEC(platform_runtime_test_Get);
 THEIA_DECLARE_REMOTE_CODEC(platform_runtime_test_GetReply);
+THEIA_DECLARE_REMOTE_CODEC(platform_runtime_test_CFeed);

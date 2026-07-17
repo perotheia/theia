@@ -50,6 +50,7 @@
 #include <functional>
 #include <list>
 #include <unordered_map>
+#include <unordered_set>
 #include <future>
 #include <memory>
 #include <type_traits>
@@ -206,6 +207,21 @@ public:
         return conflated_drops_;
     }
 
+    // Declare a msg-type (by service_id key) conflatable on this node. Called
+    // once at wiring time by register_cast(conflate=true); makes the LOCAL
+    // same-process cast() path keep-latest for that type, matching the mux path.
+    void mark_conflated(uint16_t key) {
+        std::lock_guard<std::mutex> lk(mu_);
+        if (key) conflate_types_.insert(key);
+    }
+    // Is this msg-type (service_id key) conflatable on this node? Read by the
+    // local cast() to choose enqueue_conflated() over enqueue().
+    bool is_conflated(uint16_t key) const {
+        if (!key) return false;
+        std::lock_guard<std::mutex> lk(mu_);
+        return conflate_types_.count(key) != 0;
+    }
+
     // Public forwarder used by post_info() lambdas. The actual typed
     // dispatch lives on Derived; this thunks through the virtual
     // dispatch_info_ override so the right Derived::handle_info(...)
@@ -308,6 +324,11 @@ private:
     // key → the pending (queued-but-unhandled) slot for that conflatable type.
     std::unordered_map<uint16_t, std::list<Entry>::iterator> conflate_slots_;
     uint64_t               conflated_drops_{0};   // stale casts dropped by conflation
+    // service_ids (djb2 of the msg type) declared conflatable on this node via a
+    // `[conflate]` receiver port — register_cast(conflate=true) records the key
+    // here so the LOCAL same-process cast() path can keep-latest too, not just
+    // the TIPC/mux path. Populated once at wiring time, read on every cast.
+    std::unordered_set<uint16_t> conflate_types_;
     // Touched only on the server thread (in loop_'s post-drain phase
     // and the stop-sentinel lambda) — no synchronization needed.
     std::string                          terminate_reason_{"normal"};
@@ -530,7 +551,7 @@ void cast(Server& server, Msg msg) {
         tr.emit(::theia::runtime::TraceEvent::Send,
                 ::theia::runtime::msg_type_name<Msg>(), corr, scratch, n);
     }
-    server.enqueue([m = std::move(msg), corr](GenServerBase* base) {
+    auto fn = [m = std::move(msg), corr](GenServerBase* base) {
         auto* self = static_cast<Server*>(base);
         auto& tr2 = ::theia::runtime::tracer_for(Server::kNodeName);
         if (tr2.enabled()) {
@@ -550,7 +571,23 @@ void cast(Server& server, Msg msg) {
                      ::theia::runtime::msg_type_name<Msg>(),
                      corr, nullptr, 0);
         }
-    });
+    };
+    // Keep-latest for a [conflate] type on the LOCAL path too: if this msg-type's
+    // service_id was marked conflatable on the node (register_cast conflate=true),
+    // route through enqueue_conflated so a same-process periodic feed keeps only
+    // the newest pending cast — matching the mux/TIPC path. Non-conflated types
+    // (the default) take the plain FIFO enqueue. The service_id key only exists
+    // for a type with a RemoteCodec (the ones that can cross a wire / be a
+    // receiver port); a codec-less local-only type is never conflatable, so guard
+    // the key lookup with the SFINAE detector to keep cast<T> compiling for both.
+    if (::theia::runtime::has_remote_codec_<Msg>::value) {
+        const uint16_t key = ::theia::runtime::codec_service_id<Msg>();
+        if (key && server.is_conflated(key)) {
+            server.enqueue_conflated(key, std::move(fn));
+            return;
+        }
+    }
+    server.enqueue(std::move(fn));
 }
 
 // ---- Async-call API (mirrors OTP send_request / wait_response /

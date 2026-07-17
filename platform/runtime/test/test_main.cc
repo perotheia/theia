@@ -299,6 +299,51 @@ static std::string case_feed_conflation_keep_latest() {
     return {};
 }
 
+// LOCAL PATH: the same keep-latest, but driven through the PUBLIC rt::cast()
+// free function (not enqueue_conflated directly). mark_conflated(service_id)
+// makes a same-process cast<CFeed> route through the conflating mailbox — the
+// fix for the "local same-process cast() is not conflated" follow-up. A burst of
+// CFeeds into a slow handler must keep-latest, exactly as the mux/TIPC path does.
+static std::string case_feed_conflation_local_cast() {
+    TestServer s; start_node(s);
+    // Declare CFeed conflatable on this node (what register_cast(conflate=true)
+    // does at wiring time for a `[conflate]` receiver port).
+    s.mark_conflated(rt::RemoteCodec<platform_runtime_test_CFeed>::service_id);
+    const uint32_t N = 20;
+    uint32_t last = 0;
+    for (uint32_t i = 1; i <= N; ++i) {
+        platform_runtime_test_CFeed f{}; f.seq = i; f.work_ms = 15; last = i;
+        rt::cast(s, f);   // PUBLIC local cast — must conflate now.
+    }
+    // Drain behind a non-conflated sync probe (Get has a codec but was never
+    // marked conflatable → plain FIFO tail).
+    rt::call<GetReply>(s, Get{}, CallAct{0}, /*timeout*/5000);
+    const auto& handled = s.state().feed_seqs_handled;
+    EXPECT(handled.size() < N,
+           "local cast<CFeed> keep-latest: far fewer than N handled");
+    EXPECT(!handled.empty() && handled.back() == last,
+           "the NEWEST seq is the last one handled (keep-latest, local path)");
+    EXPECT(s.conflated_drops() == N - handled.size(),
+           "conflated_drops() accounts for every coalesced stale local cast");
+    s.stop();
+    return {};
+}
+
+// CONTROL: a codec-less local-only type (plain struct Feed) is NEVER conflatable
+// — the SFINAE guard must let it through the plain FIFO enqueue even when SOME
+// type is marked conflated. All N must be handled (no keep-latest).
+static std::string case_feed_no_conflation_without_mark() {
+    TestServer s; start_node(s);
+    const uint32_t N = 6;
+    for (uint32_t i = 1; i <= N; ++i) rt::cast(s, Feed{i, /*work_ms*/1});
+    rt::call<GetReply>(s, Get{}, CallAct{0}, 5000);
+    EXPECT(s.state().feed_seqs_handled.size() == N,
+           "an unmarked/codec-less cast type is FIFO — all N handled");
+    EXPECT(s.conflated_drops() == 0, "nothing conflated for an unmarked type");
+    s.stop();
+    return {};
+}
+
 static std::string case_info_basic() {
     TestServer s; start_node(s);
     rt::post_info(s, "hello");
@@ -1386,6 +1431,8 @@ int main() {
     CASE(stat, cast_returns_immediately) { return case_cast_returns_immediately(); });
     CASE(stat, feed_conflation_backlog) { return case_feed_conflation_backlog(); });
     CASE(stat, feed_conflation_keep_latest) { return case_feed_conflation_keep_latest(); });
+    CASE(stat, feed_conflation_local_cast) { return case_feed_conflation_local_cast(); });
+    CASE(stat, feed_no_conflation_without_mark) { return case_feed_no_conflation_without_mark(); });
     CASE(stat, info_basic) { return case_info_basic(); });
     CASE(stat, send_request_basic) { return case_send_request_basic(); });
     CASE(stat, send_request_check) { return case_send_request_check(); });

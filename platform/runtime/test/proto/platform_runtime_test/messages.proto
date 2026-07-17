@@ -8,3 +8,7 @@ package platform_runtime_test;
 message Inc      { int32 n     = 1; }
 message Get      {}
 message GetReply { int32 value = 1; }
+// A codec-backed feed (has a service_id) for the LOCAL-cast conflation test —
+// unlike the plain `struct Feed`, this one can be marked [conflate] and routed
+// through the keep-latest local cast() path.
+message CFeed    { uint32 seq = 1; int32 work_ms = 2; }

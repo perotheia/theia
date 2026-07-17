@@ -109,6 +109,9 @@ public:
     // service_id IS the conflation key: one slot per message type.
     template <typename Msg, typename NodeT>
     void register_cast(NodeBinding* b, NodeT& node, bool conflate = false) {
+        // Record the conflatable type on the node so the LOCAL same-process
+        // cast() path keep-latests it too, not just this mux/TIPC path.
+        if (conflate) node.mark_conflated(RemoteCodec<Msg>::service_id);
         InboundEntry e;
         e.kind = InboundEntry::Kind::Cast;
         e.dispatch = [&node, conflate](const uint8_t* payload, uint16_t len,

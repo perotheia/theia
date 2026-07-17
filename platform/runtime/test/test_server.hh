@@ -16,6 +16,8 @@
 #include "Logger.hh"
 #include "TimerService.hh"
 
+#include "platform_runtime_test/messages.pb.h"   // CFeed (codec-backed feed)
+
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -80,6 +82,15 @@ public:
     // stale seq in order (the failure); a conflating port would only ever see
     // the newest pending seq.
     void handle_cast(const Feed& msg, TestServerState& s) {
+        s.feed_seqs_handled.push_back(msg.seq);
+        if (msg.work_ms > 0)
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(msg.work_ms));
+    }
+    // Codec-backed feed (has a service_id) — same observability as Feed, but a
+    // type that can be marked [conflate] and routed through the local keep-latest
+    // cast() path. Used by case_feed_conflation_local_cast.
+    void handle_cast(const platform_runtime_test_CFeed& msg, TestServerState& s) {
         s.feed_seqs_handled.push_back(msg.seq);
         if (msg.work_ms > 0)
             std::this_thread::sleep_for(

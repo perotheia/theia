@@ -103,10 +103,15 @@ DEPLOYMENT = DeploymentLayer(
             start_cmd=Explicit('bin/shwa'), function_group=Explicit('services'),
             fg_states={"Startup", "Running"},
         ),
+        ProcessLayer(
+            name='vucm', executable=Explicit('//services/vucm/main:vucm'),
+            start_cmd=Explicit('bin/vucm'), function_group=Explicit('services'),
+            fg_states={"Startup", "Running"},
+        ),
     }),
     applications=ApplicationSetLayer(applications={
         # one AA bundling every process; host bound by the variant.
-        ApplicationLayer(name='services', processes={'com', 'crypto', 'diag', 'fw', 'idsm', 'log', 'nm', 'osi', 'per', 'phm', 'rds', 'sm', 'tsync', 'ucm', 'shwa'}),
+        ApplicationLayer(name='services', processes={'com', 'crypto', 'diag', 'fw', 'idsm', 'log', 'nm', 'osi', 'per', 'phm', 'rds', 'sm', 'tsync', 'ucm', 'shwa', 'vucm'}),
     }),
 )
 
@@ -256,13 +261,23 @@ PROCESS_NODES = {   'com': {   'modules': ['services/com'],
                             {   'name': 'ucm_fsm',
                                 'reporting': True,
                                 'tipc_instance': '0',
-                                'tipc_type': '0x8001001E'}]}}
+                                'tipc_type': '0x8001001E'}]},
+    'vucm': {   'modules': ['services/vucm'],
+                'nodes': [   {   'name': 'vucm_gate',
+                                 'reporting': True,
+                                 'tipc_instance': '0',
+                                 'tipc_type': '0x8001005E'},
+                             {   'name': 'vucm_campaign',
+                                 'reporting': True,
+                                 'tipc_instance': '0',
+                                 'tipc_type': '0x80010050'}]}}
 
 
 # Per-process static params defaults derived from the .art at
 # gen-manifest time. serialize-manifest emits config/<fc>.json per
 # machine from this — no .art backtrack needed at install/deploy time.
-PROCESS_PARAMS = {   'com': {'nodes': {}, 'package': 'system.services.com'},
+PROCESS_PARAMS = {   'com': {   'nodes': {'com_grpc_proxy': {'grpc_listen': '0.0.0.0:7700'}},
+               'package': 'system.services.com'},
     'crypto': {   'nodes': {'crypto_provider': {'ctx_idle_ms': 30000}},
                   'package': 'system.services.crypto'},
     'diag': {'nodes': {}, 'package': 'system.services.diag'},
@@ -281,7 +296,9 @@ PROCESS_PARAMS = {   'com': {'nodes': {}, 'package': 'system.services.com'},
                'package': 'system.services.per'},
     'phm': {'nodes': {}, 'package': 'system.services.phm'},
     'rds': {   'aliases': {'ctl': 'rds_ctl', 'roudi': 'roudi_broker'},
-               'nodes': {},
+               'nodes': {   'roudi': {'args': '-c /etc/iceoryx/roudi_config.toml'},
+                            'roudi_broker': {   'args': '-c '
+                                                        '/etc/iceoryx/roudi_config.toml'}},
                'package': 'system.services.rds'},
     'shwa': {'nodes': {}, 'package': 'system.services.shwa'},
     'sm': {   'aliases': {'fg_sm': 'function_group_sm'},
@@ -296,7 +313,8 @@ PROCESS_PARAMS = {   'com': {'nodes': {}, 'package': 'system.services.com'},
                                                     'enabled': True},
                               'tsync_ctl': {'poll_ms': 100}},
                  'package': 'system.services.tsync'},
-    'ucm': {'nodes': {}, 'package': 'system.services.ucm'}}
+    'ucm': {'nodes': {}, 'package': 'system.services.ucm'},
+    'vucm': {'nodes': {}, 'package': 'system.services.vucm'}}
 
 
 # Per-process etcd config-defaults derived from the .art at
@@ -431,4 +449,20 @@ PROCESS_CONFIG_DEFAULTS = {   'com': {'configs': {}, 'package': 'system.services
                                               'values': {   'releases_root': '/opt/theia/releases',
                                                             'retain_releases': 3,
                                                             'verify_budget_ms': 30000}}},
-               'package': 'system.services.ucm'}}
+               'package': 'system.services.ucm'},
+    'vucm': {   'configs': {   'vucm_campaign': {   'art_package': 'system.services.vucm',
+                                                    'config_type': 'VucmConfig',
+                                                    'digest': 'cfg_6d5542b29f5200f1',
+                                                    'proto_type': 'system_services_vucm_VucmConfig',
+                                                    'values': {   'authorize_budget_ms': 60000,
+                                                                  'auto_confirm_in_window': False,
+                                                                  'confirm_budget_ms': 120000,
+                                                                  'enforce_nm': False,
+                                                                  'enforce_phm': False,
+                                                                  'enforce_sm': False,
+                                                                  'min_net_state': 6,
+                                                                  'require_user_confirm': False,
+                                                                  'validate_budget_ms': 30000,
+                                                                  'window_end_min': 0,
+                                                                  'window_start_min': 0}}},
+                'package': 'system.services.vucm'}}

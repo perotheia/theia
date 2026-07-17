@@ -48,20 +48,22 @@ import system.services.sm.*
 import system.services.tsync.*
 import system.services.ucm.*
 import system.services.shwa.*
+import system.services.vucm.*
 
 // ---- forward-decl stubs: FC compositions live in their own component.art
 //
 // Only the FCs with a real daemon are declared here — one per `import`
 // above, and exactly the members of `cluster Services` below. The
-// daemon-less / conceptual FCs (core, diag, exec, fw, idsm, nm,
-// osi, phm, rds, vucm — see services/system/<short>/README.md)
-// are NOT declared: they have no composition, aren't imported, and
+// daemon-less / conceptual FCs (core, exec — see services/system/<short>/
+// README.md) are NOT declared: they have no composition, aren't imported, and
 // aren't packaged. They live in the source tree only as TIPC-slot
 // placeholders; add a forward-decl + import here when one grows a daemon.
-// crypto + tsync + nm + osi + fw + idsm grew daemons (Crypto Service Manager;
-// Time-Sync control; Network-readiness FSM + poller; OS-Interface cgroup/power;
-// Firewall nftables generator/applier — supersedes the old config-only nop/fw;
-// IDS Manager — eBPF detection ingest → SECURITY firehose).
+// crypto + tsync + nm + osi + fw + idsm + vucm grew daemons (Crypto Service
+// Manager; Time-Sync control; Network-readiness FSM + poller; OS-Interface
+// cgroup/power; Firewall nftables generator/applier — supersedes the old
+// config-only nop/fw; IDS Manager — eBPF detection ingest → SECURITY firehose;
+// V-UCM — the on-vehicle update orchestrator: VucmGate admission + VucmCampaign
+// two-phase-commit barrier, drives UCM RequestUpdate/Confirm/Cancel).
 
 composition Com      { }
 composition Crypto   { }
@@ -78,6 +80,7 @@ composition Sm       { }
 composition Tsync    { }
 composition Ucm      { }
 composition Shwa     { }
+composition Vucm     { }
 
 // ---- cluster Services — the Adaptive Platform FCs ------------------------
 //
@@ -99,4 +102,5 @@ cluster Services {
     composition Tsync  tsync
     composition Ucm    ucm
     composition Shwa   shwa
+    composition Vucm   vucm
 }

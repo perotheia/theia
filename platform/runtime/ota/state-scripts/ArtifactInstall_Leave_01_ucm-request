@@ -6,45 +6,33 @@
 # In production the theia-release module ONLY lands the release dir + flips the
 # symlink (idempotent, fast, no service knowledge). The AUTOSAR lifecycle —
 # stop/restart the affected FCs, PHM-health verify, ACTIVE-or-ROLLBACK — belongs
-# to the on-device UCM agent (services/ucm). This script signals UCM to run it,
-# reusing the EXACT probe path deploy/vucm/campaign.sh uses (UcmDaemon.RequestUpdate
-# over TIPC). Mender owns "the release arrived + is on disk"; UCM owns "make theia
-# adopt it safely". If this script exits non-zero Mender treats the install as
-# failed → ArtifactRollback runs → the module restores the previous symlink.
+# to the on-device UCM agent (services/ucm). This script signals UCM to run it
+# via UcmDaemon.RequestUpdate over TIPC. Mender owns "the release arrived + is on
+# disk"; UCM owns "make theia adopt it safely". If this script exits non-zero
+# Mender treats the install as failed → ArtifactRollback restores the previous
+# symlink.
 #
-# Mender installs state-scripts from the artifact OR from
-# /etc/mender/scripts/<StateName>_<Action>_<NN>_<name>; this file is the artifact-
-# embedded variant (pass it to `mender-artifact write` via --script). For a
-# standalone (no UCM running) install this is a no-op success.
+# The hand-off is NATIVE: `theia-migrate adopt` (the C++ tool that ships in the
+# theia-runtime deb) makes the SAME RequestUpdate call the retired python
+# ucm-adopt.py made, but over the runtime's own RemoteRef — NO python, NO
+# artheia probe on the rig (the probe is a dev tool; it ships to no board). For a
+# standalone (no UCM running) install it is a no-op success.
 set -eu
 
 THEIA_ROOT="${THEIA_ROOT:-/opt/theia}"
 VER="$(readlink "$THEIA_ROOT/current" 2>/dev/null | sed 's#releases/##')"
 [ -n "$VER" ] || { echo "ucm-request: no current release" >&2; exit 1; }
 
-# If no UCM agent is up (standalone install / dev box), succeed quietly — the
-# symlink switch IS the install. The supervisor will pick up `current` on restart.
-if ! command -v python3 >/dev/null 2>&1 || [ ! -d "$THEIA_ROOT/artheia" ]; then
-    echo "ucm-request: no UCM client env; symlink-only install of $VER (ok)"
+adopt="$THEIA_ROOT/bin/theia-migrate"
+if [ ! -x "$adopt" ]; then
+    # Runtime too old to carry the native adopter, or a bare dev box: the symlink
+    # switch IS the install; the supervisor picks up `current` on restart.
+    echo "ucm-request: no $adopt; symlink-only install of $VER (ok)"
     exit 0
 fi
 
 echo "ucm-request: signalling UcmDaemon.RequestUpdate to ADOPT $VER (sw/full)"
-# Hand the already-landed release to UCM (ucm-adopt.py = the Mender→UCM bridge).
-# UCM runs the restart + PHM-verify the bare symlink switch skips; its idempotent
-# stage/switch tolerate the release Mender already staged. The adopter exits 0 if
-# UCM isn't deployed here (the symlink switch IS the install then) and non-zero
-# only on an explicit UCM REJECT → Mender's ArtifactRollback restores `previous`.
-# The script is shipped next to this one (artifact-embedded) or under
-# /etc/mender/scripts/; resolve either.
-adopt=""
-for c in "$THEIA_ROOT/deploy/mender/state-scripts/ucm-adopt.py" \
-         "/etc/mender/scripts/ucm-adopt.py" \
-         "$(dirname "$0")/ucm-adopt.py"; do
-    [ -f "$c" ] && { adopt="$c"; break; }
-done
-if [ -n "$adopt" ]; then
-    THEIA_ROOT="$THEIA_ROOT" python3 "$adopt" "$VER" full
-else
-    echo "ucm-request: ucm-adopt.py not found; symlink-only install of $VER (ok)"
-fi
+# `theia-migrate adopt` exits 0 if UCM accepts OR isn't reachable here (the
+# symlink switch IS the install then), and non-zero ONLY on an explicit UCM
+# REJECT → Mender's ArtifactRollback restores `previous`.
+THEIA_ROOT="$THEIA_ROOT" "$adopt" adopt "$VER" full

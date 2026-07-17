@@ -25,6 +25,7 @@
 #include "TipcMux.hh"          // reply pump
 #include "RemoteCodec.hh"      // THEIA_DECLARE_REMOTE_CODEC
 #include "system/services/per/per.pb.h"
+#include "system/services/ucm/ucm.pb.h"   // PackageManifest / UcmReply (adopt)
 
 #include "nlohmann/json.hpp"
 
@@ -41,6 +42,9 @@ THEIA_DECLARE_REMOTE_CODEC(system_services_per_PerReply)
 THEIA_DECLARE_REMOTE_CODEC(system_services_per_SnapshotReq)
 THEIA_DECLARE_REMOTE_CODEC(system_services_per_RestoreSnapshotReq)
 THEIA_DECLARE_REMOTE_CODEC(system_services_per_MigrateBulkReq)
+// UcmDaemon.RequestUpdate(PackageManifest) -> UcmReply — the adopt hand-off.
+THEIA_DECLARE_REMOTE_CODEC(system_services_ucm_PackageManifest)
+THEIA_DECLARE_REMOTE_CODEC(system_services_ucm_UcmReply)
 
 namespace {
 
@@ -131,15 +135,102 @@ bool load(const std::string& dir, std::string* artifact, std::vector<Step>* step
     }
 }
 
+// ---- adopt: hand a landed release to UCM (replaces ucm-adopt.py) -------------
+// The Mender theia-release module staged /opt/theia/releases/<ver> and flipped
+// `current`. This tells the on-device UCM agent to ADOPT it: run the AUTOSAR
+// lifecycle (supervised FC restart → PHM-verify → COMMIT or ROLLBACK) the bare
+// symlink switch skips. Same wire call ucm-adopt.py made — UcmDaemon.RequestUpdate
+// — but native C++ over the runtime's RemoteRef, so NO python/probe/artheia on
+// the rig. Mirrors PerManLink above; UcmDaemon is 0x8001000E.
+struct UcmLink {
+    struct Tag { static constexpr const char* kNodeName = "ucm_daemon"; };
+    using Ref = ::theia::runtime::RemoteRef<Tag, 0x8001000Eu, 0u>;
+    Ref                       ref;
+    ::theia::runtime::TipcMux  mux;
+    bool                      started = false;
+    bool ensure() {
+        if (started) return true;
+        if (!ref.connect(/*timeout_ms=*/5000)) return false;
+        mux.watch_remote_ref(ref);
+        mux.start();
+        started = true;
+        return true;
+    }
+};
+
+// Returns: 0 accepted, 1 UCM rejected (→ fail the install), 2 UCM unreachable
+// (transient/not-adopted — the symlink stands, don't fail the install).
+int adopt(const std::string& version, const std::string& scope,
+          const std::string& fc, const std::string& artifact_path) {
+    UcmLink link;
+    system_services_ucm_PackageManifest req =
+        system_services_ucm_PackageManifest_init_zero;
+    // full: name="theia", US_FULL; partial: name=<fc>, US_PARTIAL.
+    const bool full = (scope != "partial");
+    std::snprintf(req.name, sizeof(req.name), "%s",
+                  full ? "theia" : (fc.empty() ? "theia" : fc.c_str()));
+    std::snprintf(req.version, sizeof(req.version), "%s", version.c_str());
+    req.kind  = system_services_ucm_UpdateKind_UpdateKind_UK_SOFTWARE;
+    req.scope = full ? system_services_ucm_UpdateScope_UpdateScope_US_FULL
+                     : system_services_ucm_UpdateScope_UpdateScope_US_PARTIAL;
+    std::snprintf(req.artifact_path, sizeof(req.artifact_path), "%s",
+                  artifact_path.c_str());
+    req.signature[0] = '\0';
+    req.has_migrations = false;   // UcmGate reads migration/ from the staged release
+
+    // Retry on a fresh connect within a budget — a stale/leftover binding can
+    // swallow the first attempts (the live hand-off needed this; same as the
+    // python driver's retry loop).
+    for (int attempt = 1; attempt <= 5; ++attempt) {
+        if (!link.ensure()) continue;
+        auto result = ::theia::runtime::call<system_services_ucm_UcmReply>(
+            link.ref, req, 0, 6000);
+        if (result.tag != ::theia::runtime::CallTag::Reply) continue;
+        const uint32_t status = result.reply.status;
+        if (status == 0) {
+            std::printf("theia-migrate: UCM accepted v%s (%s) — restart + "
+                        "PHM-verify\n", version.c_str(),
+                        full ? "full" : "partial");
+            return 0;
+        }
+        if (status == 2) {
+            std::fprintf(stderr, "theia-migrate: UCM not wired yet (agent "
+                         "starting) — symlink stands, adopt next campaign\n");
+            return 2;   // transient — do NOT fail the install
+        }
+        std::fprintf(stderr, "theia-migrate: UCM REJECTED v%s (status=%u)\n",
+                     version.c_str(), status);
+        return 1;       // explicit reject → fail → Mender ArtifactRollback
+    }
+    std::fprintf(stderr, "theia-migrate: UCM unreachable after retries — "
+                 "symlink-only install\n");
+    return 2;           // unreachable → symlink stands, don't fail
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
     if (argc < 3) {
         std::fprintf(stderr,
-            "usage: theia-migrate <forward|rollback> <migration-dir>\n");
+            "usage: theia-migrate <forward|rollback> <migration-dir>\n"
+            "       theia-migrate adopt <version> [full|partial] [fc] "
+            "[artifact-path]\n");
         return 2;
     }
     const std::string verb = argv[1];
+
+    // adopt — hand a landed release to UCM (the native ucm-adopt.py replacement).
+    // Exit 0 on accept OR transient-unreachable (symlink stands); 1 only on an
+    // explicit UCM reject, so a not-yet-adopted rig still completes the install.
+    if (verb == "adopt") {
+        const std::string version = argv[2];
+        const std::string scope   = argc > 3 ? argv[3] : "full";
+        const std::string fc      = argc > 4 ? argv[4] : "";
+        const std::string apath   = argc > 5 ? argv[5] : "";
+        const int rc = adopt(version, scope, fc, apath);
+        return rc == 1 ? 1 : 0;   // reject → fail; accept/unreachable → ok
+    }
+
     const std::string dir  = argv[2];
 
     std::string artifact;

@@ -5672,6 +5672,155 @@ def _gs_device_id(name_or_id: str) -> "str | None":
     return None
 
 
+def cmd_provision(args: list[str]) -> int:
+    """Provision a rig's RUNTIME plane via colony — install the theia runtime
+    (+services) debs and the boot-time systemd unit over SSH, WITHOUT touching
+    the app plane. The base-plane half of `theia deploy`, on its own.
+
+    This is the CLI analog of the GS "provision" action: it POSTs
+    /api/deployments/base, which the GS proxies to `colony create` +
+    `colony orchestrate` (the SSH provision + theia-supervisor.service install).
+    The app SWP is a SEPARATE concern — ship it with `theia deploy` (a full
+    Distribution) or `theia rollout` (a phased fleet campaign).
+
+    The runtime/app split mirrors the two planes: `provision` is the runtime
+    (base) plane a rig needs ONCE to become a supervised host; `deploy`/`rollout`
+    are the day-2 app plane on top of it.
+
+    Usage:
+      theia provision <rig> [--version V] [--host HOST] [--watch]
+      theia provision status [rig]     the colony (base-plane) rows only
+      theia provision --list           the published runtime builds (S3)
+
+    <rig> is a device NAME (exo / taycann) or its GS id. The colony backend
+    resolves its SSH host from the fleet registry; pass --host for a
+    registry-free rig (a raw IP/hostname colony SSHes to directly).
+
+    Options:
+      --version V   the runtime build key (default: the newest for the rig's
+                    inferred abi — see `theia provision --list`).
+      --host HOST   SSH host/IP for a rig not in colony's registry.
+      --watch       poll the colony action to a terminal state and print it.
+      --list        list the published runtime builds (S3) and exit.
+
+    Env: $THEIA_GS_URL (default http://10.0.0.99:8090), $THEIA_GS_KEY (mutating).
+    Colony/GS are STATELESS over S3: the runtime builds come from the runtime
+    plane (`theia release <target> --s3`), not from GS-side state."""
+    if "-h" in args or "--help" in args:
+        print(cmd_provision.__doc__, file=sys.stderr)
+        return 0
+
+    def _opt(name, default=None):
+        for i, a in enumerate(args):
+            if a == name and i + 1 < len(args):
+                return args[i + 1]
+        return default
+
+    # --list — the published runtime builds colony provisions from (S3, via GS).
+    if "--list" in args:
+        code, r = _gs("GET", "/api/planes/runtime")
+        if code != 200:
+            print(f"theia provision: GS /api/planes/runtime → {code}: {r}",
+                  file=sys.stderr)
+            return 1
+        rels = r.get("releases", []) if isinstance(r, dict) else []
+        if not rels:
+            print("theia provision: no runtime builds published "
+                  "(`theia release <target> --s3` first).")
+            return 0
+        print("Runtime builds (base plane):")
+        for rel in rels:
+            debs = ", ".join(d["file"].split("/")[-1] for d in rel.get("debs", []))
+            print(f"  {rel.get('key', rel.get('version','?')):28} {debs}")
+        return 0
+
+    # status [rig] — the colony/base rows from the aggregated deployment view.
+    if args and args[0] == "status":
+        rig = args[1] if len(args) > 1 else None
+        code, d = _gs("GET", "/api/deployments")
+        if code != 200:
+            print(f"theia provision: GS /api/deployments → {code}: {d}",
+                  file=sys.stderr)
+            return 1
+        rows = d if isinstance(d, list) else (
+            d.get("deployments", d.get("rows", [])) if isinstance(d, dict) else [])
+        base_rows = [r for r in rows if isinstance(r, dict)
+                     and (r.get("plane") == "base" or r.get("base"))
+                     and (rig is None or rig in (r.get("device"), r.get("rig"),
+                                                 r.get("name")))]
+        if not base_rows:
+            print(f"theia provision: no base-plane actions"
+                  f"{' for ' + rig if rig else ''}.")
+            return 0
+        for r in base_rows:
+            print(f"  {r.get('rig', r.get('device','?')):12} "
+                  f"runtime {r.get('base', r.get('version','—'))} "
+                  f"colony={r.get('colony_id','?')} "
+                  f"status={r.get('status', r.get('state','?'))}")
+        return 0
+
+    if not args or args[0].startswith("-"):
+        print(cmd_provision.__doc__, file=sys.stderr)
+        return 2
+
+    rig = args[0]
+    version = _opt("--version")
+    host = _opt("--host")
+
+    body: dict = {"rig": rig}
+    if version:
+        body["version"] = version
+    if host:
+        body["host"] = host
+
+    code, res = _gs("POST", "/api/deployments/base", body)
+    if code not in (200, 201, 202):
+        print(f"theia provision: colony base deploy → {code}: {res}",
+              file=sys.stderr)
+        if code == 502:
+            print("  (colony backend rejected it — a rig not in the registry "
+                  "needs --host; a device not on the VPN needs a reachable IP.)",
+                  file=sys.stderr)
+        return 1
+
+    colony_id = (res.get("colony_id") or res.get("action_id")
+                 if isinstance(res, dict) else None)
+    print(f"theia provision: colony orchestrate started for {rig}"
+          f"{' (action ' + str(colony_id) + ')' if colony_id else ''}.")
+
+    if "--watch" not in args:
+        print("  (poll with `theia provision status "
+              f"{rig}`, or pass --watch)")
+        return 0
+
+    # --watch — poll the base row to a terminal state.
+    import time as _time
+    for _ in range(120):
+        _time.sleep(5)
+        code, d = _gs("GET", "/api/deployments")
+        if code != 200:
+            continue
+        rows = d if isinstance(d, list) else (
+            d.get("deployments", d.get("rows", [])) if isinstance(d, dict) else [])
+        for r in rows:
+            if isinstance(r, dict) and \
+               rig in (r.get("device"), r.get("rig"), r.get("name")) and \
+               (r.get("plane") == "base" or r.get("base")):
+                st = str(r.get("status", r.get("state", ""))).lower()
+                if st in ("success", "finished", "done", "complete"):
+                    print(f"theia provision: {rig} runtime provisioned "
+                          f"(colony {st}).")
+                    return 0
+                if st in ("failed", "error", "aborted"):
+                    print(f"theia provision: {rig} FAILED ({st}): "
+                          f"{r.get('base_error', r.get('error',''))}",
+                          file=sys.stderr)
+                    return 1
+    print(f"theia provision: {rig} still running after ~10m — "
+          f"check `theia provision status {rig}`.", file=sys.stderr)
+    return 0
+
+
 def cmd_deploy(args: list[str]) -> int:
     """Deploy a Distribution to a device — the CLI analog of the GS Deployment tab.
 
@@ -6901,8 +7050,11 @@ def cmd_target(args: list[str]) -> int:
 COMMANDS = {
     "init":        (cmd_init,        "scaffold the CWD as a Theia consuming workspace (source or /opt/theia)"),
     "rig":         (cmd_rig,         "docker compose {up|down|status} the deploy stack (status: containers + live rtdb cluster)"),
-    # provision/orchestrate/cleanup MOVED to the `colony` repo (deploy adapter).
-    # theia emits the per-rig bundle via `manifest`/`dist`; colony deploys it.
+    # The colony deploy-adapter is driven through the (stateless, S3-backed) GS
+    # API, not a local repo: `provision` runs the runtime/base plane (colony
+    # orchestrate over SSH — runtime debs + the systemd unit); `deploy`/`rollout`
+    # ship the app plane on top. theia emits the per-rig bundle via manifest/dist.
+    "provision":   (cmd_provision,   "<rig> [--version V --host H --watch] | status [rig] | --list — colony runtime-plane install (debs + systemd unit), no app"),
     "install":     (cmd_install,     "build + populate install/<machine>/ (local host)"),
     "clean":       (cmd_clean,       "remove install/ + dist/manifest/; --bazel also runs bazel clean"),
     "stage-local": (cmd_install,     "alias for `install` (back-compat)"),

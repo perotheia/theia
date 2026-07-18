@@ -58,6 +58,18 @@ TARGETS = {
         "cpu": "x86_64", "gcc_prefix": "", "sysroot": "",
         "abi_key": "noble-amd64", "libc_min": "2.39", "deb_arch": "amd64",
     },
+    # x86_64 fleet board on Ubuntu 22.04 jammy (glibc 2.35). Its OWN ABI, distinct
+    # from noble (2.39) — a jammy binary links jammy's libs, NOT interchangeable.
+    # Like noble, x86 NATIVE (cfg=host, no sysroot): built on a jammy box (the
+    # composer rig image + boxter are both jammy). The LSB codename in abi_key is
+    # what the GS runtime-plane key + Distribution label match (targets.bzl ==
+    # ground-station _rig_abi: "jammy" for 22.04). Without this entry a jammy
+    # native build ships under the bare "amd64" key, which the GS never infers.
+    "jammy": {
+        "cfg": "host",
+        "cpu": "x86_64", "gcc_prefix": "", "sysroot": "",
+        "abi_key": "jammy-amd64", "libc_min": "2.35", "deb_arch": "amd64",
+    },
     # Raspberry Pi 4 — aarch64, Debian 12 bookworm (glibc 2.36). The original
     # cross target; sysroot bootstrapped by third_party/sysroot/setup_rpi4.sh.
     "rpi4": {

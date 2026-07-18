@@ -1546,6 +1546,12 @@ _TARGETS = {
     # untracked dev/CI box.
     "noble":  {"cfg": "host",   "cpu": "x86_64",  "abi_key": "noble-amd64",
                "deb_arch": "amd64", "libc_min": "2.39"},
+    # x86_64 board on Ubuntu 22.04 jammy (glibc 2.35) — native, no sysroot; its
+    # OWN ABI distinct from noble. The composer rig image (+ boxter) are jammy;
+    # the GS infers "jammy-amd64" for a 22.04 board, so the runtime plane key
+    # must carry that codename, not the bare "amd64". Lockstep w/ targets.bzl.
+    "jammy":  {"cfg": "host",   "cpu": "x86_64",  "abi_key": "jammy-amd64",
+               "deb_arch": "amd64", "libc_min": "2.35"},
     "rpi4":   {"cfg": "rpi4",   "cpu": "aarch64", "abi_key": "bookworm-arm64",
                "deb_arch": "arm64", "libc_min": "2.36"},
     "jetson": {"cfg": "jetson", "cpu": "aarch64", "abi_key": "focal-arm64",
@@ -5771,7 +5777,19 @@ def cmd_provision(args: list[str]) -> int:
     if version:
         body["version"] = version
     if host:
-        body["host"] = host
+        # The GS base endpoint keys the reachable address on `ip` (+ optional
+        # `ssh_port`), NOT `host` — a --host of "10.0.0.23:2201" splits into
+        # ip=10.0.0.23, ssh_port=2201. A registry-free rig (not in colony's
+        # registry) needs this so colony SSHes to the right host:port; without
+        # the port colony defaults to :22 and silently no-ops on a rig whose
+        # sshd is on a non-standard port (the composer rigs are :2201/:2202).
+        if ":" in host and not host.startswith("["):
+            ip_part, _, port_part = host.rpartition(":")
+            body["ip"] = ip_part
+            if port_part.isdigit():
+                body["ssh_port"] = int(port_part)
+        else:
+            body["ip"] = host
 
     code, res = _gs("POST", "/api/deployments/base", body)
     if code not in (200, 201, 202):

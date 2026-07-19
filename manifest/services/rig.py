@@ -114,11 +114,19 @@ def _zonal_machine():
 # names no boards; a day-2 user SWP renames the deployed workers as it wishes.
 #
 # Processes are deduplicated BY NAME in the serializer (last placement wins), so
-# an FC that runs on BOTH machines (shwa — per-board HW telemetry) MUST be one
-# ProcessLayer with set-valued `machines`, NOT two single-machine layers.
-_PER_BOARD   = {"shwa"} & ALL        # runs on master AND zonal (HW telemetry)
-_ZONE_ONLY   = ZONAL - _PER_BOARD    # zonal-exclusive (ucm — worker OTA installer)
-_MASTER_ONLY = ALL - ZONAL           # everything else → master only
+# an FC that runs on BOTH machines MUST be one ProcessLayer with set-valued
+# `machines`, NOT two single-machine layers.
+#
+# ucm is PER-BOARD, not zonal-exclusive: "each board installs ITS OWN OTA
+# artifacts" (line 79) — and that INCLUDES the master board. V-UCM's
+# CMP_CONFIRMING barrier fans RequestUpdate to EVERY roster board's UcmDaemon
+# (0x8001000E @ the board's machine index) and reads each board's PROVISIONAL
+# marker; with ucm zonal-only there is no UcmDaemon at master:0, so a roster that
+# includes the master (self-updating coordinator) can't reach or confirm itself.
+# So ucm joins shwa as a per-board node (runs on master AND every zonal).
+_PER_BOARD   = {"shwa", "ucm"} & ALL  # master AND zonal (HW telemetry + per-board OTA installer)
+_ZONE_ONLY   = ZONAL - _PER_BOARD     # (now empty — ucm+shwa are both per-board)
+_MASTER_ONLY = ALL - ZONAL            # everything else → master only
 RIG = BASE.combine(DeploymentLayer(
     machines=MachineSetLayer(machines={_master_machine(), _zonal_machine()}),
     execution=ExecutionLayer(processes={

@@ -1,0 +1,17 @@
+{
+  "nodes": {
+    "vucm_gate": {
+      "boards": "master,zonal",
+      "board_instances": "master:0,zonal:1",
+      "confirm_budget_ms": 60000,
+      "require_user_confirm": 1,
+      "auto_confirm_in_window": 0,
+      "window_start_min": 0,
+      "window_end_min": 0,
+      "enforce_sm": 0,
+      "enforce_nm": 0,
+      "enforce_phm": 0
+    }
+  },
+  "package": "system.services.vucm"
+}

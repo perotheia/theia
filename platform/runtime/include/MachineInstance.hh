@@ -34,5 +34,18 @@ bool resolve_node_tipc(const char* node_name,
                        uint32_t default_type, uint32_t default_instance,
                        uint32_t& out_type, uint32_t& out_instance) noexcept;
 
+// This machine's cluster index, read from $THEIA_MACHINE_INSTANCE (central=0,
+// compute=1, …); 0 when unset/empty/malformed. The supervisor shifts each
+// CHILD's --tipc instance by this (runtime.cpp), so a child's address is already
+// machine-correct. But the TOP-LEVEL supervisor takes NO --tipc for its OWN
+// ctl/worker nodes — theia-run.sh just execs it — so resolve_node_tipc falls
+// back to the compiled instance 0 on EVERY board, colliding two supervisors on
+// 0x80020001:0 in a shared TIPC namespace. main() applies this offset to the
+// supervisor's own ctl/worker ONLY on that fallback (no --tipc override), so the
+// master binds :0 and each zonal binds :machine — realizing the design com's
+// sup_link.hpp already assumes (LOCAL=0-relative, for_instance(N) reaches board
+// N; PG members targeting :0 deterministically reach the master).
+unsigned machine_instance_offset() noexcept;
+
 }  // namespace runtime
 }  // namespace theia

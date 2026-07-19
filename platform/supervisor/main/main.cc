@@ -131,9 +131,17 @@ int main(int argc, char** argv) {
     // start() — sees its own instance via tipc_instance() (a clone that keys its
     // per-instance config in init() would otherwise race and read 0).
     uint32_t supervisor_ctl_type, supervisor_ctl_inst;
-    ::theia::runtime::resolve_node_tipc("supervisor_ctl",
-        SupervisorCtl::kTipcType, SupervisorCtl::kTipcInstance,
-        supervisor_ctl_type, supervisor_ctl_inst);
+    // The supervisor is the TOP process — theia-run.sh execs it with NO --tipc, so
+    // this resolve FALLS BACK to the compiled instance (0). On a multi-board rig in
+    // a shared TIPC namespace that collides the master + every zonal on
+    // 0x80020001:0. Shift the OWN ctl instance by this machine's index on the
+    // fallback path ONLY (a --tipc override, if ever present, already carries the
+    // machine-correct instance). Master → :0, compute → :1, … — so PG members that
+    // target :0 reach the master and com's for_instance(N) reaches board N.
+    if (!::theia::runtime::resolve_node_tipc("supervisor_ctl",
+            SupervisorCtl::kTipcType, SupervisorCtl::kTipcInstance,
+            supervisor_ctl_type, supervisor_ctl_inst))
+        supervisor_ctl_inst += ::theia::runtime::machine_instance_offset();
     // set_tipc_instance() is a GenServer/GenStateM method — only atomic + statem
     // nodes have it. A `node runnable` (GenRunnable) resolves its own instance in
     // do_start via resolve_node_tipc; a `node prebuilt` (also a GenRunnable
@@ -257,9 +265,13 @@ int main(int argc, char** argv) {
     // start() — sees its own instance via tipc_instance() (a clone that keys its
     // per-instance config in init() would otherwise race and read 0).
     uint32_t supervisor_worker_type, supervisor_worker_inst;
-    ::theia::runtime::resolve_node_tipc("supervisor_worker",
-        SupervisorWorker::kTipcType, SupervisorWorker::kTipcInstance,
-        supervisor_worker_type, supervisor_worker_inst);
+    // Same machine-shift as supervisor_ctl above (top-level supervisor, no --tipc →
+    // fallback): master → :0, compute → :1, so the worker node pair doesn't collide
+    // across boards in a shared TIPC namespace either.
+    if (!::theia::runtime::resolve_node_tipc("supervisor_worker",
+            SupervisorWorker::kTipcType, SupervisorWorker::kTipcInstance,
+            supervisor_worker_type, supervisor_worker_inst))
+        supervisor_worker_inst += ::theia::runtime::machine_instance_offset();
     // Generic node params (read via the static-deploy ParamsConfig, overridable
     // per-rig in config/<fc>.json under this node's section — same mechanism as
     // tsync's prebuilt `enabled`):

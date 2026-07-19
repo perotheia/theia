@@ -105,8 +105,15 @@ class VucmAdmissionLib:
 
     def __init__(self) -> None:
         # VucmGate logs to its own THEIA_LOGGER sink (file:/tmp/theia/vucm.log),
-        # NOT the supervisor.log — the admission verdicts land there.
+        # NOT the supervisor.log — the admission verdicts land there. VUCM_LOG may
+        # be a plain path OR "docker:<container>:<path>" to read the log live from
+        # inside a container (the composer rig) via `docker exec cat` — no host
+        # bind-mount / mirror needed, so no stale-history accumulation.
         self._log_path = os.environ.get("VUCM_LOG", "/tmp/theia/vucm.log")
+        self._docker = None
+        if self._log_path.startswith("docker:"):
+            _, container, path = self._log_path.split(":", 2)
+            self._docker = (container, path)
         # Only lines AFTER this scenario started matter (the log persists across
         # runs); each block-assert scans from the campaign's own marker.
         self._since = 0
@@ -228,6 +235,169 @@ class VucmAdmissionLib:
         logger.info(f"admission passed → INSTALLING: {line.strip()}")
         return line
 
+    # ── multi-board CMP_CONFIRMING barrier + garage auto-confirm ─────────────
+    def _ucm_activation(self, state: int, campaign_id: str,
+                        version: str) -> bytes:
+        # UcmActivation { ActivationState state=1; string version=2;
+        #                 string campaign_id=3; ... } — the two fields V-UCM's
+        # barrier reads (state + campaign_id) plus version. state 1 = PROVISIONAL.
+        return (_enc_varint_field(1, state)
+                + self._str_field(2, version)
+                + self._str_field(3, campaign_id))
+
+    @keyword("Seed Board Provisional")
+    def seed_board_provisional(self, board: str, campaign_id: str,
+                               version: str = "1.0.0") -> int:
+        """Write ucm_activation_<board> = UcmActivation{state=PROVISIONAL} into the
+        SHARED etcd via per (PutConfig, target_node = the key), simulating that
+        board's UcmDaemon reaching PROVISIONAL. V-UCM's CMP_CONFIRMING poll reads
+        these; once EVERY roster board is PROVISIONAL the barrier completes."""
+        payload = self._ucm_activation(1, campaign_id, version)  # 1 = ACT_PROVISIONAL
+        node = f"ucm_activation_{board}"
+        reply = self._per_put(node, payload, digest="prov")
+        logger.info(f"seeded {node} PROVISIONAL for {campaign_id} → {reply}B reply")
+        return reply
+
+    @keyword("Clear Board Marker")
+    def clear_board_marker(self, board: str) -> None:
+        """Best-effort clear of ucm_activation_<board> (write NONE state=0) so a
+        later campaign's barrier starts from a clean per keyspace."""
+        try:
+            self._per_put(f"ucm_activation_{board}", b"", digest="clear")
+        except OSError:
+            pass
+
+    def _per_put(self, node: str, payload: bytes, digest: str) -> int:
+        # PerClient.PutConfig { target_node=1; bytes config=2; string digest=3;
+        #   uint32 expect_rev=4 } — the per node at TIPC 0x80010007 inst 0.
+        PER_TIPC_TYPE = 0x80010007
+        req = (self._str_field(1, node)
+               + _tag(2, 2) + _varint(len(payload)) + payload
+               + self._str_field(3, digest)
+               + _enc_varint_field(4, 0))
+        svc = _djb2_low16("system_services_per_PutConfigReq")
+        hdr = struct.pack("<BBHQHHIH2x", BUS_RPC, GEN_CALL, len(req),
+                          0, svc, 0, 0x7075, 0)
+        s = socket.socket(socket.AF_TIPC, socket.SOCK_SEQPACKET)
+        s.settimeout(4.0)
+        s.connect((socket.TIPC_ADDR_NAME, PER_TIPC_TYPE, 0, 0,
+                   socket.TIPC_NODE_SCOPE))
+        s.sendall(hdr + req)
+        try:
+            reply = s.recv(4096)
+        except socket.timeout:
+            reply = b""
+        finally:
+            s.close()
+        return len(reply)
+
+    @keyword("Reset Vucm Log")
+    def reset_vucm_log(self) -> None:
+        """Truncate VucmGate's log so a suite's assertions can't match a stale
+        line from a previous run (the log persists across runs). Works for the
+        docker: scheme (truncate inside the container) and a plain path."""
+        if self._docker is not None:
+            import subprocess
+            container, path = self._docker
+            try:
+                subprocess.run(["docker", "exec", container, "sh", "-c",
+                                f": > {path}"], timeout=5)
+            except (subprocess.SubprocessError, OSError):
+                pass
+            return
+        try:
+            open(self._log_path, "w").close()
+        except OSError:
+            pass
+
+    @keyword("Commit Campaign")
+    def commit_campaign(self, campaign_id: str, timeout: float = 4.0) -> str:
+        """Call VucmCtlIf.CommitCampaign — the operator go that fans the aggregate
+        Confirm to every board, driving CMP_AWAITING_COMMIT → VALIDATING → DONE.
+        Valid only while the campaign holds at AWAITING_COMMIT (barrier complete)."""
+        payload = self._str_field(1, campaign_id)   # CommitRequest{campaign_id=1}
+        svc = _djb2_low16("system_services_vucm_CommitRequest")
+        hdr = struct.pack("<BBHQHHIH2x", BUS_RPC, GEN_CALL, len(payload),
+                          0, svc, 0, 0x434D, 0)
+        s = socket.socket(socket.AF_TIPC, socket.SOCK_SEQPACKET)
+        s.settimeout(timeout)
+        s.connect((socket.TIPC_ADDR_NAME, VUCMGATE_TIPC_TYPE,
+                   VUCMGATE_TIPC_INSTANCE, VUCMGATE_TIPC_INSTANCE,
+                   socket.TIPC_NODE_SCOPE))
+        s.sendall(hdr + payload)
+        try:
+            reply = s.recv(4096)
+        except socket.timeout:
+            reply = b""
+        finally:
+            s.close()
+        logger.info(f"CommitCampaign({campaign_id}) reply {len(reply)}B")
+        return reply.hex()
+
+    @keyword("Barrier Should Await Commit")
+    def barrier_should_await_commit(self, campaign_id: str, boards: int,
+                                    timeout: float = 20.0) -> str:
+        """The CMP_CONFIRMING barrier must observe ALL <boards> boards PROVISIONAL
+        and then HOLD at AWAITING OPERATOR COMMIT (require_user_confirm path)."""
+        pat = re.compile(r"campaign " + re.escape(campaign_id)
+                         + r": ALL " + str(boards)
+                         + r" boards PROVISIONAL — AWAITING OPERATOR COMMIT")
+        line = self._grep_log(pat, timeout)
+        if line is None:
+            raise AssertionError(
+                f"barrier for {campaign_id!r} never reached AWAITING COMMIT with "
+                f"all {boards} boards PROVISIONAL within {timeout}s; "
+                f"see {self._log_path}")
+        logger.info(f"barrier complete → awaiting commit: {line.strip()}")
+        return line
+
+    @keyword("Barrier Must Not Complete")
+    def barrier_must_not_complete(self, campaign_id: str, boards: int,
+                                  timeout: float = 6.0) -> None:
+        """The CMP_CONFIRMING barrier must NOT complete — with fewer than <boards>
+        boards PROVISIONAL, no AWAITING COMMIT / garage line may appear within the
+        window (proves the barrier really waits for EVERY board)."""
+        pat = re.compile(r"campaign " + re.escape(campaign_id)
+                         + r": ALL " + str(boards) + r" boards PROVISIONAL")
+        line = self._grep_log(pat, timeout, expect_absent=True)
+        if line is not None:
+            raise AssertionError(
+                f"barrier for {campaign_id!r} completed with < {boards} boards "
+                f"PROVISIONAL — it did not wait for every board: {line.strip()}")
+        logger.info(f"barrier correctly held (partial roster) for {campaign_id}")
+
+    @keyword("Campaign Should Reach Done")
+    def campaign_should_reach_done(self, campaign_id: str,
+                                   timeout: float = 15.0) -> str:
+        """After commit (operator or garage), the campaign must log DONE — all
+        boards confirmed ACTIVE (VALIDATING → DONE)."""
+        pat = re.compile(r"campaign " + re.escape(campaign_id)
+                         + r": DONE — all boards confirmed ACTIVE")
+        line = self._grep_log(pat, timeout)
+        if line is None:
+            raise AssertionError(
+                f"campaign {campaign_id!r} never reached DONE within {timeout}s; "
+                f"see {self._log_path}")
+        logger.info(f"campaign DONE: {line.strip()}")
+        return line
+
+    @keyword("Garage Should Auto Confirm")
+    def garage_should_auto_confirm(self, campaign_id: str, boards: int,
+                                   timeout: float = 20.0) -> str:
+        """In garage mode (auto_confirm_in_window + in-window), the barrier must
+        auto-confirm — log 'ALL <boards> boards PROVISIONAL, in-window —
+        AUTO-CONFIRM (garage)' WITHOUT holding for an operator commit."""
+        pat = re.compile(r"campaign " + re.escape(campaign_id)
+                         + r": ALL " + str(boards)
+                         + r" boards PROVISIONAL, in-window — AUTO-CONFIRM \(garage\)")
+        line = self._grep_log(pat, timeout)
+        if line is None:
+            raise AssertionError(
+                f"garage auto-confirm never fired for {campaign_id!r} within "
+                f"{timeout}s; see {self._log_path}")
+        logger.info(f"garage auto-confirm: {line.strip()}")
+        return line
+
     @keyword("Reset Campaign")
     def reset_campaign(self, campaign_id: str) -> None:
         """RollbackCampaign to clear an in-flight/blocked campaign so the next
@@ -253,19 +423,32 @@ class VucmAdmissionLib:
         time.sleep(0.5)
 
     # ── internals ───────────────────────────────────────────────────────────
+    def _read_log_lines(self):
+        if self._docker is not None:
+            import subprocess
+            container, path = self._docker
+            try:
+                out = subprocess.run(
+                    ["docker", "exec", container, "cat", path],
+                    capture_output=True, text=True, timeout=5)
+                return out.stdout.splitlines()
+            except (subprocess.SubprocessError, OSError):
+                return []
+        try:
+            with open(self._log_path, "r", errors="replace") as f:
+                return f.read().splitlines()
+        except FileNotFoundError:
+            return []
+
     def _grep_log(self, pat: "re.Pattern", timeout: float,
                   expect_absent: bool = False):
         deadline = time.monotonic() + timeout
         last = None
         while time.monotonic() < deadline:
-            try:
-                with open(self._log_path, "r", errors="replace") as f:
-                    for line in f:
-                        if pat.search(line):
-                            if not expect_absent:
-                                return line
-                            last = line
-            except FileNotFoundError:
-                pass
+            for line in self._read_log_lines():
+                if pat.search(line):
+                    if not expect_absent:
+                        return line
+                    last = line
             time.sleep(0.2)
         return last if expect_absent else None

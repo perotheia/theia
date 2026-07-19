@@ -89,5 +89,11 @@ bool resolve_node_tipc(const char* node_name,
     return true;
 }
 
+unsigned machine_instance_offset() noexcept {
+    const char* mi = std::getenv("THEIA_MACHINE_INSTANCE");
+    if (!mi || !*mi) return 0;
+    return static_cast<unsigned>(std::strtoul(mi, nullptr, 10));
+}
+
 }  // namespace runtime
 }  // namespace theia

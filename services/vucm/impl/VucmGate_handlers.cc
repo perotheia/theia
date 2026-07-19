@@ -210,7 +210,13 @@ uint32_t board_index(const std::string& board) {
 // ActivationState (0 NONE / 1 PROVISIONAL / 2 CONFIRMED / -1 error) for
 // ucm_activation_<board>. The whole point of L4-B's shared etcd: V-UCM reads
 // EVERY board's marker locally (its per → the central's etcd), no cross-board TIPC.
-int read_board_marker(const std::string& board) {
+// Read board's ucm_activation_<board> marker. out_campaign receives the marker's
+// OWN campaign_id (field 3) so the CONFIRMING poll can reject a STALE marker left
+// by a PREVIOUS campaign — a board that reached PROVISIONAL for campaign X must
+// NOT count toward campaign Y's barrier. Returns the ActivationState (0 NONE /
+// 1 PROVISIONAL / 2 CONFIRMED / -1 err).
+int read_board_marker(const std::string& board, std::string* out_campaign = nullptr) {
+    if (out_campaign) out_campaign->clear();
     system_services_per_GetConfigReq req = system_services_per_GetConfigReq_init_zero;
     std::string key = "ucm_activation_" + board;
     std::snprintf(req.target_node, sizeof(req.target_node), "%s", key.c_str());
@@ -227,6 +233,7 @@ int read_board_marker(const std::string& board) {
     pb_istream_t is = pb_istream_from_buffer(result.reply.config.bytes,
                                              result.reply.config.size);
     if (!pb_decode(&is, system_services_ucm_UcmActivation_fields, &a)) return -1;
+    if (out_campaign) *out_campaign = a.campaign_id;
     return static_cast<int>(a.state);
 }
 
@@ -436,8 +443,15 @@ void VucmGate::handle_info(const char* info, VucmGateState& s) {
 
     size_t provisional = 0;
     for (const auto& b : s.boards) {
-        int st = read_board_marker(b);   // 0 NONE 1 PROVISIONAL 2 CONFIRMED -1 err
-        if (st == 1 || st == 2) ++provisional;
+        std::string marker_campaign;
+        int st = read_board_marker(b, &marker_campaign);  // 0 NONE 1 PROV 2 CONF -1 err
+        // Count ONLY a PROVISIONAL/CONFIRMED marker that belongs to THIS campaign —
+        // a stale marker from a previous campaign (same board, old campaign_id) must
+        // not satisfy the barrier. (An empty marker_campaign is a legacy/unstamped
+        // marker; treat it as matching so a board UCM that omits the id still works.)
+        if ((st == 1 || st == 2) &&
+            (marker_campaign.empty() || marker_campaign == s.campaign_id))
+            ++provisional;
     }
 
     if (provisional == s.boards.size()) {

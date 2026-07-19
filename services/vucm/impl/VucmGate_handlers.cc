@@ -28,6 +28,8 @@
 #include <pb_decode.h>
 #include <pb_encode.h>
 
+#include <unistd.h>              // readlink (current-release version)
+
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -44,6 +46,20 @@
 // codec set. Re-declaring them here would redefine RemoteCodec<T>. UcmActivation
 // (the marker payload) is decoded inline below, not over a port, so it needs no
 // codec — only pb_decode of the raw bytes from the ConfigSnapshot.
+
+// The config-migration MECHANISM, shared with UCM. V-UCM is the FLEET authority:
+// it migrates the shared per ONCE (Snapshot + MigrateBulk), centrally, BEFORE
+// fanning RequestUpdate to the N boards — one per/etcd singleton → one migration.
+// (per_migrate.hpp's PerReply/Snapshot/MigrateBulk/RestoreSnapshot codecs are
+// #ifndef-guarded, so they compose with vucm_codecs.hh's per set.)
+#include "impl/per_migrate.hpp"
+using theia::migrate::MigrationStep;
+using theia::migrate::load_migration_steps;
+using theia::migrate::per_snapshot;
+using theia::migrate::per_restore;
+using theia::migrate::per_migrate_bulk;
+using theia::migrate::plugin_path;
+using theia::migrate::version_delta_migrates;
 
 namespace ara::vucm {
 
@@ -373,6 +389,23 @@ bool in_window(uint32_t start_min, uint32_t end_min) {
     if (start_min <= end_min) return now >= start_min && now < end_min;
     return now >= start_min || now < end_min;             // spans midnight
 }
+
+// The master's currently-installed release version = readlink(<root>/current) with
+// the "releases/" prefix stripped. "" if unresolved (a fresh box). This is V-UCM's
+// FROM-version for the version-delta gate — no separate tracking / proto field.
+std::string current_release_version(const std::string& releases_root) {
+    // releases_root is "<root>/releases"; current is "<root>/current".
+    const std::string root = releases_root.substr(0, releases_root.find_last_of('/'));
+    const std::string link = root + "/current";
+    char buf[512];
+    const ssize_t n = ::readlink(link.c_str(), buf, sizeof(buf) - 1);
+    if (n <= 0) return "";
+    buf[n] = '\0';
+    std::string tgt(buf);
+    const std::string pfx = "releases/";
+    const size_t p = tgt.rfind(pfx);
+    return (p != std::string::npos) ? tgt.substr(p + pfx.size()) : tgt;
+}
 }  // namespace
 
 // ---- OTP init/1 — publish the gate peer + read the campaign config. ---------
@@ -382,6 +415,12 @@ void VucmGate::init(VucmGateState& s) {
     s.cfg_boards        = split_boards(cfg.str("boards", ""));
     s.confirm_budget_ms = cfg.u32("confirm_budget_ms", 120000);
     s.bundle_base       = cfg.str("bundle_base", "");
+    // Where V-UCM reads the target release's migration/ to drive the CENTRAL
+    // config migration. Defaults to the standard prefix; THEIA_ROOT_DIR (set by
+    // `theia start`) overrides it for a non-/opt install.
+    if (const char* rd = std::getenv("THEIA_ROOT_DIR"); rd && *rd)
+        s.releases_root = std::string(rd) + "/releases";
+    s.releases_root     = cfg.str("releases_root", s.releases_root);
     // Update-admission knobs (AUTHORIZING conjunction + garage window).
     s.enforce_sm           = cfg.u32("enforce_sm", 0) != 0;
     s.enforce_nm           = cfg.u32("enforce_nm", 0) != 0;
@@ -510,6 +549,7 @@ CampaignReply VucmGate::handle_call(const CampaignRequest& req, VucmGateState& s
     s.scope         = static_cast<uint32_t>(req.scope);
     s.boards        = s.cfg_boards;
     s.confirm_ticks = 0;
+    s.config_migrated = false;              // fresh campaign — no central migration yet
     if (s.boards.empty()) s.boards.push_back(s.self_board);   // single-board fallback
 
     this->log().info(std::string("CheckForCampaign id=") + s.campaign_id +
@@ -643,6 +683,64 @@ void VucmGate::handle_cast(const EvAuthorized& /*msg*/, VucmGateState& s) {
     this->log().info(std::string("campaign ") + s.campaign_id +
                      ": INSTALLING — fanning RequestUpdate to " +
                      std::to_string(s.boards.size()) + " boards");
+
+    // ── CENTRAL config migration (V-UCM owns it — ONCE, before the fan-out) ──
+    // One V-UCM + one per/etcd (both master singletons) ⇒ one migration authority.
+    // Migrate the SHARED store here so the N boards install BINARIES only; per's
+    // migrate-on-read serves each board its schema until the bulk pass converges.
+    //
+    // VERSION-DELTA GATE: a PATCH bump ships the SAME .art + SAME configs + SAME
+    // schema digests — the SWP interface is unchanged — so it MUST NOT migrate.
+    // Only a MINOR delta (schema evolved) migrates; a MAJOR is a fresh deploy, not
+    // a migration. version_delta_migrates() encodes that; below it we ALSO honour
+    // an empty migration.json (a minor that happened to change no config).
+    {
+        const std::string from = current_release_version(s.releases_root);
+        if (!version_delta_migrates(from, s.version)) {
+            this->log().info(std::string("campaign ") + s.campaign_id +
+                ": " + (from.empty() ? "?" : from) + " → " + s.version +
+                " is a PATCH/same-interface step — NO config migration (SWP "
+                "interface unchanged)");
+        } else {
+            std::vector<MigrationStep> steps;
+            if (!load_migration_steps(s.releases_root, s.version, &steps)) {
+                this->log().warn(std::string("campaign ") + s.campaign_id +
+                    ": migration manifest unreadable — FAILING campaign");
+                to_fsm("EvFailed", EvFailed{});
+                to_gate(EvFailed{});
+                return;
+            }
+            if (!steps.empty()) {
+                std::string err;
+                if (!per_snapshot("pre-" + s.version, &err)) {
+                    this->log().warn(std::string("campaign ") + s.campaign_id +
+                        ": central snapshot failed (" + err + ") — FAILING campaign");
+                    to_fsm("EvFailed", EvFailed{});
+                    to_gate(EvFailed{});
+                    return;
+                }
+                for (const auto& st : steps) {
+                    const std::string so =
+                        plugin_path(s.releases_root, s.version, st.plugin);
+                    if (!per_migrate_bulk(st, so, &err)) {
+                        this->log().warn(std::string("campaign ") + s.campaign_id +
+                            ": central MigrateBulk failed (" + err +
+                            ") — restoring + FAILING campaign");
+                        std::string rerr;
+                        per_restore("pre-" + s.version, &rerr);
+                        to_fsm("EvFailed", EvFailed{});
+                        to_gate(EvFailed{});
+                        return;
+                    }
+                    this->log().info(std::string("campaign ") + s.campaign_id +
+                        ": config migrated (central) " + st.config_type + " " +
+                        st.from_digest + " → " + st.to_digest);
+                }
+                s.config_migrated = true;
+            }
+        }
+    }
+
     // Garage-mode policy: the user/operator confirm leg is mandatory — force a
     // confirm window so every board HOLDS PROVISIONAL (CommitCampaign is the
     // confirm surface) even if the deployment declared none.
@@ -691,6 +789,7 @@ void VucmGate::handle_cast(const EvValidated& /*msg*/, VucmGateState& s) {
     write_campaign("", "", 0, "IDLE", {});
     s.campaign_id.clear();
     s.boards.clear();
+    s.config_migrated = false;              // committed — the migration is now the new baseline
 }
 
 void VucmGate::handle_cast(const EvBlocked& /*msg*/, VucmGateState& /*s*/) {
@@ -700,6 +799,21 @@ void VucmGate::handle_cast(const EvBlocked& /*msg*/, VucmGateState& /*s*/) {
 void VucmGate::handle_cast(const EvFailed& /*msg*/, VucmGateState& s) {
     s.last_state = system_services_vucm_CampaignState_CampaignState_CMP_ROLLBACK;
     this->log().warn(std::string("campaign ") + s.campaign_id + ": FAILED — rolled back");
+    // CENTRAL config rollback: V-UCM took the pre-<ver> snapshot before the fan-out,
+    // so V-UCM restores it — ONCE, here (the boards roll their binaries back; they
+    // do NOT touch the shared snapshot — that would be the N-cardinality bug again).
+    if (s.config_migrated) {
+        std::string err;
+        if (per_restore("pre-" + s.version, &err))
+            this->log().warn(std::string("campaign ") + s.campaign_id +
+                ": config restored from central snapshot pre-" + s.version);
+        else
+            this->log().error(std::string("campaign ") + s.campaign_id +
+                ": CENTRAL CONFIG RESTORE FAILED (" + err + ") — config may be "
+                "AHEAD of the rolled-back boards; restore 'pre-" + s.version +
+                "' manually");
+        s.config_migrated = false;
+    }
     write_campaign("", "", 0, "IDLE", {});   // L4-C.4: clear the persisted campaign
     to_fsm("EvFailed", EvFailed{});
     s.campaign_id.clear();

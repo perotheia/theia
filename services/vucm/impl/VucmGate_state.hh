@@ -29,6 +29,11 @@ struct VucmGateState {
     std::string              bundle_base;
     // This board's own machine name (THEIA_MACHINE) — the single-board fallback.
     std::string              self_board = "central";
+    // The deploy prefix's releases dir (<root>/releases) — where V-UCM reads the
+    // target release's migration/{migration.json,plugin.so} to drive the CENTRAL
+    // config migration (Snapshot + MigrateBulk) before the fan-out. Default matches
+    // UCM's; overridable via VucmConfig.releases_root.
+    std::string              releases_root = "/opt/theia/releases";
 
     // ── Update admission (the AUTHORIZING conjunction; VucmConfig knobs) ─────
     // enforce_* false = observe-only (lab default). last_* track the live
@@ -55,6 +60,9 @@ struct VucmGateState {
     std::vector<std::string> boards;
     // Confirm-poll ticks elapsed (the barrier budget counter).
     uint32_t    confirm_ticks = 0;
+    // Set once V-UCM has run the central config migration for THIS campaign, so
+    // the Cancel/rollback path knows to RestoreSnapshot("pre-<ver>") centrally.
+    bool        config_migrated = false;
     // Last broadcast campaign state (served by GetCampaignStatus).
     system_services_vucm_CampaignState last_state =
         system_services_vucm_CampaignState_CampaignState_CMP_IDLE;

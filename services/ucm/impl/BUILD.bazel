@@ -25,6 +25,23 @@ cc_library(
     deps = ["//platform/runtime:runtime"],
 )
 
+# The config-migration MECHANISM, header-only, shared by BOTH migration
+# authorities: UCM (standalone overlay path, here) and V-UCM (the fleet path —
+# //services/vucm/impl depends on this so V-UCM migrates the shared per ONCE,
+# centrally, before its RequestUpdate fan-out). #included as "impl/per_migrate.hpp"
+# → include root is the FC out_dir (one above impl/).
+cc_library(
+    name = "per_migrate",
+    hdrs = ["per_migrate.hpp"],
+    includes = [".."],
+    copts = ["-std=c++17", "-fPIC"],
+    deps = [
+        "//platform/runtime:runtime",
+        "//platform/proto:platform_protos",   # per.pb.h (Snapshot/MigrateBulk/…)
+        "//third_party:nlohmann_json",         # migration.json parse
+    ],
+)
+
 cc_library(
     name = "ucm_impl",
     srcs = [
@@ -53,7 +70,8 @@ cc_library(
     deps = [
         "//services/ucm/lib:ucm_lib",
         # migration.json (the OTA config-migration step manifest UcmGate
-        # executes at EvInstalled) — HAND-OWNED dep, keep on regen.
+        # executes on the STANDALONE overlay path) — HAND-OWNED dep, keep on regen.
         "//third_party:nlohmann_json",
+        ":per_migrate",   # shared migration mechanism (also used by V-UCM)
     ],
 )

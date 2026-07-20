@@ -1961,6 +1961,19 @@ def _dist_app(mdir: Path, machines: list, arch_override) -> int:
     return rc_final
 
 
+# A resource whose `src` carries this scheme is LAZY: not a file baked into the
+# deb, but a model ref (`model:<category>/<name>[@<ver>]`) resolved at runtime by
+# `theia models pull` from the S3 model plane. `theia dist` SKIPS these (there is
+# no local file to bake); the on-device pull materializes them into the same
+# share/<fc>/data dir a baked resource lands in. This is the "lazy resource"
+# unification (baked = src on disk; lazy = ref in S3), same descriptor shape.
+_MODEL_SCHEME = "model:"
+
+
+def _is_lazy_resource(src: str) -> bool:
+    return src.strip().startswith(_MODEL_SCHEME)
+
+
 def _inject_resources(deb: Path, machine_dir: Path) -> int:
     """Repack a per-machine app .deb with the DATA resources each FC declared in
     the manifest (ProcessLayer.resources), staged under
@@ -1969,8 +1982,10 @@ def _inject_resources(deb: Path, machine_dir: Path) -> int:
     The resource list rides in the machine's execution.json (serialize-manifest
     emits `resources: [{src,dest}]` per process). `src` is resolved relative to
     the WORKSPACE (where `theia dist` runs); `dest` is the relative path under the
-    FC's share/data dir. A code-only FC (no resources) is a no-op. Root-owns the
-    added files, mirroring _inject_services_config."""
+    FC's share/data dir. A code-only FC (no resources) is a no-op. LAZY resources
+    (`src` = `model:...`) are SKIPPED — they are pulled on-device by `theia models
+    pull`, not baked here. Root-owns the added files, mirroring
+    _inject_services_config."""
     import json
     import shutil
     import tempfile
@@ -1978,7 +1993,7 @@ def _inject_resources(deb: Path, machine_dir: Path) -> int:
     if not exec_json.is_file():
         return 0
     procs = json.loads(exec_json.read_text()).get("processes", [])
-    # (fc_name, src_path, dest_rel) triples for every declared resource.
+    # (fc_name, src_path, dest_rel) triples for every BAKED resource.
     staged_files: list[tuple[str, Path, str]] = []
     for p in procs:
         fc = p.get("name")
@@ -1986,6 +2001,8 @@ def _inject_resources(deb: Path, machine_dir: Path) -> int:
             src = (r.get("src") or "").strip()
             if not src:
                 continue
+            if _is_lazy_resource(src):
+                continue                        # lazy (model:…) → pulled on device
             dest = (r.get("dest") or os.path.basename(src)).strip().lstrip("/")
             src_path = (WORKSPACE / src).resolve()
             if not src_path.is_file():
@@ -6226,11 +6243,23 @@ def cmd_models(args: list[str]) -> int:
         --bucket B       plane bucket (default theia-models)
       theia models list [<category>] [--fleet F] [--s3 URL] [--bucket B]
         what's in the plane (per fleet), by category/name/version.
+      theia models pull <category>/<name>[@ver] --fc <fc> [--as <local>] [--dest DIR]
+      theia models pull --descriptor models.json [--dest DIR]
+        ON-RIG: materialize the LAZY resources (models) an SWP declared — download
+        each ref into <dest>/<fc>/data/<local>/<ver>/ (sha256-verified) and flip a
+        `current` symlink. --dest is the share root ($THEIA_SHARE_DIR or
+        /opt/theia/share). --descriptor is the models.json release-swp bakes into
+        the SWP payload (read by the post-flip hook).
+      theia models gc [--keep N] [--dest DIR]
+        prune old on-device model versions, keeping `current` + the newest N.
 
-    v1 scope (this slice): push copies the PORTABLE artifacts — export/model.onnx
-    + the registry's metadata/ + a synthesized metadata.json — to
-    s3://<bucket>/<fleet>/<category>/<name>/<ver>/ and writes an index.json.
-    Arch-keyed engine build (trtexec) + on-device `pull`/`gc` land next."""
+    Models are LAZY RESOURCES: a component declares them in the manifest as a
+    resource whose src is `model:<category>/<name>[@ver]` (vs a baked resource
+    whose src is a local file). `theia dist` SKIPS lazy resources; `theia models
+    pull` fetches them at runtime into the SAME share/<fc>/data dir. push copies
+    the PORTABLE artifacts — export/model.onnx + the registry's metadata/ + a
+    synthesized metadata.json — to s3://<bucket>/<fleet>/<category>/<name>/<ver>/.
+    Arch-keyed engine build (trtexec, GPU-only) is the remaining deferred piece."""
     import os
     import json
     import hashlib
@@ -6391,7 +6420,148 @@ def cmd_models(args: list[str]) -> int:
             print(f"  {c}/{n}@{v}" + ("  [onnx]" if has_onnx else "  [meta]"))
         return 0
 
-    print(f"theia models: unknown subcommand '{sub}' (push | list).",
+    if sub == "pull":
+        # ON-RIG: materialize the LAZY resources (models) an SWP declared. Reads
+        # model refs from either an explicit <category>/<name>[@ver] arg or a
+        # --descriptor models.json (the list release-swp bakes into the SWP
+        # payload, and that the on-device post-flip hook passes here). Each ref is
+        # resolved against the S3 plane and downloaded into the FC's share/data
+        # dir with an atomic `current` symlink, sha256-verified from metadata.json.
+        #
+        #   theia models pull <category>/<name>[@ver] --fc <fc> [--dest DIR]
+        #   theia models pull --descriptor models.json [--dest DIR]
+        #
+        # --dest is the SHARE ROOT (default $THEIA_SHARE_DIR or /opt/theia/share);
+        # a model lands at <dest>/<fc>/data/<local>/current → <version>/.
+        import os
+        import json
+        import hashlib
+        desc_path = _opt("--descriptor")
+        dest_root = Path(_opt("--dest")
+                         or os.environ.get("THEIA_SHARE_DIR", "/opt/theia/share"))
+        # Build the work list: (fc, category, name, ver|None, local_name).
+        # local_name is the on-disk basename under share/<fc>/data (the resource
+        # `dest`); default = the model name.
+        wants: list[tuple] = []
+        if desc_path:
+            doc = json.loads(Path(desc_path).read_text())
+            for m in doc.get("models", []):
+                ref = m.get("ref", "")
+                if ref.startswith(_MODEL_SCHEME):
+                    ref = ref[len(_MODEL_SCHEME):]
+                c, n, v = _split_ref(ref)
+                wants.append((m.get("fc", "shared"), c, n, v,
+                              m.get("dest") or n))
+        else:
+            ref = next((a for a in rest if not a.startswith("-")), None)
+            if not ref or "/" not in ref:
+                print("theia models pull: needs <category>/<name>[@ver] --fc <fc> "
+                      "or --descriptor models.json.", file=sys.stderr)
+                return 2
+            if ref.startswith(_MODEL_SCHEME):
+                ref = ref[len(_MODEL_SCHEME):]
+            c, n, v = _split_ref(ref)
+            wants.append((_opt("--fc", "shared"), c, n, v, _opt("--as") or n))
+        if not wants:
+            print("theia models pull: descriptor declared no models — nothing to "
+                  "do.", file=sys.stderr)
+            return 0
+
+        rc_final = 0
+        for (fc, cat, name, ver, local) in wants:
+            key_ver = ver
+            # Resolve @latest / unversioned to the highest v<N> in the plane.
+            if key_ver in (None, "latest"):
+                lr = subprocess.run(
+                    [*aws, "ls", f"s3://{bucket}/{fleet}/{cat}/{name}/"],
+                    env=env, capture_output=True, text=True)
+                vs = sorted((ln.split()[-1].rstrip("/")
+                             for ln in lr.stdout.splitlines()
+                             if ln.strip().endswith("/")),
+                            key=lambda s: int(s[1:]) if s[1:].isdigit() else -1)
+                if not vs:
+                    print(f"theia models pull: no versions for {cat}/{name} "
+                          f"under fleet {fleet}.", file=sys.stderr)
+                    rc_final = 1
+                    continue
+                key_ver = vs[-1]
+            src_prefix = f"s3://{bucket}/{fleet}/{cat}/{name}/{key_ver}"
+            # Stage into <dest>/<fc>/data/<local>/<ver>/ then flip `current`.
+            data_dir = dest_root / fc / "data" / local
+            vdir = data_dir / key_ver
+            vdir.mkdir(parents=True, exist_ok=True)
+            # Pull the portable set: model.onnx, metadata.json, luts/*, and this
+            # rig's matching engine (engines/<gpu-key>/…) if present. v1: onnx +
+            # luts + metadata; the arch-keyed engine sync is a TODO (needs the GPU
+            # key — deferred with the trtexec build).
+            got = subprocess.run(
+                [*aws, "cp", "--recursive", src_prefix + "/", str(vdir),
+                 "--exclude", "engines/*"],
+                env=env, capture_output=True, text=True)
+            if got.returncode != 0:
+                print(f"theia models pull: {cat}/{name}@{key_ver}: download "
+                      f"failed:\n{got.stderr}", file=sys.stderr)
+                rc_final = 1
+                continue
+            # Verify onnx sha256 against metadata.json, if both present.
+            meta_f = vdir / "metadata.json"
+            onnx_f = vdir / "model.onnx"
+            if meta_f.is_file() and onnx_f.is_file():
+                want_sha = json.loads(meta_f.read_text()).get("onnx_sha256")
+                if want_sha:
+                    got_sha = hashlib.sha256(onnx_f.read_bytes()).hexdigest()
+                    if got_sha != want_sha:
+                        print(f"theia models pull: {cat}/{name}@{key_ver}: "
+                              f"onnx sha256 MISMATCH (want {want_sha[:12]}, got "
+                              f"{got_sha[:12]}) — refusing to activate.",
+                              file=sys.stderr)
+                        rc_final = 1
+                        continue
+            # Atomic activation: flip <local>/current → <ver> (a running FC reads
+            # through current, so the swap is a single rename — no half-update).
+            cur = data_dir / "current"
+            tmp = data_dir / ".current.new"
+            if tmp.is_symlink() or tmp.exists():
+                tmp.unlink()
+            tmp.symlink_to(key_ver)
+            os.replace(tmp, cur)
+            print(f"theia models pull: {cat}/{name}@{key_ver} → "
+                  f"{data_dir}/current ({fc})", file=sys.stderr)
+        return rc_final
+
+    if sub == "gc":
+        # Prune OLD model versions on device, keeping `current` (+ the newest
+        # --keep N). Walks <dest>/<fc>/data/<local>/ dirs, drops v<N> that are not
+        # the current target and beyond the keep window.
+        import os
+        keep = int(_opt("--keep", "1"))
+        dest_root = Path(_opt("--dest")
+                         or os.environ.get("THEIA_SHARE_DIR", "/opt/theia/share"))
+        if not dest_root.is_dir():
+            print(f"theia models gc: no share root at {dest_root}.",
+                  file=sys.stderr)
+            return 0
+        pruned = 0
+        for data_dir in dest_root.glob("*/data/*"):
+            if not data_dir.is_dir():
+                continue
+            cur = data_dir / "current"
+            keep_target = os.readlink(cur) if cur.is_symlink() else None
+            vers = sorted((p.name for p in data_dir.iterdir()
+                           if p.is_dir() and p.name.startswith("v")),
+                          key=lambda s: int(s[1:]) if s[1:].isdigit() else -1)
+            # Keep the current target + the newest `keep`; drop the rest.
+            survivors = set(vers[-keep:]) | ({keep_target} if keep_target else set())
+            for v in vers:
+                if v not in survivors:
+                    shutil.rmtree(data_dir / v, ignore_errors=True)
+                    pruned += 1
+                    print(f"theia models gc: pruned {data_dir}/{v}",
+                          file=sys.stderr)
+        print(f"theia models gc: pruned {pruned} version(s).", file=sys.stderr)
+        return 0
+
+    print(f"theia models: unknown subcommand '{sub}' (push | list | pull | gc).",
           file=sys.stderr)
     return 2
 

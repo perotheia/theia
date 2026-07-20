@@ -127,11 +127,15 @@ public:
                          uint32_t kind, SupReply& out, int timeout_ms = 5000);
     bool get_trace_config(SupReply& out, int timeout_ms = 5000);
 
-    // GetTree — a point-in-time TreeSnapshot. The firehose Subscribe polls
-    // this on an interval and re-emits each snapshot (the supervisor's event
-    // firehose has no remote egress; GetTree is the live source — same model
-    // as `tdb ps --follow`). Raw TreeSnapshot bytes land in out.tree_snapshot.
-    bool get_tree(SupReply& out, int timeout_ms = 3000);
+    // GetTree — ONE page of a point-in-time TreeSnapshot from `offset`. The
+    // firehose Subscribe polls this on an interval and re-emits the snapshot (the
+    // supervisor's event firehose has no remote egress; GetTree is the live
+    // source — same model as `tdb ps --follow`). Raw TreeSnapshot bytes land in
+    // out.tree_snapshot; *last_frame (if given) reports whether this is the final
+    // page (the caller pages offset += children_count until then, accumulating
+    // into an UNCAPPED libprotobuf merge — see fold_instance_tree).
+    bool get_tree(SupReply& out, int timeout_ms = 3000, uint32_t offset = 0,
+                  bool* last_frame = nullptr);
 
     // Read-back ops backing rtdb's `supervisor`/`info` and `loglevel` (no-arg)
     // verbs — the same supervisor TIPC calls tdb's probe makes. Raw proto bytes

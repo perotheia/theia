@@ -35,6 +35,7 @@
 #include <sys/socket.h>       // PgMembership RDM-datagram push to a watcher
 #include <linux/tipc.h>
 #include <unistd.h>
+#include <algorithm>          // std::min (GetTree pagination clamp)
 #include <pb_encode.h>
 
 namespace ara::exec {
@@ -451,11 +452,14 @@ PgMembership SupervisorCtl::handle_call(const PgWatchReq& req,
 
 
 TreeSnapshot SupervisorCtl::handle_call(
-        const GetTreeRequest& /*req*/,
+        const GetTreeRequest& req,
         SupervisorCtlState& /*s*/) {
     // Point-in-time snapshot for `tdb ps` / `tdb supervisor`: walk the engine's
     // tree into the flat parent-keyed children[] (the caller rebuilds the
     // hierarchy by name, same shape the NodeEdge/NodeState firehose streams).
+    // PAGINATED: children[] is a fixed nanopb array (max_count:128), so a tree
+    // larger than one page ships across multiple GetTree calls — the client
+    // re-requests with offset += the page's children_count until last_frame.
     using Op = ::supervisor::ExecCommand::Op;
     auto* eng = engine();
     auto rows = eng ? eng->call(exec_cmd(Op::GetTree)).tree
@@ -463,26 +467,27 @@ TreeSnapshot SupervisorCtl::handle_call(
     TreeSnapshot snap{};
     const pb_size_t cap =
         static_cast<pb_size_t>(sizeof(snap.children) / sizeof(snap.children[0]));
-    // total_children = what the walk WOULD emit; children_count = what fits.
-    // A client compares the two to render "N of M" instead of a short tree it
-    // cannot tell from a healthy one.
-    snap.total_children = static_cast<uint32_t>(rows.size());
-    snap.truncated      = rows.size() > cap;
+    const size_t total  = rows.size();
+    // offset clamps into range: a client past the end gets an empty last page.
+    const size_t offset = std::min<size_t>(req.offset, total);
+    snap.total_children = static_cast<uint32_t>(total);
+    // This page = rows [offset .. offset+cap). last_frame when it reaches the end.
+    const size_t page_end = std::min<size_t>(offset + cap, total);
+    snap.last_frame = (page_end >= total);
+    // `truncated` is retained for a legacy client that ignores offset: true only
+    // when page 0 alone can't carry the whole tree (the client must paginate).
+    snap.truncated  = (offset == 0 && total > cap);
     if (snap.truncated) {
-        // NOT "logged on encode" (the old comment here was wrong): rows dropped
-        // in this loop never reach pb_encode, so nanopb cannot warn about them.
-        // Say it once, here — otherwise the cut is invisible and a
-        // services-only reply reads as "the app FCs are dead". It did exactly
-        // that: a 99-row rig against a 64 cap showed services and no apps.
-        this->log().warn(
-            "GetTree: tree has " + std::to_string(rows.size()) +
-            " rows but the wire cap is " + std::to_string(cap) +
-            " — reply TRUNCATED, " + std::to_string(rows.size() - cap) +
-            " rows dropped (raise TreeSnapshot.children max_count in "
-            "system/supervisor/package.art, or paginate GetTree)");
+        // A page-0-only client (old tdb) still sees the cut via truncated +
+        // total_children rather than a silent short tree. A paginating client
+        // never trips this (it walks every page).
+        this->log().info(
+            "GetTree: tree has " + std::to_string(total) + " rows > page cap " +
+            std::to_string(cap) + " — paginating (a legacy single-page client "
+            "sees the first " + std::to_string(cap) + " with truncated=true)");
     }
-    for (const auto& r : rows) {
-        if (snap.children_count >= cap) break;  // counted + logged above
+    for (size_t i = offset; i < page_end; ++i) {
+        const auto& r = rows[i];
         auto& c = snap.children[snap.children_count++];
         c = ChildState{};
         std::snprintf(c.name, sizeof(c.name), "%s", r.name.c_str());

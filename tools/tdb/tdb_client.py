@@ -88,7 +88,31 @@ class SupervisorClient:
     # but the shared command layer (tdb_commands.py) passes machine= for the rtdb
     # path, so accept it to keep one call signature across both clients.
     def get_tree(self, timeout: float = 2.0, machine: str = "") -> dict[str, Any]:
-        return self.probe.call(self._target, "GetTree", timeout=timeout)
+        # PAGINATE: the supervisor's TreeSnapshot.children is a fixed nanopb array
+        # (max_count:128); a bigger tree spans pages. Loop offset += the page's
+        # row count until last_frame, concatenating children into ONE reply so
+        # `tdb ps/apps` see the whole tree. A <=128-row rig is one round-trip.
+        first = self.probe.call(self._target, "GetTree", timeout=timeout, offset=0)
+        children = list(first.get("children") or [])
+        # Robust termination: last_frame set, OR a legacy server (no last_frame /
+        # ignores offset) — then the page is the whole (truncated) tree, stop.
+        if first.get("last_frame", True):
+            return first
+        offset = len(children)
+        for _ in range(64):        # 64*128 = 8192 rows — runaway backstop
+            page = self.probe.call(self._target, "GetTree",
+                                   timeout=timeout, offset=offset)
+            pc = list(page.get("children") or [])
+            if not pc:
+                break
+            children.extend(pc)
+            offset += len(pc)
+            if page.get("last_frame", True):
+                break
+        first["children"] = children
+        first["truncated"] = False           # fully paged → nothing dropped
+        first["total_children"] = len(children)
+        return first
 
     def get_system_info(self, timeout: float = 2.0,
                         machine: str = "") -> dict[str, Any]:

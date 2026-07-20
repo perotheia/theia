@@ -368,25 +368,42 @@ bool fold_instance_tree(uint32_t inst, system_supervisor::TreeSnapshot* merged,
     if (!link.connected()) {
         if (!link.start(/*connect_timeout_ms=*/1500)) return false;
     }
-    services_com::SupReply r;
-    if (!link.get_tree(r, timeout_ms) || r.tree_snapshot.empty()) return false;
-    system_supervisor::TreeSnapshot one;
-    if (!one.ParseFromString(r.tree_snapshot)) return false;
-
-    if (one.generation()   > newest_gen) newest_gen = one.generation();
-    if (one.timestamp_ms() > newest_ts)  newest_ts  = one.timestamp_ms();
-
+    // PAGINATE the per-machine tree: the supervisor's nanopb TreeSnapshot caps
+    // children[] at 128, so a machine with > 128 supervised rows spans several
+    // GetTree pages. Loop offset += the page's row count until last_frame, folding
+    // EVERY page's rows into the UNCAPPED libprotobuf `merged` — so the cap that
+    // once truncated remote rtdb no longer bounds the cluster tree. A <=128-row
+    // machine is still one round-trip (page 0, last_frame=true).
     const std::string pfx = machine_prefix(inst);   // "<machine_name>/"
-    for (const auto& ch : one.children()) {
-        auto* dst = merged->add_children();
-        *dst = ch;
-        dst->set_name(pfx + ch.name());
-        // Re-anchor parent: the per-machine root (parent_name=="") stays a
-        // top-level node so each machine renders as its own subtree.
-        if (!ch.parent_name().empty())
-            dst->set_parent_name(pfx + ch.parent_name());
+    uint32_t offset = 0;
+    bool got_any = false;
+    const int kMaxPages = 64;   // 64*128 = 8192 rows/machine — runaway backstop
+    for (int page = 0; page < kMaxPages; ++page) {
+        services_com::SupReply r;
+        bool last_frame = true;
+        if (!link.get_tree(r, timeout_ms, offset, &last_frame) ||
+            r.tree_snapshot.empty())
+            break;                       // no (more) page; keep what we folded
+        system_supervisor::TreeSnapshot one;
+        if (!one.ParseFromString(r.tree_snapshot)) break;
+        got_any = true;
+        if (one.generation()   > newest_gen) newest_gen = one.generation();
+        if (one.timestamp_ms() > newest_ts)  newest_ts  = one.timestamp_ms();
+        for (const auto& ch : one.children()) {
+            auto* dst = merged->add_children();
+            *dst = ch;
+            dst->set_name(pfx + ch.name());
+            // Re-anchor parent: the per-machine root (parent_name=="") stays a
+            // top-level node so each machine renders as its own subtree.
+            if (!ch.parent_name().empty())
+                dst->set_parent_name(pfx + ch.parent_name());
+        }
+        offset += static_cast<uint32_t>(one.children_size());
+        // Stop on last_frame, OR a short/empty page (robust vs a legacy server
+        // that ignores offset and always returns page 0 — it short-circuits here).
+        if (last_frame || one.children_size() == 0) break;
     }
-    return true;
+    return got_any;
 }
 
 // Merge every PRESENT supervisor's tree into one TreeSnapshot so a single

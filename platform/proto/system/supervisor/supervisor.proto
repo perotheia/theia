@@ -60,6 +60,7 @@ message TreeSnapshot {
     repeated ChildState children = 3;
     bool truncated = 4;
     uint32 total_children = 5;
+    bool last_frame = 6;   // pagination: final page (client stops paging)
 }
 
 message SnapshotBegin {
@@ -118,7 +119,7 @@ message HealthBeacon {
 }
 
 message GetTreeRequest {
-    // empty body
+    uint32 offset = 1;   // pagination: emit rows from this offset (0 = first page)
 }
 
 message GetHealthRequest {

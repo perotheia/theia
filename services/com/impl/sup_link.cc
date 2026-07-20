@@ -259,19 +259,25 @@ bool SupLink::get_trace_config(SupReply& out, int timeout_ms) {
     return true;
 }
 
-bool SupLink::get_tree(SupReply& out, int timeout_ms) {
+bool SupLink::get_tree(SupReply& out, int timeout_ms, uint32_t offset,
+                       bool* last_frame) {
+    if (last_frame) *last_frame = true;
     if (!impl_->started) return false;
     std::lock_guard<std::mutex> lk(impl_->call_mu);
+    // ONE page of the tree from `offset`. children[] is a fixed nanopb array
+    // (max_count:128), so a bigger tree spans several pages — the CALLER
+    // (fold_instance_tree) loops offset += children_count until last_frame and
+    // accumulates into its UNCAPPED libprotobuf merge. The nanopb hop is per-page.
     system_supervisor_GetTreeRequest req =
         system_supervisor_GetTreeRequest_init_zero;
+    req.offset = offset;
     // Reply is a TreeSnapshot (not ControlReply). Re-serialize it to raw proto
     // bytes for the gRPC Subscribe stream (SupReply.tree_snapshot), wire-
     // identical to the libprotobuf TreeSnapshot the gRPC client decodes.
     auto result = theia::runtime::call<system_supervisor_TreeSnapshot>(
         impl_->ref, req, /*act=*/0, timeout_ms);
     if (result.tag != theia::runtime::CallTag::Reply) return false;
-    // TreeSnapshot.children is max_count:64, each ChildState up to ~360B →
-    // ~23KB worst case. 48KB matches the runtime's bumped reply ceiling.
+    if (last_frame) *last_frame = result.reply.last_frame;
     static uint8_t buf[48 * 1024];
     pb_ostream_t os = pb_ostream_from_buffer(buf, sizeof(buf));
     if (pb_encode(&os,

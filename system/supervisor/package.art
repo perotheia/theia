@@ -171,6 +171,15 @@ message TreeSnapshot {
     repeated ChildState children [max_count:128]
     bool    truncated        // children[] was cut short (tree > max_count)
     uint32  total_children   // rows the walk WOULD have emitted
+    // PAGINATION (field appended, wire-compatible): this page holds rows
+    // [offset .. offset+children_count). last_frame=true means it is the FINAL
+    // page (offset+children_count >= total_children) — the client stops. A tree
+    // <= max_count comes back as ONE page with last_frame=true (the fast path is
+    // unchanged). A bigger tree: the client re-requests with offset += the page's
+    // children_count until last_frame. `truncated` is retained for back-compat
+    // (an old client that ignores offset sees page 0 truncated) but is now
+    // ALWAYS false when the client paginates (each page fits by construction).
+    bool    last_frame       // this is the final page (client stops paging)
 }
 
 // ---- #429 topo-pair firehose stream --------------------------------------
@@ -271,6 +280,12 @@ message HealthBeacon {
 // ---- control RPC types ---------------------------------------------------
 
 message GetTreeRequest {
+    // PAGINATION: emit rows starting at this offset into the flat tree walk.
+    // 0 (proto3 default / an old empty request) = the first page — unchanged
+    // behavior. The client re-requests with offset += the last page's
+    // children_count until TreeSnapshot.last_frame. The walk order is STABLE
+    // within a generation, so paging is consistent as long as generation holds.
+    uint32  offset
 }
 
 // Empty — the supervisor returns the latest HealthBeacon (the same one it

@@ -10,13 +10,27 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 #include <string>
 
 namespace ara::com {
 
 struct ComDaemonState {
-    // Add app fields here, e.g.:
-    //   int32_t counter = 0;
+    // Network-binding gate (SM → COM, EnableBindings). One entry per named
+    // binding (a service-discovery scope / VLAN, cf. sm.md §3.B "network
+    // gating"): binding_name → enabled. SM disables scopes on UPDATE/DEGRADED and
+    // re-enables on RUNNING. The advertisement path consults this before offering
+    // a scope; an ABSENT binding is enabled-by-default (nothing has gated it).
+    // Authoritative in-process record so the gate survives across calls and an
+    // observer can read it.
+    std::map<std::string, bool> bindings;
+
+    // True iff `name` may currently be advertised (default: enabled — only an
+    // explicit EnableBindings{enabled=false} gates it off).
+    bool binding_enabled(const std::string& name) const {
+        auto it = bindings.find(name);
+        return it == bindings.end() ? true : it->second;
+    }
 };
 
 }  // namespace ara::com

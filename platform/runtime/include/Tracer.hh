@@ -64,6 +64,8 @@ enum class TraceEvent : uint8_t {
     CallResume   = 0x0c,  // sync caller unblocked (reply arrived or timeout)
     StateTransition = 0x0d,  // gen_statem transitioned between states
     StateTimeout    = 0x0e,  // gen_statem state-timeout fired
+    Conflate        = 0x0f,  // keep-latest mailbox dropped a STALE pending cast
+                             // (a [conflate] port's producer outran the consumer)
 };
 
 inline const char* trace_event_name(TraceEvent e) noexcept {
@@ -82,6 +84,7 @@ inline const char* trace_event_name(TraceEvent e) noexcept {
         case TraceEvent::CallResume:   return "call_resume";
         case TraceEvent::StateTransition: return "state_transition";
         case TraceEvent::StateTimeout:    return "state_timeout";
+        case TraceEvent::Conflate:        return "conflate";
     }
     return "?";
 }
@@ -106,6 +109,7 @@ inline TraceKind trace_kind_of(TraceEvent e) noexcept {
     switch (e) {
         case TraceEvent::Send:         return TraceKind::CastOut;   // outbound cast/req
         case TraceEvent::Recv:         return TraceKind::CastIn;    // inbound landed
+        case TraceEvent::Conflate:     return TraceKind::CastIn;    // inbound cast dropped (keep-latest)
         case TraceEvent::Dispatch:     return TraceKind::CallIn;    // handler entry (call/cast)
         case TraceEvent::SendReply:    return TraceKind::CallOut;   // reply sent (server)
         case TraceEvent::CallResult:

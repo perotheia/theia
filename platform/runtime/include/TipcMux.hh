@@ -110,8 +110,13 @@ public:
     template <typename Msg, typename NodeT>
     void register_cast(NodeBinding* b, NodeT& node, bool conflate = false) {
         // Record the conflatable type on the node so the LOCAL same-process
-        // cast() path keep-latests it too, not just this mux/TIPC path.
-        if (conflate) node.mark_conflated(RemoteCodec<Msg>::service_id);
+        // cast() path keep-latests it too, not just this mux/TIPC path. Thread
+        // the node's name in too, so a keep-latest drop can emit a Conflate
+        // Tracer event (GenServerBase can't reach Derived::kNodeName itself).
+        if (conflate) {
+            node.mark_conflated(RemoteCodec<Msg>::service_id);
+            node.set_trace_name(NodeT::kNodeName);
+        }
         InboundEntry e;
         e.kind = InboundEntry::Kind::Cast;
         e.dispatch = [&node, conflate](const uint8_t* payload, uint16_t len,

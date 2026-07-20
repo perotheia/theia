@@ -185,6 +185,7 @@ public:
     // in line (a feed that was already ahead of a later call stays ahead), we
     // only swap its payload for the fresher one.
     void enqueue_conflated(uint16_t key, MailboxFn fn) {
+        bool dropped = false;
         {
             std::lock_guard<std::mutex> lk(mu_);
             auto it = conflate_slots_.find(key);
@@ -193,10 +194,18 @@ public:
                 // payload with the fresher one (keep-latest), same position.
                 it->second->fn = std::move(fn);
                 ++conflated_drops_;   // observability: a stale value was dropped
-                return;               // no notify — the slot is already pending
+                dropped = true;
+                // Fall through to emit the trace event OUTSIDE the lock — trace
+                // submit does TIPC I/O, which must never run under mu_ (it would
+                // serialize the producer against the consumer thread).
+            } else {
+                mailbox_.push_back(Entry{key, std::move(fn)});
+                conflate_slots_[key] = std::prev(mailbox_.end());
             }
-            mailbox_.push_back(Entry{key, std::move(fn)});
-            conflate_slots_[key] = std::prev(mailbox_.end());
+        }
+        if (dropped) {
+            emit_conflate_(key);      // observability: a stale keep-latest drop
+            return;                   // no notify — the slot was already pending
         }
         cv_.notify_one();
     }
@@ -213,6 +222,14 @@ public:
     void mark_conflated(uint16_t key) {
         std::lock_guard<std::mutex> lk(mu_);
         if (key) conflate_types_.insert(key);
+    }
+
+    // The node's kNodeName, threaded in at wiring time (register_cast conflate=true)
+    // so enqueue_conflated can emit a Conflate Tracer event on a keep-latest drop —
+    // GenServerBase is non-templated, so it can't reach Derived::kNodeName itself.
+    // Empty until set (an un-wired node never conflates, so never needs it).
+    void set_trace_name(const char* name) noexcept {
+        if (name && !trace_name_) trace_name_ = name;   // set-once, no lock churn
     }
     // Is this msg-type (service_id key) conflatable on this node? Read by the
     // local cast() to choose enqueue_conflated() over enqueue().
@@ -329,6 +346,27 @@ private:
     // here so the LOCAL same-process cast() path can keep-latest too, not just
     // the TIPC/mux path. Populated once at wiring time, read on every cast.
     std::unordered_set<uint16_t> conflate_types_;
+    // This node's kNodeName (set-once at wiring time via set_trace_name), so
+    // enqueue_conflated can look up the node's Tracer to emit a Conflate event on
+    // a keep-latest drop. nullptr on an un-wired node (never conflates). const
+    // char* to a static kNodeName string — no ownership, no lock.
+    const char*                          trace_name_{nullptr};
+    // Emit a Conflate Tracer event for a keep-latest drop of service_id `key`.
+    // Called from enqueue_conflated OUTSIDE mu_ (trace submit does TIPC I/O). The
+    // Tracer's own enabled/kind/reporting filters gate the actual submit, so this
+    // is cheap (a name lookup + a branch) when tracing is off — the common case.
+    void emit_conflate_(uint16_t key) noexcept {
+        if (!trace_name_) return;
+        auto& tr = ::theia::runtime::tracer_for(trace_name_);
+        if (!tr.enabled()) return;
+        // The dropped msg's type-name isn't stored per-key; label the event by the
+        // conflate service_id so the observer can correlate it to the [conflate]
+        // port. corr_id carries the key too (numeric, for machine filtering).
+        char label[24];
+        std::snprintf(label, sizeof(label), "conflate:0x%04x", key);
+        tr.emit(::theia::runtime::TraceEvent::Conflate, label,
+                /*corr_id=*/key, /*payload=*/nullptr, /*payload_len=*/0);
+    }
     // Touched only on the server thread (in loop_'s post-drain phase
     // and the stop-sentinel lambda) — no synchronization needed.
     std::string                          terminate_reason_{"normal"};

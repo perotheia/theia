@@ -344,6 +344,61 @@ static std::string case_feed_no_conflation_without_mark() {
     return {};
 }
 
+// Part (b) of conflate-local-cast-and-trace: a keep-latest DROP emits a Conflate
+// Tracer event, so `tdb trace` can show conflation happening live. Enable the
+// node's tracer, mark CFeed conflatable + set the trace name (what
+// register_cast(conflate=true) wires), flood it so the consumer falls behind and
+// the mailbox drops stale casts, then assert a "conflate" record was emitted with
+// the right kind + service_id correlation.
+static std::string case_conflate_trace_event() {
+    const uint16_t cfeed_id =
+        rt::RemoteCodec<platform_runtime_test_CFeed>::service_id;
+
+    auto& tr = rt::tracer_for(TestServer::kNodeName);
+    tr.enable(true);
+    TraceCapture cap;
+
+    TestServer s; start_node(s);
+    // #401: mark reporting AFTER construction — the GenServer ctor's
+    // mark_reporting_() resets it from kReporting (false for this fixture), so we
+    // set it here, post-construct, to reach the (test-sink) bus.
+    tr.set_reporting(true);
+    // What register_cast(conflate=true) does at wiring time: mark the type AND
+    // thread the node name in so enqueue_conflated can emit the Conflate event.
+    s.mark_conflated(cfeed_id);
+    s.set_trace_name(TestServer::kNodeName);
+
+    const uint32_t N = 20;
+    for (uint32_t i = 1; i <= N; ++i) {
+        platform_runtime_test_CFeed f{}; f.seq = i; f.work_ms = 15;
+        rt::cast(s, f);            // floods the slow consumer → keep-latest drops
+    }
+    rt::call<GetReply>(s, Get{}, CallAct{0}, /*timeout*/5000);   // drain barrier
+    const uint64_t drops = s.conflated_drops();
+    EXPECT(drops > 0, "the flood produced keep-latest drops to trace");
+    s.stop();
+    tr.enable(false);
+
+    // A Conflate event = TraceKind::CastIn (2), msg_type "conflate:0x<id>",
+    // corr_id == the CFeed service_id. Count them; there is one per drop.
+    uint64_t conflate_recs = 0;
+    for (const auto& r : cap.records()) {
+        if (r.msg_type.rfind("conflate:", 0) == 0) {
+            ++conflate_recs;
+            EXPECT(r.kind == static_cast<uint32_t>(rt::TraceKind::CastIn),
+                   "conflate trace record carries TraceKind::CastIn");
+            EXPECT(r.corr_id == cfeed_id,
+                   "conflate trace record correlates to the CFeed service_id");
+            EXPECT(r.node_name == TestServer::kNodeName,
+                   "conflate trace record is attributed to the dropping node");
+        }
+    }
+    EXPECT(conflate_recs == drops,
+           "one 'conflate' Tracer event emitted per keep-latest drop "
+           "(→ visible in tdb trace)");
+    return {};
+}
+
 static std::string case_info_basic() {
     TestServer s; start_node(s);
     rt::post_info(s, "hello");
@@ -1433,6 +1488,7 @@ int main() {
     CASE(stat, feed_conflation_keep_latest) { return case_feed_conflation_keep_latest(); });
     CASE(stat, feed_conflation_local_cast) { return case_feed_conflation_local_cast(); });
     CASE(stat, feed_no_conflation_without_mark) { return case_feed_no_conflation_without_mark(); });
+    CASE(stat, conflate_trace_event) { return case_conflate_trace_event(); });
     CASE(stat, info_basic) { return case_info_basic(); });
     CASE(stat, send_request_basic) { return case_send_request_basic(); });
     CASE(stat, send_request_check) { return case_send_request_check(); });

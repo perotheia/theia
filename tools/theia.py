@@ -3547,12 +3547,23 @@ def cmd_release_swp(args: list[str]) -> int:
                         "dest": (_r.get("dest") or "").strip() or None,
                     })
     if _models_desc:
+        # Stamp the model-plane ENDPOINT + bucket + fleet into the descriptor so
+        # the device's pull knows WHERE to fetch — carried IN the SWP over Mender's
+        # authenticated channel (no separate provisioning, no Mender-config change).
+        # NON-SECRET only: the MinIO key/secret stay the plane default on the device
+        # (MINIO_USER/PASSWORD), never travel in the artifact.
+        _models_s3 = {
+            "endpoint": s3_url or os.environ.get("THEIA_S3",
+                                                 "http://10.0.0.99:9000"),
+            "bucket": os.environ.get("THEIA_MODELS_BUCKET", "theia-models"),
+            "fleet": fleet,
+        }
         (stage / "manifest").mkdir(exist_ok=True)
         (stage / "manifest" / "models.json").write_text(
-            json.dumps({"models": _models_desc}, indent=2) + "\n")
+            json.dumps({"s3": _models_s3, "models": _models_desc}, indent=2) + "\n")
         print(f"theia release-swp: {len(_models_desc)} lazy model(s) → "
-              f"manifest/models.json (pulled on device post-flip)",
-              file=sys.stderr)
+              f"manifest/models.json (endpoint {_models_s3['endpoint']}, "
+              f"pulled on device post-flip)", file=sys.stderr)
     # The Mender artifact-name == the Distribution swp_build identifier == what the
     # GS per-role deploy hands Mender. ABI-keyed so central (bookworm-arm64) and
     # compute (focal-arm64) of the SAME SWP version are distinct, non-colliding
@@ -6460,6 +6471,13 @@ def cmd_models(args: list[str]) -> int:
         #
         # --dest is the SHARE ROOT (default $THEIA_SHARE_DIR or /opt/theia/share);
         # a model lands at <dest>/<fc>/data/<local>/current → <version>/.
+        #
+        # A descriptor may carry an `s3` block {endpoint,bucket,fleet} — this is how
+        # the SWP conveys the plane ENDPOINT to the device (release-swp stamps it),
+        # so the on-device pull self-configures with no separately-provisioned
+        # endpoint. Explicit --s3/--bucket/--fleet still win. The MinIO key/secret
+        # are never in the descriptor — they stay the plane default (MINIO_USER/
+        # MINIO_PASSWORD via _models_env).
         import os
         import json
         import hashlib
@@ -6472,6 +6490,19 @@ def cmd_models(args: list[str]) -> int:
         wants: list[tuple] = []
         if desc_path:
             doc = json.loads(Path(desc_path).read_text())
+            # An `s3` block in the descriptor overrides the endpoint/bucket/fleet
+            # (unless the caller passed --s3/--bucket/--fleet explicitly). This is
+            # how the SWP carries the plane's ENDPOINT to the device — the secret
+            # stays the plane default (MINIO_USER/PASSWORD), only the non-secret
+            # endpoint/bucket/fleet ride in the artifact. See release-swp.
+            s3blk = doc.get("s3") or {}
+            if s3blk.get("endpoint") and not _opt("--s3"):
+                s3_url = s3blk["endpoint"]
+                aws = ["aws", "--endpoint-url", s3_url, "s3"]
+            if s3blk.get("bucket") and not _opt("--bucket"):
+                bucket = s3blk["bucket"]
+            if s3blk.get("fleet") and not _opt("--fleet"):
+                fleet = s3blk["fleet"]
             for m in doc.get("models", []):
                 ref = m.get("ref", "")
                 if ref.startswith(_MODEL_SCHEME):

@@ -123,19 +123,21 @@ _run_migration() {
 # collects them). AFTER the flip — so the models land in the just-activated
 # release before the supervisor restart spawns the FCs — pull them from the S3
 # model plane into $CURRENT/share/<fc>/data (theia::runtime::share_dir reads there).
-# S3 endpoint + creds come from /etc/theia/models.env (dropped at provision time,
-# same seam as the artifact-verify-key); absent → the pull uses the theia defaults
-# (THEIA_S3 / MINIO_USER / MINIO_PASSWORD fallbacks). No models.json → no-op.
-# A failed pull does NOT abort the install: the code is in place; a missing model
-# is a data problem to surface, not a reason to roll back a good release.
+#
+# The S3 ENDPOINT + bucket + fleet ride IN the descriptor's `s3` block (stamped by
+# release-swp), delivered over Mender's own authenticated channel — so `theia
+# models pull` needs no separately-provisioned endpoint (no Ansible, no
+# mender.conf change). The MinIO key/secret are NON-secret plane defaults
+# (MINIO_USER/MINIO_PASSWORD, applied by `theia models pull`), never in the
+# artifact. No models.json → no-op. A failed pull does NOT abort the install: the
+# code is in place; a missing model is a data problem to surface, not a reason to
+# roll back a good release.
 _pull_models() {
     work="$1"
     desc="$work/manifest/models.json"
     [ -f "$desc" ] || { echo "theia-swp: no lazy models (no models.json)"; return 0; }
     tcli="$THEIA_ROOT/bin/theia"
     [ -x "$tcli" ] || { echo "theia-swp: $tcli missing — cannot pull models" >&2; return 0; }
-    # Optional provisioned S3 creds/endpoint (THEIA_S3 / MINIO_USER / MINIO_PASSWORD).
-    [ -f /etc/theia/models.env ] && . /etc/theia/models.env
     echo "theia-swp: pulling lazy models (models.json) into current/share"
     if THEIA_SHARE_DIR="$CURRENT/share" "$tcli" models pull --descriptor "$desc"; then
         echo "theia-swp: models pulled OK"

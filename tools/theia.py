@@ -1155,6 +1155,61 @@ def _apply_config_overrides(machine: str, cfg_dir: Path) -> None:
               file=sys.stderr)
 
 
+def _stage_certs(machines: "list[str]", out: Path) -> int:
+    """Stage the dev mTLS cert set into each machine's manifest dir — the
+    PRODUCER half of the dev-mTLS loop `theia manifest` wires implicitly.
+
+    FLOW: generate the dev certs LOCALLY once (deploy/certs/, cached), then copy
+    ca.crt + server.{crt,key} + client.{crt,key} into dist/manifest/<machine>/
+    certs/. The READ side is already live: `theia start` exports THEIA_COM_TLS_*
+    from <machine>/certs so the forked com children serve mTLS, and `theia
+    observer`/rtdb point at the same CA + client identity. Downstream, a `theia
+    release-swp` bundles dist/manifest/<machine>/ (certs included), so the SWP
+    carries the dev identity to the rig — cert staging rides the manifest → SWP.
+
+    The set is generated ONCE and cached in deploy/certs/ (regenerating would
+    invalidate any running client). DEV certs only (self-signed, CN/SAN
+    localhost+127.0.0.1 — correct for the network_mode:host cluster where clients
+    dial 127.0.0.1; pass THEIA_DEV_CERT_SANS for rig IPs). A real deployment
+    swaps in PKI-issued certs (colony's rig path) or the crypto-FC engine slot.
+
+    Idempotent + non-fatal: no gen_dev_certs.sh (a trimmed checkout) → skip with a
+    LOUD note (the cluster then runs com plaintext, the local dev default), never
+    abort the manifest. Returns 0 on stage-or-skip, non-zero only on a gen error."""
+    certs_src = WORKSPACE / "deploy" / "certs"
+    needed = ["ca.crt", "server.crt", "server.key", "client.crt", "client.key"]
+    if not all((certs_src / f).is_file() for f in needed):
+        gen = THEIA_ROOT / "tools" / "gen_dev_certs.sh"
+        if not gen.is_file():
+            print("theia manifest: no deploy/certs and no tools/gen_dev_certs.sh "
+                  "— skipping mTLS cert staging (com runs plaintext; run "
+                  "`theia observer` to generate on demand).", file=sys.stderr)
+            return 0
+        certs_src.mkdir(parents=True, exist_ok=True)
+        # server_cn=localhost; extra SANs from THEIA_DEV_CERT_SANS (gen reads env).
+        if (rc := _run(["bash", str(gen), str(certs_src), "localhost"])) != 0:
+            return rc
+        print(f"theia manifest: generated dev mTLS cert set → {certs_src} "
+              "(cached; delete it to rotate)", file=sys.stderr)
+    staged = []
+    for m in machines:
+        # A real deploy slice has a config/ dir (a host/console-only node has an
+        # empty tree and no com — nothing to serve TLS). Match the config-override
+        # loop's notion of a materialized machine.
+        if not (out / m / "config").is_dir():
+            continue
+        dst = out / m / "certs"
+        dst.mkdir(parents=True, exist_ok=True)
+        for f in needed:
+            shutil.copy2(certs_src / f, dst / f)
+        staged.append(m)
+    if staged:
+        print("theia manifest: staged dev mTLS certs → dist/manifest/{" +
+              ",".join(staged) + "}/certs/ (com serves mTLS; `theia observer` "
+              "trusts the same CA)", file=sys.stderr)
+    return 0
+
+
 def _installed_role_config(manifest_root: Path, machine: str) -> "Path | None":
     """The framework's shipped per-ROLE config slice for this machine, if the
     theia-services deb provided one — else None.
@@ -1744,6 +1799,13 @@ def cmd_manifest(args: list[str]) -> int:
         _top_ex = out / _m / "executor.json"
         if _cfg_ex.is_file() and _top_ex.is_file():
             _top_ex.write_text(_cfg_ex.read_text())
+
+    # Stage the dev mTLS cert set into each machine's manifest dir (the PRODUCER
+    # the read side — `theia start` THEIA_COM_TLS_*, `theia observer`/rtdb — has
+    # always expected). Generated locally once (deploy/certs/, cached) then copied
+    # per-machine; a release-swp then carries them to the rig. Non-fatal.
+    if (rc := _stage_certs(machines, out)) != 0:
+        return rc
 
     # config/<fc>.json and config/config-defaults.json are emitted by
     # serialize-manifest directly (from PROCESS_PARAMS / PROCESS_CONFIG_DEFAULTS
@@ -3365,6 +3427,16 @@ def cmd_release_swp(args: list[str]) -> int:
                         dst_fn.write_text(json.dumps(_ex, indent=2))
                     else:
                         _sh.copy2(msrc / fn, dst_fn)
+            # Dev mTLS certs: `theia manifest` staged the set under
+            # dist/manifest/<machine>/certs/. Carry it into the SWP payload so the
+            # deployed release serves mTLS (the read side — a dev `theia start` on
+            # the flipped current/config, or the GUI/rtdb — points at the same CA +
+            # client identity). Absent (a plaintext dev loop / fleet-cert rig that
+            # provisions certs out of band) → nothing to ship.
+            csrc = msrc / "certs"
+            if csrc.is_dir():
+                cdst = stage / "manifest" / mname / "certs"
+                _sh.copytree(csrc, cdst, dirs_exist_ok=True)
     # The Mender artifact-name == the Distribution swp_build identifier == what the
     # GS per-role deploy hands Mender. ABI-keyed so central (bookworm-arm64) and
     # compute (focal-arm64) of the SAME SWP version are distinct, non-colliding

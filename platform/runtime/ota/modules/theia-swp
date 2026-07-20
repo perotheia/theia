@@ -182,6 +182,10 @@ _stage_and_flip() {
         cp -a "$f" "$stage/config/$b"
     done
     [ -f "$work/manifest/machines.json" ] && cp -a "$work/manifest/machines.json" "$stage/config/machines.json"
+    # Dev mTLS certs (if the SWP carries them): land them at config/certs/ so a dev
+    # `theia start` on the flipped release exports THEIA_COM_TLS_* + com serves mTLS.
+    # Fleet rigs provision certs out of band (the com bridge cert path) — absent here.
+    [ -d "$work/$mdir/certs" ] && { mkdir -p "$stage/config/certs"; cp -a "$work/$mdir/certs/." "$stage/config/certs/"; }
     echo "$ver" > "$stage/.mender_version"
     echo "theia-swp: staged SWP release $ver → $stage (services from $(basename "$base_rel_dir"))"
 

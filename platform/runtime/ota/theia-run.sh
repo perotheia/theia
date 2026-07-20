@@ -45,6 +45,19 @@ if [[ -f "$THEIA_ROOT_DIR/current/config/machines.json" ]]; then
     export THEIA_MACHINE_MANIFEST="${THEIA_MACHINE_MANIFEST:-$THEIA_ROOT_DIR/current/config}"
 fi
 
+# mTLS opt-in (mirrors tools/theia.py cmd_start): when the flipped release carries
+# certs (config/certs/, staged by `theia manifest` → carried in the SWP → laid by
+# the theia-swp module), export THEIA_COM_TLS_* so com serves mutual TLS and the
+# GUI/rtdb trust the same CA. Absent (a plaintext loop, or a fleet rig that
+# provisions certs out of band via the com bridge) → com stays plaintext.
+_CERTS="$THEIA_ROOT_DIR/current/config/certs"
+if [[ -f "$_CERTS/server.crt" && -f "$_CERTS/server.key" ]]; then
+    export THEIA_COM_TLS_CERT="${THEIA_COM_TLS_CERT:-$_CERTS/server.crt}"
+    export THEIA_COM_TLS_KEY="${THEIA_COM_TLS_KEY:-$_CERTS/server.key}"
+    [[ -f "$_CERTS/ca.crt" ]] && export THEIA_COM_TLS_CA="${THEIA_COM_TLS_CA:-$_CERTS/ca.crt}"
+    echo "theia-run: mTLS on — com serves TLS from $_CERTS" >&2
+fi
+
 # THEIA_MACHINE_INSTANCE persistence: the board's TIPC instance is a DEPLOY fact
 # (colony passes machine_instance per board: master=0, and each zonal worker a
 # distinct 1,2,… — it is NOT derivable from the machine NAME, which is shared

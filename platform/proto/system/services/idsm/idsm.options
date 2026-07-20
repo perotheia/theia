@@ -13,6 +13,8 @@ system_services_idsm.IdsmConfig.mock_event_path   max_size:128
 system_services_idsm.IdsmConfig.expected_listeners   max_size:512
 system_services_idsm.IdsmConfig.grpc_servers   max_size:128
 system_services_idsm.IdsmConfig.elf_digests   max_size:2048
+system_services_idsm.IdsmConfig.known_fcs   max_size:512
+system_services_idsm.IdsmDigestUpdate.digests   max_size:2048
 system_services_idsm.Detection.signature   max_size:64
 system_services_idsm.Detection.src   max_size:96
 system_services_idsm.Detection.dst   max_size:96

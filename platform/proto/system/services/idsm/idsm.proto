@@ -20,6 +20,7 @@ message IdsmConfig {
     string expected_listeners = 7;
     string grpc_servers = 8;
     string elf_digests = 9;
+    string known_fcs = 10;
 }
 
 message Detection {
@@ -44,7 +45,7 @@ message IdsStatusReq {
 }
 
 message IdsmDigestUpdate {
-    // empty body
+    string digests = 1;
 }
 
 message IdsmModeInput {

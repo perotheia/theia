@@ -24,9 +24,11 @@
 #include <pb_decode.h>
 #include <pb_encode.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <set>
 #include <string>
 #include <unistd.h>   // getppid
 
@@ -153,12 +155,23 @@ bool process_detections_(IdsmDaemon& self, IdsmDaemonState& s,
 // set so it can tell a real-FC-on-wrong-port (Cat A) from a rogue listener (C).
 void apply_proc_config_(IdsmDaemonState& s) {
     s.proc.configure(s.expected_listeners, s.grpc_servers, s.elf_digests);
-    // The platform FCs (the manifest's process set). Hardcoded here = the
-    // services + demo apps the supervisor forks; a manifest reader can replace
-    // this. Used only to classify A-vs-C; not a security gate.
-    s.proc.set_known_fcs({"com", "crypto", "log", "nm", "osi", "per", "sm",
-                          "tsync", "ucm", "shwa", "fw", "idsm",
-                          "p1", "p2", "p3", "p4"});
+    // The platform FCs (the manifest's process set) — from config (s.known_fcs),
+    // NOT a hardcoded literal, so a rig with a different process set classifies
+    // A-vs-C correctly. Comma-separated comm; blank entries skipped. Not a
+    // security gate.
+    std::set<std::string> fcs;
+    for (size_t pos = 0; pos < s.known_fcs.size(); ) {
+        size_t comma = s.known_fcs.find(',', pos);
+        std::string tok = s.known_fcs.substr(
+            pos, comma == std::string::npos ? std::string::npos : comma - pos);
+        // trim surrounding whitespace
+        size_t a = tok.find_first_not_of(" \t");
+        size_t b = tok.find_last_not_of(" \t");
+        if (a != std::string::npos) fcs.insert(tok.substr(a, b - a + 1));
+        if (comma == std::string::npos) break;
+        pos = comma + 1;
+    }
+    s.proc.set_known_fcs(fcs);
 }
 
 }  // namespace
@@ -221,6 +234,7 @@ void IdsmDaemon::on_config_update(
     s.expected_listeners = c.expected_listeners;
     s.grpc_servers      = c.grpc_servers;
     s.elf_digests       = c.elf_digests;
+    if (c.known_fcs[0] != '\0') s.known_fcs = c.known_fcs;
     apply_proc_config_(s);
     log().info(std::string("config: bpf='") + s.bpf_object_path + "' mock='" +
         s.mock_event_path + "' poll_ms=" + std::to_string(s.poll_ms) +
@@ -230,14 +244,23 @@ void IdsmDaemon::on_config_update(
     broadcast_status_(*this, s);
 }
 
-// IdsmDigestUpdate — UCM pushes the expected per-binary SHA-256 digests at
-// install time (Category H baseline). idsm stores them so the integrity rule
-// can flag drift. CAST (notification) — no reply. Placeholder: the message body
-// is empty until the digest schema (repeated {path, sha256}) is pinned; for now
-// just acknowledge receipt so the edge is live and the wire round-trips.
-void IdsmDaemon::handle_cast(const IdsmDigestUpdate& /*msg*/, IdsmDaemonState& /*s*/) {
-    // TODO(comm-matrix): when IdsmDigestUpdate grows its {path, sha256} entries,
-    // load them into the ProcBackend Category-H expected-digest table here.
+// IdsmDigestUpdate — UCM pushes the expected per-binary SHA-256 baseline at
+// install time (Category H). idsm loads it into the ProcBackend expected-digest
+// table so the integrity rule flags drift. CAST (notification) — no reply. The
+// payload is the SAME "comm:sha256hex" comma list as IdsmConfig.elf_digests, so
+// this is a live update of that same table (empty string clears it).
+void IdsmDaemon::handle_cast(const IdsmDigestUpdate& msg, IdsmDaemonState& s) {
+    s.elf_digests = msg.digests;   // fixed char[2048] (idsm.options), NUL-terminated
+    // Re-apply the proc config so the Cat-H table picks up the new baseline
+    // (configure() re-splits elf_digests into the digest map); known_fcs +
+    // listener/grpc allow-lists are re-seeded from current state unchanged.
+    apply_proc_config_(s);
+    log().info(std::string("digest baseline updated (Cat-H): ") +
+               (s.elf_digests.empty() ? "cleared"
+                : std::to_string(std::count(s.elf_digests.begin(),
+                                            s.elf_digests.end(), ',') + 1) +
+                  " entr" + (s.elf_digests.find(',') == std::string::npos
+                             ? "y" : "ies")));
 }
 
 // GetIdsStatus — serve the current status snapshot.

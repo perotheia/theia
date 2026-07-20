@@ -75,6 +75,13 @@ message IdsmConfig {
     // Comma-separated "comm:sha256hex" the running ELF must match (Cat H). Empty
     // = integrity check off (the digests are normally manifest/UCM-supplied).
     string elf_digests = "" [max_size:2048]
+    // The platform FCs the supervisor forks (comma-separated comm) — the manifest
+    // process set. Used ONLY to classify a real-FC-on-wrong-port (Cat A) from a
+    // rogue listener (Cat C); NOT a security gate. Comes from the deployment
+    // (gen-config fills it from the machine's process set); the default matches
+    // the framework services + demo apps so boot-time classification is correct
+    // before the first etcd push.
+    string known_fcs = "com,crypto,log,nm,osi,per,sm,tsync,ucm,shwa,fw,idsm,p1,p2,p3,p4" [max_size:512]
 }
 
 // ─── Detection ──────────────────────────────────────────────────────────────
@@ -127,7 +134,12 @@ interface senderReceiver OsiStatusStream { }  // from system.services.osi
 
 // ucm edge — Category H baseline: UCM pushes the expected per-binary SHA-256
 // digests at install time, so idsm can flag drift. CAST (notification).
-message IdsmDigestUpdate { }   // TODO: { repeated {path, sha256} entries }
+// UCM pushes the expected per-binary baseline at install time. Same wire format
+// as IdsmConfig.elf_digests — comma-separated "comm:sha256hex" — so one loader
+// serves both the boot config and this live push. Empty string = clear the table.
+message IdsmDigestUpdate {
+    string digests = 1 [max_size:2048]
+}
 interface senderReceiver IdsmDigestFeed {
     data IdsmDigestUpdate digests
 }

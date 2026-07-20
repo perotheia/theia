@@ -36,6 +36,11 @@ struct IdsmDaemonState {
     std::string expected_listeners = "com:7700,com:7710,com:7711";
     std::string grpc_servers       = "com";
     std::string elf_digests;
+    // The supervised FC set (comma-separated comm) — manifest-derived via config,
+    // NOT hardcoded. Classifies Cat A (real FC, wrong port) vs Cat C (rogue). The
+    // default mirrors the .art IdsmConfig default for boot-time correctness.
+    std::string known_fcs =
+        "com,crypto,log,nm,osi,per,sm,tsync,ucm,shwa,fw,idsm,p1,p2,p3,p4";
 
     // Running counters (the status snapshot).
     uint64_t    events_total    = 0;

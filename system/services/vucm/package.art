@@ -44,8 +44,8 @@ import system.services.per.*
 // boards installed + running but PROVISIONAL (unconfirmed); V-UCM waits for EVERY
 // board's PROVISIONAL marker (read from the shared etcd keyspace), then fans the
 // aggregate Confirm so all boards activate together (or any-fail/timeout → fan
-// Cancel → all rollback); VALIDATING: post-confirm fleet health confirm; DONE:
-// reported success to the fleet; ROLLBACK: a gate/install/confirm step failed.
+// Cancel → all rollback); VALIDATING: post-confirm on-vehicle (PHM) health check;
+// DONE: success reported UP to the fleet; ROLLBACK: a gate/install/confirm step failed.
 //
 // CMP_CONFIRMING is the vehicle-level half of the two-phase commit: UCM's own
 // PROVISIONAL state (one layer down) holds a SINGLE board unconfirmed; V-UCM's

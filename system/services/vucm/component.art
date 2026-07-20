@@ -1,7 +1,8 @@
 package system.services.vucm
 
 
-// The VUCM orchestrator process: the fleet ingress (VucmGate) + the campaign
+// The VUCM orchestrator process, running ON THE VEHICLE: the fleet-facing ingress
+// (VucmGate — the fleet's entry point to this vehicle's campaign) + the campaign
 // state machine (VucmCampaign). VucmTester is probe-only (NOT a composition
 // member). Mirrors ucm (UcmGate+UcmFsm) / sm (SmGate+SmDaemon) / phm
 // (PhmGate+PhmFsm). VUCM decides WHAT; it drives UCM (the HOW layer) over to_ucm.

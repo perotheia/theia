@@ -47,9 +47,10 @@
 // (the marker payload) is decoded inline below, not over a port, so it needs no
 // codec — only pb_decode of the raw bytes from the ConfigSnapshot.
 
-// The config-migration MECHANISM, shared with UCM. V-UCM is the FLEET authority:
-// it migrates the shared per ONCE (Snapshot + MigrateBulk), centrally, BEFORE
-// fanning RequestUpdate to the N boards — one per/etcd singleton → one migration.
+// The config-migration MECHANISM, shared with UCM. V-UCM is the VEHICLE's
+// migration authority (it runs ON the vehicle, not on the fleet): it migrates the
+// vehicle's shared per ONCE (Snapshot + MigrateBulk), centrally, BEFORE fanning
+// RequestUpdate to the vehicle's N boards — one per/etcd singleton → one migration.
 // (per_migrate.hpp's PerReply/Snapshot/MigrateBulk/RestoreSnapshot codecs are
 // #ifndef-guarded, so they compose with vucm_codecs.hh's per set.)
 #include "impl/per_migrate.hpp"
@@ -535,7 +536,8 @@ void VucmGate::handle_info(const char* info, VucmGateState& s) {
                                  kPollMs, *this, "confirm_poll");
 }
 
-// ---- The fleet/Mender control surface (com → CheckForCampaign). -------------
+// ---- The fleet-FACING control surface (the fleet's entry to THIS vehicle's
+//      campaign: GS/Mender → com → CheckForCampaign; the handler runs on-vehicle).
 CampaignReply VucmGate::handle_call(const CampaignRequest& req, VucmGateState& s) {
     CampaignReply reply = system_services_vucm_CampaignReply_init_zero;
     if (!s.campaign_id.empty()) {

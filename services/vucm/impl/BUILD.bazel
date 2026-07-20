@@ -44,7 +44,8 @@ cc_library(
     deps = [
         "//services/vucm/lib:vucm_lib",
         # The shared config-migration mechanism (impl/per_migrate.hpp). V-UCM is
-        # the FLEET migration authority: it drives per Snapshot+MigrateBulk ONCE,
+        # the VEHICLE's migration authority (runs on-vehicle): drives per
+        # Snapshot+MigrateBulk ONCE,
         # centrally, before the RequestUpdate fan-out. Same target UCM uses for the
         # standalone overlay path — one mechanism, the authorities differ.
         "//services/ucm/impl:per_migrate",

@@ -258,7 +258,21 @@ public:
                 TheiaMsgHeader rh{};
                 rh.bus_type            = ::theia::runtime::kBusTypeRpc;
                 rh.msg_type            = ::theia::runtime::kMsgGenCallReply;
-                rh.proto_len           = (uint16_t)os.bytes_written;
+                // proto_len is uint16_t: an oversize reply (>65535 B) would wrap
+                // to a bogus/zero length and ship a corrupt frame. Refuse LOUDLY
+                // instead — the client sees a missing reply (call timeout) rather
+                // than a silently-truncated one. (GetTree's TreeSnapshot is the
+                // real oversize risk on a big multi-board tree.)
+                if (!::theia::runtime::narrow_proto_len(os.bytes_written,
+                                                        rh.proto_len)) {
+                    std::fprintf(stderr,
+                        "[tipcmux] reply for service 0x%04x is %zu B > 65535 — "
+                        "refusing to send a would-wrap frame (call will time "
+                        "out; paginate the reply)\n",
+                        (unsigned)RemoteCodec<Reply>::service_id,
+                        (size_t)os.bytes_written);
+                    return;
+                }
                 rh.rpc.service_id      = RemoteCodec<Reply>::service_id;
                 rh.rpc.method_id       = 0;
                 rh.rpc.correlation_id  = corr;

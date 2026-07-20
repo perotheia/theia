@@ -105,5 +105,22 @@ static_assert(sizeof(TheiaMsgHeader) == 24, "TheiaMsgHeader must be 24 bytes —
 // narrowing-cast hazard here (cf. the kReplyCap 64*1024-1 note in TipcMux).
 static constexpr size_t kMaxCastPayload = 4 * 1024;
 
+// proto_len is a uint16_t (see the header layout above): a payload of 65536+
+// bytes narrows to a WRONG length — a full 65536-byte encode wraps to 0 and
+// ships a silently-corrupt frame the peer decodes as empty. Every framing site
+// that sets hdr.proto_len from a pb_ostream's bytes_written must gate on this so
+// an oversize encode fails LOUD (refuse to send) instead of wrapping. Returns
+// true + writes `out` when `n` fits proto_len; false (out untouched) when it
+// doesn't — the caller then drops the frame with a diagnostic rather than
+// shipping garbage. The buffer caps (kMaxCastPayload 4 KB, kReplyCap 64 KB-1)
+// keep this from tripping today; the guard makes a future cap bump safe.
+static constexpr size_t kMaxProtoLen = 0xFFFFu;   // uint16_t max
+
+inline bool narrow_proto_len(size_t n, uint16_t& out) noexcept {
+    if (n > kMaxProtoLen) return false;
+    out = static_cast<uint16_t>(n);
+    return true;
+}
+
 }  // namespace runtime
 }  // namespace theia

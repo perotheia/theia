@@ -399,6 +399,25 @@ static std::string case_conflate_trace_event() {
     return {};
 }
 
+// proto_len is a uint16_t; a framing site that narrows a pb_ostream's
+// bytes_written must refuse (never wrap) when the encode is oversize — a full
+// 65536-byte encode would wrap to 0 and ship a silently-corrupt frame (the
+// GetTree/TreeSnapshot pagination hazard). Unit-check the guard directly.
+static std::string case_proto_len_narrow_guard() {
+    uint16_t out = 0xAB;   // sentinel — must stay untouched on refusal
+    EXPECT(rt::narrow_proto_len(0, out) && out == 0, "0 fits → 0");
+    EXPECT(rt::narrow_proto_len(1, out) && out == 1, "1 fits → 1");
+    EXPECT(rt::narrow_proto_len(65535, out) && out == 65535,
+           "65535 (uint16_t max) fits exactly");
+    out = 0xAB;
+    EXPECT(!rt::narrow_proto_len(65536, out),
+           "65536 is REFUSED (would wrap to 0)");
+    EXPECT(out == 0xAB, "a refused narrow leaves out untouched (no wrap written)");
+    EXPECT(!rt::narrow_proto_len(100000, out) && out == 0xAB,
+           "a far-oversize encode is refused, out still untouched");
+    return {};
+}
+
 static std::string case_info_basic() {
     TestServer s; start_node(s);
     rt::post_info(s, "hello");
@@ -1489,6 +1508,7 @@ int main() {
     CASE(stat, feed_conflation_local_cast) { return case_feed_conflation_local_cast(); });
     CASE(stat, feed_no_conflation_without_mark) { return case_feed_no_conflation_without_mark(); });
     CASE(stat, conflate_trace_event) { return case_conflate_trace_event(); });
+    CASE(stat, proto_len_narrow_guard) { return case_proto_len_narrow_guard(); });
     CASE(stat, info_basic) { return case_info_basic(); });
     CASE(stat, send_request_basic) { return case_send_request_basic(); });
     CASE(stat, send_request_check) { return case_send_request_check(); });

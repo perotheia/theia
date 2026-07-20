@@ -3526,6 +3526,33 @@ def cmd_release_swp(args: list[str]) -> int:
             if csrc.is_dir():
                 cdst = stage / "manifest" / mname / "certs"
                 _sh.copytree(csrc, cdst, dirs_exist_ok=True)
+    # LAZY-RESOURCE descriptor: collect the `model:` resources this SWP's FCs
+    # declared (from each machine's execution.json — where serialize-manifest emits
+    # processes[].resources[]) into stage/manifest/models.json. The on-device
+    # theia-swp module reads it post-flip and runs `theia models pull` to fetch the
+    # models from S3 (they are NOT baked into the deb — see _is_lazy_resource). No
+    # model: resources → no descriptor (a code-only SWP).
+    _models_desc = []
+    for mname in swp_on:
+        _ej = mdir / mname / "execution.json"
+        if not _ej.is_file():
+            continue
+        for _p in json.loads(_ej.read_text()).get("processes", []):
+            for _r in (_p.get("resources") or []):
+                _src = (_r.get("src") or "").strip()
+                if _is_lazy_resource(_src):
+                    _models_desc.append({
+                        "fc": _p.get("name"),
+                        "ref": _src,              # model:<category>/<name>[@ver]
+                        "dest": (_r.get("dest") or "").strip() or None,
+                    })
+    if _models_desc:
+        (stage / "manifest").mkdir(exist_ok=True)
+        (stage / "manifest" / "models.json").write_text(
+            json.dumps({"models": _models_desc}, indent=2) + "\n")
+        print(f"theia release-swp: {len(_models_desc)} lazy model(s) → "
+              f"manifest/models.json (pulled on device post-flip)",
+              file=sys.stderr)
     # The Mender artifact-name == the Distribution swp_build identifier == what the
     # GS per-role deploy hands Mender. ABI-keyed so central (bookworm-arm64) and
     # compute (focal-arm64) of the SAME SWP version are distinct, non-colliding

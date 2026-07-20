@@ -118,6 +118,34 @@ _run_migration() {
     fi
 }
 
+# ---- lazy-resource (model) pull hook -----------------------------------------
+# An SWP that declares `model:` resources ships manifest/models.json (release-swp
+# collects them). AFTER the flip — so the models land in the just-activated
+# release before the supervisor restart spawns the FCs — pull them from the S3
+# model plane into $CURRENT/share/<fc>/data (theia::runtime::share_dir reads there).
+# S3 endpoint + creds come from /etc/theia/models.env (dropped at provision time,
+# same seam as the artifact-verify-key); absent → the pull uses the theia defaults
+# (THEIA_S3 / MINIO_USER / MINIO_PASSWORD fallbacks). No models.json → no-op.
+# A failed pull does NOT abort the install: the code is in place; a missing model
+# is a data problem to surface, not a reason to roll back a good release.
+_pull_models() {
+    work="$1"
+    desc="$work/manifest/models.json"
+    [ -f "$desc" ] || { echo "theia-swp: no lazy models (no models.json)"; return 0; }
+    tcli="$THEIA_ROOT/bin/theia"
+    [ -x "$tcli" ] || { echo "theia-swp: $tcli missing — cannot pull models" >&2; return 0; }
+    # Optional provisioned S3 creds/endpoint (THEIA_S3 / MINIO_USER / MINIO_PASSWORD).
+    [ -f /etc/theia/models.env ] && . /etc/theia/models.env
+    echo "theia-swp: pulling lazy models (models.json) into current/share"
+    if THEIA_SHARE_DIR="$CURRENT/share" "$tcli" models pull --descriptor "$desc"; then
+        echo "theia-swp: models pulled OK"
+    else
+        echo "theia-swp: WARNING — models pull failed (models absent on device); " \
+             "install continues" >&2
+    fi
+    return 0
+}
+
 # ---- supervisor restart (preserved; adopts the flipped current/config) -------
 # The supervisor reads executor.json once at startup (static tree, no hot-reload),
 # so "adopt the flip" = RESTART it: it re-reads current/config/executor.json (now
@@ -271,6 +299,9 @@ case "$STATE" in
     # MAJOR migration (against the still-current release), then stage + flip.
     _run_migration "$work" || { rm -rf "$work"; exit 1; }
     _stage_and_flip "$art" "$work" || { rm -rf "$work"; exit 1; }
+    # Lazy resources: fetch the SWP's declared models into the flipped release
+    # (before ArtifactCommit restarts the supervisor). $work still holds models.json.
+    _pull_models "$work"
     rm -rf "$work"
     echo "theia-swp: installed SWP release '$art'"
     ;;

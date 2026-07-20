@@ -52,7 +52,7 @@ message ChildState {
     uint32  restart_count
     sint32  last_exit_code   // most recent observed return code; 0 if never exited
     uint64  uptime_ms        // since current start_ts; 0 if not running
-    string  strategy [max_size:24]   // supervisor only: one_for_one | one_for_all | rest_for_one | simple_one_for_one
+    string  strategy [max_size:24]   // supervisor only: one_for_one | one_for_all | rest_for_one  (simple_one_for_one is rejected — static tree)
     uint32  max_restarts     // supervisor only
     uint32  max_seconds      // supervisor only
     string  start_cmd [max_size:128] // worker only — argv joined by space (informational)

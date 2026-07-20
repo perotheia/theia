@@ -21,7 +21,8 @@ enum class RestartStrategy {
     OneForOne,
     OneForAll,
     RestForOne,
-    SimpleOneForOne,  // not implemented at runtime; logged
+    // (OTP's simple_one_for_one is rejected at parse — Theia's static tree has no
+    //  dynamic-child set for it; see parse_strategy in spec.cpp.)
 };
 
 enum class RestartType {

@@ -20,7 +20,18 @@ RestartStrategy parse_strategy(const std::string& s) {
     if (s == "one_for_one")        return RestartStrategy::OneForOne;
     if (s == "one_for_all")        return RestartStrategy::OneForAll;
     if (s == "rest_for_one")       return RestartStrategy::RestForOne;
-    if (s == "simple_one_for_one") return RestartStrategy::SimpleOneForOne;
+    // OTP's simple_one_for_one supervises DYNAMICALLY-spawned identical children.
+    // Theia's supervision tree is STATIC (children are declared in executor.json),
+    // so there is nothing for it to mean here — reject it at load with a clear
+    // error rather than silently downgrade it to one_for_one at restart time (a
+    // caller that asked for it would otherwise get different semantics with only a
+    // warning).
+    if (s == "simple_one_for_one")
+        throw std::runtime_error(
+            "restart strategy 'simple_one_for_one' is unsupported: Theia uses a "
+            "static supervision tree (children declared in executor.json), which "
+            "has no dynamic-child set for it to supervise — use one_for_one, "
+            "one_for_all, or rest_for_one");
     throw std::runtime_error("unknown restart strategy: " + s);
 }
 
@@ -36,7 +47,6 @@ const char* to_string(RestartStrategy s) {
         case RestartStrategy::OneForOne:        return "one_for_one";
         case RestartStrategy::OneForAll:        return "one_for_all";
         case RestartStrategy::RestForOne:       return "rest_for_one";
-        case RestartStrategy::SimpleOneForOne:  return "simple_one_for_one";
     }
     return "<unknown>";
 }

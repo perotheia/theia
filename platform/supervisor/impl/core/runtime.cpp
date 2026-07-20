@@ -1241,10 +1241,6 @@ void Supervisor::on_child_exit(WorkerNode& w, int return_code, pid_t old_pid) {
         case RestartStrategy::RestForOne:
             restart_rest(*sup, w);
             break;
-        case RestartStrategy::SimpleOneForOne:
-            log_warn("simple_one_for_one not implemented; treating as one_for_one");
-            start_worker(w);
-            break;
     }
 }
 

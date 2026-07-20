@@ -93,6 +93,48 @@ fi
 if [ -d /opt/theia ]; then
     chown -R theia:theia /opt/theia 2>/dev/null || true
 fi
+
+# shwa power plane (Jetson only): shwa runs as the NON-ROOT theia user, but
+# nvpmodel drives root-only sysfs (/sys/.../cpu*/online) and its persisted default
+# lives in the root-owned /etc/nvpmodel.conf (nvpmodel -m does NOT rewrite it — the
+# DEFAULT line must be edited). File-caps on the shwa binary can't help — nvpmodel
+# is a SEPARATE root tool shwa shells out to, and caps don't cross execve. So:
+#   1. install a TINY bounded helper that sets nvpmodel.conf's PM_CONFIG DEFAULT to
+#      a validated 0-9 id (and nothing else),
+#   2. grant theia PASSWORDLESS sudo for EXACTLY nvpmodel + that helper — not
+#      arbitrary sed/tee, so the grant can't be repurposed.
+# A no-op on a non-Jetson box (no nvpmodel). shwa's Jetson backend prefixes its
+# power commands with `sudo -n`; absent the rule it logs the gap and the power
+# plane stays observe-only (read_power_mode via -q needs no privilege).
+if command -v nvpmodel >/dev/null 2>&1; then
+    NVP="$(command -v nvpmodel)"
+    JC="$(command -v jetson_clocks 2>/dev/null || echo /usr/bin/jetson_clocks)"
+    HELPER=/opt/theia/bin/theia-nvpmodel-persist
+    # (1) the bounded helper: $1 must be a single 0-9 digit; rewrites ONLY the
+    #     PM_CONFIG DEFAULT= line in the resolved nvpmodel.conf. Refuses anything else.
+    cat > "$HELPER" <<'HLP'
+#!/bin/sh
+set -e
+id="$1"
+case "$id" in [0-9]) : ;; *) echo "usage: theia-nvpmodel-persist <0-9>" >&2; exit 2 ;; esac
+conf="$(readlink -f /etc/nvpmodel.conf)"
+[ -f "$conf" ] || { echo "no nvpmodel.conf" >&2; exit 1; }
+sed -ri "s/(< *PM_CONFIG +DEFAULT=)[0-9]+/\\1${id}/" "$conf"
+HLP
+    chmod 0755 "$HELPER"
+    if [ -d /etc/sudoers.d ]; then
+        printf 'theia ALL=(root) NOPASSWD: %s, %s, %s\\n' "$NVP" "$JC" "$HELPER" \\
+               > /etc/sudoers.d/theia-shwa-power
+        chmod 0440 /etc/sudoers.d/theia-shwa-power
+        # validate; a bad drop-in would break ALL sudo, so remove it if invalid.
+        if command -v visudo >/dev/null 2>&1 && ! visudo -cf /etc/sudoers.d/theia-shwa-power >/dev/null 2>&1; then
+            rm -f /etc/sudoers.d/theia-shwa-power
+            echo "theia-services: shwa power sudoers rule invalid — removed (power plane observe-only)" >&2
+        else
+            echo "theia-services: granted theia NOPASSWD sudo for nvpmodel + persist helper (shwa power plane)"
+        fi
+    fi
+fi
 exit 0
 """
 

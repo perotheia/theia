@@ -126,12 +126,15 @@ void ShwaDaemon::handle_info(const char* info, ShwaDaemonState& s) {
     if (backend::on_jetson() && s.power_mode != s.applied_power_mode &&
         s.power_mode != PM_UNKNOWN) {
         std::string err;
-        if (backend::apply_power_mode(s.power_mode, s.jetson_clocks, err)) {
+        if (backend::apply_power_mode(s.power_mode, s.jetson_clocks, s.persist, err)) {
             s.applied_power_mode = s.power_mode;
             log().info("power mode → " + std::to_string(s.power_mode) +
-                       (s.jetson_clocks ? " (+jetson_clocks)" : ""));
+                       (s.jetson_clocks ? " (+jetson_clocks)" : "") +
+                       (s.persist ? " (persisted)" : ""));
         } else {
-            log().warn("power mode apply failed: " + err);
+            // apply_power_mode returns false on a persist-only failure too (the
+            // live switch happened, the reboot default didn't) — log it either way.
+            log().warn("power mode apply: " + err);
         }
     }
 
@@ -153,9 +156,15 @@ void ShwaDaemon::on_config_update(const platform_runtime_ConfigUpdated& cfg,
     s.poll_ms       = c.poll_ms ? c.poll_ms : 2000;
     s.power_mode    = static_cast<int>(c.power_mode);
     s.jetson_clocks = c.jetson_clocks;
+    s.persist       = c.persist;
+    // Re-arm the reconcile edge so a config change to persist/power_mode is
+    // re-applied on the next tick even if the mode value itself is unchanged
+    // (persist alone flipping true must still write nvpmodel.conf's DEFAULT).
+    s.applied_power_mode = -1;
     log().info(std::string("config: poll_ms=") + std::to_string(s.poll_ms) +
         " power_mode=" + std::to_string(s.power_mode) +
-        " jetson_clocks=" + (s.jetson_clocks ? "true" : "false"));
+        " jetson_clocks=" + (s.jetson_clocks ? "true" : "false") +
+        " persist=" + (s.persist ? "true" : "false"));
 }
 
 // GetAccelStatus — serve the latest sample.
@@ -175,8 +184,10 @@ PowerModeReply ShwaDaemon::handle_call(const PowerModeReq& req,
                      sizeof(rep.message) - 1);
         return rep;
     }
+    // The ad-hoc SetPowerMode op is TRANSIENT (current boot only) — PowerModeReq
+    // has no persist field; persistence is a config concern (ShwaConfig.persist).
     bool ok = backend::apply_power_mode(static_cast<int>(req.mode),
-                                        req.jetson_clocks, err);
+                                        req.jetson_clocks, /*persist=*/false, err);
     if (ok) {
         s.power_mode = static_cast<int>(req.mode);
         s.applied_power_mode = s.power_mode;

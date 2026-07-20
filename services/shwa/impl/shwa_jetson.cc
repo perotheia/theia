@@ -139,15 +139,47 @@ int read_power_mode() {
                   default: return id < 0 ? PM_UNKNOWN : PM_LOW; }
 }
 
-bool apply_power_mode(int mode, bool jetson_clocks, std::string& err) {
+bool apply_power_mode(int mode, bool jetson_clocks, bool persist, std::string& err) {
     int id;
     switch (mode) {
         case PM_MAXN: id = 0; break; case PM_BALANCED: id = 1; break;
         case PM_LOW: id = 2; break;
         default: err = "MODE_UNKNOWN — leaving platform default"; return false;
     }
-    run_("nvpmodel -m " + std::to_string(id));
-    if (jetson_clocks) run_("jetson_clocks");
+    // shwa runs NON-ROOT (theia:theia); nvpmodel drives root-only sysfs and the
+    // conf is root-owned, so the power commands go through `sudo -n` (the
+    // theia-services postinst grants theia passwordless sudo for nvpmodel + the
+    // conf-write on a Jetson). `sudo -n` fails immediately (no prompt) if the rule
+    // isn't present — we surface that as err rather than hanging.
+    const std::string SUDO = "sudo -n ";
+
+    // Current boot: switch the active mode now.
+    run_(SUDO + "nvpmodel -m " + std::to_string(id));
+    if (jetson_clocks) run_(SUDO + "jetson_clocks");
+
+    // Persist: nvpmodel -m only sets the RUNNING mode; the reboot default lives in
+    // /etc/nvpmodel.conf's `< PM_CONFIG DEFAULT=N >` line. Rewrite it (via sudo) so
+    // a reboot comes up in the selected mode. Best-effort — a failure is reported
+    // in err but doesn't undo the live switch.
+    if (persist) {
+        // Call the bounded helper (theia-services postinst installs it + the
+        // scoped sudoers rule) — NOT arbitrary sed. It validates <id> is 0-9 and
+        // rewrites only nvpmodel.conf's PM_CONFIG DEFAULT line.
+        run_(SUDO + "/opt/theia/bin/theia-nvpmodel-persist " + std::to_string(id));
+        // Verify (read-only, no privilege): re-read the DEFAULT and confirm it now
+        // matches — sudo/permission failures are otherwise silent.
+        std::string check = run_(
+            "grep -oE '< *PM_CONFIG +DEFAULT=[0-9]+' "
+            "\"$(readlink -f /etc/nvpmodel.conf)\" | grep -oE '[0-9]+$'");
+        while (!check.empty() && (check.back() == '\n' || check.back() == ' '))
+            check.pop_back();
+        if (check != std::to_string(id)) {
+            err = "power mode set for this boot, but PERSIST FAILED (could not set "
+                  "nvpmodel.conf DEFAULT=" + std::to_string(id) + "; got '" +
+                  check + "' — is the theia-shwa-power sudoers rule installed?)";
+            return false;   // live switch happened; caller logs the persist gap
+        }
+    }
     return true;
 }
 

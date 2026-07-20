@@ -145,7 +145,7 @@ void init() { cpu_jiffies_(g_last_busy, g_last_total); }
 
 bool on_jetson() { return false; }
 int  read_power_mode() { return PM_UNKNOWN; }
-bool apply_power_mode(int /*mode*/, bool /*jc*/, std::string& err) {
+bool apply_power_mode(int /*mode*/, bool /*jc*/, bool /*persist*/, std::string& err) {
     err = "no nvpmodel (host backend — not a Jetson)";
     return false;
 }

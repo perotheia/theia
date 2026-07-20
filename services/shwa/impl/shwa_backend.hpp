@@ -62,7 +62,9 @@ void init();
 void sample(AccelReading& out);
 bool on_jetson();
 int  read_power_mode();
-bool apply_power_mode(int mode, bool jetson_clocks, std::string& err);
+// persist=true also writes /etc/nvpmodel.conf's PM_CONFIG DEFAULT so the mode
+// survives a reboot (Jetson backend); false applies to the current boot only.
+bool apply_power_mode(int mode, bool jetson_clocks, bool persist, std::string& err);
 
 }  // namespace backend
 }  // namespace ara::shwa

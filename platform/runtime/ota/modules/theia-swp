@@ -148,6 +148,42 @@ _reload_supervisor() {
     fi
 }
 
+# ---- prune stale SWP releases (mirrors UCM's prune_releases) -----------------
+# Standalone Mender installs (no UCM driving the lifecycle) otherwise pile up old
+# releases/<swp>-<ver> forever — the "tangled symlinks" a rig accrues. Keep the
+# newest N (default 3, THEIA_SWP_RETAIN) and NEVER touch:
+#   * current / previous (the live + rollback targets),
+#   * any runtime-* release — the services BASE the anchored symlink + every SWP
+#     overlay depend on (removing it bricks the rig).
+# UCM's own prune (services/ucm/impl/release_dir.hpp) covers the fleet path; this
+# is the standalone-path equivalent, oldest-first by mtime.
+_prune_releases() {
+    keep="${THEIA_SWP_RETAIN:-3}"
+    reldir="$THEIA_ROOT/releases"
+    [ -d "$reldir" ] || return 0
+    cur="$(readlink -f "$CURRENT" 2>/dev/null || true)"
+    prev="$(readlink -f "$PREVIOUS" 2>/dev/null || true)"
+    # Candidates = real release dirs, EXCLUDING runtime-* and the current/previous
+    # targets, oldest-first. `ls -dt` is newest-first; tail past `keep` = the old.
+    set --
+    for d in $(ls -dt "$reldir"/*/ 2>/dev/null); do
+        d="${d%/}"
+        case "$(basename "$d")" in runtime-*) continue ;; esac   # never the base
+        [ -L "$d" ] && continue                                  # skip symlinks (e.g. runtime anchor)
+        rp="$(readlink -f "$d" 2>/dev/null || echo "$d")"
+        [ "$rp" = "$cur" ] && continue
+        [ "$rp" = "$prev" ] && continue
+        set -- "$@" "$d"
+    done
+    # $@ is the prunable set, newest-first; drop the first `keep`, remove the rest.
+    i=0
+    for d in "$@"; do
+        i=$((i + 1))
+        [ "$i" -le "$keep" ] && continue
+        rm -rf "$d" && echo "theia-swp: pruned old release $(basename "$d")"
+    done
+}
+
 # ---- the flip: stage the SWP as a real release + atomically re-aim current ----
 _stage_and_flip() {
     ver="$1"; work="$2"
@@ -264,6 +300,10 @@ case "$STATE" in
 
   Cleanup)
     rm -f "$THEIA_ROOT"/.current.* 2>/dev/null || true
+    # Prune stale releases so standalone Mender installs don't accrete forever
+    # (the tangled-symlink cleanup, made permanent). Best-effort — never fail the
+    # deploy over housekeeping.
+    _prune_releases || true
     ;;
 
   *) exit 0 ;;

@@ -1950,8 +1950,72 @@ def _dist_app(mdir: Path, machines: list, arch_override) -> int:
         staged = mdir / host / f"{host}.deb"
         staged.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(built, staged)   # resolves the bazel symlink → real file
+        # Bake this host's per-FC DATA resources (LUTs, tables declared in the
+        # manifest's ProcessLayer.resources) into the deb at
+        # /opt/theia/share/<fc>/data/. The bazel pkg can't run serialize-manifest,
+        # so — like _inject_services_config — we repack the built deb here.
+        if (rc := _inject_resources(staged, mdir / host)) != 0:
+            rc_final = rc
+            continue
         print(f"theia dist: staged {staged} ({staged.stat().st_size} bytes)")
     return rc_final
+
+
+def _inject_resources(deb: Path, machine_dir: Path) -> int:
+    """Repack a per-machine app .deb with the DATA resources each FC declared in
+    the manifest (ProcessLayer.resources), staged under
+    /opt/theia/share/<fc>/data/<dest>.
+
+    The resource list rides in the machine's execution.json (serialize-manifest
+    emits `resources: [{src,dest}]` per process). `src` is resolved relative to
+    the WORKSPACE (where `theia dist` runs); `dest` is the relative path under the
+    FC's share/data dir. A code-only FC (no resources) is a no-op. Root-owns the
+    added files, mirroring _inject_services_config."""
+    import json
+    import shutil
+    import tempfile
+    exec_json = machine_dir / "execution.json"
+    if not exec_json.is_file():
+        return 0
+    procs = json.loads(exec_json.read_text()).get("processes", [])
+    # (fc_name, src_path, dest_rel) triples for every declared resource.
+    staged_files: list[tuple[str, Path, str]] = []
+    for p in procs:
+        fc = p.get("name")
+        for r in (p.get("resources") or []):
+            src = (r.get("src") or "").strip()
+            if not src:
+                continue
+            dest = (r.get("dest") or os.path.basename(src)).strip().lstrip("/")
+            src_path = (WORKSPACE / src).resolve()
+            if not src_path.is_file():
+                print(f"theia dist: {fc}: resource src not found: {src} "
+                      f"(resolved {src_path})", file=sys.stderr)
+                return 1
+            staged_files.append((fc, src_path, dest))
+    if not staged_files:
+        return 0
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td) / "root"
+        root.mkdir()
+        if (rc := _run(["dpkg-deb", "-R", str(deb), str(root)])) != 0:
+            return rc
+        for fc, src_path, dest in staged_files:
+            adest = root / "opt" / "theia" / "share" / fc / "data" / dest
+            adest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(src_path, adest)
+            adest.chmod(0o644)
+        rebuilt = Path(td) / deb.name
+        if (rc := _run(["dpkg-deb", "--build", "--root-owner-group",
+                        str(root), str(rebuilt)])) != 0:
+            return rc
+        deb.chmod(0o644)
+        shutil.copyfile(rebuilt, deb)
+        n = len(staged_files)
+        fcs = ",".join(sorted({fc for fc, _, _ in staged_files}))
+        print(f"theia dist: baked {n} resource(s) into {deb.name} "
+              f"→ /opt/theia/share/{{{fcs}}}/data/")
+    return 0
 
 
 # The two runtime service ROLES the services deb carries config for. `master` is

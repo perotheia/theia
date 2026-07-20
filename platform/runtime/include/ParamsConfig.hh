@@ -246,5 +246,34 @@ inline bool init_config(const std::string& fc_name) {
 // The process config singleton — nodes call get_config().node(kNodeName)....
 inline ParamsConfig& get_config() { return ParamsConfig::instance(); }
 
+// Resolve the directory holding an FC's static DATA resources (LUTs, tables —
+// baked into the FC's deb at /opt/theia/share/<fc>/data by `theia dist` from the
+// manifest's ProcessLayer.resources). Returns "<base>/<fc>/data" WITHOUT a
+// trailing slash; append "/<file>" to open a resource.
+//
+// Resolution mirrors init_config (everything reads through `current`, so an OTA
+// flip/rollback swaps the data with the code):
+//   $THEIA_SHARE_DIR/<fc>/data     (absolute override — deb install / tests)
+//   ./share/<fc>/data              (relative default; CWD = current, the active
+//                                   release — a relative dir follows the flip)
+// A deb install exports THEIA_SHARE_DIR=/opt/theia/share; a supervised release
+// leaves it unset and the relative default resolves under `current`.
+inline std::string share_dir(const std::string& fc_name) {
+    std::string base = "share";
+    if (const char* d = std::getenv("THEIA_SHARE_DIR"); d && *d) base = d;
+    return base + "/" + fc_name + "/data";
+}
+
+// Resolve the caller's OWN share dir. The share path is keyed by the manifest
+// PROCESS name (the same name theia dist bakes under /opt/theia/share/<proc>/data
+// and that the supervisor exports as THEIA_PROCESS_NAME) — NOT the node's
+// kNodeName. A supervised process reads $THEIA_PROCESS_NAME; unset (a bare run)
+// falls back to the passed default (typically the FC/prototype name).
+inline std::string share_dir_self(const std::string& fallback_name) {
+    if (const char* pn = std::getenv("THEIA_PROCESS_NAME"); pn && *pn)
+        return share_dir(pn);
+    return share_dir(fallback_name);
+}
+
 }  // namespace runtime
 }  // namespace theia

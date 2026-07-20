@@ -86,10 +86,26 @@ export LD_LIBRARY_PATH="$THEIA_ROOT_DIR/current/lib${LD_LIBRARY_PATH:+:$LD_LIBRA
 # TIPC sockets/bearers are up — best-effort with a LOUD diagnostic: a mismatch
 # means this rig may see (and be seen by) another cluster's services.
 _NETID_FILE="$THEIA_ROOT_DIR/config/tipc_netid"
+# Source precedence: (1) the deploy env (colony -e THEIA_TIPC_NETID, a per-run
+# override) → (2) the persisted file (a prior launch) → (3) the MANIFEST, i.e.
+# the rig's DECLARED tipc_netid in config/machines.json (serialize-manifest
+# --tipc-netid). The manifest is the authoritative source; env/file override it
+# for a one-off. This makes netid a first-class deploy fact, not only an env var.
+if [[ -z "${THEIA_TIPC_NETID:-}" ]] && [[ -r "$_NETID_FILE" ]]; then
+    THEIA_TIPC_NETID="$(cat "$_NETID_FILE")"
+fi
+if [[ -z "${THEIA_TIPC_NETID:-}" ]] \
+   && [[ -r "$THEIA_ROOT_DIR/current/config/machines.json" ]]; then
+    # tipc_netid is a top-level integer in machines.json (rig-wide). Grep it out
+    # without a JSON dep (theia-run.sh stays shell-only): "tipc_netid": <n>.
+    _mnet="$(grep -oE '"tipc_netid"[[:space:]]*:[[:space:]]*[0-9]+' \
+             "$THEIA_ROOT_DIR/current/config/machines.json" 2>/dev/null \
+             | grep -oE '[0-9]+$' | head -1)"
+    [[ -n "$_mnet" ]] && THEIA_TIPC_NETID="$_mnet" \
+        && echo "theia-run: TIPC netid $_mnet from manifest (machines.json)" >&2
+fi
 if [[ -n "${THEIA_TIPC_NETID:-}" ]]; then
     printf '%s\n' "$THEIA_TIPC_NETID" > "$_NETID_FILE" 2>/dev/null || true
-elif [[ -r "$_NETID_FILE" ]]; then
-    THEIA_TIPC_NETID="$(cat "$_NETID_FILE")"
 fi
 if [[ -n "${THEIA_TIPC_NETID:-}" ]] && command -v tipc >/dev/null 2>&1; then
     _cur="$(tipc node get netid 2>/dev/null | head -1 | tr -dc '0-9')"

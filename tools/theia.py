@@ -1778,6 +1778,14 @@ def cmd_manifest(args: list[str]) -> int:
     # that drop a model-level MachineSetLayer.name.
     cmd = ["artheia", "serialize-manifest", module, "--attr", attr,
            "--rig-name", target, "--out", str(out)]
+    # --tipc-netid <n>: the rig's TIPC cluster-isolation netid → machines.json,
+    # which theia-run.sh applies before the first bind. Passed through to
+    # serialize-manifest (also honours $THEIA_TIPC_NETID for a shell-driven run).
+    _netid = next((args[i + 1] for i, a in enumerate(args)
+                   if a == "--tipc-netid" and i + 1 < len(args)),
+                  os.environ.get("THEIA_TIPC_NETID"))
+    if _netid:
+        cmd += ["--tipc-netid", str(_netid)]
     if (rc := _run(cmd)) != 0:
         return rc
 

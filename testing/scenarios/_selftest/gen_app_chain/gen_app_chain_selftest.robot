@@ -1,5 +1,5 @@
 *** Settings ***
-Documentation    End-to-end selftest of `artheia gen-app --kind fc`
+Documentation    End-to-end selftest of `artheia gen-fc`
 ...              and its three-slice (lib / main / impl) regen
 ...              policy. The test exercises the contract that
 ...              hand-edits in impl/ survive every regen mode

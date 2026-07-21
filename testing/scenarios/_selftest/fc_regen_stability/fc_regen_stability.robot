@@ -1,7 +1,7 @@
 *** Settings ***
 Documentation    Regen-stability guard: every committed FC's lib +
 ...              main + impl/BUILD.bazel MUST equal what `artheia
-...              gen-app --kind fc` emits today. Hand-edits to
+...              gen-fc` emits today. Hand-edits to
 ...              generated files are forbidden — they break the
 ...              gen → build dependency chain and silently rot.
 ...

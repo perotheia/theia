@@ -74,10 +74,12 @@ stop_ws() {   # $1=ws dir — best-effort stop of a started supervisor
 }
 
 start_ws() {  # $1=ws dir $2=target — manifest+install+start; caller stops
+    # -d: BACKGROUND the supervisor (theia start is FOREGROUND by default now) so
+    # this returns and the caller can run its checks + `theia stop`.
     ( cd "$1" \
       && $THEIA manifest "$2" >/dev/null \
       && $THEIA install  "$2" >/dev/null \
-      && $THEIA start ) \
+      && $THEIA start -d ) \
       || fail "start_ws $1 $2"
     sleep 2
 }

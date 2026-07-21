@@ -9,7 +9,7 @@ so an idsm regression reports alongside every other scenario, rather than as a
 loose script. (It is fine that Robot doesn't drive the probe itself — the value
 here is uniform reporting, not re-implementing the probe in keywords.)
 
-Needs the stack up (`theia start`): the keyword detects idsm's TIPC binding and
+Needs the stack up (`theia start -d`): the keyword detects idsm's TIPC binding and
 SKIPS cleanly when no stack is running, so a hermetic CI lane doesn't false-fail.
 """
 from __future__ import annotations
@@ -54,7 +54,7 @@ class IdsmProbeLib:
             from robot.api import SkipExecution
             raise SkipExecution(
                 f"idsm not bound (TIPC type {hex(_IDSM_TIPC_DEC)} absent from "
-                "the nametable) — start the stack with `theia start`.")
+                "the nametable) — start the stack with `theia start -d`.")
 
     @keyword("Run Idsm Probe Smoke")
     def run_idsm_probe_smoke(self) -> None:

@@ -8,7 +8,7 @@ RUNS it + a couple of focused keywords and surfaces pass/fail into Robot's
 output.xml / report.html so a diag regression reports alongside every other
 scenario. Useful as the diag e2e gate.
 
-Needs the stack up (`theia start`, so the supervisor forks diag → DoipServer
+Needs the stack up (`theia start -d`, so the supervisor forks diag → DoipServer
 binds 13400). The keyword SKIPS cleanly when diag isn't bound, so a hermetic CI
 lane doesn't false-fail.
 """
@@ -68,7 +68,7 @@ class DiagDoipLib:
             raise SkipExecution(
                 f"diag not ready (TIPC {hex(_DIAG_TIPC_DEC)} bound={bound}, "
                 f"DoIP :{_DOIP_PORT} open={port_open}) — start the stack with "
-                "`theia start`.")
+                "`theia start -d`.")
 
     @keyword("Run Diag DoIP Smoke")
     def run_diag_doip_smoke(self) -> None:

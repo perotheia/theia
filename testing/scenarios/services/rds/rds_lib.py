@@ -31,7 +31,7 @@ class RdsLib:
         if rc != 0:
             from robot.api import SkipExecution
             raise SkipExecution("iox-roudi not running — start the stack "
-                                "(`theia start`) or run iox-roudi.")
+                                "(`theia start -d`) or run iox-roudi.")
 
     @keyword("Run Rds Roundtrip")
     def run_rds_roundtrip(self) -> None:

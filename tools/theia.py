@@ -435,15 +435,20 @@ def cmd_start(args: list[str]) -> int:
 
     The supervisor forks every child from executor.json; bring the whole stack
     up with one verb instead of the hand-typed
-    `THEIA_SUPERVISOR_MANIFEST=… ./supervisor`. Detached (setsid) with a pidfile
-    so `theia stop` can bring it down gracefully — and so it survives the
-    calling shell (the supervisor must outlive `theia start`). Logs stream to
-    install/<machine>/supervisor.log. Idempotent: refuses if one is already up.
+    `THEIA_SUPERVISOR_MANIFEST=… ./supervisor`.
+
+    FOREGROUND by default: the supervisor's output streams to THIS terminal and
+    `theia start` blocks until it exits (Ctrl-C stops the whole stack cleanly).
+    Pass -d / --detach to run it in the BACKGROUND instead — setsid'd so it
+    outlives this shell, output → install/<machine>/supervisor.log, `theia stop`
+    brings it down. Either way a pidfile is written; idempotent (refuses if one
+    is already up).
 
     Pass an INSTANCE via `--instance N` (THEIA_SUPERVISOR_INSTANCE, default 0)."""
     if "-h" in args or "--help" in args:
         print(cmd_start.__doc__, file=sys.stderr)
         return 0
+    detach = "-d" in args or "--detach" in args
     dest = _install_dir(args)
     sup = dest / "supervisor"
     if not sup.is_file():
@@ -580,10 +585,12 @@ def cmd_start(args: list[str]) -> int:
         prev = env.get("LD_LIBRARY_PATH", "")
         env["LD_LIBRARY_PATH"] = os.pathsep.join(
             [str(p) for p in _libdirs] + ([prev] if prev else []))
-    # Detach into its own session so it outlives this process; redirect output
-    # to the log. start_new_session=True == setsid → the supervisor leads its
-    # own session (its children already setsid per-worker).
-    logf = open(log, "ab")
+    # Detach mode (-d): its own session so it outlives this process, output → log.
+    # Foreground mode (default): inherit this terminal's stdout/stderr and block
+    # on the supervisor until it exits. start_new_session=True == setsid → the
+    # supervisor leads its own session (its children already setsid per-worker);
+    # in foreground we DON'T setsid so Ctrl-C's SIGINT reaches it via the tty.
+    logf = open(log, "ab") if detach else None
     # The supervisor's own SupervisorCtl address is ARG-driven like every node:
     # --tipc=supervisor_ctl=<type>:<machine_index>. Instance-only (":N") keeps the
     # compiled type 0x80020001. central → :0, compute → :1.
@@ -607,32 +614,58 @@ def cmd_start(args: list[str]) -> int:
                   file=sys.stderr)
     proc = subprocess.Popen(
         sup_argv, cwd=str(dest), env=env,
-        stdout=logf, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-        start_new_session=True,
+        # detach: output → log, no tty; foreground: inherit this terminal.
+        stdout=logf, stderr=(subprocess.STDOUT if detach else None),
+        stdin=subprocess.DEVNULL,
+        start_new_session=detach,
     )
     pidfile.write_text(str(proc.pid) + "\n")
-    print(f"theia: supervisor up (pid {proc.pid}, instance {instance}, "
-          f"machine {machine_instance}) — log: {log}", file=sys.stderr)
-    # Brief liveness check: if it died immediately (bad manifest / port in use),
-    # surface the tail rather than leave a stale pidfile.
     import time
-    time.sleep(1.0)
-    if proc.poll() is not None:
-        pidfile.unlink(missing_ok=True)
-        print(f"theia: supervisor exited immediately (rc={proc.returncode}); "
-              f"tail of {log}:", file=sys.stderr)
-        _run(["tail", "-n", "15", str(log)])
-        return 1
 
-    # First-boot config seed: populate /theia/config/* from the demo's DECLARED
-    # config defaults, for any node that has no stored value yet. Idempotent —
-    # safe to run on every start (already-stored keys are left untouched), and
-    # best-effort: a seed failure (no etcd, per still coming up) is a warning,
-    # not a start failure. Skip with --no-seed.
+    if detach:
+        print(f"theia: supervisor up (pid {proc.pid}, instance {instance}, "
+              f"machine {machine_instance}) — log: {log}", file=sys.stderr)
+        # Brief liveness check: if it died immediately (bad manifest / port in
+        # use), surface the tail rather than leave a stale pidfile.
+        time.sleep(1.0)
+        if proc.poll() is not None:
+            pidfile.unlink(missing_ok=True)
+            print(f"theia: supervisor exited immediately (rc={proc.returncode}); "
+                  f"tail of {log}:", file=sys.stderr)
+            _run(["tail", "-n", "15", str(log)])
+            return 1
+        # First-boot config seed (see _seed_defaults). Skip with --no-seed.
+        if "--no-seed" not in args:
+            _seed_defaults()
+        return 0
+
+    # ── FOREGROUND (default) ──────────────────────────────────────────────
+    print(f"theia: supervisor up (pid {proc.pid}, instance {instance}, "
+          f"machine {machine_instance}) — foreground, Ctrl-C to stop "
+          f"(-d to background)", file=sys.stderr)
+    # Seed after per has had a moment to come up, WITHOUT blocking the foreground
+    # stream: a background thread runs the (idempotent, best-effort) seed while
+    # we wait on the supervisor. Skip with --no-seed.
     if "--no-seed" not in args:
-        _seed_defaults()
+        import threading
 
-    return 0
+        def _delayed_seed():
+            time.sleep(2.0)
+            if proc.poll() is None:      # still up
+                _seed_defaults()
+        threading.Thread(target=_delayed_seed, daemon=True).start()
+    # Block on the supervisor. On Ctrl-C, SIGINT already reached it via the tty
+    # (same process group); wait for its clean shutdown, then reap the pidfile.
+    try:
+        rc = proc.wait()
+    except KeyboardInterrupt:
+        try:
+            proc.wait(timeout=10)
+        except (subprocess.TimeoutExpired, KeyboardInterrupt):
+            proc.terminate()
+        rc = proc.returncode if proc.returncode is not None else 0
+    pidfile.unlink(missing_ok=True)
+    return rc if rc and rc > 0 else 0
 
 
 def _seed_defaults() -> None:
@@ -7563,7 +7596,7 @@ COMMANDS = {
     "install":     (cmd_install,     "build + populate install/<machine>/ (local host)"),
     "clean":       (cmd_clean,       "remove install/ + dist/manifest/; --bazel also runs bazel clean"),
     "stage-local": (cmd_install,     "alias for `install` (back-compat)"),
-    "start":       (cmd_start,       "run the staged supervisor from install/<machine>/ (detached + pidfile)"),
+    "start":       (cmd_start,       "run the staged supervisor from install/<machine>/ (foreground; -d to background)"),
     "stop":        (cmd_stop,        "stop the supervisor started by `theia start` (graceful)"),
     "cast":        (cmd_cast,        "cast <node> <msg> --data '{json}' [--instance N|--machine M] (test/demo)"),
     "call":        (cmd_call,        "call <node> <op> --data '{json}' [--instance N|--machine M] — prints reply (test/demo)"),

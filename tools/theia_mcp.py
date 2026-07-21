@@ -18,9 +18,9 @@ agent PROPOSES a release; a human runs it. See docs — the "find balance" call.
 
 Invocation: theia.py's ``main(argv)`` and tdb/rtdb's ``main(argv)`` are imported
 and called IN-PROCESS (like artheia's CliRunner), honoring THEIA_INVOCATION_CWD
-for workspace resolution. ``theia start`` daemonizes its supervisor via a
-double-fork inside cmd_start, so it returns promptly here; we never hold a
-long-lived child.
+for workspace resolution. ``theia start`` is FOREGROUND by default, so the MCP
+theia_start tool always passes ``-d`` to BACKGROUND the supervisor — it returns
+promptly here and we never hold a long-lived child.
 """
 
 from __future__ import annotations
@@ -177,10 +177,12 @@ def theia_install(target: str, machine: str | None = None) -> str:
 
 @mcp.tool()
 def theia_start(instance: int | None = None) -> str:
-    """Start the local supervisor daemon (from install/). It double-forks and
-    detaches, so this returns once the daemon is up. `instance` starts a second
+    """Start the local supervisor daemon (from install/) in the BACKGROUND (-d),
+    so this returns once it is up. (`theia start` is FOREGROUND by default from a
+    terminal; the MCP tool always backgrounds it.) `instance` starts a second
     supervisor instance for a multi-instance local rig. Verify with tdb_apps."""
-    argv = ["start"] + (["--instance", str(instance)] if instance is not None else [])
+    argv = ["start", "-d"] + (
+        ["--instance", str(instance)] if instance is not None else [])
     return _theia_run(argv)
 
 

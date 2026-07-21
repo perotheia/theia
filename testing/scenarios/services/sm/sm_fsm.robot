@@ -2,7 +2,7 @@
 Documentation    SM — the machine-state FSM (SmDaemon gen_statem) driven live
 ...              through the generic hybrid-automata keywords.
 ...
-...              The statem stack ATTACHES to the RUNNING rig (`theia start`
+...              The statem stack ATTACHES to the RUNNING rig (`theia start -d`
 ...              one first; the stack never owns the supervisor — same
 ...              doctrine as pg_join, see docs/runtime.md §10): it enables
 ...              STATEM trace on sm_daemon, subscribes the trace observer to

@@ -11,7 +11,7 @@ explicitly replies 'no certificate deployed' (UNKNOWN_IDENTIFIER / empty PEM). A
 crypto outage or a non-absence error fails CLOSED — com never opens an insecure
 port on a guess.
 
-Needs crypto listening (`theia start`); the test self-skips when crypto is
+Needs crypto listening (`theia start -d`); the test self-skips when crypto is
 unreachable, so this is safe in a hermetic lane too.
 """
 from __future__ import annotations
@@ -46,7 +46,7 @@ class ComCertAgreementLib:
             from robot.api import SkipExecution
             raise SkipExecution(
                 f"crypto not bound (TIPC {hex(_CRYPTO_TIPC_DEC)} absent) — "
-                "start the stack with `theia start`.")
+                "start the stack with `theia start -d`.")
 
     @keyword("Run Cert Agreement Test")
     def run_cert_agreement_test(self) -> None:

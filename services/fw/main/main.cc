@@ -168,6 +168,9 @@ int main(int argc, char** argv) {
     if (auto* fw_daemon_cfg = config_mux.bind_node(
             fw_daemon, fw_daemon_type,
             fw_daemon_inst)) {
+        // Config-service edge — REPORTING-ONLY (a non-reporting node
+        // gets no supervisor control pushes). Kept distinct from the
+        // pg/receiver demux below, which every consumer needs.
         config_mux.register_cast<platform_runtime_LogLevelPush>(
             fw_daemon_cfg, fw_daemon);
         // Trace control (#403): supervisor pushes TraceControlPush to flip
@@ -201,8 +204,8 @@ int main(int argc, char** argv) {
         fw_daemon.pg_attach("fw_daemon", fw_daemon_cfg,
                                 fw_daemon_type, fw_daemon_inst);
     } else {
-        fw_daemon.log().warn("config service bind failed; live log-level "
-                                 "push + signal inject disabled");
+        fw_daemon.log().warn("mux bind failed; pg/receiver frames + "
+                                 "live control pushes will not be delivered");
     }
 
 

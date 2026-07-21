@@ -166,6 +166,9 @@ int main(int argc, char** argv) {
     if (auto* per_client_cfg = config_mux.bind_node(
             per_client, per_client_type,
             per_client_inst)) {
+        // Config-service edge — REPORTING-ONLY (a non-reporting node
+        // gets no supervisor control pushes). Kept distinct from the
+        // pg/receiver demux below, which every consumer needs.
         config_mux.register_cast<platform_runtime_LogLevelPush>(
             per_client_cfg, per_client);
         // Trace control (#403): supervisor pushes TraceControlPush to flip
@@ -193,8 +196,8 @@ int main(int argc, char** argv) {
         per_client.pg_attach("per_client", per_client_cfg,
                                 per_client_type, per_client_inst);
     } else {
-        per_client.log().warn("config service bind failed; live log-level "
-                                 "push + signal inject disabled");
+        per_client.log().warn("mux bind failed; pg/receiver frames + "
+                                 "live control pushes will not be delivered");
     }
 
 
@@ -262,6 +265,9 @@ int main(int argc, char** argv) {
     if (auto* per_manager_cfg = config_mux.bind_node(
             per_manager, per_manager_type,
             per_manager_inst)) {
+        // Config-service edge — REPORTING-ONLY (a non-reporting node
+        // gets no supervisor control pushes). Kept distinct from the
+        // pg/receiver demux below, which every consumer needs.
         config_mux.register_cast<platform_runtime_LogLevelPush>(
             per_manager_cfg, per_manager);
         // Trace control (#403): supervisor pushes TraceControlPush to flip
@@ -295,8 +301,8 @@ int main(int argc, char** argv) {
         per_manager.pg_attach("per_manager", per_manager_cfg,
                                 per_manager_type, per_manager_inst);
     } else {
-        per_manager.log().warn("config service bind failed; live log-level "
-                                 "push + signal inject disabled");
+        per_manager.log().warn("mux bind failed; pg/receiver frames + "
+                                 "live control pushes will not be delivered");
     }
 
 

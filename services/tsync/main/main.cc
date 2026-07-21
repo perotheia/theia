@@ -280,6 +280,9 @@ int main(int argc, char** argv) {
     if (auto* tsync_ctl_cfg = config_mux.bind_node(
             tsync_ctl, tsync_ctl_type,
             tsync_ctl_inst)) {
+        // Config-service edge — REPORTING-ONLY (a non-reporting node
+        // gets no supervisor control pushes). Kept distinct from the
+        // pg/receiver demux below, which every consumer needs.
         config_mux.register_cast<platform_runtime_LogLevelPush>(
             tsync_ctl_cfg, tsync_ctl);
         // Trace control (#403): supervisor pushes TraceControlPush to flip
@@ -322,8 +325,8 @@ int main(int argc, char** argv) {
         tsync_ctl.pg_attach("tsync_ctl", tsync_ctl_cfg,
                                 tsync_ctl_type, tsync_ctl_inst);
     } else {
-        tsync_ctl.log().warn("config service bind failed; live log-level "
-                                 "push + signal inject disabled");
+        tsync_ctl.log().warn("mux bind failed; pg/receiver frames + "
+                                 "live control pushes will not be delivered");
     }
 
 

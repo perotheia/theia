@@ -168,6 +168,9 @@ int main(int argc, char** argv) {
     if (auto* idsm_daemon_cfg = config_mux.bind_node(
             idsm_daemon, idsm_daemon_type,
             idsm_daemon_inst)) {
+        // Config-service edge — REPORTING-ONLY (a non-reporting node
+        // gets no supervisor control pushes). Kept distinct from the
+        // pg/receiver demux below, which every consumer needs.
         config_mux.register_cast<platform_runtime_LogLevelPush>(
             idsm_daemon_cfg, idsm_daemon);
         // Trace control (#403): supervisor pushes TraceControlPush to flip
@@ -200,8 +203,8 @@ int main(int argc, char** argv) {
         idsm_daemon.pg_attach("idsm_daemon", idsm_daemon_cfg,
                                 idsm_daemon_type, idsm_daemon_inst);
     } else {
-        idsm_daemon.log().warn("config service bind failed; live log-level "
-                                 "push + signal inject disabled");
+        idsm_daemon.log().warn("mux bind failed; pg/receiver frames + "
+                                 "live control pushes will not be delivered");
     }
 
 

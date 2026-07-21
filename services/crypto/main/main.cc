@@ -165,6 +165,9 @@ int main(int argc, char** argv) {
     if (auto* crypto_provider_cfg = config_mux.bind_node(
             crypto_provider, crypto_provider_type,
             crypto_provider_inst)) {
+        // Config-service edge — REPORTING-ONLY (a non-reporting node
+        // gets no supervisor control pushes). Kept distinct from the
+        // pg/receiver demux below, which every consumer needs.
         config_mux.register_cast<platform_runtime_LogLevelPush>(
             crypto_provider_cfg, crypto_provider);
         // Trace control (#403): supervisor pushes TraceControlPush to flip
@@ -214,8 +217,8 @@ int main(int argc, char** argv) {
         crypto_provider.pg_attach("crypto_provider", crypto_provider_cfg,
                                 crypto_provider_type, crypto_provider_inst);
     } else {
-        crypto_provider.log().warn("config service bind failed; live log-level "
-                                 "push + signal inject disabled");
+        crypto_provider.log().warn("mux bind failed; pg/receiver frames + "
+                                 "live control pushes will not be delivered");
     }
 
 

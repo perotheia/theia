@@ -168,6 +168,9 @@ int main(int argc, char** argv) {
     if (auto* osi_ctl_cfg = config_mux.bind_node(
             osi_ctl, osi_ctl_type,
             osi_ctl_inst)) {
+        // Config-service edge — REPORTING-ONLY (a non-reporting node
+        // gets no supervisor control pushes). Kept distinct from the
+        // pg/receiver demux below, which every consumer needs.
         config_mux.register_cast<platform_runtime_LogLevelPush>(
             osi_ctl_cfg, osi_ctl);
         // Trace control (#403): supervisor pushes TraceControlPush to flip
@@ -201,8 +204,8 @@ int main(int argc, char** argv) {
         osi_ctl.pg_attach("osi_ctl", osi_ctl_cfg,
                                 osi_ctl_type, osi_ctl_inst);
     } else {
-        osi_ctl.log().warn("config service bind failed; live log-level "
-                                 "push + signal inject disabled");
+        osi_ctl.log().warn("mux bind failed; pg/receiver frames + "
+                                 "live control pushes will not be delivered");
     }
 
 

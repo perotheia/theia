@@ -34,7 +34,7 @@ namespace {
 // (config/rds.json, key "roudi.args") overrides it at
 // runtime so the SAME binary runs e.g. ptp4l as master on central / slave on
 // compute without a rebuild. Whitespace-split tokens; no shell.
-constexpr const char* kDefaultArgs = "";
+constexpr const char* kDefaultArgs = "-c /etc/iceoryx/roudi_config.toml";
 
 // Drain whatever is ready on `fd` and emit each COMPLETE line through `emit`.
 // `carry` holds a partial trailing line between calls. Returns false on EOF

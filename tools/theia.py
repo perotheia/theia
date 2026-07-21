@@ -4536,8 +4536,8 @@ def cmd_init(args: list[str]) -> int:
             name = args[i + 1]
         elif a == "--kind" and i + 1 < len(args):
             kind = args[i + 1]
-    if kind not in ("ws", "package"):
-        print(f"theia init: --kind must be ws|package (got {kind!r}).",
+    if kind not in ("ws", "package", "lib"):
+        print(f"theia init: --kind must be ws|package|lib (got {kind!r}).",
               file=sys.stderr)
         return 2
     # --with-services: bootstrap with the ARA platform services (com/log/per/sm/
@@ -4558,6 +4558,8 @@ def cmd_init(args: list[str]) -> int:
     # own repo. See docs/tasks/BACKLOG/theia-packages.md.
     if kind == "package":
         return _init_package(ws, theia_root, name, with_services)
+    if kind == "lib":
+        return _init_lib(ws, theia_root, name)
 
     created: list[str] = []
     # --name drives the app's identity end-to-end: the SWP name, the source
@@ -4900,6 +4902,84 @@ def _init_package(ws: Path, theia_root: Path, name: str,
     for c in created:
         print(f"  + {c}", file=sys.stderr)
     print(_sub(_PKG_NEXT_STEPS), file=sys.stderr)
+    return 0
+
+
+def _init_lib(ws: Path, theia_root: Path, name: str) -> int:
+    """Scaffold the CWD as a SELF-CONTAINED VENDORED lib repo (theia init --kind
+    lib). Like a package (a node + protocol + impl), but it VENDORS the Theia
+    runtime and compiles into a STANDALONE Bazel artifact — no @pero_theia
+    workspace dep — for an isolated target build. `gen-fc-lib --vendored` emits
+    runtime/ + generated/ + a root BUILD.bazel; the app owns its own main (see
+    main.example.cc). Everything is parameterized by `name` so a FRESH scaffold
+    builds with zero edits:
+
+        artheia gen-fc-lib --vendored system/<name>/package.art --out .
+        bazel build //:<name>_impl
+    """
+    import os as _os
+    slug = _py_ident_safe(name)
+    Cls = "".join(p.capitalize() for p in name.replace("-", "_").split("_"))
+    created: list[str] = []
+
+    def _write(rel: str, content: str) -> None:
+        p = ws / rel
+        if p.exists():
+            print(f"theia init: keep existing {rel}", file=sys.stderr)
+            return
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content)
+        created.append(rel)
+
+    def _sync_pin(rel: str, content: str) -> None:
+        p = ws / rel
+        try:
+            existing = p.read_text() if p.exists() else None
+        except OSError:
+            existing = None
+        if existing is not None and existing.strip() == content.strip():
+            return
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content)
+        created.append(rel + ("  (re-synced to framework)" if existing else ""))
+
+    def _sub(t: str) -> str:
+        return (t.replace("@NAME@", name).replace("@SLUG@", slug)
+                 .replace("@CLS@", Cls))
+
+    # The node package + the aggregate. gen-fc-lib --vendored runs on the
+    # package.art directly (a bare node package needs no composition — generate_lib
+    # emits all its nodes), keeping ONE package name (system.<name>) so the node's
+    # codecs and its proto agree (a separate _lib composition in a DIFFERENT package
+    # would diverge the codec/proto naming).
+    _write(f"system/{name}/package.art", _sub(_PKG_PACKAGE_ART))
+    _write("system/system.art", _sub(_LIB_SYSTEM_ART))
+
+    # Build wiring — VENDORED: NO @pero_theia dep (the runtime is vendored under
+    # runtime/ by gen-fc-lib --vendored). Only rules_cc + host nanopb (via the
+    # .bazelrc -I copt). .bazelversion MUST match the framework (an incompatible
+    # bazel can't load the vendored runtime's toolchain configs — the classic
+    # `name 'set' is not defined` in rules_cc).
+    _write(".theia", f"THEIA_ROOT={_os.path.relpath(theia_root, ws)}\n"
+                     f"name={name}\nkind=lib\n")
+    _write("MODULE.bazel", _sub(_LIB_MODULE_BAZEL))
+    _write(".bazelrc", _INIT_BAZELRC)
+    _sync_pin(".bazelversion", _read_or(theia_root / ".bazelversion", "9.1.0"))
+    _write(".mcp.json", _INIT_MCP_JSON.replace("@THEIA_ROOT@", str(theia_root)))
+    _write("local_setup.sh", _INIT_SETUP_LOCAL.replace("@NAME@", name))
+    if (ws / "local_setup.sh").exists():
+        (ws / "local_setup.sh").chmod(0o755)
+    # The vendored codegen (runtime/ generated/ lib/ impl/ BUILD.bazel + the app
+    # proto) is gen-fc-lib output — gitignored (regenerated), except the write-once
+    # impl bodies. Standard scaffold gitignore is close enough; keep it simple.
+    _write(".gitignore", _sub(_LIB_GITIGNORE))
+    _write("README.md", _sub(_LIB_README))
+
+    print(f"\ntheia init: scaffolded '{name}' vendored lib against {theia_root}",
+          file=sys.stderr)
+    for c in created:
+        print(f"  + {c}", file=sys.stderr)
+    print(_sub(_LIB_NEXT_STEPS), file=sys.stderr)
     return 0
 
 
@@ -5813,6 +5893,73 @@ Scaffold complete. The whole toolchain runs UNMODIFIED:
 
 Edit system/@NAME@/package.art (your nodes + protocol) +
 src/impl/@CLS@Ctrl_handlers.cc (write-once, your bodies).
+'''
+
+
+# ── theia init --kind lib (vendored standalone) templates ────────────────────
+_LIB_SYSTEM_ART = '''\
+// @NAME@ — vendored-lib aggregate: `artheia parse system/system.art` validates
+// the tree. `package system`, importing system.@NAME@.*. No supervisor/platform
+// import — a vendored lib is a build artifact, not a deployed rig.
+
+package system
+
+import system.@NAME@.*
+'''
+
+_LIB_MODULE_BAZEL = '''\
+# @NAME@ — a SELF-CONTAINED vendored Theia lib. It VENDORS platform/runtime under
+# runtime/ (gen-fc-lib --vendored), so it has NO @pero_theia dep — it compiles as a
+# standalone Bazel artifact on its target. nanopb is a HOST dep (pb.h via the
+# .bazelrc -I copt + libprotobuf-nanopb.a linkopt), like the framework runtime.
+module(name = "@SLUG@", version = "0.1.0")
+
+bazel_dep(name = "rules_cc", version = "0.2.17")
+'''
+
+_LIB_GITIGNORE = '''\
+# GENERATED / VENDORED trees (gen-fc-lib --vendored output — regenerated, never
+# committed) EXCEPT the write-once impl bodies (src/impl/*_handlers.cc, *_state.hh)
+# which you own after first emit.
+/runtime/
+/generated/
+/src/lib/
+/BUILD.bazel
+/main.example.cc
+/proto/*
+!/proto/BUILD.bazel
+/bazel-*
+MODULE.bazel.lock
+__pycache__/
+*.pyc
+'''
+
+_LIB_README = '''\
+# @NAME@ — Theia vendored lib
+
+A SELF-CONTAINED node library: it VENDORS the Theia runtime and compiles into a
+standalone Bazel artifact (no @pero_theia workspace dep) for an isolated target
+build. The app that consumes it owns its own main (see `main.example.cc`).
+
+```sh
+source local_setup.sh
+# generate the vendored slice (runtime/ + generated/ + lib/impl + BUILD.bazel):
+artheia gen-fc-lib --vendored system/@NAME@/package.art --out . --ns ara::@NAME@
+bazel build //:@NAME@_impl        # the whole vendored stack, standalone
+```
+
+Edit `system/@NAME@/package.art` (nodes + protocol) + the write-once
+`impl/@CLS@Ctrl_handlers.cc`. Regenerate with the same gen-fc-lib command.
+'''
+
+_LIB_NEXT_STEPS = '''
+Scaffold complete (vendored lib). Generate + build standalone:
+  source local_setup.sh
+  artheia gen-fc-lib --vendored system/@NAME@/package.art --out . --ns ara::@NAME@
+  bazel build //:@NAME@_impl
+
+Edit system/@NAME@/package.art (nodes + protocol) + the write-once
+impl/@CLS@Ctrl_handlers.cc (your bodies).
 '''
 
 

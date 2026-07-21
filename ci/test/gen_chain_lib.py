@@ -26,7 +26,7 @@ Pipeline stages (mirrors the architecture map):
   2. artheia rig-deps           — rig.json (Bazel + GUI feed)
   3. artheia gen-netgraph       — per-cluster signal routing JSON
   4. artheia gen-routing        — per-process LocalRef/RemoteRef hh
-  5. artheia gen-app            — per-process app skeleton (lib/main/impl)
+  5. artheia gen-fc            — per-process app skeleton (lib/main/impl)
   6. artheia serialize-manifest — DeploymentLayer rig → dist/manifest/<m>/
                                   {machine,execution,service,application,
                                   executor}.json + a top-level machines.json.
@@ -271,26 +271,26 @@ class GenChainLib:
             )
 
     # ------------------------------------------------------------------
-    # Stage 5 — gen-app (per-process app skeleton)
+    # Stage 5 — gen-fc (per-process app skeleton)
     # ------------------------------------------------------------------
 
     @keyword("Stage 5 Gen App Composition")
     def stage5_gen_app_composition(self, composition: str) -> str:
         """Emit the per-process app skeleton (lib/main/impl) for one
-        composition via `gen-app --kind fc --composition`. gen-app
+        composition via `gen-fc --composition`. gen-fc
         appends the composition to --out, so the project lands at
         <out>/<composition>/. One project per `on process P` partition."""
         assert self._workdir is not None
         out_dir = self._workdir / "app"
         out_dir.mkdir(exist_ok=True)
         r = self._artheia(
-            "gen-app", "--kind", "fc",
+            "gen-fc",
             "system/apps/component.art",
             "--out", str(out_dir),
             "--proto-out", str(self._workdir / "proto"),
                         "--composition", composition,
         )
-        self._ok(r, f"stage 5: artheia gen-app --composition {composition}")
+        self._ok(r, f"stage 5: artheia gen-fc --composition {composition}")
         return str(out_dir)
 
     @keyword("App Composition Has Process Dir")

@@ -4551,7 +4551,7 @@ def cmd_init(args: list[str]) -> int:
 
     # --kind package: a ROS-style PACKAGE repo (nodes + protocol + impl as a
     # composable unit + its own probe test), scaffolded so the WHOLE toolchain
-    # runs unmodified: gen-app --kind package (→impl), gen-app --kind fc
+    # runs unmodified: gen-fc-lib (→impl), gen-fc
     # component.art (→apps, gitignored), gen-manifest, serialize-manifest,
     # theia install/start, and `robot test/<name>.robot` (the probe drives the
     # node's ctl in isolation). A workspace CONSUMES packages; a package is its
@@ -4766,8 +4766,8 @@ def _init_package(ws: Path, theia_root: Path, name: str,
     consumes. Everything is parameterized by `name` so the whole toolchain runs
     on a FRESH scaffold with zero edits:
 
-        gen-app --kind package system/<name>/package.art --out src --ns ara::<name> → src/{lib,impl}
-        gen-app --kind fc      system/<name>_tester/component.art --out apps → apps/ (gitignored)
+        gen-fc-lib system/<name>/package.art --out src --ns ara::<name> → src/{lib,impl}
+        gen-fc      system/<name>_tester/component.art --out apps → apps/ (gitignored)
         gen-manifest / serialize-manifest (from manifest/rig.py)
         theia install / theia start
         robot test/<name>.robot   (the probe drives the node's ctl in isolation)
@@ -4828,7 +4828,7 @@ def _init_package(ws: Path, theia_root: Path, name: str,
     # in ONE workspace, exactly as an EXTERNAL consumer would:
     #
     #   system/<name>/package.art          `package system.<name>` — the NODE
-    #     → gen-app --kind package --out system/<name> → system/<name>/{lib,impl}
+    #     → gen-fc-lib --out system/<name> → system/<name>/{lib,impl}
     #       (a linkable //system/<name>/lib:<name>_lib — its dir IS its bazel pkg).
     #
     #   system/<name>_tester/component.art `package system.<name>_tester` — the APP
@@ -4853,7 +4853,7 @@ def _init_package(ws: Path, theia_root: Path, name: str,
     # NOT hand-written) works unchanged. With --with-services it also folds in the
     # framework's ARA services manifest.
     # (The package's OWN generated impl goes to packages/<name>/{lib,impl} via
-    #  `gen-app --kind package … --out packages/<name>`, matching the //packages/
+    #  `gen-fc-lib … --out packages/<name>`, matching the //packages/
     #  <name> bazel label the composition derives from `import packages.<name>.*`.)
     _write("manifest/__init__.py", "")
     _write("manifest/rig/__init__.py", "")
@@ -4877,11 +4877,11 @@ def _init_package(ws: Path, theia_root: Path, name: str,
     _sync_pin(".bazelversion", _read_or(theia_root / ".bazelversion", "9.1.0"))
     # The TESTER app's proto shims. In the two-package layout the runnable app is
     # system.@NAME@_tester (NOT system.apps), so its proto lands at
-    # proto/system/@NAME@_tester/@NAME@_tester.proto. gen-app --kind fc writes that
+    # proto/system/@NAME@_tester/@NAME@_tester.proto. gen-fc writes that
     # .proto but NOT its nanopb genrule BUILD (fc-mode emits no proto BUILD), so the
     # scaffold supplies it here + the //proto:platform_protos aggregate that links
     # it. (The PACKAGE's own proto, system/@NAME@, gets a self-contained BUILD from
-    # gen-app --kind package — no shim needed.) apps/__init__.py + deploy/ gitkeeps
+    # gen-fc-lib — no shim needed.) apps/__init__.py + deploy/ gitkeeps
     # + .mcp.json round out the workspace shape so dev-loop tooling works unchanged.
     _write("proto/BUILD.bazel", _sub(_PKG_PROTO_AGG))
     _write(f"proto/system/{name}_tester/BUILD.bazel", _sub(_PKG_TESTER_PROTO_BUILD))
@@ -5039,14 +5039,14 @@ _INIT_APPS_COMPONENT_ART = '''\
 // @NAME@ — composition + cluster wiring for this workspace's app (SWP @NAME@).
 //
 // It ships ONE composition (@CLS@) prototyping the placeholder @CLS@Node, and the
-// `cluster Applications` member that deploys it — so `gen-app --kind fc … --out
+// `cluster Applications` member that deploys it — so `gen-fc … --out
 // apps` emits apps/@CLS@/main (→ //apps/@CLS@/main), and manifest/install/start run
 // a real supervised node on a fresh scaffold.
 //
 // To add another app: declare a node in package.art, then here:
 //   composition MyApp   { prototype MyNode my_node }
 //   cluster Applications { composition MyApp my_app }   (add the member)
-// then re-run `artheia gen-app --kind fc system/@NAME@/component.art --out apps
+// then re-run `artheia gen-fc system/@NAME@/component.art --out apps
 // --proto-out proto` (--proto-out lands @NAME@.proto where proto/'s BUILD expects
 // it) and `bazel build //apps/...` (compiles against @pero_theia).
 
@@ -5477,7 +5477,7 @@ local_path_override(module_name = "pero_theia", path = "@THEIA_REL@")
 
 # Hermetic proto codegen (@theia_codegen) — the content-hashed protoc + nanopb a
 # PACKAGE's proto genrule declares as `tools` (proto/packages/<X>/BUILD.bazel from
-# gen-app --kind package). Re-exported from @pero_theia's toolchains/codegen so a
+# gen-fc-lib). Re-exported from @pero_theia's toolchains/codegen so a
 # consuming workspace resolves @theia_codegen the same way the framework does.
 # (Workspace-only apps under proto/system/apps/ use the host nanopb and don't need
 # it, but declaring it is harmless — only referenced when a package proto builds.)
@@ -5551,12 +5551,12 @@ filegroup(name = "@NAME@_proto", srcs = ["@NAME@.proto"])
 
 # ── package-flavour proto shims ─────────────────────────────────────────────
 # A PACKAGE workspace has TWO proto trees (mirroring its two .art packages):
-#   proto/system/@NAME@/          — the package's own messages. gen-app --kind
+#   proto/system/@NAME@/          — the package's own messages. gen-fc-lib
 #                                   package emits a SELF-CONTAINED BUILD there
 #                                   (//proto/system/@NAME@:@NAME@_proto), so no
 #                                   scaffold shim is needed for it.
 #   proto/system/@NAME@_tester/   — the tester app's messages (its no-arg-op
-#                                   request wrappers etc.). gen-app --kind fc
+#                                   request wrappers etc.). gen-fc
 #                                   writes ONLY the .proto here (fc-mode emits no
 #                                   proto BUILD), so the scaffold MUST provide the
 #                                   nanopb genrule BUILD, exactly as a ws does for
@@ -5618,7 +5618,7 @@ _PKG_PACKAGE_ART = '''\
 // @NAME@ — a Theia PACKAGE: messages + interfaces + node(s), ONE linkable unit.
 // `package system.@NAME@` — the FQN mirrors the dir (system/@NAME@/) 1:1, no
 // tautological `packages/` prefix. Built ONCE as a lib via
-//   artheia gen-app --kind package system/@NAME@/package.art --out src
+//   artheia gen-fc-lib system/@NAME@/package.art --out src
 // → src/{lib,impl} → //src/lib:@NAME@_lib. A composition (the tester below, or a
 // real user workspace) IMPORTS system.@NAME@ and links that prebuilt lib.
 //
@@ -5664,7 +5664,7 @@ _PKG_COMPONENT_ART = '''\
 // the prebuilt //src/lib:@NAME@_lib (the imported node is NOT regenerated). This
 // in-repo tester proves the import/link path without a second repo.
 //
-// gen-app --kind fc on THIS file emits apps/@CLS@Tester/main (gitignored) that
+// gen-fc on THIS file emits apps/@CLS@Tester/main (gitignored) that
 // `theia install` stages + `theia start` runs; gen-manifest reads the cluster.
 //
 // ONE composition = one process. The RF probe (test/@NAME@.robot) is the test
@@ -5815,11 +5815,11 @@ _PKG_GITIGNORE = '''\
 # state structs — user-owned after first emit) ARE committed, so they are
 # re-included below and survive a fresh clone before any gen-app.
 #
-# The tester app tree — pure codegen, regenerated every gen-app --kind fc.
+# The tester app tree — pure codegen, regenerated every gen-fc.
 /apps/*
 !/apps/__init__.py
 # The PACKAGE's generated tree lives under src/. Its lib/ + BUILD.bazel are pure
-# codegen (regen every gen-app --kind package). Its impl/ is WRITE-ONCE — the
+# codegen (regen every gen-fc-lib). Its impl/ is WRITE-ONCE — the
 # user owns the handler bodies + state structs + that BUILD after first emit — so
 # src/impl/ is TRACKED (re-included) while src/lib/ is ignored.
 /src/lib/
@@ -5862,9 +5862,9 @@ This repo holds TWO .art packages, modelling the ROS import/link relationship:
 ```sh
 source local_setup.sh
 # 1. the PACKAGE (node/lib) — system/@NAME@ source → src/{lib,impl}:
-artheia gen-app --kind package system/@NAME@/package.art --out src --proto-out proto --ns ara::@NAME@
+artheia gen-fc-lib system/@NAME@/package.art --out src --proto-out proto --ns ara::@NAME@
 # 2. the TESTER app — imports system.@NAME@, links //src/lib:@NAME@_lib (apps/ gitignored):
-artheia gen-app --kind fc      system/@NAME@_tester/component.art --out apps --proto-out proto
+artheia gen-fc      system/@NAME@_tester/component.art --out apps --proto-out proto
 # 3. manifest + install + run:
 artheia gen-manifest system/@NAME@_tester/component.art manifest/@NAME@/manifest.py
 theia manifest rig && theia install rig && theia start
@@ -5884,9 +5884,9 @@ _PKG_NEXT_STEPS = '''
 Scaffold complete. The whole toolchain runs UNMODIFIED:
   source local_setup.sh
   # 1. the PACKAGE (node/lib) — system/@NAME@ source → src/{lib,impl}:
-  artheia gen-app --kind package system/@NAME@/package.art --out src --proto-out proto --ns ara::@NAME@
+  artheia gen-fc-lib system/@NAME@/package.art --out src --proto-out proto --ns ara::@NAME@
   # 2. the TESTER app (imports system.@NAME@, links //src/lib:@NAME@_lib):
-  artheia gen-app --kind fc      system/@NAME@_tester/component.art --out apps --proto-out proto
+  artheia gen-fc      system/@NAME@_tester/component.art --out apps --proto-out proto
   artheia gen-manifest system/@NAME@_tester/component.art manifest/@NAME@/manifest.py
   theia manifest rig && theia install rig && theia start
   robot test/@NAME@.robot

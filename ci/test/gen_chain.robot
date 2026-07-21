@@ -14,7 +14,7 @@ Documentation    End-to-end test of the .art→.ipk generation
 ...
 ...                .art source  ──┐
 ...                rig.py        ─┤  artheia parse / rig-deps / gen-netgraph
-...                               │  gen-routing / gen-app
+...                               │  gen-routing / gen-fc
 ...                               │
 ...                              .json + .hh + .cc + BUILD.bazel
 ...                               │
@@ -128,10 +128,10 @@ Stage 4 — gen-routing per-process headers
     Routing Header Exists    ${out}    Demo3WayP1    P1
 
 
-Stage 5 — gen-app per-process skeleton
+Stage 5 — gen-fc per-process skeleton
     [Documentation]    One app skeleton per `on process P` partition,
-    ...                emitted by `gen-app --kind fc --composition`.
-    ...                gen-app appends the composition to --out, so the
+    ...                emitted by `gen-fc --composition`.
+    ...                gen-fc appends the composition to --out, so the
     ...                project lands at <out>/Demo3WayP1/{lib,main,impl}.
     [Tags]    gen-chain    hermetic    selftest    stage-5
 

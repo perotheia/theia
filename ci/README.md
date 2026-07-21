@@ -14,26 +14,26 @@ NO_LIVE=1 ./ci/run.sh    # toolchain only (no TIPC / no sudo — e.g. a containe
 
 | | scenario | flow | runtime assertion (Robot, ci/test/) |
 |---|---|---|---|
-| s1 | ws-bare | `theia init --kind ws` → placeholder app → gen-app fc → bazel → manifest/install/start | node bound + answers `theia call`; **enabled-override regression** (a `deploy/config` param must reach the node); empty-cluster gen-app refuses; `.bazelversion`/`-c opt` pins |
+| s1 | ws-bare | `theia init --kind ws` → placeholder app → gen-fc → bazel → manifest/install/start | node bound + answers `theia call`; **enabled-override regression** (a `deploy/config` param must reach the node); empty-cluster gen-fc refuses; `.bazelversion`/`-c opt` pins |
 | s2 | ws-demo | init + graft the Demo3Way seed (4 compositions, statem, connects, config) | 4 processes up; counter accumulated the driver's increments (== 50) |
 | s3 | ws-services | `--with-services` → full FC tree manifests + builds | service tree up under one supervisor (per/nm held: no etcd/caps in CI) |
 | s4 | pkg | `theia init --kind package` + sensor seed → package gen + tester gen → bazel | the scaffold's own robot probe; **params-alias regression** (both identity keys staged) |
 | s5 | pkg-consume | sensor + filter package repos consumed by a fresh ws as bazel modules; cross-package `connect` | **data flows** producer→consumer (`GetStats.received` grows) |
 
 Together the scenarios exercise every `theia init` kind/flag and every
-`gen-app` mode a user touches (`--kind fc` per-composition, `--kind package`,
+the gen-fc verbs a user touches (`gen-fc` per-composition, `gen-fc-lib`,
 statem + atomic + timer nodes, sender/receiver/server ports, params, imported
 packages, module-qualified labels).
 
 ## The contract (why this doesn't rot like demo/ did)
 
 1. **Fresh scaffold every run.** Workspaces are generated under `ci/.work/`
-   (gitignored) via the real entry points (`theia init`, `artheia gen-app`,
+   (gitignored) via the real entry points (`theia init`, `artheia gen-fc`,
    bazel against `@pero_theia`). Nothing generated is committed, so nothing
    drifts when the scaffold or codegen changes — the harness follows.
 2. **Seeds are USER-side code.** `ci/seeds/` + `ci/demo/` hold only what a user
    would write: `.art` sources and write-once impl bodies, grafted onto the
-   scaffold **before** gen-app (which proves the write-once skip). Neutral names
+   scaffold **before** gen-fc (which proves the write-once skip). Neutral names
    (sensor/filter/pilot/pipeline) — never a real downstream package's.
 3. **Framework code must never import anything under `ci/`.** The dependency
    arrow points one way: ci/ consumes the framework through its public surface

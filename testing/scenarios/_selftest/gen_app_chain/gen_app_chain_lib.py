@@ -108,7 +108,7 @@ class GenAppChainLib:
         env.pop("PYTHONPATH", None)
         result = subprocess.run(
             [
-                "artheia", "gen-app", "--kind", "fc",
+                "artheia", "gen-fc",
                 str(self._art_dst),
                 "--out", str(self._fc_dir),
                 "--proto-out", str(self._proto_dir),

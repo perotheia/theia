@@ -1,7 +1,7 @@
 """Robot library for the FC regen-stability selftest.
 
 The contract: every committed FC's {lib,main,impl} MUST match what
-`artheia gen-app --kind fc` emits when run against its `.art` spec.
+`artheia gen-fc` emits when run against its `.art` spec.
 Hand-edits to generated files (lib/, main/, and the BUILD.bazel in
 impl/) are forbidden — they cause silent drift and break the gen →
 build dependency that the rest of the toolchain assumes.
@@ -172,7 +172,7 @@ class FcRegenLib:
         # exactly as the real invocation does (gen-app appends it to --out
         # both for the filesystem and the label prefix).
         cmd = [
-            "artheia", "gen-app", "--kind", "fc",
+            "artheia", "gen-fc",
             str(fc_ws / fc.spec),
             "--out", fc.out,                       # workspace-relative — drives labels
             "--proto-out", fc.proto_out,
@@ -237,7 +237,7 @@ class FcRegenLib:
                     raise AssertionError(
                         f"{short}: {slice_}/{tmp_f.name} drift — "
                         f"the committed file diverges from gen-app output. "
-                        f"Run `artheia gen-app --kind fc {fc.spec} "
+                        f"Run `artheia gen-fc {fc.spec} "
                         f"--out {fc.out}/ --proto-out platform/proto/ "
                         f"--ns {fc.ns}{comp} --force` and commit the diff."
                     )

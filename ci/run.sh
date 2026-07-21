@@ -7,7 +7,7 @@
 #   NO_LIVE=1 ./ci/run.sh       # skip the runtime phase (no TIPC / no sudo)
 #
 # Every scenario scaffolds a FRESH workspace under ci/.work/ via the real user
-# entry points (`theia init`, `artheia gen-app`, bazel against @pero_theia),
+# entry points (`theia init`, `artheia gen-fc`, bazel against @pero_theia),
 # grafts the committed seed (ci/seeds/, ci/demo/ — USER-side code only), drives
 # the full toolchain, and asserts the RUNTIME behaviour with Robot Framework
 # (ci/test/). Nothing generated is ever committed; nothing in ci/ may be
@@ -101,14 +101,14 @@ s1() {
     local ws="$WORK/s1-ws"; fresh_ws "$ws"; cd "$ws"
     log "s1: theia init --kind ws (placeholder app)"
     $THEIA init --kind ws --name pilot >/dev/null 2>&1
-    $ARTHEIA gen-app --kind fc system/pilot/component.art --out apps --proto-out proto >/dev/null
+    $ARTHEIA gen-fc system/pilot/component.art --out apps --proto-out proto >/dev/null
     $ARTHEIA gen-manifest system/pilot/component.art manifest/pilot/manifest.py >/dev/null
 
-    log "s1: negative — gen-app on an EMPTIED cluster must refuse (exit 2)"
+    log "s1: negative — gen-fc on an EMPTIED cluster must refuse (exit 2)"
     local t="$WORK/s1-empty"; fresh_ws "$t"; ( cd "$t" && $THEIA init --kind ws --name pilot >/dev/null 2>&1 \
         && printf 'package system.pilot\n\ncluster Applications { }\n' > system/pilot/component.art \
-        && ! $ARTHEIA gen-app --kind fc system/pilot/component.art --out apps --proto-out proto >/dev/null 2>&1 ) \
-        || fail "empty-cluster gen-app did not refuse"
+        && ! $ARTHEIA gen-fc system/pilot/component.art --out apps --proto-out proto >/dev/null 2>&1 ) \
+        || fail "empty-cluster gen-fc did not refuse"
 
     log "s1: scaffold pins — .bazelversion matches framework, -c opt present"
     diff -q "$ws/.bazelversion" "$ROOT/.bazelversion" >/dev/null || fail ".bazelversion drift"
@@ -143,11 +143,11 @@ s2() {
     log "s2: theia init --kind ws --name apps + graft the Demo3Way seed"
     $THEIA init --kind ws --name apps >/dev/null 2>&1
     cp "$CI"/demo/system-apps/*.art "$ws/system/apps/"
-    # write-once impl bodies pre-placed → gen-app skips them (the user story).
+    # write-once impl bodies pre-placed → gen-fc skips them (the user story).
     ( cd "$CI/demo/impl" && find . -type f ) | while read -r f; do
         mkdir -p "$ws/apps/$(dirname "$f")"; cp "$CI/demo/impl/$f" "$ws/apps/$f"
     done
-    $ARTHEIA gen-app --kind fc system/apps/component.art --out apps --proto-out proto >/dev/null
+    $ARTHEIA gen-fc system/apps/component.art --out apps --proto-out proto >/dev/null
     $ARTHEIA gen-manifest system/apps/component.art manifest/apps/manifest.py >/dev/null
 
     # Graft the app-side trace-decoder plugin seed (the hand-written example of
@@ -190,7 +190,7 @@ s3() {
     log "s3: theia init --kind ws --with-services"
     $THEIA init --kind ws --name svc --with-services >/dev/null 2>&1
     $ARTHEIA check-addresses system/system.art >/dev/null || fail "s3 parse"
-    $ARTHEIA gen-app --kind fc system/svc/component.art --out apps --proto-out proto >/dev/null
+    $ARTHEIA gen-fc system/svc/component.art --out apps --proto-out proto >/dev/null
     $ARTHEIA gen-manifest system/svc/component.art manifest/svc/manifest.py >/dev/null
     ( cd "$ws" && $THEIA manifest svc >/dev/null ) || fail "s3 manifest"
     ls "$ws"/dist/manifest/central/config/sm.json >/dev/null 2>&1 || fail "s3: FC configs not staged"
@@ -218,8 +218,8 @@ s4() {
     $THEIA init --kind package --name sensor >/dev/null 2>&1
     cp "$CI/seeds/pkg-sensor/package.art" "$ws/system/sensor/package.art"
     mkdir -p "$ws/src/impl"; cp "$CI"/seeds/pkg-sensor/impl/* "$ws/src/impl/"
-    $ARTHEIA gen-app --kind package system/sensor/package.art --out src --proto-out proto --ns ara::sensor >/dev/null
-    $ARTHEIA gen-app --kind fc system/sensor_tester/component.art --out apps --proto-out proto >/dev/null
+    $ARTHEIA gen-fc-lib system/sensor/package.art --out src --proto-out proto --ns ara::sensor >/dev/null
+    $ARTHEIA gen-fc system/sensor_tester/component.art --out apps --proto-out proto >/dev/null
     $ARTHEIA gen-manifest system/sensor_tester/component.art manifest/sensor/manifest.py >/dev/null
 
     log "s4: params-alias regression — manifest carries BOTH identity keys"
@@ -263,8 +263,8 @@ add = ('bazel_dep(name = "sensor", version = "0.1.0")' + chr(10)
        + 'local_path_override(module_name = "sensor", path = "../sensor")' + chr(10))
 open(p, "w").write(s[:i] + add + s[i:])
 MPY
-    ( cd "$pk/sensor" && $ARTHEIA gen-app --kind package system/sensor/package.art --out src --proto-out proto --ns ara::sensor >/dev/null )
-    ( cd "$pk/filter" && $ARTHEIA gen-app --kind package system/filter/package.art --out src --proto-out proto --ns ara::filter >/dev/null )
+    ( cd "$pk/sensor" && $ARTHEIA gen-fc-lib system/sensor/package.art --out src --proto-out proto --ns ara::sensor >/dev/null )
+    ( cd "$pk/filter" && $ARTHEIA gen-fc-lib system/filter/package.art --out src --proto-out proto --ns ara::filter >/dev/null )
 
     local ws="$WORK/s5-ws"; fresh_ws "$ws"; cd "$ws"
     log "s5: consumer workspace composing both packages (bazel modules)"
@@ -286,7 +286,7 @@ add = ('bazel_dep(name = "sensor", version = "0.1.0")\n'
        f'local_path_override(module_name = "filter", path = "{pk}/filter")\n')
 open(p, "w").write(s[:i] + add + s[i:])
 PY
-    $ARTHEIA gen-app --kind fc system/pipeline/component.art --out apps --proto-out proto >/dev/null
+    $ARTHEIA gen-fc system/pipeline/component.art --out apps --proto-out proto >/dev/null
     $ARTHEIA gen-manifest system/pipeline/component.art manifest/pipeline/manifest.py >/dev/null
     grep -q '@sensor//src/lib' "$ws"/apps/*/main/BUILD.bazel || fail "module-qualified label missing"
 

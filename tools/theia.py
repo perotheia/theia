@@ -4743,7 +4743,7 @@ def cmd_init(args: list[str]) -> int:
     print(f"\nThe scaffold ships a runnable placeholder app ('{Cls}'). Run the "
           f"toolchain end to end:\n"
           f"  # 1. generate the app C++ (→ apps/{Cls}/) + proto:\n"
-          f"  artheia gen-app --kind fc system/{slug}/component.art "
+          f"  artheia gen-fc system/{slug}/component.art "
           f"--out apps --proto-out proto\n"
           f"  # 2. manifest + install + run (theia manifest <{slug}>, the rig):\n"
           f"  artheia gen-manifest system/{slug}/component.art "

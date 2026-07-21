@@ -52,8 +52,8 @@ bazel build --config=linux //services/com/main:com //services/sm/main:sm \
   //services/log/main:log //services/per/main:per //services/ucm/main:ucm \
   //services/shwa/main:shwa
 
-# Hercules TMS570 — gateway firmware (TI armcl)
-bazel build --config=ti_arm_cgt_18 //gateway/firmware/...
+# RPi4 (aarch64) cross-compile
+bazel build --config=rpi4 //services/...
 ```
 
 The `.art` filegroup itself is a target too:

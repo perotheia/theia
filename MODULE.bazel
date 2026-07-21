@@ -35,21 +35,14 @@ bazel_dep(name = "rules_foreign_cc", version = "0.14.0")
 # ── Nanopb (protobuf for embedded C) ──────────────────────────────────────
 bazel_dep(name = "nanopb", version = "0.4.9.1")
 
-# ── ARM GCC 7-2017-q4 toolchain (CCS 8 era) — cross-compile for Cortex-R4F
-# Fetched by the toolchain extension below; local install at
-# /opt/gcc-arm-none-eabi-7-2017-q4 is used when available.
-# ──────────────────────────────────────────────────────────────────────────
-
 # ── System library handles ─────────────────────────────────────────────────
 # libpcap and libexpat are resolved via the host sysroot (cc_library + linkopts).
 # No Bazel module needed — the toolchain locates them via pkg-config.
 
 # ── Toolchain registrations ────────────────────────────────────────────────
-# ARM GCC 7-2017-q4 (open-source, CCS 8 era)
-register_toolchains("//toolchains/arm_gcc_7_2017q4:cc_suite")
-
-# TI ARM CGT 18.1.1.LTS (original CCS 8 proprietary compiler)
-register_toolchains("//toolchains/ti_arm_cgt_18:cc_suite")
+# (The Hercules/TMS570 firmware toolchains ti_arm_cgt_18 + arm_gcc_7_2017q4 were
+#  removed — the gateway firmware they built moved to gataway_ws. Registering
+#  them globally broke a bare consuming repo's host build; they are gone.)
 
 # aarch64-linux-gnu — cross-compile to Raspberry Pi 4 (aarch64, Debian bookworm)
 # for //rules/config:rpi4. Host gcc-aarch64-linux-gnu + the bookworm sysroot.

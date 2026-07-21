@@ -4343,11 +4343,8 @@ def _publish_swp_plane(s3_url: str, fleet: str, app: str, ver: str,
 
 # Default scope for the compile DB: the in-tree, LINUX-buildable C++ trees
 # clangd needs to index. Kept explicit (not `//...`) so the aquery doesn't
-# drag in (a) vendor 3pp / external repos with their own build systems, or
-# (b) //gateway/firmware (the Hercules TMS570 firmware — a different
-# toolchain, --config=ti_arm_cgt_18, that fails under --config=linux). Only
-# the linux gateway libs (//gateway/libs) belong here. Override by passing
-# target patterns after the verb (e.g. `theia compdb //services/...`).
+# drag in vendor 3pp / external repos with their own build systems. Override
+# by passing target patterns after the verb (e.g. `theia compdb //services/...`).
 _COMPDB_TARGETS = [
     "//services/...",
     "//platform/...",

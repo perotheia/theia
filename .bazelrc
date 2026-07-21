@@ -44,15 +44,8 @@ build:linux --compiler=gcc
 build:rpi4 --platforms=//rules/config:rpi4
 build:rpi4 --strategy=CppCompile=local --strategy=CppLink=local
 
-# ── TI ARM CGT 18.1.1.LTS — original CCS 8 compiler (armcl) ─────────────
-# Requires /opt/ti/cgt_arm_18.1.1.LTS/ installed.
-build:ti_arm_cgt_18 --platforms=//toolchains:tms570lc43xx_ti
-build:ti_arm_cgt_18 --extra_toolchains=//toolchains/ti_arm_cgt_18:cc_suite
-build:ti_arm_cgt_18 --strategy=CppCompile=local
-build:ti_arm_cgt_18 --strategy=CppLink=local
-build:ti_arm_cgt_18 --strategy=CppArchive=local
-build:ti_arm_cgt_18 --features=-layering_check
-build:ti_arm_cgt_18 --nocheck_visibility
+# (The Hercules/TMS570 firmware configs — ti_arm_cgt_18 + cortex_r4f — were
+#  removed with their toolchains; the gateway firmware moved to gataway_ws.)
 
 # ── CI mode (no interactive output) ───────────────────────────────────────
 build:ci --show_progress_rate_limit=30
@@ -61,8 +54,7 @@ test:ci  --test_output=errors
 
 # ── Output shortcuts ──────────────────────────────────────────────────────
 # Host:     bazel build //... --config=linux
-# GCC FW:   bazel build //gateway/firmware/pero_cmp_ti:pero_cmp_ti.elf --config=cortex_r4f
-# TI FW:    bazel build //gateway/firmware/pero_cmp_ti:pero_cmp_ti.elf --config=ti_arm_cgt_18
+# RPi4:     bazel build //... --config=rpi4
 
 # Host-local overrides (NOT committed): a native-board build box (jetson/orin)
 # drops `build --linkopt=-L/usr/local/lib --host_linkopt=-L/usr/local/lib` here

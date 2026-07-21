@@ -101,7 +101,7 @@ public:
     // the given binding. Sender stamps service_id = djb2_low16("Msg");
     // receiver's `node` exposes handle_cast(const Msg&, State&).
     //
-    // `conflate` (from a `[conflate]` .art port attr, gen-app-emitted): a
+    // `conflate` (from a `[conflate]` .art port attr, gen-fc-emitted): a
     // periodic STATE-LIKE feed where only the newest matters. The enqueue routes
     // through enqueue_conflated(service_id, …) so a cast whose predecessor is
     // still queued OVERWRITES it in place — a slow consumer sees the latest, not

@@ -44,8 +44,8 @@ inventory `machine=` matches. The inventory (machine→ssh host/user) is
   has no apps (e.g. the rpi4 service-test rig) must `Remove()` them from BASE so
   they're not in execution.json (see manifest-py-syntax.md).
 - **The workspace must contain the binaries the manifest references.** If a rig
-  binds `p1..p4` but the demo apps were never `gen-app`'d here, `theia dist`
-  can't build them. Either gen them (`artheia gen-app --kind fc
+  binds `p1..p4` but the demo apps were never the gen-fc family'd here, `theia dist`
+  can't build them. Either gen them (`artheia gen-fc
   demo/system/apps/component.art --out apps`) or use a rig that doesn't include
   them.
 - **Ad-hoc binary testing ≠ the deploy flow.** For a one-off "does this binary

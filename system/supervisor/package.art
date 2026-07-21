@@ -563,7 +563,7 @@ message ControlReply {
 // NB: there is NO monolithic ControlRequest envelope. Each control op is its
 // own typed message dispatched by the runtime as a separate
 // register_call<Req, Reply> (see the SupervisorControlIf operations below) —
-// the OTP-faithful, gen-app-native shape. The old op_kind/oneof ControlRequest
+// the OTP-faithful, gen-fc-native shape. The old op_kind/oneof ControlRequest
 // + ControlReply.correlation_id were removed with the com bridge: per-op CALLs
 // correlate at the transport layer, not via an envelope id.
 //

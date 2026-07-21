@@ -1,6 +1,6 @@
 // User handler bodies for NmPoller — the read-only netlink poller.
 //
-// HAND-OWNED (gen-app emits this once, then skips it without --force).
+// HAND-OWNED (gen-fc emits this once, then skips it without --force).
 //
 // NmPoller reads `ip` link/address state on a timer tick (requires_timers), and
 // on a STATE EDGE post_event()s into NmDaemon's FSM IN-PROCESS:

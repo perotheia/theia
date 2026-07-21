@@ -2,7 +2,7 @@
 //
 // Polls CounterNode.Get every 200ms (cross-PROCESS call — Observer is its
 // own process; Counter lives in P1). Migrated from the retired
-// demo/nodes/observer_node.{hh,tcc} onto the gen-app --kind fc shape —
+// demo/nodes/observer_node.{hh,tcc} onto the gen-fc --kind fc shape —
 // the call goes through the generated netgraph RemoteRef (peer address
 // from the cluster connect observer.counter_call -> counter.srv); timers
 // via process_timers(), logger via this->log() ([#observer] tag).

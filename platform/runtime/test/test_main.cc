@@ -1314,7 +1314,7 @@ static std::string case_tipc_3process() {
     return run_3process_("demo_p1", "demo_p2", "demo_p3");
 }
 
-// Generated p* binaries (from `artheia gen-app-composition`). Same
+// Generated p* binaries (from `artheia gen-fc-composition`). Same
 // assertions — the test runs the SAME counter-math invariant against
 // the generated boot scaffolding, proving the generator's output is
 // behaviorally equivalent to the handwritten mains.

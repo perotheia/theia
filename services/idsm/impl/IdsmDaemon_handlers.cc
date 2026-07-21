@@ -1,6 +1,6 @@
 // User handler bodies for IdsmDaemon — the IDS-manager node.
 //
-// HAND-OWNED (gen-app emits this once, then skips it without --force).
+// HAND-OWNED (gen-fc emits this once, then skips it without --force).
 //
 // IdsmDaemon manages the eBPF detector, drains its ring buffer on a tick,
 // normalizes each detection into a TraceRecord (kind=SECURITY), and SUBMITS it

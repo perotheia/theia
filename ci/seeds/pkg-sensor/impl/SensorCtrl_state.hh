@@ -1,5 +1,5 @@
 // CI SEED — SensorCtrl state (USER-side, write-once slot of the harness's
-// sensor package). Grafted before gen-app; gen-app skips it (the user story).
+// sensor package). Grafted before gen-fc; gen-fc skips it (the user story).
 #pragma once
 
 #include <cstdint>

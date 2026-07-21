@@ -3336,10 +3336,10 @@ def cmd_release_swp(args: list[str]) -> int:
         proc_pkg.setdefault(p, f"apps/{app}")
 
     # ── Build every proc's FC binary (target-arch). Each composition's `main`
-    #    package holds ONE cc_binary named after the cluster — gen-app names it
+    #    package holds ONE cc_binary named after the cluster — gen-fc names it
     #    `<app>` (e.g. //apps/Demo3WayP1/main:apps). The bazel target name is the
     #    cluster, NOT the proc; start_cmd renames the output to bin/<proc>. ────────
-    cluster = app                        # gen-app's cc_binary name == the app/cluster
+    cluster = app                        # gen-fc's cc_binary name == the app/cluster
     fc_targets = sorted({f"//{proc_pkg[p]}/main:{cluster}" for p in app_procs})
     # Non-default cross targets (orin) need their theia_target define so the
     # sysroot/codegen selects fire (rpi4 rides the .bazelrc default define).
@@ -4379,7 +4379,7 @@ def cmd_compdb(args: list[str]) -> int:
         # Defensive: tolerate any package that fails to load/analyze, indexing
         # everything that DID. (The original offender — services/log:all_srcs +
         # com referencing the retired //platform/supervisor:proto_srcs over a
-        # CMake/grpc edge — is GONE: log is a clean gen-app FC and com's trace
+        # CMake/grpc edge — is GONE: log is a clean gen-fc FC and com's trace
         # gRPC moved to TraceForwarder. //services/... loads clean now. Kept as
         # a safety net so a future broken package degrades to a partial compdb
         # instead of aborting the whole regen.)
@@ -4450,6 +4450,59 @@ def _read_or(path: "Path", default: str) -> str:
         return default + "\n"
 
 
+class _Scaffold:
+    """Shared file-emission helpers for the `theia init` scaffolders (_init_ws /
+    _init_package / _init_lib). Holds the workspace dir + the running `created`
+    list so the three kinds don't each re-define identical `_write`/`_link`/
+    `_sync_pin` closures. (`_sub` stays per-kind — the placeholder set differs.)"""
+
+    def __init__(self, ws: Path):
+        self.ws = ws
+        self.created: list[str] = []
+
+    def write(self, rel: str, content: str) -> None:
+        """Write `content` to `<ws>/<rel>` — never overwriting an existing file
+        (user source is sacred)."""
+        p = self.ws / rel
+        if p.exists():
+            print(f"theia init: keep existing {rel}", file=sys.stderr)
+            return
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content)
+        self.created.append(rel)
+
+    def link(self, rel: str, target: Path) -> None:
+        """Relative symlink `<ws>/<rel>` → target (kept relative so the workspace
+        stays relocatable as a pair with theia). Never clobbers."""
+        p = self.ws / rel
+        if p.exists() or p.is_symlink():
+            print(f"theia init: keep existing {rel}", file=sys.stderr)
+            return
+        p.parent.mkdir(parents=True, exist_ok=True)
+        rel_target = os.path.relpath(target, p.parent)
+        p.symlink_to(rel_target)
+        self.created.append(f"{rel} -> {rel_target}")
+
+    def sync_pin(self, rel: str, content: str) -> None:
+        """A framework-PINNED build file (.bazelversion): it must MATCH the
+        framework, so re-sync it on mismatch rather than 'keep existing'. A stale
+        .bazelversion from an earlier init against an older framework causes an
+        incompatible bazel to load the framework's toolchain configs — e.g.
+        `name 'set' is not defined` in rules_cc's cc_toolchain_config, aborting the
+        build. This is generated config, not user-edited source, so overwriting is
+        safe (unlike .art)."""
+        p = self.ws / rel
+        try:
+            existing = p.read_text() if p.exists() else None
+        except OSError:
+            existing = None
+        if existing is not None and existing.strip() == content.strip():
+            return                       # already correct — silent
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content)
+        self.created.append(rel + ("  (re-synced to framework)" if existing else ""))
+
+
 def cmd_init(args: list[str]) -> int:
     """Scaffold the CURRENT directory as a Theia consuming workspace.
 
@@ -4481,7 +4534,7 @@ def cmd_init(args: list[str]) -> int:
       - manifest/<name>/rig.py — the one-machine deploy rig, addressable as
         `theia manifest <name>`; imports the generated app manifest (gen-manifest
         writes manifest/<name>/manifest.py).
-      - apps/, proto/       — homes for the GENERATED C++ (gen-app --out apps →
+      - apps/, proto/       — homes for the GENERATED C++ (gen-fc --out apps →
         //apps/<Comp>/main) and proto (--proto-out proto); never mixed with the fwk.
       - .theia               — records THEIA_ROOT (the source it's bound to).
 
@@ -4561,7 +4614,6 @@ def cmd_init(args: list[str]) -> int:
     if kind == "lib":
         return _init_lib(ws, theia_root, name)
 
-    created: list[str] = []
     # --name drives the app's identity end-to-end: the SWP name, the source
     # package (system/<slug>, FQN system.<slug>), the manifest/rig target
     # (manifest/<slug> → `theia manifest <slug>`), and the composition name
@@ -4570,47 +4622,13 @@ def cmd_init(args: list[str]) -> int:
     slug = _py_ident_safe(name)
     Cls = "".join(p.capitalize() for p in name.replace("-", "_").split("_"))
 
+    # Shared file-emission helpers (see _Scaffold); `_sub` is kind-specific.
+    _sc = _Scaffold(ws)
+    _write, _link, _sync_pin, created = (
+        _sc.write, _sc.link, _sc.sync_pin, _sc.created)
+
     def _sub(t: str) -> str:
         return t.replace("@NAME@", slug).replace("@CLS@", Cls)
-
-    def _write(rel: str, content: str) -> None:
-        p = ws / rel
-        if p.exists():
-            print(f"theia init: keep existing {rel}", file=sys.stderr)
-            return
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(content)
-        created.append(rel)
-
-    def _link(rel: str, target: Path) -> None:
-        p = ws / rel
-        if p.exists() or p.is_symlink():
-            print(f"theia init: keep existing {rel}", file=sys.stderr)
-            return
-        p.parent.mkdir(parents=True, exist_ok=True)
-        # Relative symlink so the workspace stays relocatable as a pair with theia.
-        rel_target = os.path.relpath(target, p.parent)
-        p.symlink_to(rel_target)
-        created.append(f"{rel} -> {rel_target}")
-
-    def _sync_pin(rel: str, content: str) -> None:
-        """A framework-PINNED build file (.bazelversion): it must MATCH the
-        framework, so re-sync it on mismatch rather than 'keep existing'. A stale
-        .bazelversion from an earlier init against an older framework causes an
-        incompatible bazel to load the framework's toolchain configs — e.g.
-        `name 'set' is not defined` in rules_cc's cc_toolchain_config, aborting the
-        build. This is generated config, not user-edited source, so overwriting is
-        safe (unlike .art)."""
-        p = ws / rel
-        try:
-            existing = p.read_text() if p.exists() else None
-        except OSError:
-            existing = None
-        if existing is not None and existing.strip() == content.strip():
-            return                       # already correct — silent
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(content)
-        created.append(rel + ("  (re-synced to framework)" if existing else ""))
 
     # The supervisor is a DEPLOY-time fabric: `theia manifest`/`install` stage it
     # from the FIXED framework target (//platform/supervisor/main:supervisor,
@@ -4648,8 +4666,8 @@ def cmd_init(args: list[str]) -> int:
     #
     # The app is named after --name: system/<name> is the REAL, canonical app
     # source (FQN system.<name> maps to the dir 1:1 — no indirection, no symlink)
-    # and <name> is this workspace's SWP/app name. The user edits these; gen-app
-    # emits the C++ to apps/<Composition>/ (gen-app --out apps → //apps/<Comp>/main,
+    # and <name> is this workspace's SWP/app name. The user edits these; gen-fc
+    # emits the C++ to apps/<Composition>/ (gen-fc --out apps → //apps/<Comp>/main,
     # the demo convention) and the proto to proto/, gen-manifest writes the Python
     # sidecar to manifest/<name>/ — all SEPARATE from this source dir. (`slug` = a
     # py/bazel-safe form of --name for dir + module + label use.)
@@ -4704,7 +4722,7 @@ def cmd_init(args: list[str]) -> int:
 
     # ── Bazel module: the workspace builds its OWN app C++ against the sibling
     # Theia (the gataway_ws pattern). Its own MODULE.bazel consumes pero_theia
-    # via local_path_override; gen-app emits the framework labels already
+    # via local_path_override; gen-fc emits the framework labels already
     # qualified as @pero_theia//platform/... (it detects the consuming-workspace
     # layout), so they resolve directly against the sibling module — NO per-
     # workspace alias shims to write. The app's OWN proto
@@ -4726,10 +4744,10 @@ def cmd_init(args: list[str]) -> int:
     # against a bumped framework picks up the new pin. Default falls back to the
     # framework's current pin if the file is somehow unreadable.
     _sync_pin(".bazelversion", _read_or(theia_root / ".bazelversion", "9.1.0"))
-    # The app's own proto package: gen-app writes <slug>.proto + <slug>.options
+    # The app's own proto package: gen-fc writes <slug>.proto + <slug>.options
     # under proto/system/<slug>/ (--proto-out proto keys the subpath off the FQN
     # system.<slug>); this BUILD nanopb-compiles them. //proto:platform_protos
-    # aggregates it (+ the runtime proto from @pero_theia) so the gen-app lib's
+    # aggregates it (+ the runtime proto from @pero_theia) so the gen-fc lib's
     # `//proto:platform_protos` dep resolves locally. The app proto lives under
     # proto/ (the workspace's own), NOT platform/proto/ — they never mix.
     _write("proto/BUILD.bazel", _sub(_INIT_PROTO_AGG))
@@ -4772,42 +4790,13 @@ def _init_package(ws: Path, theia_root: Path, name: str,
         theia install / theia start
         robot test/<name>.robot   (the probe drives the node's ctl in isolation)
     """
-    import os as _os
     slug = _py_ident_safe(name)
     Cls = "".join(p.capitalize() for p in name.replace("-", "_").split("_"))
-    created: list[str] = []
 
-    def _write(rel: str, content: str) -> None:
-        p = ws / rel
-        if p.exists():
-            print(f"theia init: keep existing {rel}", file=sys.stderr)
-            return
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(content)
-        created.append(rel)
-
-    def _sync_pin(rel: str, content: str) -> None:
-        """Framework-PINNED build file (.bazelversion): re-sync on mismatch (a
-        stale pin loads an incompatible bazel against @pero_theia's toolchains).
-        See the twin in _init_ws for the full rationale."""
-        p = ws / rel
-        try:
-            existing = p.read_text() if p.exists() else None
-        except OSError:
-            existing = None
-        if existing is not None and existing.strip() == content.strip():
-            return
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(content)
-        created.append(rel + ("  (re-synced to framework)" if existing else ""))
-
-    def _link(rel: str, target: Path) -> None:
-        p = ws / rel
-        if p.exists() or p.is_symlink():
-            return
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.symlink_to(_os.path.relpath(target, p.parent))
-        created.append(f"{rel} -> {_os.path.relpath(target, p.parent)}")
+    # Shared file-emission helpers (see _Scaffold); `_sub` is kind-specific.
+    _sc = _Scaffold(ws)
+    _write, _link, _sync_pin, created = (
+        _sc.write, _sc.link, _sc.sync_pin, _sc.created)
 
     def _sub(t: str) -> str:
         return (t.replace("@NAME@", name).replace("@SLUG@", slug)
@@ -4832,7 +4821,7 @@ def _init_package(ws: Path, theia_root: Path, name: str,
     #       (a linkable //system/<name>/lib:<name>_lib — its dir IS its bazel pkg).
     #
     #   system/<name>_tester/component.art `package system.<name>_tester` — the APP
-    #     IMPORTS system.<name>.* and prototypes its node into a composition. gen-app
+    #     IMPORTS system.<name>.* and prototypes its node into a composition. gen-fc
     #     --kind fc --out apps emits apps/<Comp>/main that LINKS //system/<name>/lib
     #     (the imported node is NOT regenerated — cross-package link, the payoff).
     #
@@ -4867,7 +4856,7 @@ def _init_package(ws: Path, theia_root: Path, name: str,
 
     # Build wiring vs the sibling @pero_theia (same as a workspace).
     try:
-        theia_rel = _os.path.relpath(theia_root, ws)
+        theia_rel = os.path.relpath(theia_root, ws)
     except ValueError:
         theia_rel = str(theia_root)
     _write(".theia", f"THEIA_ROOT={theia_rel}\nname={name}\nkind=package\n")
@@ -4892,7 +4881,7 @@ def _init_package(ws: Path, theia_root: Path, name: str,
     _write("local_setup.sh", _INIT_SETUP_LOCAL.replace("@NAME@", name))
     if (ws / "local_setup.sh").exists():
         (ws / "local_setup.sh").chmod(0o755)
-    # apps/ + proto/ generated trees are GITIGNORED (gen-app output, not source).
+    # apps/ + proto/ generated trees are GITIGNORED (gen-fc output, not source).
     _write(".gitignore", _sub(_PKG_GITIGNORE))
     _write("README.md", _sub(_PKG_README))
 
@@ -4917,31 +4906,13 @@ def _init_lib(ws: Path, theia_root: Path, name: str) -> int:
         artheia gen-fc-lib --vendored system/<name>/package.art --out .
         bazel build //:<name>_impl
     """
-    import os as _os
     slug = _py_ident_safe(name)
     Cls = "".join(p.capitalize() for p in name.replace("-", "_").split("_"))
-    created: list[str] = []
 
-    def _write(rel: str, content: str) -> None:
-        p = ws / rel
-        if p.exists():
-            print(f"theia init: keep existing {rel}", file=sys.stderr)
-            return
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(content)
-        created.append(rel)
-
-    def _sync_pin(rel: str, content: str) -> None:
-        p = ws / rel
-        try:
-            existing = p.read_text() if p.exists() else None
-        except OSError:
-            existing = None
-        if existing is not None and existing.strip() == content.strip():
-            return
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(content)
-        created.append(rel + ("  (re-synced to framework)" if existing else ""))
+    # Shared file-emission helpers (see _Scaffold); `_sub` is kind-specific. A lib
+    # plants no framework symlinks, so `.link` is unused here.
+    _sc = _Scaffold(ws)
+    _write, _sync_pin, created = _sc.write, _sc.sync_pin, _sc.created
 
     def _sub(t: str) -> str:
         return (t.replace("@NAME@", name).replace("@SLUG@", slug)
@@ -4960,7 +4931,7 @@ def _init_lib(ws: Path, theia_root: Path, name: str) -> int:
     # .bazelrc -I copt). .bazelversion MUST match the framework (an incompatible
     # bazel can't load the vendored runtime's toolchain configs — the classic
     # `name 'set' is not defined` in rules_cc).
-    _write(".theia", f"THEIA_ROOT={_os.path.relpath(theia_root, ws)}\n"
+    _write(".theia", f"THEIA_ROOT={os.path.relpath(theia_root, ws)}\n"
                      f"name={name}\nkind=lib\n")
     _write("MODULE.bazel", _sub(_LIB_MODULE_BAZEL))
     _write(".bazelrc", _INIT_BAZELRC)
@@ -5009,7 +4980,7 @@ _INIT_APPS_PACKAGE_ART = '''\
 // (FQN ↔ dir 1:1). You EDIT this file: add your messages/interfaces/nodes.
 //
 // It ships ONE placeholder node (@CLS@Node) so the toolchain runs end to end on a
-// fresh scaffold — parse → gen-app → build → install → start a real supervised
+// fresh scaffold — parse → gen-fc → build → install → start a real supervised
 // node. Rename it, add ports/messages, or add more nodes as your app grows.
 
 package system.@NAME@
@@ -5024,7 +4995,7 @@ interface clientServer @CLS@CtlIf {
 
 // The app's node. tipc 0xD0010001 (pick your own range as you add nodes). A
 // GenServer serving @CLS@CtlIf; the impl body is the write-once
-// apps/@CLS@/impl/@CLS@Node_handlers.cc after gen-app.
+// apps/@CLS@/impl/@CLS@Node_handlers.cc after gen-fc.
 node atomic @CLS@Node {
     tipc type=0xD0010001 instance=0
     reporting = true
@@ -5458,7 +5429,7 @@ _INIT_MODULE_BAZEL = '''\
 # @MODNAME@ — a Theia consuming workspace's Bazel module. Builds this workspace's
 # OWN app C++ (apps/<App>/...) against the sibling Theia source tree, consumed as
 # the `pero_theia` module via local_path_override (the gataway_ws pattern). The
-# gen-app BUILD files reference //platform/runtime, //proto,
+# gen-fc BUILD files reference //platform/runtime, //proto,
 # //platform/supervisor/tombstone — resolved by the alias shims under platform/
 # that forward to @pero_theia//... (the app's OWN proto under proto/system/apps
 # builds locally).
@@ -5507,7 +5478,7 @@ build --config=linux
 '''
 
 _INIT_PROTO_AGG = '''\
-# //proto:platform_protos — the nanopb wire types the gen-app lib links. This
+# //proto:platform_protos — the nanopb wire types the gen-fc lib links. This
 # workspace builds its OWN app proto (system/@NAME@, nanopb-compiled below) + pulls
 # the runtime control proto from @pero_theia. (The framework aggregates all the
 # FC protos under //platform/proto; a consuming workspace only needs its own app
@@ -5528,7 +5499,7 @@ cc_library(
 '''
 
 _INIT_APPS_PROTO_BUILD = '''\
-# nanopb sources for the system.@NAME@ package. gen-app (--proto-out proto)
+# nanopb sources for the system.@NAME@ package. gen-fc (--proto-out proto)
 # writes @NAME@.proto AND @NAME@.options here (it auto-pins every string/bytes field
 # to a fixed char[]; override per field with an .art `[max_size:N]`). Both feed
 # this genrule (.options auto-loaded by nanopb). .pb.{c,h} are BUILT, not committed.
@@ -5585,7 +5556,7 @@ cc_library(
 '''
 
 _PKG_TESTER_PROTO_BUILD = '''\
-# nanopb sources for the system.@NAME@_tester package (the tester app). gen-app
+# nanopb sources for the system.@NAME@_tester package (the tester app). gen-fc
 # --kind fc (--proto-out proto) writes @NAME@_tester.proto AND @NAME@_tester.options
 # here (auto-pins every string/bytes field to a fixed char[]; override per field
 # with an .art `[max_size:N]`). Both feed this genrule (.options auto-loaded by
@@ -5810,10 +5781,10 @@ class @CLS@ProbeLib:
 '''
 
 _PKG_GITIGNORE = '''\
-# GENERATED trees (gen-app / gen-manifest / install output — never committed).
+# GENERATED trees (gen-fc / gen-manifest / install output — never committed).
 # The scaffold's hand-written build shims + the WRITE-ONCE impl (handler bodies,
 # state structs — user-owned after first emit) ARE committed, so they are
-# re-included below and survive a fresh clone before any gen-app.
+# re-included below and survive a fresh clone before any gen-fc.
 #
 # The tester app tree — pure codegen, regenerated every gen-fc.
 /apps/*
@@ -5877,7 +5848,7 @@ robot test/@NAME@.robot
 Clone this repo next to your workspace and depend on its bazel module; the
 package resolves as `//packages/@NAME@/src/lib:@NAME@_lib`. In your app's
 `.art`:  `import system.@NAME@.*`  then prototype `@CLS@Ctrl` in a composition —
-gen-app links the prebuilt lib, it is never regenerated in your tree.
+gen-fc links the prebuilt lib, it is never regenerated in your tree.
 '''
 
 _PKG_NEXT_STEPS = '''

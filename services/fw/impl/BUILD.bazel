@@ -2,7 +2,7 @@
 #
 # Impl slice — handler bodies. The user owns this BUILD.bazel: it adds
 # fw_backend.hpp (the nftables generate/merge/apply controller) to the state +
-# impl targets. gen-app can't derive this from the .art — excluded from the
+# impl targets. gen-fc can't derive this from the .art — excluded from the
 # regen-stability diff (see fc_regen_lib.py hand_owned_impl_build).
 
 load("@rules_cc//cc:defs.bzl", "cc_library")

@@ -1,6 +1,6 @@
 // User handler bodies for PhmGate — the PHM ingest gate.
 //
-// HAND-OWNED (gen-app emits this once, then skips it without --force).
+// HAND-OWNED (gen-fc emits this once, then skips it without --force).
 // PhmGate is the only TIPC-reachable PHM surface. It SUBSCRIBES to the four
 // AUTOSAR supervision inputs and does the per-entity THRESHOLD arithmetic,
 // then post_event()s the resulting level-change into PhmFsm's fault FSM

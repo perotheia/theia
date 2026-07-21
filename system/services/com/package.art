@@ -197,10 +197,10 @@ node runnable LogForwarder {
 // the target's address FROM its own; impersonation is attribution only
 // (header `src` / trace), never an address takeover.
 //
-// gen-app gives this node a generated gen_server + handlers; the impl
+// gen-fc gives this node a generated gen_server + handlers; the impl
 // OVERRIDES that dispatch so the probe can send/receive arbitrary
 // messages rather than the fixed port schema. The `probe_ctl` port
-// exists only so gen-app materializes the node + its TIPC bind.
+// exists only so gen-fc materializes the node + its TIPC bind.
 //
 // ===== BACKUP (2026-05): ProbeDaemon parked, NOT deleted. ================
 // The probe (test agent / impersonator, #387/#409) is preserved here while
@@ -208,7 +208,7 @@ node runnable LogForwarder {
 // the ProbeCtl interface + ProbeDaemon node below and rename the matching
 // `.bak` impl/lib/src files back (impl/ProbeDaemon_handlers.cc,
 // lib/ProbeDaemon*.hh, src/robot_node.cpp, include/com/robot_node.hpp), then
-// re-run `gen-app --kind fc`. Kept block-commented so gen-app does NOT
+// re-run `gen-fc`. Kept block-commented so gen-fc does NOT
 // materialize the node, but the wiring stays on record.
 /*
 interface clientServer ProbeCtl {
@@ -219,7 +219,7 @@ node atomic ProbeDaemon {
     tipc type=0x800100FF instance=0
     // The probe is a fall-through node: it impersonates/ drives arbitrary
     // nodes for tests, so it accepts inbound TIPC frames the port schema
-    // doesn't name. gen-app emits handle_info(const InfoMsg&, State&) and
+    // doesn't name. gen-fc emits handle_info(const InfoMsg&, State&) and
     // the impl decides what to do with each frame. (A production FC would
     // never set this — the GenServer default CRITICAL-errors on unrouted
     // frames precisely to catch netgraph/wiring drift.)

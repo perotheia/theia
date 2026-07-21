@@ -23,7 +23,7 @@
 # `tdb ps --follow`). The old sup_firehose{,_register}.cc reassembler +
 # tipc_uplink.{cpp,hpp} are DELETED.
 #
-# gen-app emits this BUILD listing only the <Node>_handlers.cc; we add the
+# gen-fc emits this BUILD listing only the <Node>_handlers.cc; we add the
 # bridge dep + sup_link, so it diverges from the template — the HAND-OWNED
 # banner makes the fc_regen_stability selftest skip its byte-diff.
 
@@ -35,7 +35,7 @@ package(default_visibility = ["//visibility:public"])
 # the lib (which #includes "impl/<Node>_state.hh" as the GenServer State
 # type) and the impl can depend on it WITHOUT a lib<->impl cycle:
 #   com_state  ←  lib  ←  impl
-# gen-app's template emits this target on a stock FC; com's BUILD is
+# gen-fc's template emits this target on a stock FC; com's BUILD is
 # HAND-OWNED, so we carry it here by hand (matching the template shape).
 cc_library(
     name = "com_state",

@@ -1,8 +1,8 @@
 // State struct for VucmGate — APP-OWNED, WRITE-ONCE.
 //
-// `artheia gen-app --kind fc` seeds this once and then NEVER overwrites
+// `artheia gen-fc` seeds this once and then NEVER overwrites
 // it (unless --force). The node's persistent state is app behaviour,
-// which gen-app does NOT derive from the .art — so you own this file.
+// which gen-fc does NOT derive from the .art — so you own this file.
 
 #pragma once
 

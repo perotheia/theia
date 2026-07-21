@@ -12,7 +12,7 @@
 // threshold before invoking the virtual log() — so the filter is
 // inherited by every subclass without subclasses having to opt in.
 // Operators flip the threshold via the THEIA_LOG_LEVEL env var at
-// process boot (gen-app's main.cc reads it) or via a future
+// process boot (gen-fc's main.cc reads it) or via a future
 // ConfigureLogLevel RPC at runtime.
 
 #pragma once
@@ -41,7 +41,7 @@ inline constexpr LogLevel kDefaultLogLevel = LogLevel::Info;
 
 // Parse "trace"|"debug"|"info"|"warn"|"error" (case-insensitive).
 // Anything else returns Info — never throws, never aborts. Used by
-// gen-app's main.cc to apply $THEIA_LOG_LEVEL at boot.
+// gen-fc's main.cc to apply $THEIA_LOG_LEVEL at boot.
 LogLevel parse_log_level(const std::string& name) noexcept;
 
 // Inverse: render a LogLevel as the canonical lowercase name.
@@ -94,7 +94,7 @@ std::shared_ptr<Logger> MakeConsoleLogger() noexcept;
 // ---- Sink kinds, selectable per-process via the manifest ----------------
 //
 // The rig's per-process `logger` field (executor.json) flows to the child as
-// the THEIA_LOGGER env var (kind[:arg], e.g. "file:/var/log/sm.log"); gen-app's
+// the THEIA_LOGGER env var (kind[:arg], e.g. "file:/var/log/sm.log"); gen-fc's
 // main.cc calls MakeLogger($THEIA_LOGGER, kNodeName) at boot. ConsoleLogger
 // above is the "stdio" kind.
 

@@ -1,7 +1,7 @@
 # @pero_theia//platform/runtime — the BUILD shipped into /opt/theia (the
 # installed pero_theia module). A TRIMMED copy of the repo's
 # platform/runtime/BUILD.bazel: only the two cc_library targets a consuming
-# workspace's gen-app output links (`:runtime`, `:runtime_proto_cc`). No test
+# workspace's gen-fc output links (`:runtime`, `:runtime_proto_cc`). No test
 # suite, no dist filegroups — those are repo-build-only. The sources
 # (src/, include/, proto/platform_runtime/runtime.pb.{c,h}) ship alongside this
 # file at the same workspace-relative paths, so the globs resolve identically to

@@ -2,7 +2,7 @@
 //
 // Self-driving node: init() posts "loop"; each "loop" self-schedules the
 // next via send_after, up to a fixed tick count. Migrated from the
-// retired demo/nodes/ticker_node.{hh,cc} onto the gen-app --kind fc shape
+// retired demo/nodes/ticker_node.{hh,cc} onto the gen-fc --kind fc shape
 // — timers via process_timers() (the .art `requires_timers` flag makes
 // main publish it), logger via this->log() ([#ticker] tag).
 

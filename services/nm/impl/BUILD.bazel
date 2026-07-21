@@ -2,7 +2,7 @@
 #
 # Impl slice — handler bodies. The user owns this BUILD.bazel: it adds
 # nm_backend.hpp (the read-only `ip` observer header) to nm_impl's hdrs +
-# include root, which gen-app can't derive from the .art. Excluded from the
+# include root, which gen-fc can't derive from the .art. Excluded from the
 # regen-stability diff (see fc_regen_lib.py hand_owned_impl_build).
 
 load("@rules_cc//cc:defs.bzl", "cc_library")

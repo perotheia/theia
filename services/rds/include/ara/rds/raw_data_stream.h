@@ -9,7 +9,7 @@
 //
 // This is the app-facing API (close to AUTOSAR ara::rds, plus zero-copy loan
 // semantics). A node opts in via the .art `requires_rds` flag + `rds_stream`
-// declarations; gen-app links this lib, calls Runtime::Init, and emits a typed
+// declarations; gen-fc links this lib, calls Runtime::Init, and emits a typed
 // StreamWriter/StreamReader per stream. The transport is hidden behind
 // ITransport (iceoryx today; Tcp/Udp later) so applications never see iceoryx.
 //
@@ -52,7 +52,7 @@ struct Chunk {
 };
 
 // One process registers ONCE with RouDi under a unique runtime name (the node
-// name). gen-app calls this from main() for a requires_rds node.
+// name). gen-fc calls this from main() for a requires_rds node.
 struct Runtime {
     static void Init(const std::string& runtime_name);
 };

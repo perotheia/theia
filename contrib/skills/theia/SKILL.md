@@ -24,7 +24,7 @@ Read this page to orient. For a specific task, load the matching reference:
 | **Removing / simplifying / rewriting code** (read first) | [references/requirements.md](references/requirements.md) — functional vs non-functional |
 | Writing or editing `.art` files | [references/art-lang-grammar.md](references/art-lang-grammar.md) |
 | Writing or editing a deploy rig (`manifest/<rig>/rig.py`): the DeploymentLayer / Append-Remove monoid algebra | [references/manifest-py-syntax.md](references/manifest-py-syntax.md) |
-| Generating / regenerating an application C++ (lib/main/impl) | [references/artheia-gen-app.md](references/artheia-gen-app.md) |
+| Generating / regenerating an application C++ (lib/main/impl) | [references/artheia-gen-fc.md](references/artheia-gen-fc.md) |
 | Regenerating the system: .art → manifests (stages 1–2) | [references/artheia-gen-system.md](references/artheia-gen-system.md) |
 | Bazel build: rig extension, FC daemons, bundles | [references/build-system.md](references/build-system.md) |
 | Provisioning & orchestration: the `theia manifest → dist → orchestrate` handoff flow (Ansible, per-machine `.deb`), **and the fleet path — the colony web API** (S3-exclusive, GS-driven provision/orchestrate/cleanup; role-keyed master/zonal) | [references/provision-orchestrate.md](references/provision-orchestrate.md) |
@@ -115,7 +115,7 @@ theia init                             # bare: supervisor + your own apps
 
 # 2. (optional) author an app: add a composition to
 #    system/apps/component.art, then generate its C++ + proto:
-artheia gen-app --kind fc system/apps/component.art --out apps --proto-out proto
+artheia gen-fc system/apps/component.art --out apps --proto-out proto
 
 # 3. emit + serialize the manifests, install the runtime layout, run it.
 #    `theia init` scaffolds manifest/bootstrap/rig.py — the smoke-test target
@@ -130,8 +130,8 @@ What `theia init` creates in the CWD (never overwriting): `system/system.art`
 workspace's **own** empty app package, `system.apps` — the REAL, canonical app
 source, mapped 1:1 from the FQN: **no `apps/system/apps` indirection, no
 symlink**), `manifest/rig.py` (one-machine stub; gen-manifest writes
-`manifest/app.py`), `apps/` (home for the generated C++ via `gen-app --out
-apps`), `proto/` (home for the generated proto via `gen-app --proto-out
+`manifest/app.py`), `apps/` (home for the generated C++ via `gen-fc --out
+apps`), `proto/` (home for the generated proto via `gen-fc --proto-out
 proto`), and a Bazel module (`MODULE.bazel`, `.bazelrc`, `.bazelversion`,
 alias-shim `BUILD`s, local proto `BUILD`). It's idempotent — re-run it any
 time (e.g. to add `--with-services`). Theia itself is **not vendored** —
@@ -172,7 +172,7 @@ import/link relationship in one repo exactly as an external consumer would:
 system/<X>/package.art          package system.<X>          — the node(s) + protocol + algo
 system/<X>_tester/component.art  package system.<X>_tester   — imports system.<X>, LINKS its lib
 system/system.art                package system              — aggregate parse entry
-src/{lib,impl}                   ← gen-app --kind package  (lib generated+gitignored; impl WRITE-ONCE+tracked)
+src/{lib,impl}                   ← gen-fc-lib  (lib generated+gitignored; impl WRITE-ONCE+tracked)
 proto/system/<X>/                ← the package's own self-contained proto
 ```
 
@@ -182,9 +182,9 @@ The whole toolchain runs **UNMODIFIED** on a fresh scaffold — dogfooded by the
 ```sh
 source local_setup.sh
 # 1. the PACKAGE (node/lib) — system/<X> source → src/{lib,impl}, //src/lib:<X>_lib:
-artheia gen-app --kind package system/<X>/package.art --out src --proto-out proto --ns ara::<X>
+artheia gen-fc-lib system/<X>/package.art --out src --proto-out proto --ns ara::<X>
 # 2. the TESTER app — imports system.<X>, links //src/lib:<X>_lib (apps/ gitignored):
-artheia gen-app --kind fc      system/<X>_tester/component.art --out apps --proto-out proto
+artheia gen-fc      system/<X>_tester/component.art --out apps --proto-out proto
 # 3. manifest + install + run:
 artheia gen-manifest system/<X>_tester/component.art manifest/apps/manifest.py
 theia manifest rig && theia install rig && theia start
@@ -194,7 +194,7 @@ robot test/<X>.robot
 
 Key conventions (each fixes a concrete resolver/label bug — don't "simplify"):
 
-- **Source (`system/`) vs codegen (`src/`) are separate.** `gen-app --kind
+- **Source (`system/`) vs codegen (`src/`) are separate.** `gen-fc --kind
   package --out src` writes `src/lib/` (regenerated every run, gitignored) +
   `src/impl/` (the write-once handler bodies + state + your BUILD — **tracked**,
   yours to own after first emit). Never `--out system/<X>` — codegen stays out of
@@ -244,19 +244,19 @@ ln -s ../packages/<X>/system/<X> system/<X>       # → import system.<X>
 
 # 5. generate the PACKAGE's own lib+proto inside the submodule (gitignored
 #    codegen — not in a fresh clone), then build your app:
-( cd packages/<X> && artheia gen-app --kind package system/<X>/package.art \
+( cd packages/<X> && artheia gen-fc-lib system/<X>/package.art \
     --out src --proto-out proto --ns ara::<X> )
-artheia gen-app --kind fc system/apps/component.art --out apps --proto-out proto
+artheia gen-fc system/apps/component.art --out apps --proto-out proto
 bazel build //apps/MyApp/main:apps       # links @<X>//src/{lib,impl} — NOT regenerated
 ```
 
-`gen-app --kind fc` emits `@<X>//src/lib:<X>_lib` + `@<X>//src/impl:<X>_impl` +
+`gen-fc` emits `@<X>//src/lib:<X>_lib` + `@<X>//src/impl:<X>_impl` +
 `@<X>//proto/system/<X>:<X>_proto` (module-qualified, from the package's
 `MODULE.bazel` module name) and a module-local include `src/lib/<Node>.hh`; the
 imported node is linked, never regenerated. The **in-repo tester** is the same
 pattern in the same module — there the labels are plain `//src/lib` (no `@<X>`).
 
-See `references/artheia-gen-app.md` for the generator internals.
+See `references/artheia-gen-fc.md` for the generator internals.
 
 ## The Functional Cluster catalog
 
@@ -316,7 +316,7 @@ The `com` FC bridges theia↔gRPC to external tools (`supdbg`, `supervisor-gui`,
 ## The pipeline, end to end
 
 ```
- .art system tree           gen-app --kind fc      C++ FC daemons
+ .art system tree           gen-fc      C++ FC daemons
  (system/, services/)  ──►   per node:        ──►  //services/<fc>/main:<fc>
         │                    lib/ main/ impl/
         │
@@ -349,7 +349,7 @@ bazel build --config=linux //services/com/main:com //services/sm/main:sm …
 bazel build @rig_apps//:executor_json           # the manifest pipeline under Bazel
 bazel build //system:art_sources                # the .art filegroup
 
-# Regen-stability guard — committed lib/main/impl/BUILD must equal gen-app output:
+# Regen-stability guard — committed lib/main/impl/BUILD must equal gen-fc output:
 robot rf_theia/scenarios/_selftest/fc_regen_stability/fc_regen_stability.robot
 ```
 Do **not** commit `MODULE.bazel.lock`.
@@ -391,12 +391,12 @@ is running.
 - **Generated files are not hand-edited.** `lib/`, `main/`, and `BUILD`
   carry an `AUTO-GENERATED … DO NOT EDIT` banner. The **app-owned,
   write-once** files are BOTH `impl/<Node>_handlers.cc` (handler bodies)
-  **and** `impl/<Node>_state.hh` (the node's state struct) — gen-app
+  **and** `impl/<Node>_state.hh` (the node's state struct) — gen-fc
   scaffolds them once and never overwrites them (only `--force` clobbers,
   and it clobbers both). To change generated output, change the `.art` (or
-  the template in `artheia/.../templates/fc_app/`) and re-run gen-app. The
+  the template in `artheia/.../templates/fc_app/`) and re-run gen-fc. The
   regen-stability test enforces this.
-- **nanopb `.options`** are emitted by gen-app alongside the proto (pinning
+- **nanopb `.options`** are emitted by gen-fc alongside the proto (pinning
   string/bytes fields to fixed `char[]`); a `.art` field can size its buffer
   with `[max_size:N]`. Committed under `platform/proto/system/<pkg>/`.
 - **Cross-repo Bazel labels are hierarchical**: `//gateway/pero_cmp_lnx/lib:…`,

@@ -64,7 +64,7 @@ message TraceControlPush {
 //
 // services/per (the etcd-backed config gatekeeper) casts this to a node when
 // its config changes. Same framework path as TraceControlPush / LogLevelPush:
-// gen-app register_cast<ConfigUpdated>'s it on the node's config-service
+// gen-fc register_cast<ConfigUpdated>'s it on the node's config-service
 // receiver, and the GenServer base handle_cast(ConfigUpdated) decodes `config`
 // to the node's own config message, swaps the held shared_ptr<const Config>,
 // and (if the app overrides it) calls on_config_update(cfg, changed).
@@ -87,7 +87,7 @@ message ConfigUpdated {
 // The CONTROL plane pushed to every reporting node, as one interface bundling
 // the fire-and-forget casts a node's framework config-service receiver applies.
 // The SENDER `requires` it; each child node `provides` it — realized by the
-// universal config-service receiver gen-app injects (register_cast<
+// universal config-service receiver gen-fc injects (register_cast<
 // TraceControlPush> / <LogLevelPush> / <ConfigUpdated> → GenServer base
 // handle_cast). senderReceiver (not clientServer): all are casts, no reply.
 // Carried here in the runtime package so a child provides it without depending

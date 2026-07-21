@@ -1,4 +1,4 @@
-# ALIAS package: gen-app emits an imported-package proto dep as
+# ALIAS package: gen-fc emits an imported-package proto dep as
 # @pero_theia//proto/system/<art-package-path>:<pkg>_proto and expects a
 # CC library (the package-repo convention). The platform common-type
 # protos are compiled into the //platform/proto:platform_protos aggregate

@@ -2,7 +2,7 @@
 //
 // Drives the demo: on init, fire 10 casts of Inc{5} at CounterNode, then
 // a synchronous call(Get) and check the reply is 50. Migrated from the
-// retired demo/nodes/driver_node.{hh,tcc} onto the gen-app --kind fc
+// retired demo/nodes/driver_node.{hh,tcc} onto the gen-fc --kind fc
 // shape — cross-node messaging via the generated netgraph (cast by
 // TipcAddr, call by RemoteRef alias); logger via this->log() ([#driver] tag).
 

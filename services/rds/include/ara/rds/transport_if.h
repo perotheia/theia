@@ -18,7 +18,7 @@ namespace ara::rds {
 
 // A resolved stream endpoint — the deployment triple (iceoryx service/instance/
 // event) + the pool sizing, produced by the deployment resolver from the
-// manifest topic name. Applications never construct this; gen-app/the resolver
+// manifest topic name. Applications never construct this; gen-fc/the resolver
 // does, from an InstanceSpecifier like "/Perception/CameraFront".
 struct StreamSpec {
     std::string service;     // iceoryx service   (e.g. "Perception")
@@ -54,7 +54,7 @@ std::unique_ptr<IReaderTransport> make_reader_transport();
 
 // Resolve an InstanceSpecifier ("/Perception/CameraFront") → a StreamSpec
 // (iceoryx triple + pool sizing). chunk_size/history come from the manifest
-// `rds_stream` declaration (gen-app passes them); 0 = defaults.
+// `rds_stream` declaration (gen-fc passes them); 0 = defaults.
 StreamSpec resolve_instance(const std::string& instance_specifier,
                             uint32_t max_chunk = 0, uint32_t history = 0);
 

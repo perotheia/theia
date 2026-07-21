@@ -39,7 +39,7 @@ interface clientServer RdsCtl_If {
 
 // ─── Nodes ──────────────────────────────────────────────────────────────────
 
-// The iceoryx broker. A `node prebuilt`: gen-app emits a fully-generated
+// The iceoryx broker. A `node prebuilt`: gen-fc emits a fully-generated
 // GenRunnable that forks+execvp's `path` with the `args` tail, drains its
 // stdout/stderr into the node logger, and SIGTERM+reaps on stop. tipc 0x80010099.
 node prebuilt RoudiBroker {

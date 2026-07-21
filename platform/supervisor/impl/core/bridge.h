@@ -1,6 +1,6 @@
 // Process-global Supervisor bridge.
 //
-// The gen-app FC has TWO nodes that must share ONE supervision engine:
+// The gen-fc FC has TWO nodes that must share ONE supervision engine:
 //   - SupervisorWorker (runnable) constructs the engine + runs its loop.
 //   - SupervisorCtl (atomic gen_server) enqueue()/call()s typed control
 //     ExecCommands into it and is the source of the EmitSink callbacks.

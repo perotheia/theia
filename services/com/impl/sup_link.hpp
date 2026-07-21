@@ -2,7 +2,7 @@
 // control surface (#418).
 //
 // This replaces the control half of TipcUplink::send_control_request. The
-// supervisor's control node (gen-app SupervisorCtl) is a gen_server bound on
+// supervisor's control node (gen-fc SupervisorCtl) is a gen_server bound on
 // TipcMux at TIPC type 0x80020001, instance 0 — the current supervisor UNIFIED
 // control + the event/health/snapshot firehose on this one address (the old
 // split-out 0x80020003 control node is gone). com drives the control surface

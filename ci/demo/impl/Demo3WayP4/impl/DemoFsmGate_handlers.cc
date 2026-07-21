@@ -1,7 +1,7 @@
 // User handler bodies for DemoFsmGate — the test FSM's external-message
 // front (modeled on services/sm's SmGate).
 //
-// HAND-OWNED (gen-app emits this once, then skips it without --force).
+// HAND-OWNED (gen-fc emits this once, then skips it without --force).
 // Each event the gate receives over TIPC is forwarded into the DemoFsm
 // state machine IN-PROCESS via post_event(). The statem node itself takes
 // no external messages — the gate is the only TIPC-reachable surface for

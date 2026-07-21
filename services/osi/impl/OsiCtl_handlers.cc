@@ -1,6 +1,6 @@
 // User handler bodies for OsiCtl — the OS-resource + power control node.
 //
-// HAND-OWNED (gen-app emits this once, then skips it without --force).
+// HAND-OWNED (gen-fc emits this once, then skips it without --force).
 //
 // OsiCtl owns the two resource-plane pieces the runtime+supervisor don't:
 // cgroup v2 per-FC partitioning/accounting + Orin power-mode reconciliation. On

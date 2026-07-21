@@ -1,6 +1,6 @@
 // User handler bodies for PhmFsm (STATEM variant) — the per-entity fault FSM.
 //
-// HAND-OWNED (gen-app emits this once, then skips it without --force).
+// HAND-OWNED (gen-fc emits this once, then skips it without --force).
 // PhmFsm runs the OK→WARNING→DEGRADED→FAILED fault state machine. PhmGate does
 // the threshold counting and post_event()s FaultObserved/FaultEscalate/
 // FaultCleared into this FSM IN-PROCESS (via phm_fsm_ref()); the FSM owns the

@@ -22,7 +22,7 @@ package system.services.phm
 // Reuse the SUPERVISOR's own signal types — the SAME SupervisionEvent /
 // HeartbeatReport / SendTimeoutReport the supervisor's SupervisorCtl emits
 // and decodes. Cross-package import (the supervisor↔runtime idiom): PHM's
-// from_sup / from_nodes receiver ports carry these real types so gen-app
+// from_sup / from_nodes receiver ports carry these real types so gen-fc
 // emits the matching handle_cast + register_cast on PhmGate's config_mux
 // binding (race-free, pre-start) and pulls the supervisor RemoteCodecs in.
 // Real defs live in platform/supervisor/system/package.art.
@@ -92,7 +92,7 @@ message PhmEntityPolicy {
 // ─── Supervision inputs (the four types) ────────────────────────────────────
 //
 // alive + deadline: the SUPERVISOR's own signals, imported (system.supervisor)
-// so gen-app generates the typed handle_cast + register_cast on PhmGate's
+// so gen-fc generates the typed handle_cast + register_cast on PhmGate's
 // config_mux binding. PHM SUBSCRIBES — it does not re-detect.
 interface senderReceiver SupervisorEventIf {
     data SupervisionEvent event              // from system.supervisor — alive

@@ -2,7 +2,7 @@
 Documentation    services/log[trace] — verify the trace fanout service.
 ...
 ...              This scenario is a SPEC. The TraceCollector FC's .art
-...              + gen-app skeleton landed; the live behaviour (handler
+...              + gen-fc skeleton landed; the live behaviour (handler
 ...              bodies, com gRPC TraceStream bridge, FC-side selective
 ...              emit hooks, rf-theia trace_stream adapter) is queued
 ...              as separate tasks:

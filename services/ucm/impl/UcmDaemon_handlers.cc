@@ -1,6 +1,6 @@
 // User handler bodies for UcmDaemon — the UCM agent's ctl FRONT.
 //
-// HAND-OWNED (gen-app emits once, then skips without --force).
+// HAND-OWNED (gen-fc emits once, then skips without --force).
 //
 // UcmDaemon is the external-facing control node: the fleet manager / com forward
 // a PackageManifest via UpdateCtl.RequestUpdate. UcmDaemon validates it, stashes

@@ -1,7 +1,7 @@
 # FIRST-TIME-ONLY (regenerated with --force). source: system/services/per/package.art
 #
 # Impl slice — handler bodies. The user owns this BUILD.bazel after
-# first emit (you may want to add per-FC test_*.cc files; gen-app
+# first emit (you may want to add per-FC test_*.cc files; gen-fc
 # won't reach in and squash that).
 
 load("@rules_cc//cc:defs.bzl", "cc_library")
@@ -43,7 +43,7 @@ cc_library(
     # closure (the .a's are in the sysroot); only ssl/crypto/system stay dynamic.
     # The host x86 box has grpc shared-only (no .a's), so it keeps the dynamic
     # -l form — a dev/test box, not a shipped distro. This linkopt propagates to
-    # per's binary link (per/main is gen-app'd, can't edit it).
+    # per's binary link (per/main is gen-fc'd, can't edit it).
     #
     # The static group goes inside -Wl,-Bstatic … -Wl,-Bdynamic + --start-group
     # (abseil archives have circular deps). System libs it depends on come AFTER

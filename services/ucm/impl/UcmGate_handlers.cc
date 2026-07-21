@@ -1,6 +1,6 @@
 // User handler bodies for UcmGate.
 //
-// FIRST-TIME-ONLY SCAFFOLD. `artheia gen-app --kind fc` checks for
+// FIRST-TIME-ONLY SCAFFOLD. `artheia gen-fc` checks for
 // this file's existence and refuses to overwrite unless `--force`
 // is passed. Bodies are yours; the declarations are in
 // lib/UcmGate.hh.
@@ -295,7 +295,7 @@ Marker read_marker(const std::string& /*root*/) {
     pb_istream_t is = pb_istream_from_buffer(result.reply.config.bytes,
                                              result.reply.config.size);
     if (!pb_decode(&is, system_services_ucm_UcmActivation_fields, &a)) return m;
-    if (a.state == ACT_NONE) return m;  // cleared (gen-app enum-value alias)
+    if (a.state == ACT_NONE) return m;  // cleared (gen-fc enum-value alias)
     m.state = static_cast<int>(a.state);
     m.version = a.version;
     m.campaign_id = a.campaign_id;

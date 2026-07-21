@@ -1,6 +1,6 @@
 // User handler bodies for ComDaemon.
 //
-// FIRST-TIME-ONLY SCAFFOLD. `artheia gen-app --kind fc` checks for
+// FIRST-TIME-ONLY SCAFFOLD. `artheia gen-fc` checks for
 // this file's existence and refuses to overwrite unless `--force`
 // is passed. Bodies are yours; the declarations are in
 // lib/ComDaemon.hh.

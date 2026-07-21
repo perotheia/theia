@@ -1,6 +1,6 @@
 // User handler bodies for FwDaemon — the firewall control node.
 //
-// HAND-OWNED (gen-app emits this once, then skips it without --force).
+// HAND-OWNED (gen-fc emits this once, then skips it without --force).
 //
 // FwDaemon generates a baseline nftables ruleset for the IP boundary (default-
 // drop input, allow-list the DMZ TCP ports + loopback + established/related),

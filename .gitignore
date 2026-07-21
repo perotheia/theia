@@ -120,7 +120,7 @@ core.*
 #   - `artheia executor emit --out manifest/<x>/executor.json` etc. is a
 #     stray; emit to install/ or stdout. (The canonical rig manifests are
 #     emitted into dist/manifest/ by the dist_manifest pipeline.)
-#   - `artheia gen-app --kind fc --proto-out services/<fc>/proto` litters a
+#   - `artheia gen-fc --proto-out services/<fc>/proto` litters a
 #     package-mirror tree (services/<fc>/proto/system/<pkg>/<leaf>.proto)
 #     + its .pb.{c,h}; the CANONICAL FC protos live in platform/proto/, so
 #     this byproduct is generated, never committed. (Narrow to the

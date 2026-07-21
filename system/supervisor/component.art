@@ -46,7 +46,7 @@ node atomic SupervisorCtl {
         // (per child, resolved from executor.json at run time — not a static
         // netgraph peer), so the runtime emits it via the GenRunnable cast-to-
         // runtime-addr override; this port models the intent. Each child node
-        // is the receiver side (gen-app's universal config-service
+        // is the receiver side (gen-fc's universal config-service
         // register_cast<TraceControlPush/LogLevelPush>).
         sender   child_ctrl provides ChildControlIf
     }

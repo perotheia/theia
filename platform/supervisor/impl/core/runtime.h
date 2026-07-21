@@ -2,7 +2,7 @@
 //
 // Transport-FREE: this class owns the supervision state (the child tree,
 // the watchdog table, the restart strategy) and the select()-loop that
-// drives it. It no longer binds any TIPC socket itself. The gen-app FC
+// drives it. It no longer binds any TIPC socket itself. The gen-fc FC
 // shell wraps it:
 //   - SupervisorWorker (runnable) constructs the process-global Supervisor
 //     and runs do_loop() == run() (the select loop, sole state owner).
@@ -40,7 +40,7 @@ namespace supervisor {
 
 // ---- Plain (protobuf-free) value types crossing the engine boundary ------
 //
-// The engine speaks plain C++ structs; the gen-app SupervisorCtl node
+// The engine speaks plain C++ structs; the gen-fc SupervisorCtl node
 // translates these to/from the nanopb system_supervisor_* wire types.
 
 // One supervision event (child started/exited/restart/escalation/watchdog/

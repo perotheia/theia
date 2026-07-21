@@ -28,7 +28,7 @@ package system.services.ucm
 import system.services.phm.*
 // phm transitively imports system.supervisor.*; pull it here too so phm's
 // supervisor-typed references (SupervisionEvent/HeartbeatReport) resolve during
-// gen-app's cross-ref scan (the 2-hop ucm→phm→supervisor case). Also gives us
+// gen-fc's cross-ref scan (the 2-hop ucm→phm→supervisor case). Also gives us
 // the real SupervisorControlIf for the to_sup edge.
 import system.supervisor.*
 

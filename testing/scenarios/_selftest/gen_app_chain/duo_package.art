@@ -1,8 +1,8 @@
-// Duo — 2-node demo FC for gen-app regen-invariant tests.
+// Duo — 2-node demo FC for gen-fc regen-invariant tests.
 //
 // Owned by testing/scenarios/_selftest/gen_app_chain/.
 // The Robot test copies this into services/duo/system/package.art,
-// runs gen-app, exercises the regen invariants, and cleans up.
+// runs gen-fc, exercises the regen invariants, and cleans up.
 //
 // Shape: one plain reporting node + one GenStateM-driven node, with
 // a sender→receiver signal between them. Small enough that the lib +

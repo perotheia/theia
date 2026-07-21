@@ -1,7 +1,7 @@
 # FIRST-TIME-ONLY (regenerated with --force). source: system/services/ucm/component.art
 #
 # Impl slice — handler bodies. The user owns this BUILD.bazel after
-# first emit (you may want to add per-FC test_*.cc files; gen-app
+# first emit (you may want to add per-FC test_*.cc files; gen-fc
 # won't reach in and squash that).
 
 load("@rules_cc//cc:defs.bzl", "cc_library")
@@ -52,7 +52,7 @@ cc_library(
     ],
     # release_dir.hpp is the release-directory model (A/B replacement) UcmGate
     # #includes as "impl/release_dir.hpp" — the FC out_dir (one above impl/) is
-    # the include root. HAND-OWNED: a hands-off `gen-app --force` regen scaffolds
+    # the include root. HAND-OWNED: a hands-off `gen-fc --force` regen scaffolds
     # ucm_impl WITHOUT these two lines, and the build then loses the header
     # (fatal: impl/release_dir.hpp: No such file). Do NOT drop them on regen.
     # mender_install.hpp: the role-resolution + Mender standalone-install back-end.

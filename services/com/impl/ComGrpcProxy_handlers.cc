@@ -1,6 +1,6 @@
 // User do_* bodies for the runnable node ComGrpcProxy.
 //
-// FIRST-TIME-ONLY SCAFFOLD origin: `artheia gen-app --kind fc`. Bodies are
+// FIRST-TIME-ONLY SCAFFOLD origin: `artheia gen-fc`. Bodies are
 // ours; the declarations live in lib/ComGrpcProxy.hh (byte-stable, do NOT add
 // members there). All gRPC state is file-static in this translation unit —
 // ComGrpcProxy is a single-instance runnable (one per com process), so a
@@ -1288,7 +1288,7 @@ private:
 
 // ---- File-static runnable state (one ComGrpcProxy per process) -----------
 // Held here rather than as ComGrpcProxy members so lib/ComGrpcProxy.hh stays
-// byte-stable against gen-app. do_start builds them; do_stop tears them down.
+// byte-stable against gen-fc. do_start builds them; do_stop tears them down.
 // No firehose uplink: the live tree is a GetTree poll (SupLink), so com needs
 // no ComDaemon cast-sink wiring — Subscribe pulls on an interval.
 std::unique_ptr<SupervisorViewImpl>         g_sup_svc;

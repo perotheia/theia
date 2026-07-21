@@ -1,6 +1,6 @@
 // User handler bodies for SmGate — the SM's external-message front.
 //
-// HAND-OWNED (gen-app emits this once, then skips it without --force).
+// HAND-OWNED (gen-fc emits this once, then skips it without --force).
 // Each lifecycle message the gate receives over TIPC is forwarded into
 // the SmDaemon state machine IN-PROCESS via post_event(). The statem
 // node itself takes no external messages — the gate is the only
@@ -81,7 +81,7 @@ void SmGate::handle_cast(const PowerOff& msg, SmGateState& /*s*/) {
 
 // OTP init/1 + local string handle_info — empty (the gate does no startup
 // work and no self-tick; it only forwards inbound lifecycle casts into the
-// FSM). Present to satisfy the lib decls gen-app emits for every node.
+// FSM). Present to satisfy the lib decls gen-fc emits for every node.
 void SmGate::init(SmGateState& /*s*/) {}
 void SmGate::handle_info(const char* /*info*/, SmGateState& /*s*/) {}
 

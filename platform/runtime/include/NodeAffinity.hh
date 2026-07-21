@@ -2,7 +2,7 @@
 //
 // A rig pins a specific artheia NODE (its thread) to cores + a scheduler via
 // NodeToCPUMapping; the supervisor serializes that into the child's
-// THEIA_NODE_CFG env var, and the hosting process's gen-app main.cc calls
+// THEIA_NODE_CFG env var, and the hosting process's gen-fc main.cc calls
 // apply_node_affinity() right after node.start() to apply it to that node's
 // pthread. Memory limits are NOT here (RLIMIT is per-process, not per-thread —
 // per-node memory needs cgroup v2; see docs/tasks/TODO/per-node-affinity-sched).

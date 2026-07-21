@@ -141,7 +141,7 @@ def theia_init(kind: str = "ws", name: str | None = None,
     to src/{lib,impl} → //src/lib:<name>_lib) + system/<name>_tester/component.art
     (`package system.<name>_tester`, imports+links the package to prove the
     cross-package link) + system/system.art. The whole toolchain then runs
-    UNMODIFIED: gen-app --kind package (→src) + gen-app --kind fc (→apps) +
+    UNMODIFIED: gen-fc-lib (→src) + gen-fc (→apps) +
     gen-manifest + theia manifest/install/start + robot (a reachability probe).
 
     name — the package/workspace name (a valid identifier; used for the FQN, the

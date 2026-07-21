@@ -1,6 +1,6 @@
 // User handler bodies for NmCfgTxn (STATEM variant) — the config-transaction FSM.
 //
-// HAND-OWNED (gen-app emits a scaffold once, then skips without --force).
+// HAND-OWNED (gen-fc emits a scaffold once, then skips without --force).
 //
 // NmCfgTxn owns the two-phase commit. NmCfgGate (which has the request payload)
 // computes the new NmConfig, stashes it in nm_cfg_shared(), and post_event()s

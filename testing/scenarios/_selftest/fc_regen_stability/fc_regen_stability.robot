@@ -14,15 +14,15 @@ Documentation    Regen-stability guard: every committed FC's lib +
 ...              hand-edit. The fix is to:
 ...
 ...                1. Move the .art spec to express the change.
-...                2. Re-run gen-app and commit the regen.
+...                2. Re-run gen-fc and commit the regen.
 ...
 ...                Or — if the template itself is wrong — fix the
 ...                template in artheia/generators/templates/fc_app/
-...                and re-run gen-app across all FCs.
+...                and re-run gen-fc across all FCs.
 ...
 ...              Drives the daemon FCs (sm, com, per, ucm, log) AND
 ...              the non-services FCs (apps×3, gateway) —
-...              gen-app stays byte-stable wherever the FC lives.
+...              gen-fc stays byte-stable wherever the FC lives.
 Library          ${CURDIR}/fc_regen_lib.py
 
 
@@ -43,35 +43,35 @@ Anchor At Workspace
 *** Test Cases ***
 sm regenerates byte-identically
     [Documentation]    services/sm/{lib,main,impl/BUILD.bazel} ==
-    ...                gen-app output from services/system/sm/package.art.
+    ...                gen-fc output from services/system/sm/package.art.
     [Tags]    fc-regen-stability    hermetic    selftest
     Regen And Diff FC    sm
 
 
 com regenerates byte-identically
     [Documentation]    services/com/{lib,main,impl/BUILD.bazel} ==
-    ...                gen-app output from services/system/com/package.art.
+    ...                gen-fc output from services/system/com/package.art.
     [Tags]    fc-regen-stability    hermetic    selftest
     Regen And Diff FC    com
 
 
 per regenerates byte-identically
     [Documentation]    services/per/{lib,main,impl/BUILD.bazel} ==
-    ...                gen-app output from services/system/per/package.art.
+    ...                gen-fc output from services/system/per/package.art.
     [Tags]    fc-regen-stability    hermetic    selftest
     Regen And Diff FC    per
 
 
 ucm regenerates byte-identically
     [Documentation]    services/ucm/{lib,main,impl/BUILD.bazel} ==
-    ...                gen-app output from services/system/ucm/package.art.
+    ...                gen-fc output from services/system/ucm/package.art.
     [Tags]    fc-regen-stability    hermetic    selftest
     Regen And Diff FC    ucm
 
 
 log regenerates byte-identically
     [Documentation]    services/log/{lib,main,impl/BUILD.bazel} ==
-    ...                gen-app output from services/log/system/package.art.
+    ...                gen-fc output from services/log/system/package.art.
     ...                Note log uses the new per-#368 spec layout
     ...                (spec under services/log/system/, not
     ...                services/system/log/); the canonical TraceCollector

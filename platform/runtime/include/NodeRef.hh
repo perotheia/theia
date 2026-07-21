@@ -329,7 +329,7 @@ private:
 //
 // This is the user-facing primitive after the netgraph redesign —
 // app code writes `cast(*this, msg, netgraph::exec)` where
-// `netgraph::exec` is a `constexpr TipcAddr` from the gen-app-emitted
+// `netgraph::exec` is a `constexpr TipcAddr` from the gen-fc-emitted
 // header. The runtime builds a per-call TipcClient + frame-sends.
 //
 // Cost: each cast opens a fresh TIPC connection. For high-frequency

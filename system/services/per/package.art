@@ -177,7 +177,7 @@ node atomic PerClient {
         server client_api provides PerClientIf
         // Outbound config push to each WATCHING subscriber. per is the SOURCE
         // of the platform.runtime.ConfigUpdated cast (the `config_push` data of
-        // ChildControlIf); the subscriber side is gen-app's universal
+        // ChildControlIf); the subscriber side is gen-fc's universal
         // config-service register_cast<ConfigUpdated>. Address is dynamic (the
         // subscriber resolved from WatchConfigReq.subscriber_node at run time,
         // not a static netgraph peer) — emitted via the cast-to-runtime-addr

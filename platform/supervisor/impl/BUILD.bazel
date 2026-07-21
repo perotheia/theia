@@ -1,7 +1,7 @@
 # FIRST-TIME-ONLY (regenerated with --force). source: platform/supervisor/system/component.art
 #
 # Impl slice — handler bodies. The user owns this BUILD.bazel after
-# first emit (you may want to add per-FC test_*.cc files; gen-app
+# first emit (you may want to add per-FC test_*.cc files; gen-fc
 # won't reach in and squash that).
 
 load("@rules_cc//cc:defs.bzl", "cc_library")
@@ -27,7 +27,7 @@ cc_library(
 # The transport-free supervision ENGINE (carried from supervisor.orig,
 # protobuf-stripped). fork/exec/reap/watchdog + the select() loop + the
 # child tree, all behind plain-C++ control primitives + an EmitSink. The
-# gen-app node impls (below) wrap it; the process-global bridge lets the two
+# gen-fc node impls (below) wrap it; the process-global bridge lets the two
 # nodes share one instance.
 # Build-stamp header: #define THEIA_GIT_SHA / THEIA_BUILD_TIMESTAMP from the
 # live workspace. runtime.cpp's do_get_system_info() reads them (behind #ifdef)

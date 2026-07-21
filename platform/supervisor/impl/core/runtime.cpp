@@ -1,6 +1,6 @@
 // Supervisor ENGINE — fork/exec children, observe exits, apply OTP-style
 // restart strategy. Transport-free: it owns the supervision state + the
-// select() loop; the gen-app FC shell (SupervisorWorker + SupervisorCtl)
+// select() loop; the gen-fc FC shell (SupervisorWorker + SupervisorCtl)
 // wraps it. Mirrors supervisor/runtime.py.
 //
 // No protobuf in this translation unit, and NO transport. Outbound
@@ -188,7 +188,7 @@ Supervisor::Supervisor(std::unique_ptr<Node> root,
     machine_name_ = std::move(machine_name);
 
     // Block SIGCHLD only and read it via signalfd — child reaping is the
-    // engine's concern. SIGTERM/SIGINT are NOT ours: the generic gen-app main.cc
+    // engine's concern. SIGTERM/SIGINT are NOT ours: the generic gen-fc main.cc
     // owns process termination (std::signal → stop nodes → exit), the same as
     // every FC. (Previously this also blocked SIGTERM/SIGINT, stealing them from
     // main's handler → the process hung on SIGTERM.) pthread_sigmask, NOT
@@ -1490,7 +1490,7 @@ int Supervisor::run() {
     log_info("supervisor starting (root=" + root_->name + ")");
     start_subtree(*root_);
 
-    // The control surface is provided by the gen-app SupervisorCtl node
+    // The control surface is provided by the gen-fc SupervisorCtl node
     // (bound on the FC's config_mux at 0x80020001); it enqueue()/call()s each
     // op into this engine. No ControlServer / TipcPublisher here any more —
     // this loop is purely the supervision state owner.

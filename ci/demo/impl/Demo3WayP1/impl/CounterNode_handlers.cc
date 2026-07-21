@@ -1,7 +1,7 @@
 // User handler bodies for CounterNode.
 //
 // Holds an integer; serves Get (call) and Inc (cast). Migrated from the
-// retired demo/nodes/counter_node.{hh,cc} onto the gen-app --kind fc
+// retired demo/nodes/counter_node.{hh,cc} onto the gen-fc --kind fc
 // shape (platform/runtime GenServer; logger via this->log() — the node's own
 // [#counter]-tagged logger from the NodeLogger mixin).
 

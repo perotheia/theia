@@ -6,7 +6,7 @@ Hand-edits to generated files (lib/, main/, and the BUILD.bazel in
 impl/) are forbidden — they cause silent drift and break the gen →
 build dependency that the rest of the toolchain assumes.
 
-gen-app is path-agnostic: an FC can live ANYWHERE (services/, apps/,
+gen-fc is path-agnostic: an FC can live ANYWHERE (services/, apps/,
 platform/), and the generated cross-slice Bazel labels
 are derived from --out. This harness mirrors that — each FC carries an
 explicit out-path (and optional --composition), NOT a hardcoded
@@ -20,7 +20,7 @@ IS checked — it carries no business logic.
 
 Drives the daemon FCs (sm, com, per, ucm, log) AND the non-services
 FCs (the apps compositions, the gateway) — proving
-gen-app stays byte-stable regardless of where the FC lives.
+gen-fc stays byte-stable regardless of where the FC lives.
 """
 from __future__ import annotations
 
@@ -38,12 +38,12 @@ from robot.api.deco import keyword, library
 class FcSpec:
     """One FC the regen-stability contract covers.
 
-    short:       test key (also the gen-app fc-short for services FCs).
-    spec:        the .art passed to gen-app (workspace-relative).
+    short:       test key (also the gen-fc fc-short for services FCs).
+    spec:        the .art passed to gen-fc (workspace-relative).
     ns:          --ns C++ namespace.
     out:         --out tree, workspace-relative. The committed FC lives
                  here (or here/<composition> when composition is set —
-                 gen-app appends it verbatim). NOT assumed to be
+                 gen-fc appends it verbatim). NOT assumed to be
                  services/<short>; an FC lives anywhere.
     composition: --composition for a multi-composition spec;
                  None for a single-app FC.
@@ -67,7 +67,7 @@ class FcSpec:
     workspace: Optional[str] = None
     proto_out: str = "platform/proto"
     # impl/BUILD.bazel is normally regen-stable + checked. A few FCs HAND-OWN
-    # it because they add real cc_library targets gen-app can't emit (e.g. per's
+    # it because they add real cc_library targets gen-fc can't emit (e.g. per's
     # per_etcd / migration_registry isolation, log's shared trace_hub). For
     # those, impl/BUILD.bazel is user-owned business architecture — exclude it
     # from the regen diff (lib/ + main/ are still checked). The header on those
@@ -80,7 +80,7 @@ class FcSpec:
         return f"{self.out}/{self.composition}" if self.composition else self.out
 
 
-# FCs that should regenerate byte-identically. gen-app derives its
+# FCs that should regenerate byte-identically. gen-fc derives its
 # cross-slice Bazel labels from --out, so the in-tree location is the
 # single source of truth — services/ is no longer privileged.
 FC_SPECS = [
@@ -116,11 +116,11 @@ FC_SPECS = [
     # fully-generated fork/drain runnable, no state.hh) + RdsCtl (atomic). Proves
     # the prebuilt template-pair + impl/BUILD `not n.prebuilt` state-skip stay
     # regen-stable. The ara::rds transport lib lives in services/rds/transport
-    # (a sibling target), not impl/BUILD, so impl/BUILD is gen-app-default.
+    # (a sibling target), not impl/BUILD, so impl/BUILD is gen-fc-default.
     FcSpec("rds", "system/services/rds/package.art", "ara::rds", "services/rds"),
     # Non-services (consuming-workspace) regen coverage moved with the demo/
     # retirement: the user-flow harness (ci/run.sh s2 + ci/test/gen_chain.robot)
-    # scaffolds a FRESH workspace per run and drives gen-app/--composition
+    # scaffolds a FRESH workspace per run and drives gen-fc/--composition
     # against it — path-agnostic label derivation is proven there on every
     # commit, with no committed reference tree to drift.
 ]
@@ -162,14 +162,14 @@ class FcRegenLib:
         # are resolved against THIS workspace.
         fc_ws = self._workspace / fc.workspace if fc.workspace else self._workspace
 
-        # The cross-slice Bazel labels gen-app emits are derived from the
+        # The cross-slice Bazel labels gen-fc emits are derived from the
         # --out STRING (//<out>/lib:<short>_lib), so to reproduce the
         # committed FC byte-for-byte we must pass the SAME workspace-
         # relative --out the real invocation uses (e.g. `apps`, not an
         # absolute /tmp path). We run with cwd=scratch and an ABSOLUTE
         # spec path, so the relative --out writes into scratch while the
         # baked-in labels stay `//<fc.out>/...`. --composition is appended
-        # exactly as the real invocation does (gen-app appends it to --out
+        # exactly as the real invocation does (gen-fc appends it to --out
         # both for the filesystem and the label prefix).
         cmd = [
             "artheia", "gen-fc",
@@ -192,11 +192,11 @@ class FcRegenLib:
         )
         if result.returncode != 0:
             raise AssertionError(
-                f"gen-app for {short} failed:\n"
+                f"gen-fc for {short} failed:\n"
                 f"stdout: {result.stdout}\nstderr: {result.stderr}"
             )
 
-        # gen-app wrote to scratch/<fc.in_tree>; the committed copy is at
+        # gen-fc wrote to scratch/<fc.in_tree>; the committed copy is at
         # <fc_ws>/<fc.in_tree>.
         regen_dir = scratch / fc.in_tree
         in_tree = fc_ws / fc.in_tree
@@ -208,7 +208,7 @@ class FcRegenLib:
             ("main", None),                           # all files
         ]
         # impl/BUILD.bazel is checked unless this FC hand-owns it (real
-        # cc_library targets gen-app can't reproduce — see FcSpec).
+        # cc_library targets gen-fc can't reproduce — see FcSpec).
         if not fc.hand_owned_impl_build:
             regenerable.append(("impl", "BUILD.bazel"))
         for slice_, filter_ in regenerable:
@@ -220,10 +220,10 @@ class FcRegenLib:
                 in_tree_f = in_tree_slice / tmp_f.name
                 if not in_tree_f.exists():
                     raise AssertionError(
-                        f"{short}: gen-app emits {slice_}/{tmp_f.name}, "
+                        f"{short}: gen-fc emits {slice_}/{tmp_f.name}, "
                         f"but it doesn't exist in tree"
                     )
-                # A HAND-OWNED slice file is deliberately not the gen-app
+                # A HAND-OWNED slice file is deliberately not the gen-fc
                 # template (e.g. sm's main.cc wires the two-node FSM via
                 # LocalRef + sm_statem_ref()). Its lib/ + impl/BUILD still
                 # regen byte-stable and ARE checked; only the hand-owned
@@ -236,7 +236,7 @@ class FcRegenLib:
                     comp = f" --composition {fc.composition}" if fc.composition else ""
                     raise AssertionError(
                         f"{short}: {slice_}/{tmp_f.name} drift — "
-                        f"the committed file diverges from gen-app output. "
+                        f"the committed file diverges from gen-fc output. "
                         f"Run `artheia gen-fc {fc.spec} "
                         f"--out {fc.out}/ --proto-out platform/proto/ "
                         f"--ns {fc.ns}{comp} --force` and commit the diff."
@@ -244,7 +244,7 @@ class FcRegenLib:
 
     @staticmethod
     def _strip_source_comment(text: str) -> str:
-        """gen-app's emit includes a `source: <path>` comment near
+        """gen-fc's emit includes a `source: <path>` comment near
         the top of every file (sometimes embedded in a longer banner
         like `# FIRST-TIME-ONLY (regenerated with --force). source:
         ...`). We normalize the path portion so /tmp paths vs

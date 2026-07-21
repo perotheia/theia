@@ -278,7 +278,7 @@ protected:
     // Override in Derived to call Derived::init(state). Runs ONCE on the
     // node's own thread before any mailbox item is handled — the OTP
     // gen_server:init/1 callback. Default no-op; the GenServer<Derived,
-    // State> override forwards to Derived::init(state_) (which gen-app
+    // State> override forwards to Derived::init(state_) (which gen-fc
     // emits — empty by default — into every node's impl).
     virtual void dispatch_init_() {}
 
@@ -398,7 +398,7 @@ public:
 
     // Default init is a no-op (OTP init/1). Derived shadows it with
     //   void init(State& state);
-    // gen-app emits an init() body into every node's impl (empty by
+    // gen-fc emits an init() body into every node's impl (empty by
     // default, the bootstrap body for self-driving nodes). The default
     // here keeps EXISTING (un-regenerated) FCs compiling against the new
     // runtime — name-hiding picks Derived's init() once it's emitted.
@@ -513,7 +513,7 @@ protected:
 
     // OTP init/1: forward to Derived::init(state) on the node thread,
     // once, before the first message (called from GenServerBase::loop_).
-    // gen-app emits Derived::init(State&) into every node's impl (empty
+    // gen-fc emits Derived::init(State&) into every node's impl (empty
     // by default), so this resolves to a real method.
     //
     // Guarded with `if constexpr`: a GenStateM-derived node's `init` has
@@ -543,7 +543,7 @@ protected:
     // reporting node, so emit() only submits to the collector bus for
     // reporting nodes (parallels the reporting-gated NodeTraceCtl config
     // receiver). Runs from the ctor body — Derived is complete at
-    // instantiation. gen-app daemons all declare `kReporting`; other
+    // instantiation. gen-fc daemons all declare `kReporting`; other
     // GenServer users (test fixtures, ad-hoc nodes) may not, so detect
     // it and default to false (safe: no bus traffic from an unmarked
     // node). Idempotent — the per-node-type Tracer is a singleton.

@@ -28,7 +28,7 @@ namespace services_com {
 
 namespace {
 
-// Control address — the gen-app supervisor's SupervisorCtl node (system.art:
+// Control address — the gen-fc supervisor's SupervisorCtl node (system.art:
 // `node atomic SupervisorCtl { tipc type=0x80020001 instance=0 }`). The current
 // supervisor UNIFIED control + the event/health/firehose on this one address
 // (the old split-out 0x80020003 control node is gone). This is exactly what

@@ -56,10 +56,10 @@ Tear Down Synthetic FC
 
 *** Test Cases ***
 Stage 1 — initial emit writes all three slices
-    [Documentation]    First gen-app run emits lib/ (DaemonClass.hh
+    [Documentation]    First gen-fc run emits lib/ (DaemonClass.hh
     ...                + netgraph + BUILD), main/ (main.cc + BUILD),
     ...                impl/ (handlers + BUILD), and the .proto
-    ...                under proto-out. Validates the gen-app
+    ...                under proto-out. Validates the gen-fc
     ...                template-set hasn't lost a file.
     [Tags]    gen-app-chain    hermetic    selftest    stage-1
 
@@ -92,7 +92,7 @@ Stage 1 — initial emit writes all three slices
 
 
 Stage 2 — re-emit overwrites lib + main, preserves impl
-    [Documentation]    The contract: re-running gen-app without
+    [Documentation]    The contract: re-running gen-fc without
     ...                --force regenerates lib + main (idempotent
     ...                — bytes don't actually change for a stable
     ...                .art) but SKIPS impl. Asserts impl bytes
@@ -122,7 +122,7 @@ Stage 2 — re-emit overwrites lib + main, preserves impl
 
 Stage 3 — hand-edit on impl survives re-emit
     [Documentation]    Append a unique user comment to
-    ...                impl/handlers.cc, re-run gen-app without
+    ...                impl/handlers.cc, re-run gen-fc without
     ...                --force, assert the comment is still there.
     ...                This is the workflow that matters most: the
     ...                user iterates on handler logic while
@@ -190,7 +190,7 @@ Stage 6 — bazel build the synthetic FC
     ...
     ...                This is the strongest single check: it
     ...                proves the lib/main/impl/proto chain
-    ...                emitted by gen-app produces a real, linkable
+    ...                emitted by gen-fc produces a real, linkable
     ...                cc_binary against platform/runtime.
     [Tags]    gen-app-chain    live-bazel    selftest    stage-6
 

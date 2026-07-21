@@ -1,6 +1,6 @@
 // User handler bodies for NmCfgGate — the config-transaction gate (GenServer).
 //
-// HAND-OWNED (gen-app emits a scaffold once, then skips without --force).
+// HAND-OWNED (gen-fc emits a scaffold once, then skips without --force).
 //
 // NmCfgGate is the OWNER of the config transaction: it has the request payload
 // (handle_call), validates it, computes the new NmConfig (clone the committed

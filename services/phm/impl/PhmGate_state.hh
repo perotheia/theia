@@ -1,6 +1,6 @@
 // State struct for PhmGate — APP-OWNED, WRITE-ONCE.
 //
-// `artheia gen-app --kind fc` seeds this once and then NEVER overwrites
+// `artheia gen-fc` seeds this once and then NEVER overwrites
 // it (unless --force). PhmGate is the PHM ingest: it counts faults per
 // monitored entity in the configured window and post_event()s the
 // matching level-change into PhmFsm. This struct holds that per-entity

@@ -137,7 +137,7 @@ fixup_counter(&from, &to);
 ```
 
 and writes a **WRITE-ONCE** sidecar `<out>_custom.cc` with the typed stub —
-never clobbered on regen (like gen-app's `impl/`). You implement the body on the
+never clobbered on regen (like gen-fc's `impl/`). You implement the body on the
 typed nanopb structs. So 100% is expressible, ~90% generated. (The whole plugin
 IS C, so even a fully hand-written `per_register_migrations` is valid.)
 

@@ -6,7 +6,7 @@ Documentation     RDS zero-copy data plane — consistent reporting wrapper.
 ...               copy, while the Theia TIPC control plane carries the "frame
 ...               ready" notification. RouDi (iox-roudi, a supervised native
 ...               child) owns the pools. A node opts in via the .art
-...               `requires_rds` + `rds_stream` (gen-app links librds + emits the
+...               `requires_rds` + `rds_stream` (gen-fc links librds + emits the
 ...               StreamWriter/Reader handles).
 ...
 ...               This suite runs the cc roundtrip (//services/rds/test:

@@ -1,5 +1,5 @@
 # @pero_theia//platform/supervisor/tombstone — the BUILD shipped into
-# /opt/theia. Just the `:tombstone` cc_library a consuming workspace's gen-app
+# /opt/theia. Just the `:tombstone` cc_library a consuming workspace's gen-fc
 # main links (crash-handler). Keep IN SYNC with the repo's tombstone/BUILD.bazel
 # :tombstone target.
 load("@rules_cc//cc:defs.bzl", "cc_library")

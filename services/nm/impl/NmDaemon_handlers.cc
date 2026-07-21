@@ -1,6 +1,6 @@
 // User handler bodies for NmDaemon (STATEM variant) — the network-readiness FSM.
 //
-// HAND-OWNED (gen-app emits this once, then skips it without --force).
+// HAND-OWNED (gen-fc emits this once, then skips it without --force).
 //
 // NmDaemon is the readiness state machine. It takes NO external TIPC events: the
 // sibling NmPoller (same process) reads `ip` link/addr state on a tick and

@@ -175,7 +175,7 @@ shims:
 
 ```sh
 theia init my_ws                                          # scaffold beside theia
-artheia gen-app --kind fc system/apps/component.art \
+artheia gen-fc system/apps/component.art \
         --out apps --proto-out proto                      # emits @pero_theia//… labels
 bazel build //apps/...                                    # compiles against @pero_theia
 theia manifest bootstrap && theia install && theia start  # the ws's own rig drives the tree
@@ -186,14 +186,14 @@ theia manifest bootstrap && theia install && theia start  # the ws's own rig dri
   gateway/PSP/firmware toolchains), consumes the framework via
   `bazel_dep(pero_theia)` + `local_path_override` (relative ws→theia), and
   declares the user's rig (`@rig_myapp`).
-- **No platform shims.** gen-app detects the consuming-workspace layout and
+- **No platform shims.** gen-fc detects the consuming-workspace layout and
   emits the framework labels already qualified —
   `@pero_theia//platform/runtime:runtime`,
   `@pero_theia//platform/supervisor/tombstone:tombstone` — so they resolve
   straight against the sibling module. (Earlier `theia init` wrote per-label
-  `alias()` shims under `platform/`; gen-app emitting `@pero_theia//…` directly
+  `alias()` shims under `platform/`; gen-fc emitting `@pero_theia//…` directly
   removed them.)
-- The app's OWN proto stays local: gen-app writes `proto/system/apps/*` and the
+- The app's OWN proto stays local: gen-fc writes `proto/system/apps/*` and the
   `//proto:platform_protos` aggregator the lib links is in-workspace (a
   consumer whose `.art` differs from the framework's gets its own wire types).
 
@@ -227,7 +227,7 @@ So Theia doesn't hardcode `apps`/`demo`:
   target never carries sources/protos.
 - **`.deb` is primary, `.ipk` is the embedded hatch** (`--ipk`). Same `ar`
   archive; `dpkg` installs either.
-- **The workspace consumes Theia, never vendors it** — gen-app emits
+- **The workspace consumes Theia, never vendors it** — gen-fc emits
   `@pero_theia//…` labels directly (no alias shims), resolving against the
   sibling framework module via `local_path_override`.
 - **artheia changes ⇒ rebuild + reinstall `theia-framework`** on the target;

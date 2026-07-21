@@ -3,7 +3,7 @@
 # Impl slice — handler bodies. The user owns this BUILD.bazel: it adds
 # ids_backend.hpp (the eBPF/mock event source) to the state + impl targets, and
 # gives idsm_impl the log proto dep (the handler submits a
-# system_services_log_TraceRecord to the firehose). gen-app can't derive these
+# system_services_log_TraceRecord to the firehose). gen-fc can't derive these
 # from the .art — excluded from the regen-stability diff (see fc_regen_lib.py
 # hand_owned_impl_build).
 

@@ -2,7 +2,7 @@
 //
 // Every 300ms casts Inc{2} at CounterNode (cross-PROCESS — Counter is in
 // P1). Migrated from the retired demo/nodes/incrementer_node.{hh,tcc}
-// onto the gen-app --kind fc shape — outbound cast by the generated
+// onto the gen-fc --kind fc shape — outbound cast by the generated
 // netgraph TipcAddr; timers via process_timers(), logger via this->log()
 // ([#incrementer] tag).
 

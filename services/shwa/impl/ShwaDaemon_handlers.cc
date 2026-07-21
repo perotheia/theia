@@ -1,6 +1,6 @@
 // User handler bodies for ShwaDaemon — the Safe-Hardware-Accelerator node.
 //
-// HAND-OWNED (gen-app emits this once, then skips it without --force).
+// HAND-OWNED (gen-fc emits this once, then skips it without --force).
 //
 // On a timer tick ShwaDaemon samples the build-selected backend (host or
 // jetson), broadcasts an AccelTelemetry record (CPU/GPU/mem/temp/power/fan),

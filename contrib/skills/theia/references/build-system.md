@@ -76,14 +76,14 @@ bazel build //:install
 ## Regen-stability guard
 
 Committed `lib/main/impl/BUILD` files for every FC must equal what
-`artheia gen-app --kind fc <fc>` produces today. The selftest enforces
+`artheia gen-fc <fc>` produces today. The selftest enforces
 this — run it after any template or `.art` change:
 
 ```sh
 robot rf_theia/scenarios/_selftest/fc_regen_stability/fc_regen_stability.robot
 ```
 
-If it fails, the fix is to **re-run gen-app and commit the regen**, not
+If it fails, the fix is to **re-run gen-fc and commit the regen**, not
 to edit the generated files.
 
 ## Where to look when it breaks
@@ -92,5 +92,5 @@ to edit the generated files.
 | --- | --- |
 | `rig-deps` fails at module-load time | `artheia rig-deps apps.manifest.rig` in isolation; it's a normal Python import error |
 | Target `@rig_apps//<m>:image` missing | machine `bazel_buildable=False` in the rig — `pkg_opkg` is skipped on purpose |
-| Stale FC scaffold won't compile | re-run `artheia gen-app --kind fc <fc>`; `impl/<Node>_handlers.cc` is yours, everything else is regen |
+| Stale FC scaffold won't compile | re-run `artheia gen-fc <fc>`; `impl/<Node>_handlers.cc` is yours, everything else is regen |
 | `.proto` change not picked up | the `.pb.*` are genrule-derived; `bazel clean --expunge` if the genrule cache lies |

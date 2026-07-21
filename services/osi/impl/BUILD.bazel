@@ -2,7 +2,7 @@
 #
 # Impl slice — handler bodies. The user owns this BUILD.bazel: it adds
 # osi_backend.hpp (the cgroup v2 + /proc + Orin-power observer/controller) to the
-# state + impl targets. gen-app can't derive that from the .art — excluded from
+# state + impl targets. gen-fc can't derive that from the .art — excluded from
 # the regen-stability diff (see fc_regen_lib.py hand_owned_impl_build).
 #
 # The V2V plane (estimator + consensus + the mesh transport) MOVED OUT to

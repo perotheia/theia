@@ -1,4 +1,4 @@
-# `gen-app --kind fc`: the lib/main/impl split
+# `gen-fc`: the lib/main/impl split
 
 How an FC's C++ is generated from its `.art` spec. Generator:
 `artheia/artheia/generators/fc_app.py`; templates in
@@ -7,7 +7,7 @@ How an FC's C++ is generated from its `.art` spec. Generator:
 ## The command
 
 ```sh
-PATH="$PWD/.venv/bin:$PATH" artheia gen-app --kind fc \
+PATH="$PWD/.venv/bin:$PATH" artheia gen-fc \
     services/<fc>/system/<fc>/package.art \
     --out        services/<fc>/ \
     --proto-out  platform/proto/ \
@@ -17,7 +17,7 @@ PATH="$PWD/.venv/bin:$PATH" artheia gen-app --kind fc \
 
 | flag | meaning |
 | --- | --- |
-| `--kind fc` | FC mode (vs `psp`). |
+| `gen-fc` | FC mode (vs `psp`). |
 | `<art_file>` | the spec — `services/<fc>/system/<fc>/package.art` (loader merges the sibling `component.art`). |
 | `--out` | the impl tree root, `services/<fc>/`. |
 | `--proto-out` | where the `.proto` lands — `platform/proto/`. The committed `.proto` is the source; `.pb.*` are gitignored, genrule-derived. |
@@ -44,13 +44,13 @@ services/<fc>/
 
 The split: `lib/` + `main/` are a pure projection of the `.art` — rewritten
 verbatim every run. `impl/<Node>_handlers.cc` carries your business logic;
-gen-app refuses to overwrite it unless `--force`. It's the *only* file you
+gen-fc refuses to overwrite it unless `--force`. It's the *only* file you
 hand-edit. To change anything in `lib/`/`main/`, change the `.art` (or the
 Jinja template) and regenerate — never edit the generated file.
 
 ## One node = one skeleton; multi-node FCs decompose
 
-A single FC package may declare more than one node. gen-app emits per-node
+A single FC package may declare more than one node. gen-fc emits per-node
 `<Node>.hh`, `<Node>_netgraph.hh`, plus the **write-once** pair
 `impl/<Node>_handlers.cc` (handler bodies) and `impl/<Node>_state.hh` (the
 node's state struct), with shared `<fc>_codecs.hh` + `Log.hh`. So
@@ -71,7 +71,7 @@ state. Both `impl/<Node>_handlers.cc` and `impl/<Node>_state.hh` are
 APP-OWNED and never overwritten unless you pass `--force` (which clobbers
 both).
 
-## Which base class gen-app picks
+## Which base class gen-fc picks
 
 Per node, by shape of the `.art` `node` declaration:
 
@@ -89,7 +89,7 @@ GenServer — choosing the `Daemon[.statem|.runnable].hh.j2` +
 
 `testing/rf_theia/scenarios/_selftest/fc_regen_stability/` enforces the
 contract: **committed `lib/`, `main/`, and `impl/BUILD.bazel` must equal
-gen-app's output byte-for-byte.** Only `impl/<Node>_handlers.cc` is exempt
+gen-fc's output byte-for-byte.** Only `impl/<Node>_handlers.cc` is exempt
 (detected by its `HAND-OWNED` / `FIRST-TIME-ONLY SCAFFOLD` banner). The
 `FC_SPECS` table in `fc_regen_lib.py` maps each short → spec path → namespace:
 
@@ -111,7 +111,7 @@ cd testing && PATH="$PWD/.venv/bin:$PATH" \
 ```
 
 If a test fails, the fix is **not** to commit a hand-edit to a generated
-file. Either change the `.art` and re-run gen-app, or — if the template is
+file. Either change the `.art` and re-run gen-fc, or — if the template is
 wrong — fix the template under `templates/fc_app/` and regenerate every FC.
 When you add a field/node to a spec, regenerate, then build to confirm:
 
@@ -119,22 +119,22 @@ When you add a field/node to a spec, regenerate, then build to confirm:
 bazel build --config=linux //services/<fc>/main:<fc>
 ```
 
-## `gen-app --kind package`: the reusable-unit (no-main) mode
+## `gen-fc-lib`: the reusable-unit (no-main) mode
 
-`--kind fc` builds a runnable daemon (lib + **main** + impl). `--kind package`
+`gen-fc` builds a runnable daemon (lib + **main** + impl). `gen-fc-lib`
 builds a **linkable unit with NO main** — the ROS-package shape a workspace
 imports and links. It is how `theia init --kind package` scaffolds are built (see
 the SKILL's "Packages" section for the two-package repo layout).
 
 ```sh
 # from a package repo, source .art under system/<X>/, codegen to src/:
-artheia gen-app --kind package system/<X>/package.art \
+artheia gen-fc-lib system/<X>/package.art \
   --out src --proto-out proto --ns ara::<X>
 ```
 
-| flag | effect (vs `--kind fc`) |
+| flag | effect (vs `gen-fc`) |
 | --- | --- |
-| `--kind package` | emit `lib/` + `impl/` + a **self-contained proto** (nanopb genrule + `<X>_proto` cc_library), **NO `main/`**. |
+| `gen-fc-lib` | emit `lib/` + `impl/` + a **self-contained proto** (nanopb genrule + `<X>_proto` cc_library), **NO `main/`**. |
 | `--out src` | codegen tree. Lib → `src/lib` (regen, gitignored); impl → `src/impl` (**write-once**, tracked). Keep it OUT of the hand-edited `system/` source. |
 | `--ns ara::<X>` | the package's C++ namespace — required, else co-composed packages collide on `Log.hh`. |
 | `--proto-out proto` | the package's proto lands at `proto/system/<X>/` (keyed off the `.art` **FQN**, not `--out`); label `//proto/system/<X>:<X>_proto`. |
@@ -147,7 +147,7 @@ What lands where — the labels a consuming composition derives from
 - `//src/lib:<X>_lib` — the node class + wiring (regenerated every run; the proto
   dep is auto-correct).
 - `//src/impl:<X>_impl` + `//src/impl:<X>_state` — handler bodies + state structs.
-  **Write-once**: `gen-app` refuses to overwrite `src/impl/*` and its
+  **Write-once**: the gen-fc family refuses to overwrite `src/impl/*` and its
   `BUILD.bazel` without `--force` — so a custom algo target (e.g. v2v's
   `v2v_algo`) or a `select()` survives regen. **`--force` CLOBBERS the write-once
   impl** — back it up first if you must refresh lib+proto that way; plain regen
@@ -155,7 +155,7 @@ What lands where — the labels a consuming composition derives from
 - `//proto/system/<X>:<X>_proto` — the package's own messages (a consuming SWP
   links just these, not the framework `//platform/proto` aggregate).
 
-A `gen-app --kind fc` run on a `component.art` that `import`s the package then
+A `gen-fc` run on a `component.art` that `import`s the package then
 LINKS these prebuilt targets and does **not** regenerate the imported node
 (filtered in the per-node loop + `BUILD.lib/impl.j2`). Externally (package cloned
 into another workspace) the same node resolves as `//packages/<X>/src/lib:<X>_lib`.

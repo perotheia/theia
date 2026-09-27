@@ -22,7 +22,7 @@ in-repo demo lives in exactly such a workspace at `demo/` (Theia dogfoods the
 | **[theia](https://github.com/perotheia/theia)** | this repo — runtime, supervisor, services, build/packaging |
 | **[artheia](https://github.com/perotheia/artheia)** | submodule — the `.art` DSL, generators, LSP |
 | **[rf-theia](https://github.com/perotheia/rf-theia)** | submodule — the Robot Framework testing harness (library only) |
-| **docs** | a plain clone at `docs/` (gitignored here, not part of the framework tree) |
+| **[wiki](https://github.com/perotheia/theia/wiki)** | the manuals + tutorials (`git clone https://github.com/perotheia/theia.wiki.git`) |
 
 Submodules also include `third_party/etcd-cpp-apiv3`.
 
@@ -44,7 +44,6 @@ contrib/
   skills/           Claude Code agent skills
 packaging/theia/    the ROS2-style .deb package set (framework/runtime/services)
 rules/, toolchains/ Bazel rules (rig.bzl, deb.bzl, config/) + cross-compile cfg
-docs/               a plain clone of the docs repo (gitignored — see above)
 ```
 
 The three primitives everything in `.art` rests on:
@@ -90,7 +89,7 @@ theia manifest && theia install && theia start
 ```
 
 See [`contrib/skills/theia/SKILL.md`](contrib/skills/theia/SKILL.md) for the
-full orientation, and the **docs** repo (cloned at `docs/`) for the manuals.
+full orientation, and the [wiki](https://github.com/perotheia/theia/wiki) for the manuals.
 
 ## Editor support
 
@@ -113,4 +112,4 @@ services / -dev) under `dist/debian/`. (`theia release <target>` is the separate
 S3 runtime-plane push, not the local build.) The framework deb ships artheia + rf-theia
 as **wheels** under `/opt/theia/wheels` (the user installs them into their own
 venv) and makes `/opt/theia` a consumable Bazel module (`@pero_theia`). See
-[`docs/`](docs/) → deployment for the full split.
+the wiki's [Tutorial 1 — Install](https://github.com/perotheia/theia/wiki/Tutorial-1-Install) for the full split.

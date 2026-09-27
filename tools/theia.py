@@ -1154,7 +1154,28 @@ def _deep_merge(base, over):
     return over                               # scalar / plain list → replace
 
 
-def _apply_config_overrides(machine: str, cfg_dir: Path) -> None:
+# Host-path anchors a deploy/config override may use in string values. Expanded
+# ONLY by the local install pass (expand_anchors=True): `theia manifest` bakes
+# overrides into the committed/shipped dist/manifest, which must stay free of
+# host paths, so there the literal `${THEIA_WORKSPACE}` survives.
+_CONFIG_ANCHORS = ("THEIA_WORKSPACE", "THEIA_ROOT")
+
+
+def _expand_anchors(v):
+    if isinstance(v, str):
+        for k in _CONFIG_ANCHORS:
+            v = v.replace("${" + k + "}", str(WORKSPACE if k == "THEIA_WORKSPACE"
+                                              else THEIA_ROOT))
+        return v
+    if isinstance(v, dict):
+        return {k: _expand_anchors(x) for k, x in v.items()}
+    if isinstance(v, list):
+        return [_expand_anchors(x) for x in v]
+    return v
+
+
+def _apply_config_overrides(machine: str, cfg_dir: Path,
+                            expand_anchors: bool = False) -> None:
     """Deep-merge deploy/config/<machine>/<name>.json ON TOP of the staged
     install/<machine>/config/<name>.json (INCLUDING executor.json). This is the
     LOCAL equivalent of colony's deploy-time config-override pass — it lets a
@@ -1167,7 +1188,12 @@ def _apply_config_overrides(machine: str, cfg_dir: Path) -> None:
 
     blocks per (needs etcd) and nm (needs CAP_NET_ADMIN) from booting on a box
     that lacks those, while keeping them DEFINED in the tree. The build artifact
-    stays a pure function of (arch, os, version); the override is the rig layer."""
+    stays a pure function of (arch, os, version); the override is the rig layer.
+
+    With expand_anchors (the local install), `${THEIA_WORKSPACE}` /
+    `${THEIA_ROOT}` in override string values resolve to this host's paths —
+    for dev-bench-only values (a workspace output dir, a static web root) that
+    have no share/<fc>/data equivalent."""
     import json as _json
     override_dir = WORKSPACE / "deploy" / "config" / machine
     if not override_dir.is_dir():
@@ -1183,6 +1209,8 @@ def _apply_config_overrides(machine: str, cfg_dir: Path) -> None:
             print(f"theia: skipping malformed override {ov} ({e})",
                   file=sys.stderr)
             continue
+        if expand_anchors:
+            merged = _expand_anchors(merged)
         target.write_text(_json.dumps(merged, indent=2))
         print(f"theia: applied config override {ov.name} → {target}",
               file=sys.stderr)
@@ -1415,7 +1443,11 @@ def cmd_install(args: list[str]) -> int:
     fw_targets = [t for t in all_targets
                   if _is_framework_target(t) and t not in prebuilt]
     ws_targets = [t for t in all_targets if not _is_framework_target(t)]
-    if fw_targets and (rc := _run(["bazel", "build", *fw_targets],
+    # --config=linux: install is host-only, and this is the host config every
+    # workspace .bazelrc (_INIT_BAZELRC) and the build docs already default to —
+    # without it a manual `bazel build --config=linux` in THEIA_ROOT and this
+    # build keep discarding each other's analysis cache (--compiler/--copt flip).
+    if fw_targets and (rc := _run(["bazel", "build", "--config=linux", *fw_targets],
                                   cwd=THEIA_ROOT)) != 0:
         return rc
     if ws_targets:
@@ -1470,7 +1502,15 @@ def cmd_install(args: list[str]) -> int:
     # 3b. Apply per-machine config overrides (deploy/config/<machine>/*.json),
     #     deep-merged onto the staged config — incl. executor.json (e.g.
     #     run_on_start:false to keep per/nm DOWN on a box without etcd/netadmin).
-    _apply_config_overrides(machine, cfg_dir)
+    _apply_config_overrides(machine, cfg_dir, expand_anchors=True)
+
+    # 3c. Stage the per-FC DATA resources (ProcessLayer.resources — LUTs, model
+    #     engines) into releases/local/share/<fc>/data/, mirroring what `theia
+    #     dist` bakes into the deb. Without this an FC reading its data through
+    #     share_dir_self() finds nothing in the local dev loop.
+    if (rc := _stage_resources_local(manifest_root / machine,
+                                     dest / "releases" / "local")) != 0:
+        return rc
 
     # 4. Stage binaries + setcap. A binary's source is its prebuilt path (deb
     #    mode) when we have one, else its bazel-bin output.
@@ -2007,6 +2047,62 @@ def _is_lazy_resource(src: str) -> bool:
     return src.strip().startswith(_MODEL_SCHEME)
 
 
+def _baked_resources(machine_dir: Path,
+                     verb: str) -> "list[tuple[str, Path, str]] | None":
+    """The (fc_name, src_path, dest_rel) triples for every BAKED resource the
+    machine's execution.json declares (ProcessLayer.resources). `src` resolves
+    against the WORKSPACE; `dest` defaults to the src basename. LAZY resources
+    (`model:…`) are skipped. Returns None (after a LOUD error) when a declared
+    src is missing — shared by `theia dist` (deb bake) and `theia install`
+    (local stage) so both read the same resource contract."""
+    import json
+    exec_json = machine_dir / "execution.json"
+    if not exec_json.is_file():
+        return []
+    procs = json.loads(exec_json.read_text()).get("processes", [])
+    out: list[tuple[str, Path, str]] = []
+    for p in procs:
+        fc = p.get("name")
+        for r in (p.get("resources") or []):
+            src = (r.get("src") or "").strip()
+            if not src:
+                continue
+            if _is_lazy_resource(src):
+                continue                        # lazy (model:…) → pulled on device
+            dest = (r.get("dest") or os.path.basename(src)).strip().lstrip("/")
+            src_path = (WORKSPACE / src).resolve()
+            if not src_path.is_file():
+                print(f"{verb}: {fc}: resource src not found: {src} "
+                      f"(resolved {src_path})", file=sys.stderr)
+                return None
+            out.append((fc, src_path, dest))
+    return out
+
+
+def _stage_resources_local(machine_dir: Path, release: Path) -> int:
+    """LOCAL counterpart of _inject_resources: copy the machine's baked resources
+    into <release>/share/<fc>/data/<dest> — the SAME relative layout the deb
+    lands at /opt/theia/share, so runtime::share_dir_self() (relative default
+    `share/<fc>/data`, CWD = current) resolves identically in the dev loop and
+    on the device. The share/ tree is rebuilt from scratch each install so a
+    resource dropped from the manifest doesn't linger."""
+    staged = _baked_resources(machine_dir, "theia install")
+    if staged is None:
+        return 1
+    share = release / "share"
+    if share.exists():
+        shutil.rmtree(share)
+    for fc, src_path, dest in staged:
+        adest = share / fc / "data" / dest
+        adest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(src_path, adest)
+    if staged:
+        fcs = ",".join(sorted({fc for fc, _, _ in staged}))
+        print(f"theia install: staged {len(staged)} resource(s) → "
+              f"{share}/{{{fcs}}}/data/", file=sys.stderr)
+    return 0
+
+
 def _inject_resources(deb: Path, machine_dir: Path) -> int:
     """Repack a per-machine app .deb with the DATA resources each FC declared in
     the manifest (ProcessLayer.resources), staged under
@@ -2019,30 +2115,11 @@ def _inject_resources(deb: Path, machine_dir: Path) -> int:
     (`src` = `model:...`) are SKIPPED — they are pulled on-device by `theia models
     pull`, not baked here. Root-owns the added files, mirroring
     _inject_services_config."""
-    import json
     import shutil
     import tempfile
-    exec_json = machine_dir / "execution.json"
-    if not exec_json.is_file():
-        return 0
-    procs = json.loads(exec_json.read_text()).get("processes", [])
-    # (fc_name, src_path, dest_rel) triples for every BAKED resource.
-    staged_files: list[tuple[str, Path, str]] = []
-    for p in procs:
-        fc = p.get("name")
-        for r in (p.get("resources") or []):
-            src = (r.get("src") or "").strip()
-            if not src:
-                continue
-            if _is_lazy_resource(src):
-                continue                        # lazy (model:…) → pulled on device
-            dest = (r.get("dest") or os.path.basename(src)).strip().lstrip("/")
-            src_path = (WORKSPACE / src).resolve()
-            if not src_path.is_file():
-                print(f"theia dist: {fc}: resource src not found: {src} "
-                      f"(resolved {src_path})", file=sys.stderr)
-                return 1
-            staged_files.append((fc, src_path, dest))
+    staged_files = _baked_resources(machine_dir, "theia dist")
+    if staged_files is None:
+        return 1
     if not staged_files:
         return 0
     with tempfile.TemporaryDirectory() as td:
@@ -4743,7 +4820,12 @@ def cmd_init(args: list[str]) -> int:
     # theia/artheia/rf-theia servers fix their workspace to the launch cwd, so
     # they must run FROM here; artheia/rf-theia live in the workspace venv, the
     # theia server + work-with-me ship under $THEIA_ROOT (the deb's /opt/theia).
-    _write(".mcp.json", _INIT_MCP_JSON.replace("@THEIA_ROOT@", str(theia_root)))
+    _write(".mcp.json", _render_mcp_json(ws, theia_root))
+    # .gitignore — the generated/host-local trees `theia manifest/install` write
+    # into the workspace. Critically deploy/certs/ (the dev mTLS PRIVATE keys
+    # `theia manifest` generates) and the signing keys, which must never be
+    # committed; dist/ is regenerated from the rig on every `theia manifest`.
+    _write(".gitignore", _INIT_GITIGNORE)
     # deploy/ homes for this workspace's rig data (registry + per-rig config
     # overrides). Empty + a .gitkeep so the dirs exist for the operator to drop
     # <rig>.yml / <rig>/<fc>.json into; the framework playbooks read them via
@@ -4910,7 +4992,7 @@ def _init_package(ws: Path, theia_root: Path, name: str,
     _write("apps/__init__.py", "")
     _write("deploy/registry/.gitkeep", "")
     _write("deploy/config/.gitkeep", "")
-    _write(".mcp.json", _INIT_MCP_JSON.replace("@THEIA_ROOT@", str(theia_root)))
+    _write(".mcp.json", _render_mcp_json(ws, theia_root))
     _write("local_setup.sh", _INIT_SETUP_LOCAL.replace("@NAME@", name))
     if (ws / "local_setup.sh").exists():
         (ws / "local_setup.sh").chmod(0o755)
@@ -4969,7 +5051,7 @@ def _init_lib(ws: Path, theia_root: Path, name: str) -> int:
     _write("MODULE.bazel", _sub(_LIB_MODULE_BAZEL))
     _write(".bazelrc", _INIT_BAZELRC)
     _sync_pin(".bazelversion", _read_or(theia_root / ".bazelversion", "9.1.0"))
-    _write(".mcp.json", _INIT_MCP_JSON.replace("@THEIA_ROOT@", str(theia_root)))
+    _write(".mcp.json", _render_mcp_json(ws, theia_root))
     _write("local_setup.sh", _INIT_SETUP_LOCAL.replace("@NAME@", name))
     if (ws / "local_setup.sh").exists():
         (ws / "local_setup.sh").chmod(0o755)
@@ -5367,28 +5449,59 @@ _INIT_MCP_JSON = '''\
   "mcpServers": {
     "artheia": {
       "type": "stdio",
-      "command": ".venv/bin/python",
+      "command": "@PY@",
       "args": ["-m", "artheia.adapters.mcp_server"]
     },
     "theia": {
       "type": "stdio",
-      "command": ".venv/bin/python",
+      "command": "@PY@",
       "args": ["@THEIA_ROOT@/tools/theia_mcp.py"],
       "env": { "PYTHONPATH": "@THEIA_ROOT@/tools" }
     },
     "rf-theia": {
       "type": "stdio",
-      "command": ".venv/bin/python",
+      "command": "@PY@",
       "args": ["-m", "rf_theia.adapters.mcp_server"]
     },
     "work-with-me": {
       "type": "stdio",
-      "command": ".venv/bin/python",
-      "args": ["@THEIA_ROOT@/skills/work-with-me/server.py"]
+      "command": "@PY@",
+      "args": ["@THEIA_ROOT@/contrib/skills/work-with-me/server.py"]
     }
   }
 }
 '''
+
+
+_INIT_GITIGNORE = '''\
+# GENERATED / host-local trees (theia manifest / install / bazel) — never committed.
+/bazel-*
+MODULE.bazel.lock
+/install/
+# dist/manifest/ is re-serialized from the rig by every `theia manifest`.
+/dist/
+# Dev mTLS cert set (PRIVATE keys) generated by `theia manifest`, and the SWP
+# signing keys (`theia cert generate`).
+/deploy/certs/
+/deploy/signing/
+__pycache__/
+*.pyc
+'''
+
+
+def _render_mcp_json(ws: Path, theia_root: Path) -> str:
+    """The workspace .mcp.json. Paths are RELATIVE to the workspace (the MCP
+    servers launch with cwd = the workspace) so the ws+framework pair stays
+    relocatable. Interpreter: a SOURCE checkout's framework venv (a consuming
+    workspace borrows it — see env.sh), else the workspace's own .venv (the deb
+    flow: `pip install --no-index --find-links /opt/theia/wheels ...`)."""
+    try:
+        root = os.path.relpath(theia_root, ws)
+    except ValueError:
+        root = str(theia_root)
+    fw_py = theia_root / ".venv" / "bin" / "python"
+    py = f"{root}/.venv/bin/python" if fw_py.exists() else ".venv/bin/python"
+    return _INIT_MCP_JSON.replace("@THEIA_ROOT@", root).replace("@PY@", py)
 
 
 _INIT_SETUP_LOCAL = '''\
@@ -5840,6 +5953,9 @@ _PKG_GITIGNORE = '''\
 !/proto/system/@NAME@/BUILD.bazel
 /install/
 /dist/
+/deploy/certs/
+/deploy/signing/
+MODULE.bazel.lock
 /manifest/@NAME@/manifest.py
 /manifest/@NAME@/executor.py
 /bazel-*

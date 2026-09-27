@@ -145,3 +145,8 @@ services/idsm/bpf/vmlinux.h
 deploy/signing/
 /ci/.work/
 user.bazelrc
+
+# Bazel module lockfile — resolution is host-dependent; never committed.
+MODULE.bazel.lock
+# Per-developer editor config (host paths) — see contrib/editors/ for the LSP setup.
+/.vscode/settings.json

@@ -62,6 +62,21 @@ index 8c568a5..4cfbdd3 100644
      get_target_property(GRPC_CPP_PLUGIN gRPC::grpc_cpp_plugin LOCATION)
      get_target_property(GRPC_INCLUDE_DIR gRPC::grpc INTERFACE_INCLUDE_DIRECTORIES)
  else()
+diff --git a/etcd/KeepAlive.hpp b/etcd/KeepAlive.hpp
+index 71f86fc..8c940b8 100644
+--- a/etcd/KeepAlive.hpp
++++ b/etcd/KeepAlive.hpp
+@@ -13,6 +13,10 @@
+ #include "etcd/Response.hpp"
+ 
+ #include <boost/config.hpp>
++// Theia patch: BOOST_VERSION lives in <boost/version.hpp>; Boost 1.90's
++// config.hpp no longer pulls it in, so the guard below saw 0 and picked the
++// io_service header (removed in Boost 1.87).
++#include <boost/version.hpp>
+ #if BOOST_VERSION >= 106600
+ #include <boost/asio/io_context.hpp>
+ #else
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
 index e77e92a..3db6354 100644
 --- a/src/CMakeLists.txt

@@ -1,0 +1,73 @@
+# The ONE RouDi (iceoryx 1.0.1) for host pascal. Owner: bond001 (theia-kernel).
+#
+# iceoryx runs one RouDi per host user (its management segment is
+# /dev/shm/iceoryx_mgmt), so every stack on pascal (theia services' rds FC,
+# spr, carla_ws, the rds demo) shares THIS broker. Start it once, as axadmin:
+#
+#   nohup iox-roudi -c /home/axadmin/repo/theia/deploy/iceoryx/roudi-host-pascal.toml \
+#       > /bigdata/work/bond001/tools/roudi.log 2>&1 &
+#
+# and don't start another one: no hand-run iox-roudi, and in a
+# --with-services workspace switch the rds FC's broker off with
+# deploy/config/<machine>/rds.json = {"nodes": {"roudi": {"enabled": false}}}.
+# See docs/HOST-PASCAL.md, "The host RouDi".
+#
+# Sizing. `size` is the PAYLOAD capacity: iceoryx 1.0 adds its 40-byte chunk
+# header on top (introspection: a 128 pool has 168-byte chunks). A loan goes to
+# the SMALLEST pool whose size >= the loaned bytes; the largest pool is the hard
+# ceiling (no fragmentation). The +1 KiB / +64 KiB on the camera pools is
+# headroom for the frame descriptor, not the header.
+# What counts is the LOANED size, not the .art chunk_size. Chunks in flight per
+# stream ~ history + readers * queue(=history) + readers * held(<=2) + 1 loan.
+#
+#   pool      count  for
+#   128 B     10000  small control samples (odometry 256 B lands in 1 KiB)
+#   1 KiB      5000  odometry, attitude, small records
+#   16 KiB     1000  rds demo frames (9.3 KB), misc
+#   64 KiB       64  spr per-layer planes (wc 25,728 B, road 40,128 B): 3 streams x 11
+#   128 KiB      64  spr min frames (wc 76,928 B, road 120,128 B): grid + replay, 2 readers: 2 x 17
+#   512 KiB     128  spr full frames (wc 307,456 B, road 480,256 B): 2 x 17;
+#                    carla day0 512x288 BGR8 (442 KB): 6 streams x 11
+#   1 MiB+1 KiB 144  carla 640x360 RGBA/depth-f32/semantic (921,600 B + descriptor):
+#                    4 RGB + 4 depth + 4 semantic = 12 streams x 12
+#   8 MiB+64 KiB 144 carla 1080p RGBA (8,294,400 B + descriptor), same 12 streams, later
+#
+# Total ~1.5 GB of /dev/shm (32 GB available). Pages are touched as chunks are
+# used, so the 1080p pool costs RAM only once 1080p frames flow. Raise a count
+# (not the sizes) if a writer logs Loan() failures / MEPOO ... RUNNING_OUT_OF_CHUNKS.
+[general]
+version = 1
+
+[[segment]]
+
+[[segment.mempool]]
+size = 128
+count = 10000
+
+[[segment.mempool]]
+size = 1024
+count = 5000
+
+[[segment.mempool]]
+size = 16384
+count = 1000
+
+[[segment.mempool]]
+size = 65536
+count = 64
+
+[[segment.mempool]]
+size = 131072
+count = 64
+
+[[segment.mempool]]
+size = 524288
+count = 128
+
+[[segment.mempool]]
+size = 1049600
+count = 144
+
+[[segment.mempool]]
+size = 8454144
+count = 144

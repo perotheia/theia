@@ -167,21 +167,19 @@ node atomic Cam {
 - gen-fc now also gives a `requires_rds` node's state target the
   `//services/rds/transport:rds` dep, and seeds its write-once `_state.hh` with
   the include and a handle hint.
-- **Known gap (not fixed): one stream accessor per stream NAME per FC.** Two
-  prototypes of one writer node (`composition TwoCams { prototype Cam left;
-  prototype Cam right }`) get ONE `frames_spec()` keyed on the LAST prototype
-  (`/Right/frames`), so both publish on the same stream; a package lib with no
-  composition keys on the node TYPE (`/Spr_producer/grid`). Two different node
-  types declaring the same stream name in one FC would emit `frames_spec()`
-  twice. Workaround: give the writer a per-prototype param (e.g. `instance :
-  string = "/Cam_left/frames"`), set it per prototype in the rig, and construct
-  the writer with `ara::rds::StreamWriter(ara::rds::resolve_instance(param,
-  chunk, hist))`; readers resolve the same string. Repro:
-  `/bigdata/work/bond001/s3/q1/`.
-- Size limits: one sample (FrameDescriptor + payload) must fit the
-  smallest mempool ≥ its size **plus the iceoryx chunk header**. Size pools a
-  little above the payload (1 MB+1 KB, not exactly 1 MB). The largest pool is
-  the hard ceiling: there is no fragmentation. `history` = chunks kept for late
+- **Per-prototype streams (step 4, artheia 50e0d17 / theia 1ee4091).** A
+  writer node prototyped N times publishes N streams, each keyed on its RUNTIME
+  prototype name: main.cc calls `<proto>.set_node_name("<proto>")`, and the node
+  MEMBERS `make_<s>_writer()` / `make_<s>_reader()` / `<s>_spec()` key on
+  `node_name()` via `ara::rds::owner_instance()`. Readers:
+  `stream left { role=reader from=cam_left.frames … }` names the writer's
+  PROTOTYPE. Use the members; the flat `rds_streams::` functions are keyed at
+  generation time (node type in a package lib) and kept only for old callers.
+  Demo: `services/rds/demo` (cam_left + cam_right → two streams).
+- Size limits: a pool's `size` is the PAYLOAD capacity (iceoryx 1.0 adds a
+  40-byte chunk header itself); a loan goes to the smallest pool with
+  `size >= loaned bytes`, and the largest pool is the hard ceiling (no
+  fragmentation). `history` = chunks kept for late
   joiners; the reader's queue capacity = `history` (4 if 0). The runtime name and
   each id are capped at 100 chars.
 - Run: `bazel build //services/rds/demo/... //services/rds/test:rds_roundtrip`;
@@ -189,6 +187,30 @@ node atomic Cam {
   `rds-roundtrip: OK … producer ptr == reader ptr`; the two
   `services/rds/demo/Rds{Producer,Consumer}/main/rdsdemo` processes log
   `published N` / `received N … bad=0`.
+
+## The host RouDi (one per host; owner bond001)
+
+iceoryx runs ONE RouDi per host user. On pascal it is started once, as axadmin,
+from the framework repo's host config:
+
+```sh
+nohup iox-roudi -c /home/axadmin/repo/theia/deploy/iceoryx/roudi-host-pascal.toml \
+    > /bigdata/work/bond001/tools/roudi.log 2>&1 &
+pgrep -a iox-roudi            # is it up?
+```
+
+- Pools (payload sizes): 128 B×10000, 1 KiB×5000, 16 KiB×1000, 64 KiB×64,
+  128 KiB×64, 512 KiB×128, 1 MiB+1 KiB×144, 8 MiB+64 KiB×144, about 1.47 GB of
+  /dev/shm. That covers spr (wc/road, min/full/per-layer, grid + replay with two
+  readers) and the CARLA rig (12 cameras: 4 RGB + 4 depth + 4 semantic, at
+  640x360 now and 1080p later). The sizing table is in the file's header.
+- Everyone attaches to it: just start your stack. **Do not start your own
+  iox-roudi** (it fails "Could not acquire lock" while the host one runs). In a
+  `--with-services` workspace switch the rds FC's broker off:
+  `deploy/config/<machine>/rds.json` = `{"nodes": {"roudi": {"enabled": false}}}`.
+- Out of chunks (a writer's Loan() fails / RouDi logs RUNNING_OUT_OF_CHUNKS):
+  raise the pool's count in the file, tell bond001, and restart RouDi when no
+  RDS process is attached (all writers/readers must restart after a RouDi restart).
 
 ## Several stacks on one host
 

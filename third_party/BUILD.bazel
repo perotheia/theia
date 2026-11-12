@@ -249,7 +249,8 @@ cc_library(
         "-lprotobuf",
         "-lssl",
         "-lcrypto",
-        "-lboost_system",
+        # no -lboost_system: Boost.System is header-only since 1.69 and Boost
+        # 1.89 removed the stub library (the Ubuntu runners ship Boost 1.90).
         "-lboost_thread",
         "-lboost_random",
         "-lpthread",

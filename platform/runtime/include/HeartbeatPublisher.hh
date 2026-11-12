@@ -43,6 +43,7 @@
 #include "RemoteCodec.hh"      // hash_msg_type_ — service_id derivation
 
 #include <atomic>
+#include <cstdlib>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -63,6 +64,17 @@ public:
     // The supervisor's control node (SupervisorCtl / NodeReportIf receiver).
     static constexpr uint32_t kSupTipcType     = 0x80020001u;
     static constexpr uint32_t kSupTipcInstance = 0u;
+
+    // The supervisor this process's PG joins / heartbeats target. Instance 0 by
+    // default: on a multi-machine rig the PG registry is the MASTER's (machine 0).
+    // An ISOLATED stack started with `theia start --instance N` (a second dev
+    // stack on one host, not machine N of a rig) gets THEIA_PG_SUPERVISOR_INSTANCE=N
+    // from theia start (inherited by every child), so it talks to its OWN supervisor.
+    static uint32_t sup_instance() noexcept {
+        const char* v = std::getenv("THEIA_PG_SUPERVISOR_INSTANCE");
+        return (v && *v) ? static_cast<uint32_t>(std::strtoul(v, nullptr, 10))
+                         : kSupTipcInstance;
+    }
 
     // The on-wire message type name — service_id is its djb2_low16, matching
     // the supervisor's register_cast<HeartbeatReport>(...) (which keys on the
@@ -197,7 +209,7 @@ private:
         addr.family                  = AF_TIPC;
         addr.addrtype                = TIPC_ADDR_NAME;
         addr.addr.name.name.type     = kSupTipcType;
-        addr.addr.name.name.instance = kSupTipcInstance;
+        addr.addr.name.name.instance = sup_instance();
         addr.scope                   = TIPC_NODE_SCOPE;
         return ::connect(fd_, reinterpret_cast<struct sockaddr*>(&addr),
                          sizeof(addr)) == 0;

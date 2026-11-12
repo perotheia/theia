@@ -33,6 +33,7 @@
 #include "TipcMux.hh"            // NodeBinding, InboundEntry (the node's demux)
 
 #include <atomic>
+#include <cstdlib>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -56,6 +57,17 @@ public:
     // The supervisor's control node (SupervisorControlIf — the CALL target).
     static constexpr uint32_t kSupTipcType     = 0x80020001u;
     static constexpr uint32_t kSupTipcInstance = 0u;
+
+    // The supervisor this process's PG joins / heartbeats target. Instance 0 by
+    // default: on a multi-machine rig the PG registry is the MASTER's (machine 0).
+    // An ISOLATED stack started with `theia start --instance N` (a second dev
+    // stack on one host, not machine N of a rig) gets THEIA_PG_SUPERVISOR_INSTANCE=N
+    // from theia start (inherited by every child), so it talks to its OWN supervisor.
+    static uint32_t sup_instance() noexcept {
+        const char* v = std::getenv("THEIA_PG_SUPERVISOR_INSTANCE");
+        return (v && *v) ? static_cast<uint32_t>(std::strtoul(v, nullptr, 10))
+                         : kSupTipcInstance;
+    }
 
     // The CALL request service_ids (djb2 of the nanopb request type name, matching
     // the supervisor's register_call<PgJoinReq,...> / <PgLeaveReq,...> / PgWatch).
@@ -242,7 +254,7 @@ private:
             "  Fix: `theia start` one rig on this host (its supervisor serves "
             "all local testers), then run this binary alongside.\n",
             what, group_name, node_name_.c_str(), kSupTipcType,
-            kSupTipcInstance);
+            sup_instance());
         if (n > 0)
             (void)!::write(2, buf, static_cast<size_t>(
                 n < (int)sizeof(buf) ? n : (int)sizeof(buf) - 1));
@@ -318,7 +330,7 @@ private:
         a.family                  = AF_TIPC;
         a.addrtype                = TIPC_ADDR_NAME;
         a.addr.name.name.type     = kSupTipcType;
-        a.addr.name.name.instance = kSupTipcInstance;
+        a.addr.name.name.instance = sup_instance();
         a.scope                   = TIPC_CLUSTER_SCOPE;
         for (int i = 0; i < 6; ++i) {   // retry stale bindings (probe-connect memory)
             if (::connect(call_fd_, reinterpret_cast<struct sockaddr*>(&a),

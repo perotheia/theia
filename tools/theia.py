@@ -389,7 +389,20 @@ def _install_dir(args: list[str]) -> Path:
     """install/<machine>/ — the machine from the arg, else $THEIA_MACHINE, else
     the single staged machine under install/ (a single-host workspace needs no
     name), else 'central'."""
-    machine = next((a for a in args if not a.startswith("-")), None)
+    # The first POSITIONAL arg. Skip the values of value-taking options, or
+    # `theia start -d --instance 2` would take "2" as the machine name.
+    _valued = {"--instance", "--machine", "--timeout", "--data"}
+    machine, skip = None, False
+    for a in args:
+        if skip:
+            skip = False
+            continue
+        if a in _valued:
+            skip = True
+            continue
+        if not a.startswith("-"):
+            machine = a
+            break
     if machine is None:
         machine = os.environ.get("THEIA_MACHINE")
     if machine is None:
@@ -478,19 +491,27 @@ def cmd_start(args: list[str]) -> int:
     # sets THEIA_NODE_TIPC per child shifted to N. An explicit --instance arg wins;
     # else machine.json's index; else 0 (single-machine / legacy — unchanged).
     machine_instance = instance
-    if instance == "0":  # no explicit override → look up the manifest
-        mname = dest.name
-        for mj in (WORKSPACE / "install" / "manifest" / mname / "machine.json",
-                   dest / "machine.json"):
-            try:
-                import json as _json
-                _m = _json.loads(mj.read_text())
-                idx = (_m.get("machine") or _m).get("machine_index")
-                if idx is not None:
-                    machine_instance = str(int(idx))
-                    break
-            except (OSError, ValueError, KeyError, TypeError):
-                continue
+    _manifest_idx = None   # this machine's index in the rig's manifest, if any
+    mname = dest.name
+    for mj in (WORKSPACE / "install" / "manifest" / mname / "machine.json",
+               dest / "machine.json"):
+        try:
+            import json as _json
+            _m = _json.loads(mj.read_text())
+            idx = (_m.get("machine") or _m).get("machine_index")
+            if idx is not None:
+                _manifest_idx = int(idx)
+                break
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    if instance == "0" and _manifest_idx is not None:  # no explicit override
+        machine_instance = str(_manifest_idx)
+    # ISOLATED stack: an explicit --instance N on a machine the rig itself calls
+    # 0 (or a rig with no index) is a second, independent dev stack on this host,
+    # not machine N of a multi-machine rig. Its processes must PG-join and
+    # heartbeat to THEIR OWN supervisor (:N), not whichever stack holds :0.
+    # Machine N of a real rig keeps the master (:0) as its PG registry.
+    _isolated = instance != "0" and not _manifest_idx
 
     # FAIL-FAST on a cross-workspace TIPC address collision. The supervisor's ctl
     # binds a FIXED TIPC address 0x80020001:<machine_instance>. The pidfile guard
@@ -548,6 +569,9 @@ def cmd_start(args: list[str]) -> int:
         # via --tipc below (ARG-only, like every node).
         "THEIA_MACHINE_INSTANCE": machine_instance,
     }
+    if _isolated:
+        # Read by PgClient + HeartbeatPublisher (inherited by every child).
+        env["THEIA_PG_SUPERVISOR_INSTANCE"] = instance
     # The cluster manifest ROOT (machines.json + per-machine machine.json). The
     # supervisor passes it down to every child it forks; com reads it to map a
     # TIPC instance back to a machine NAME (central/compute) for per-machine
@@ -4915,7 +4939,7 @@ def _init_package(ws: Path, theia_root: Path, name: str,
 
     def _sub(t: str) -> str:
         return (t.replace("@NAME@", name).replace("@SLUG@", slug)
-                 .replace("@CLS@", Cls))
+                 .replace("@CLS@", Cls).replace("@TIPC@", _default_pkg_tipc(name)))
 
     # NO framework symlinks. A package's .art never imports system.supervisor /
     # system.platform — the supervisor is a DEPLOY-time fabric (it forks + runs the
@@ -5009,6 +5033,25 @@ def _init_package(ws: Path, theia_root: Path, name: str,
     return 0
 
 
+def _default_pkg_tipc(name: str) -> str:
+    """Default TIPC service type for a package scaffold's node, derived from the
+    package NAME so two packages scaffolded on one host don't collide (they all
+    used to get 0x800100F0, which also sits inside the framework services'
+    0x8001xxxx range).
+
+    Layout 0xD0HHHH01: 0xD0 = the app/user range (the workspace scaffold's node is
+    0xD0010001), HHHH = a 16-bit CRC of the name, low byte = the node index (01
+    for the scaffold's one node; add your next nodes as 02, 03, ...). HHHH skips
+    0x0000 and 0x0001 so a package never lands on the workspace default's slot.
+    Deterministic: re-running init yields the same address. Not a registry:
+    `artheia check-addresses system/system.art` still validates a composed tree."""
+    import zlib
+    h = zlib.crc32(name.encode()) & 0xFFFF
+    if h in (0x0000, 0x0001):
+        h += 2
+    return f"0x{0xD0000001 | (h << 8):08X}"
+
+
 def _init_lib(ws: Path, theia_root: Path, name: str) -> int:
     """Scaffold the CWD as a SELF-CONTAINED VENDORED lib repo (theia init --kind
     lib). Like a package (a node + protocol + impl), but it VENDORS the Theia
@@ -5031,7 +5074,7 @@ def _init_lib(ws: Path, theia_root: Path, name: str) -> int:
 
     def _sub(t: str) -> str:
         return (t.replace("@NAME@", name).replace("@SLUG@", slug)
-                 .replace("@CLS@", Cls))
+                 .replace("@CLS@", Cls).replace("@TIPC@", _default_pkg_tipc(name)))
 
     # The node package + the aggregate. gen-fc-lib --vendored runs on the
     # package.art directly (a bare node package needs no composition — generate_lib
@@ -5760,11 +5803,12 @@ interface clientServer CtlIf {
     operation Ping(in p: @CLS@Empty) returns @CLS@Status
 }
 
-// The package's real node. tipc 0x800100F0 (pick your own range). A GenServer
+// The package's real node. tipc @TIPC@ (derived from the package name; keep
+// your nodes in 0x....HHHH01..FF, or pick your own range). A GenServer
 // serving CtlIf. Add real ports (senderReceiver streams, more ops) as your
 // package grows; the impl handler lives in src/impl/@CLS@Ctrl_handlers.cc.
 node atomic @CLS@Ctrl {
-    tipc type=0x800100F0 instance=0
+    tipc type=@TIPC@ instance=0
     reporting = true
     tag = "@CLS@"
     ports {
@@ -5861,8 +5905,14 @@ from robot.api.deco import keyword, library
 
 # test/@NAME@_lib.py → package repo root.
 _WS = Path(__file__).resolve().parents[1]
-# @CLS@Ctrl's TIPC service type (system.@NAME@ @CLS@Ctrl = 0x800100F0).
-_NODE_TIPC_DEC = 0x800100F0
+# @CLS@Ctrl's TIPC service type, read from the package's own .art so the probe
+# follows the node when you change its address (no hardcoded constant).
+def _node_tipc_type():
+    import re
+    src = (_WS / "system" / "@NAME@" / "package.art").read_text()
+    m = re.search(r"node\s+\w+\s+@CLS@Ctrl\s*\{[^}]*?tipc\s+type=(0x[0-9A-Fa-f]+)",
+                  src, re.S)
+    return int(m.group(1), 16) if m else None
 
 
 @library(scope="SUITE")
@@ -5878,11 +5928,16 @@ class @CLS@ProbeLib:
         except (FileNotFoundError, subprocess.SubprocessError):
             logger.info("`tipc` unavailable — deferring to the probe's own gate.")
             return
-        if str(_NODE_TIPC_DEC) not in out:
+        node_type = _node_tipc_type()
+        if node_type is None:
+            logger.info("no tipc type found for @CLS@Ctrl in package.art — "
+                        "deferring to the probe's own gate.")
+            return
+        if str(node_type) not in out:
             from robot.api import SkipExecution
             raise SkipExecution(
                 "@CLS@Ctrl not bound (TIPC %s absent) — `theia start` first."
-                % hex(_NODE_TIPC_DEC))
+                % hex(node_type))
 
     @keyword("Run @CLS@ Probe")
     def run_probe(self) -> None:

@@ -91,18 +91,24 @@ rdsdemo producer regenerates byte-identically
 
 rdsdemo consumer regenerates byte-identically
     [Documentation]    services/rds/demo/RdsConsumer/{lib,main,impl/BUILD.bazel} ==
-    ...                gen-fc --composition RdsConsumer output. Its reader
-    ...                declares `from=frame_producer`, so the generated handle
-    ...                must open the WRITER's instance (asserted below).
+    ...                gen-fc --composition RdsConsumer output. Its readers
+    ...                declare `from=cam_left.frames` / `from=cam_right.frames`,
+    ...                so they must open the two WRITER prototypes' instances.
     [Tags]    fc-regen-stability    hermetic    selftest
     Regen And Diff FC    rdsdemo_consumer
-    ${w}=    Get File    ${CURDIR}/../../../../services/rds/demo/RdsProducer/lib/RdsStreams.hh
-    ${r}=    Get File    ${CURDIR}/../../../../services/rds/demo/RdsConsumer/lib/RdsStreams.hh
-    Should Contain    ${w}    resolve_instance("/Frame_producer/frames"
-    Should Contain    ${r}    resolve_instance("/Frame_producer/frames"
+    ${r}=    Get File    ${CURDIR}/../../../../services/rds/demo/RdsConsumer/lib/FrameConsumer.hh
+    Should Contain    ${r}    "/Cam_left/frames"
+    Should Contain    ${r}    "/Cam_right/frames"
 
 
-# Non-services (consuming-workspace) regen coverage lives in the user-flow
-# harness now: ci/run.sh s2 + ci/test/gen_chain.robot scaffold a FRESH
-# workspace per run — no committed reference tree to drift (demo/ retired).
-
+rdsdemo writer streams are keyed per prototype at runtime
+    [Documentation]    RdsProducer prototypes FrameProducer TWICE. main.cc must
+    ...                construct BOTH and name each (set_node_name), and the
+    ...                writer accessor must key on that runtime name, so the two
+    ...                prototypes publish on two streams, not one.
+    [Tags]    fc-regen-stability    hermetic    selftest
+    ${m}=    Get File    ${CURDIR}/../../../../services/rds/demo/RdsProducer/main/main.cc
+    Should Contain    ${m}    cam_left.set_node_name("cam_left");
+    Should Contain    ${m}    cam_right.set_node_name("cam_right");
+    ${h}=    Get File    ${CURDIR}/../../../../services/rds/demo/RdsProducer/lib/FrameProducer.hh
+    Should Contain    ${h}    ::ara::rds::owner_instance(rds_node_name_, "frames")

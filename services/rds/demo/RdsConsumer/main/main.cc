@@ -115,6 +115,9 @@ int main(int argc, char** argv) {
 
 
     FrameConsumer frame_consumer;
+    // RDS: the node's runtime identity = this PROTOTYPE name; the streams it
+    // writes are keyed on it (two prototypes of one writer -> two streams).
+    frame_consumer.set_node_name("frame_consumer");
     // RUNTIME NODE IDENTITY = the PROTOTYPE name ("frame_consumer") — the name the
     // manifest/supervisor domain uses everywhere (executor.json art_nodes, the
     // --tipc arg keys, config/<proc>.json `nodes` sections, `tdb ps` rows). For a

@@ -4,16 +4,19 @@
 // small RGB8 test pattern into it in place, Publish. Zero copy, no malloc in
 // the data path. The consumer (RdsConsumer/FrameConsumer) Takes the same chunk.
 //
-// Stream identity: the generated writer handle publishes on the instance
-// "/Frame_producer/frames" (the WRITER prototype + the stream name). A reader
-// in another node names that instance explicitly (see FrameConsumer).
+// Stream identity: make_frames_writer() (a member of the node) publishes on
+// "/<Prototype>/frames", keyed on this node's RUNTIME prototype name. The
+// RdsProducer composition prototypes this node twice (cam_left, cam_right), so
+// the process publishes TWO streams: /Cam_left/frames and /Cam_right/frames.
+// Each frame's timestamp_ns carries a hash of the prototype name so the
+// consumer can prove which writer a chunk came from.
 
 #include "lib/FrameProducer.hh"
 
-#include "lib/RdsStreams.hh"  // rds_streams::make_frames_writer (generated)
 #include "TimerService.hh"   // post_info / send_after / process_timers
 
 #include <cstring>
+#include <functional>
 #include <string>
 
 namespace ara::rdsdemo {
@@ -25,8 +28,8 @@ constexpr uint32_t kPayload = kW * kH * 3;
 }  // namespace
 
 void FrameProducer::init(FrameProducerState& s) {
-    s.frames = std::make_unique<::ara::rds::StreamWriter>(
-        rds_streams::make_frames_writer());
+    s.frames = std::make_unique<::ara::rds::StreamWriter>(make_frames_writer());
+    s.source_tag = std::hash<std::string>{}(node_name());
     const auto rc = s.frames->Connect();
     if (rc != ::ara::rds::RdsError::OK) {
         log().error("rds: writer Connect failed (is iox-roudi up?) — not publishing");
@@ -51,7 +54,7 @@ void FrameProducer::handle_info(const char* info, FrameProducerState& s) {
         fd->width        = kW;
         fd->height       = kH;
         fd->format       = ::ara::rds::PixelFormat::RGB8;
-        fd->timestamp_ns = 0;
+        fd->timestamp_ns = s.source_tag;   // which writer (prototype) this is
         fd->payload_size = kPayload;
         auto* px = reinterpret_cast<uint8_t*>(c.data) + sizeof(*fd);
         for (uint32_t i = 0; i < kPayload; ++i)
@@ -62,7 +65,7 @@ void FrameProducer::handle_info(const char* info, FrameProducerState& s) {
         }
     }
     if (s.next_frame_id % 50 == 0 && s.published > 0)
-        log().info("rds: published " + std::to_string(s.published) +
+        log().info("rds: [" + node_name() + "] published " + std::to_string(s.published) +
                    " frames (loan failures " + std::to_string(s.loan_fail) + ")");
     ::theia::runtime::send_after(::theia::runtime::process_timers(), kPeriodMs,
                                  *this, "tick");

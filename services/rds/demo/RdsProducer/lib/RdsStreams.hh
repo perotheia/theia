@@ -16,11 +16,16 @@
 namespace ara::rdsdemo {
 namespace rds_streams {
 
+// PREFER the node members (<node>.make_<s>_writer() / _reader(), <s>_spec()):
+// they key a written stream on the node's RUNTIME prototype name, so two
+// prototypes of one writer get two streams. These flat functions are keyed at
+// generation time and kept for existing callers; one per stream NAME (the first
+// node that declares it).
 
-// FrameProducer.frames — role=writer, instance "/Frame_producer/frames",
+// FrameProducer.frames — role=writer, instance "/Cam_right/frames",
 // chunk_size=1048576 history=4.
 inline ::ara::rds::StreamSpec frames_spec() {
-    return ::ara::rds::resolve_instance("/Frame_producer/frames",
+    return ::ara::rds::resolve_instance("/Cam_right/frames",
                                         1048576u, 4u);
 }
 inline ::ara::rds::StreamWriter make_frames_writer() {

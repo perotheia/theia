@@ -11,6 +11,7 @@
 #include "GenServer.hh"
 #include "NodeRef.hh"   // cast(self, msg, TipcAddr) — pg broadcast fan-out
 #include "PgClient.hh"  // OTP-pg broadcast fan-out (sender-port broadcast_*)
+#include "ara/rds/stream.h"   // StreamWriter/Reader + owner_instance (requires_rds)
 #include "Log.hh"      // sibling — per-FC ContextLogger + kLogTag
 #include "rdsdemo_codecs.hh"   // FC-wide inbound RemoteCodecs (#387)
 #include "system/services/rdsdemo/rdsdemo.pb.h"
@@ -53,6 +54,35 @@ namespace ara::rdsdemo {
 class FrameConsumer : public ::theia::runtime::GenServer<FrameConsumer, FrameConsumerState> {
 public:
     static constexpr const char* kNodeName = "frame_consumer";
+
+    // ---- RDS (requires_rds) -------------------------------------------------
+    // This node's RUNTIME identity: its PROTOTYPE name, set by main.cc
+    // (set_node_name) before start(); kNodeName until then. A stream this node
+    // WRITES is keyed on it ("/<Prototype>/<stream>"), so two prototypes of one
+    // writer node publish on two streams. Use these members, not the flat
+    // rds_streams:: functions (those are keyed at generation time).
+    void set_node_name(std::string name) { rds_node_name_ = std::move(name); }
+    const std::string& node_name() const { return rds_node_name_; }
+    // rds stream `left`: role=reader, reads the writer cam_left.frames,
+    // chunk_size=1048576 history=4.
+    ::ara::rds::StreamSpec left_spec() const {
+        return ::ara::rds::resolve_instance(
+            "/Cam_left/frames",
+            1048576u, 4u);
+    }
+    ::ara::rds::StreamReader make_left_reader() const {
+        return ::ara::rds::StreamReader(left_spec());
+    }
+    // rds stream `right`: role=reader, reads the writer cam_right.frames,
+    // chunk_size=1048576 history=4.
+    ::ara::rds::StreamSpec right_spec() const {
+        return ::ara::rds::resolve_instance(
+            "/Cam_right/frames",
+            1048576u, 4u);
+    }
+    ::ara::rds::StreamReader make_right_reader() const {
+        return ::ara::rds::StreamReader(right_spec());
+    }
     static constexpr uint32_t kTipcType     = 0x80010041u;
     static constexpr uint32_t kTipcInstance = 0u;
 
@@ -199,6 +229,7 @@ private:
     // watch cache, and the supervisor CALL channel. Attached via pg_attach().
     ::theia::runtime::PgClient pg_;
     std::set<uint16_t> pg_watched_;          // groups this node already pg_watch'd
+    std::string rds_node_name_{kNodeName};   // runtime identity (prototype name)
     uint32_t pg_self_type_{0};               // this node's bound addr (watcher addr)
     uint32_t pg_self_instance_{0};
 };

@@ -55,6 +55,13 @@ std::unique_ptr<IReaderTransport> make_reader_transport();
 // Resolve an InstanceSpecifier ("/Perception/CameraFront") → a StreamSpec
 // (iceoryx triple + pool sizing). chunk_size/history come from the manifest
 // `rds_stream` declaration (gen-fc passes them); 0 = defaults.
+// The InstanceSpecifier of a stream OWNED (written) by the node whose runtime
+// identity is `owner` (its PROTOTYPE name): "/<Owner>/<stream>", with <Owner>
+// capitalized exactly like the .art lowering (Python str.capitalize(): first
+// char upper, the rest lower). Two prototypes of one writer node therefore get
+// two streams ("/Cam_left/frames", "/Cam_right/frames").
+std::string owner_instance(const std::string& owner, const std::string& stream);
+
 StreamSpec resolve_instance(const std::string& instance_specifier,
                             uint32_t max_chunk = 0, uint32_t history = 0);
 

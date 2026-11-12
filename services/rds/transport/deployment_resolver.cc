@@ -10,6 +10,7 @@
 
 #include "ara/rds/transport_if.h"
 
+#include <cctype>
 #include <string>
 #include <vector>
 
@@ -45,6 +46,15 @@ StreamSpec resolve_instance(const std::string& instance_specifier,
     s.max_chunk = max_chunk;
     s.history   = history;
     return s;
+}
+
+std::string owner_instance(const std::string& owner, const std::string& stream) {
+    std::string o = owner;
+    for (size_t i = 0; i < o.size(); ++i) {
+        unsigned char c = static_cast<unsigned char>(o[i]);
+        o[i] = static_cast<char>(i == 0 ? std::toupper(c) : std::tolower(c));
+    }
+    return "/" + o + "/" + stream;
 }
 
 }  // namespace ara::rds

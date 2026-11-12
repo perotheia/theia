@@ -16,16 +16,32 @@
 namespace ara::rdsdemo {
 namespace rds_streams {
 
+// PREFER the node members (<node>.make_<s>_writer() / _reader(), <s>_spec()):
+// they key a written stream on the node's RUNTIME prototype name, so two
+// prototypes of one writer get two streams. These flat functions are keyed at
+// generation time and kept for existing callers; one per stream NAME (the first
+// node that declares it).
 
-// FrameConsumer.frames — role=reader, instance "/Frame_producer/frames",
+// FrameConsumer.left — role=reader, instance "/Cam_left/frames",
 // chunk_size=1048576 history=4.
-// Reads the writer frame_producer.frames (`from=` in the .art).
-inline ::ara::rds::StreamSpec frames_spec() {
-    return ::ara::rds::resolve_instance("/Frame_producer/frames",
+// Reads the writer cam_left.frames (`from=` in the .art).
+inline ::ara::rds::StreamSpec left_spec() {
+    return ::ara::rds::resolve_instance("/Cam_left/frames",
                                         1048576u, 4u);
 }
-inline ::ara::rds::StreamReader make_frames_reader() {
-    return ::ara::rds::StreamReader(frames_spec());
+inline ::ara::rds::StreamReader make_left_reader() {
+    return ::ara::rds::StreamReader(left_spec());
+}
+
+// FrameConsumer.right — role=reader, instance "/Cam_right/frames",
+// chunk_size=1048576 history=4.
+// Reads the writer cam_right.frames (`from=` in the .art).
+inline ::ara::rds::StreamSpec right_spec() {
+    return ::ara::rds::resolve_instance("/Cam_right/frames",
+                                        1048576u, 4u);
+}
+inline ::ara::rds::StreamReader make_right_reader() {
+    return ::ara::rds::StreamReader(right_spec());
 }
 
 }  // namespace rds_streams

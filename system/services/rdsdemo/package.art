@@ -19,6 +19,8 @@ node atomic FrameConsumer {
     requires_rds
     tag = "RDC"
     rds {
-        stream frames { role=reader from=frame_producer chunk_size=1048576 history=4 }
+        // one reader per writer PROTOTYPE (from=<prototype>.<writer stream>)
+        stream left  { role=reader from=cam_left.frames  chunk_size=1048576 history=4 }
+        stream right { role=reader from=cam_right.frames chunk_size=1048576 history=4 }
     }
 }

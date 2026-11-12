@@ -114,8 +114,11 @@ int main(int argc, char** argv) {
     std::vector<std::unique_ptr<::theia::runtime::HeartbeatPublisher>> heartbeats;
 
 
-    FrameProducer frame_producer;
-    // RUNTIME NODE IDENTITY = the PROTOTYPE name ("frame_producer") — the name the
+    FrameProducer cam_left;
+    // RDS: the node's runtime identity = this PROTOTYPE name; the streams it
+    // writes are keyed on it (two prototypes of one writer -> two streams).
+    cam_left.set_node_name("cam_left");
+    // RUNTIME NODE IDENTITY = the PROTOTYPE name ("cam_left") — the name the
     // manifest/supervisor domain uses everywhere (executor.json art_nodes, the
     // --tipc arg keys, config/<proc>.json `nodes` sections, `tdb ps` rows). For a
     // LOCAL node this equals FrameProducer::kNodeName; for an IMPORTED package node it
@@ -124,15 +127,15 @@ int main(int argc, char** argv) {
     // Keying main's identity calls on kNodeName would make an imported node's
     // --tipc lookup MISS (silent fallback to the compiled address) and its params
     // section unmatched (silent defaults) — so use the prototype name.
-    // Per-node logger: tagged [#frame_producer] (matches `tdb ps`), sink chosen by
+    // Per-node logger: tagged [#cam_left] (matches `tdb ps`), sink chosen by
     // $THEIA_LOGGER. Installed BEFORE start() so do_start/init log through it. The
     // FIRST node's logger also backs process_logger() — the ConfigureLogLevel-push
     // fallback target + any process_logger() caller.
     {
-        auto frame_producer_log = MakeContextLogger("frame_producer");
-        frame_producer_log->set_level(boot_level);
-        ::theia::runtime::set_process_logger(frame_producer_log);
-        frame_producer.set_logger(std::move(frame_producer_log));
+        auto cam_left_log = MakeContextLogger("cam_left");
+        cam_left_log->set_level(boot_level);
+        ::theia::runtime::set_process_logger(cam_left_log);
+        cam_left.set_logger(std::move(cam_left_log));
     }
     // Resolve this node's TIPC address from the --tipc arg the supervisor built
     // from executor.json (per node, instance machine-shifted), so the BINARY is
@@ -141,17 +144,17 @@ int main(int argc, char** argv) {
     // start() so the node's init() — which runs on the node thread right after
     // start() — sees its own instance via tipc_instance() (a clone that keys its
     // per-instance config in init() would otherwise race and read 0).
-    uint32_t frame_producer_type, frame_producer_inst;
-    ::theia::runtime::resolve_node_tipc("frame_producer",
+    uint32_t cam_left_type, cam_left_inst;
+    ::theia::runtime::resolve_node_tipc("cam_left",
         FrameProducer::kTipcType, FrameProducer::kTipcInstance,
-        frame_producer_type, frame_producer_inst);
+        cam_left_type, cam_left_inst);
     // set_tipc_instance() is a GenServer/GenStateM method — only atomic + statem
     // nodes have it. A `node runnable` (GenRunnable) resolves its own instance in
     // do_start via resolve_node_tipc; a `node prebuilt` (also a GenRunnable
     // subclass, wrapping a 3rd-party child) likewise has no such method. Emit the
     // call ONLY for gen_server/statem nodes so init() sees its instance before
     // start(); a runnable/prebuilt would fail to compile (no member).
-    frame_producer.set_tipc_instance(frame_producer_inst);
+    cam_left.set_tipc_instance(cam_left_inst);
     // Generic node params (read via the static-deploy ParamsConfig, overridable
     // per-rig in config/<fc>.json under this node's section — same mechanism as
     // tsync's prebuilt `enabled`):
@@ -159,8 +162,8 @@ int main(int argc, char** argv) {
     //                     start, freeing its TIPC slot (e.g. a probe replaces it).
     //   start_delay_ms   (default 0)     — deterministic intra-executable ordering.
     // A node section may be absent entirely → all defaults apply (start normally).
-    const auto frame_producer_params =
-        ::theia::runtime::get_config().node("frame_producer");
+    const auto cam_left_params =
+        ::theia::runtime::get_config().node("cam_left");
     // Boot gate — recomputed identically in the START pass below (cheap param
     // read). PASS 1 (here): wire the mux (bind_node + register_* + pg_attach)
     // BEFORE config_mux.start() and BEFORE the node thread runs. PASS 2 (after
@@ -168,24 +171,24 @@ int main(int argc, char** argv) {
     // BLOCKING CALL to the supervisor's PG allocator) gets its reply pumped. If
     // start() ran here (before config_mux.start()), a pg_join in init() would
     // deadlock, the node would never beat, and the watchdog would SIGTERM it.
-    const bool frame_producer_enabled = frame_producer_params.boolean("enabled", true);
-    if (!frame_producer_enabled) {
-        frame_producer.log().info("node disabled (params.enabled=false) — not "
+    const bool cam_left_enabled = cam_left_params.boolean("enabled", true);
+    if (!cam_left_enabled) {
+        cam_left.log().info("node disabled (params.enabled=false) — not "
             "started; its TIPC address is free for a test/probe to bind");
     } else {
 
-    if (auto* frame_producer_cfg = config_mux.bind_node(
-            frame_producer, frame_producer_type,
-            frame_producer_inst)) {
+    if (auto* cam_left_cfg = config_mux.bind_node(
+            cam_left, cam_left_type,
+            cam_left_inst)) {
         // Config-service edge — REPORTING-ONLY (a non-reporting node
         // gets no supervisor control pushes). Kept distinct from the
         // pg/receiver demux below, which every consumer needs.
         config_mux.register_cast<platform_runtime_LogLevelPush>(
-            frame_producer_cfg, frame_producer);
+            cam_left_cfg, cam_left);
         // Trace control (#403): supervisor pushes TraceControlPush to flip
         // this node's Tracer kind filter — same path as LogLevelPush.
         config_mux.register_cast<platform_runtime_TraceControlPush>(
-            frame_producer_cfg, frame_producer);
+            cam_left_cfg, cam_left);
         // Receiver ports (#387): register the node's declared inbound
         // types so a real peer — or a robot-test inject via services/com
         // — lands on the same handle_call / handle_cast path. clientServer
@@ -198,15 +201,111 @@ int main(int argc, char** argv) {
         // supervisor's PgMembership pushes route into handle_cast) and pass its
         // BOUND ADDRESS as the watcher address — where the supervisor casts
         // PgMembership when this node pg_watch'es a group it produces to.
-        frame_producer.pg_attach("frame_producer", frame_producer_cfg,
-                                frame_producer_type, frame_producer_inst);
+        cam_left.pg_attach("cam_left", cam_left_cfg,
+                                cam_left_type, cam_left_inst);
     } else {
-        frame_producer.log().warn("mux bind failed; pg/receiver frames + "
+        cam_left.log().warn("mux bind failed; pg/receiver frames + "
                                  "live control pushes will not be delivered");
     }
 
 
-    }  // end if (frame_producer_enabled) — PASS 1 (mux wiring)
+    }  // end if (cam_left_enabled) — PASS 1 (mux wiring)
+
+    FrameProducer cam_right;
+    // RDS: the node's runtime identity = this PROTOTYPE name; the streams it
+    // writes are keyed on it (two prototypes of one writer -> two streams).
+    cam_right.set_node_name("cam_right");
+    // RUNTIME NODE IDENTITY = the PROTOTYPE name ("cam_right") — the name the
+    // manifest/supervisor domain uses everywhere (executor.json art_nodes, the
+    // --tipc arg keys, config/<proc>.json `nodes` sections, `tdb ps` rows). For a
+    // LOCAL node this equals FrameProducer::kNodeName; for an IMPORTED package node it
+    // does NOT (the package lib is compiled without a composition, so its
+    // kNodeName is the snake'd node TYPE, not this composition's prototype name).
+    // Keying main's identity calls on kNodeName would make an imported node's
+    // --tipc lookup MISS (silent fallback to the compiled address) and its params
+    // section unmatched (silent defaults) — so use the prototype name.
+    // Per-node logger: tagged [#cam_right] (matches `tdb ps`), sink chosen by
+    // $THEIA_LOGGER. Installed BEFORE start() so do_start/init log through it. The
+    // FIRST node's logger also backs process_logger() — the ConfigureLogLevel-push
+    // fallback target + any process_logger() caller.
+    {
+        auto cam_right_log = MakeContextLogger("cam_right");
+        cam_right_log->set_level(boot_level);
+        cam_right.set_logger(std::move(cam_right_log));
+    }
+    // Resolve this node's TIPC address from the --tipc arg the supervisor built
+    // from executor.json (per node, instance machine-shifted), so the BINARY is
+    // address-agnostic — same binary on every machine. Falls back to the compiled
+    // kTipcType/kTipcInstance (the .art instance) for a standalone run. Done BEFORE
+    // start() so the node's init() — which runs on the node thread right after
+    // start() — sees its own instance via tipc_instance() (a clone that keys its
+    // per-instance config in init() would otherwise race and read 0).
+    uint32_t cam_right_type, cam_right_inst;
+    ::theia::runtime::resolve_node_tipc("cam_right",
+        FrameProducer::kTipcType, FrameProducer::kTipcInstance,
+        cam_right_type, cam_right_inst);
+    // set_tipc_instance() is a GenServer/GenStateM method — only atomic + statem
+    // nodes have it. A `node runnable` (GenRunnable) resolves its own instance in
+    // do_start via resolve_node_tipc; a `node prebuilt` (also a GenRunnable
+    // subclass, wrapping a 3rd-party child) likewise has no such method. Emit the
+    // call ONLY for gen_server/statem nodes so init() sees its instance before
+    // start(); a runnable/prebuilt would fail to compile (no member).
+    cam_right.set_tipc_instance(cam_right_inst);
+    // Generic node params (read via the static-deploy ParamsConfig, overridable
+    // per-rig in config/<fc>.json under this node's section — same mechanism as
+    // tsync's prebuilt `enabled`):
+    //   enabled          (default true)  — boot gate; a disabled node does NOT
+    //                     start, freeing its TIPC slot (e.g. a probe replaces it).
+    //   start_delay_ms   (default 0)     — deterministic intra-executable ordering.
+    // A node section may be absent entirely → all defaults apply (start normally).
+    const auto cam_right_params =
+        ::theia::runtime::get_config().node("cam_right");
+    // Boot gate — recomputed identically in the START pass below (cheap param
+    // read). PASS 1 (here): wire the mux (bind_node + register_* + pg_attach)
+    // BEFORE config_mux.start() and BEFORE the node thread runs. PASS 2 (after
+    // the mux is pumping): node.start() — so init()'s OWN pg_join/pg_watch (a
+    // BLOCKING CALL to the supervisor's PG allocator) gets its reply pumped. If
+    // start() ran here (before config_mux.start()), a pg_join in init() would
+    // deadlock, the node would never beat, and the watchdog would SIGTERM it.
+    const bool cam_right_enabled = cam_right_params.boolean("enabled", true);
+    if (!cam_right_enabled) {
+        cam_right.log().info("node disabled (params.enabled=false) — not "
+            "started; its TIPC address is free for a test/probe to bind");
+    } else {
+
+    if (auto* cam_right_cfg = config_mux.bind_node(
+            cam_right, cam_right_type,
+            cam_right_inst)) {
+        // Config-service edge — REPORTING-ONLY (a non-reporting node
+        // gets no supervisor control pushes). Kept distinct from the
+        // pg/receiver demux below, which every consumer needs.
+        config_mux.register_cast<platform_runtime_LogLevelPush>(
+            cam_right_cfg, cam_right);
+        // Trace control (#403): supervisor pushes TraceControlPush to flip
+        // this node's Tracer kind filter — same path as LogLevelPush.
+        config_mux.register_cast<platform_runtime_TraceControlPush>(
+            cam_right_cfg, cam_right);
+        // Receiver ports (#387): register the node's declared inbound
+        // types so a real peer — or a robot-test inject via services/com
+        // — lands on the same handle_call / handle_cast path. clientServer
+        // ops → register_call; senderReceiver `in` data → register_cast.
+        // ---- process groups (pg): MANUAL pub/sub control (OTP pg shape) ----
+        // The node OWNS its membership: pg_join<T>() to CONSUME a group,
+        // pg_watch<T>()/broadcast_*() to PRODUCE, pg_leave<T>() to stop — from its
+        // OWN logic (init()/handlers), never automatically here. We ATTACH the
+        // node's PgClient to its demux binding (so a joined group's frames + the
+        // supervisor's PgMembership pushes route into handle_cast) and pass its
+        // BOUND ADDRESS as the watcher address — where the supervisor casts
+        // PgMembership when this node pg_watch'es a group it produces to.
+        cam_right.pg_attach("cam_right", cam_right_cfg,
+                                cam_right_type, cam_right_inst);
+    } else {
+        cam_right.log().warn("mux bind failed; pg/receiver frames + "
+                                 "live control pushes will not be delivered");
+    }
+
+
+    }  // end if (cam_right_enabled) — PASS 1 (mux wiring)
 
 
     // The mux is now WIRED for every node (bind_node + register_* + pg_attach)
@@ -218,37 +317,71 @@ int main(int argc, char** argv) {
 
     // PASS 2 — start the node thread (runs init()/1) now that the mux pumps,
     // then apply post-start settings (affinity) + the liveness heartbeat.
-    if (frame_producer_params.boolean("enabled", true)) {
-    if (auto frame_producer_delay = frame_producer_params.u32("start_delay_ms", 0))
-        std::this_thread::sleep_for(std::chrono::milliseconds(frame_producer_delay));
-    frame_producer.start();
+    if (cam_left_params.boolean("enabled", true)) {
+    if (auto cam_left_delay = cam_left_params.u32("start_delay_ms", 0))
+        std::this_thread::sleep_for(std::chrono::milliseconds(cam_left_delay));
+    cam_left.start();
     {
         char _tipc[64];
         std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
-                      frame_producer_type, frame_producer_inst);
-        frame_producer.log().info(_tipc);
+                      cam_left_type, cam_left_inst);
+        cam_left.log().info(_tipc);
     }
     // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG. Applied AFTER
     // start() — the thread exists now. No-op when unset; soft-fails on EPERM.
-    ::theia::runtime::apply_node_affinity(frame_producer.native_handle(),
-        "frame_producer", std::getenv("THEIA_NODE_CFG"));
+    ::theia::runtime::apply_node_affinity(cam_left.native_handle(),
+        "cam_left", std::getenv("THEIA_NODE_CFG"));
 
     // Liveness beat to the supervisor watchdog (#PHM). A reporting node must beat
     // or the watchdog SIGTERMs it after K missed deadlines. One publisher per
     // node, own timer thread; 1s default matches the supervisor's check cadence.
     {
-        auto frame_producer_hb = std::make_unique<
-            ::theia::runtime::HeartbeatPublisher>("frame_producer");
-        if (frame_producer_hb->open()) {
-            frame_producer_hb->start(/*period_ms=*/1000);
-            heartbeats.push_back(std::move(frame_producer_hb));
+        auto cam_left_hb = std::make_unique<
+            ::theia::runtime::HeartbeatPublisher>("cam_left");
+        if (cam_left_hb->open()) {
+            cam_left_hb->start(/*period_ms=*/1000);
+            heartbeats.push_back(std::move(cam_left_hb));
         } else {
-            frame_producer.log().warn("heartbeat publisher open failed; "
+            cam_left.log().warn("heartbeat publisher open failed; "
                                      "supervisor watchdog will not see beats");
         }
     }
 
-    }  // end if (frame_producer_enabled) — PASS 2 (start + heartbeat)
+    }  // end if (cam_left_enabled) — PASS 2 (start + heartbeat)
+
+    // PASS 2 — start the node thread (runs init()/1) now that the mux pumps,
+    // then apply post-start settings (affinity) + the liveness heartbeat.
+    if (cam_right_params.boolean("enabled", true)) {
+    if (auto cam_right_delay = cam_right_params.u32("start_delay_ms", 0))
+        std::this_thread::sleep_for(std::chrono::milliseconds(cam_right_delay));
+    cam_right.start();
+    {
+        char _tipc[64];
+        std::snprintf(_tipc, sizeof(_tipc), "up — TIPC type=0x%x instance=%u",
+                      cam_right_type, cam_right_inst);
+        cam_right.log().info(_tipc);
+    }
+    // Per-node CPU affinity + scheduler from $THEIA_NODE_CFG. Applied AFTER
+    // start() — the thread exists now. No-op when unset; soft-fails on EPERM.
+    ::theia::runtime::apply_node_affinity(cam_right.native_handle(),
+        "cam_right", std::getenv("THEIA_NODE_CFG"));
+
+    // Liveness beat to the supervisor watchdog (#PHM). A reporting node must beat
+    // or the watchdog SIGTERMs it after K missed deadlines. One publisher per
+    // node, own timer thread; 1s default matches the supervisor's check cadence.
+    {
+        auto cam_right_hb = std::make_unique<
+            ::theia::runtime::HeartbeatPublisher>("cam_right");
+        if (cam_right_hb->open()) {
+            cam_right_hb->start(/*period_ms=*/1000);
+            heartbeats.push_back(std::move(cam_right_hb));
+        } else {
+            cam_right.log().warn("heartbeat publisher open failed; "
+                                     "supervisor watchdog will not see beats");
+        }
+    }
+
+    }  // end if (cam_right_enabled) — PASS 2 (start + heartbeat)
 
 
     while (g_running.load()) {
@@ -259,7 +392,9 @@ int main(int argc, char** argv) {
     config_mux.stop();
 
 
-    frame_producer.stop("signal");
+    cam_left.stop("signal");
+
+    cam_right.stop("signal");
 
     return 0;
 }

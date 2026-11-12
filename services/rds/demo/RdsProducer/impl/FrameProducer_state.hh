@@ -15,6 +15,7 @@ struct FrameProducerState {
     uint64_t next_frame_id = 0;   // frame_id of the next published frame
     uint64_t published     = 0;   // frames successfully published
     uint64_t loan_fail     = 0;   // Loan() failures (pool exhausted / no RouDi)
+    uint64_t source_tag    = 0;   // hash of the prototype name, stamped in each frame
 };
 
 }  // namespace ara::rdsdemo

@@ -23,7 +23,7 @@ cc_library(
     copts = ["-std=c++17", "-fPIC"],
     deps = [
         "//platform/runtime:runtime",
-        # the state holds the ara::rds StreamWriter/StreamReader handle.
+        # requires_rds: the state holds the ara::rds StreamWriter/Reader handles.
         "//services/rds/transport:rds",
     ],
 )

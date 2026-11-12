@@ -3,14 +3,14 @@
 // Every 20 ms: drain the stream (Take → validate the FrameDescriptor + the test
 // pattern in place → Release). Logs a running count every 50 frames.
 //
-// Stream identity: gen-fc keys a stream's instance on the node that DECLARES it
-// ("/<Prototype>/<stream>"), so the generated make_frames_reader() would listen
-// on "/Frame_consumer/frames" — which no writer publishes. A reader therefore
-// names the WRITER's instance explicitly, with the writer's chunk_size/history
-// (the same convention the downstream packages use).
+// Stream identity: a stream is keyed on its WRITER ("/<Writer_prototype>/<s>").
+// The .art declares `stream frames { role=reader from=frame_producer … }`, so
+// the generated rds_streams::make_frames_reader() opens "/Frame_producer/frames",
+// the same instance FrameProducer publishes on.
 
 #include "lib/FrameConsumer.hh"
 
+#include "lib/RdsStreams.hh"  // rds_streams::make_frames_reader (generated)
 #include "TimerService.hh"   // post_info / send_after / process_timers
 
 #include <cstring>
@@ -20,19 +20,18 @@ namespace ara::rdsdemo {
 
 namespace {
 constexpr int kPeriodMs = 20;
-constexpr const char* kWriterInstance = "/Frame_producer/frames";
-constexpr uint32_t kChunk = 1048576u, kHistory = 4u;   // = FrameProducer.frames
 }  // namespace
 
 void FrameConsumer::init(FrameConsumerState& s) {
     s.frames = std::make_unique<::ara::rds::StreamReader>(
-        ::ara::rds::resolve_instance(kWriterInstance, kChunk, kHistory));
+        rds_streams::make_frames_reader());
     if (s.frames->Connect() != ::ara::rds::RdsError::OK) {
         log().error("rds: reader Connect failed (is iox-roudi up?) — not reading");
         s.frames.reset();
         return;
     }
-    log().info(std::string("rds: reader connected on ") + kWriterInstance);
+    log().info("rds: reader connected on " + s.frames->spec().service + "/" +
+               s.frames->spec().instance + "/" + s.frames->spec().event);
     ::theia::runtime::post_info(*this, "poll");
 }
 

@@ -151,15 +151,22 @@ node atomic Cam {
 }
 ```
 
-- The writer uses the generated `rds_streams::make_frames_writer()`. Its
-  instance is `"/<Prototype_capitalized>/<stream>"`, e.g.
-  `/Frame_producer/frames` → iceoryx service/instance/event
-  `Frame_producer/frames/frame`.
-- **A reader in another node must name the WRITER's instance by hand**:
-  `ara::rds::StreamReader(ara::rds::resolve_instance("/Frame_producer/frames", 1048576, 4))`.
-  gen-fc keys a stream on the node that declares it, so the generated
-  `make_<s>_reader()` listens on `/<ReaderProto>/<s>`, which nobody publishes.
-  The downstream packages (carla_ws, percept, chair-ws) already do it this way.
+- A stream is keyed on its WRITER: instance `"/<Writer_prototype_capitalized>/<stream>"`,
+  e.g. `/Frame_producer/frames` → iceoryx service/instance/event
+  `Frame_producer/frames/frame`. The writer uses the generated
+  `rds_streams::make_frames_writer()`.
+- **A reader names its writer with `from=`** (artheia host-pascal, step 2):
+  `stream frames { role=reader from=frame_producer chunk_size=1048576 history=4 }`,
+  or `from=cam_rig.cam_front_l` when the writer's stream has another name. The
+  generated `rds_streams::make_frames_reader()` then opens the writer's instance.
+  Give the reader the writer's chunk_size/history. `from` is the writer's
+  PROTOTYPE name (its runtime identity), and `from=` on a writer is a parse
+  error. A reader without `from` keeps the old self-keyed instance, which no writer
+  publishes. Hand-written `resolve_instance("/<Writer>/<s>", …)` (carla_ws,
+  percept, chair-ws) still works unchanged.
+- gen-fc now also gives a `requires_rds` node's state target the
+  `//services/rds/transport:rds` dep, and seeds its write-once `_state.hh` with
+  the include and a handle hint.
 - Size limits: one sample (FrameDescriptor + payload) must fit the
   smallest mempool ≥ its size **plus the iceoryx chunk header**. Size pools a
   little above the payload (1 MB+1 KB, not exactly 1 MB). The largest pool is

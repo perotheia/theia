@@ -19,6 +19,6 @@ node atomic FrameConsumer {
     requires_rds
     tag = "RDC"
     rds {
-        stream frames { role=reader chunk_size=1048576 history=4 }
+        stream frames { role=reader from=frame_producer chunk_size=1048576 history=4 }
     }
 }

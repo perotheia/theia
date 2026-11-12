@@ -17,10 +17,11 @@ namespace ara::rdsdemo {
 namespace rds_streams {
 
 
-// FrameConsumer.frames — role=reader, instance "/Frame_consumer/frames",
+// FrameConsumer.frames — role=reader, instance "/Frame_producer/frames",
 // chunk_size=1048576 history=4.
+// Reads the writer frame_producer.frames (`from=` in the .art).
 inline ::ara::rds::StreamSpec frames_spec() {
-    return ::ara::rds::resolve_instance("/Frame_consumer/frames",
+    return ::ara::rds::resolve_instance("/Frame_producer/frames",
                                         1048576u, 4u);
 }
 inline ::ara::rds::StreamReader make_frames_reader() {

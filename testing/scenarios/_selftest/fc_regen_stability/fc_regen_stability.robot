@@ -24,6 +24,7 @@ Documentation    Regen-stability guard: every committed FC's lib +
 ...              the non-services FCs (apps×3, gateway) —
 ...              gen-fc stays byte-stable wherever the FC lives.
 Library          ${CURDIR}/fc_regen_lib.py
+Library          OperatingSystem
 
 
 Suite Setup      Anchor At Workspace
@@ -78,6 +79,27 @@ log regenerates byte-identically
     ...                node is here.
     [Tags]    fc-regen-stability    hermetic    selftest
     Regen And Diff FC    log
+
+
+rdsdemo producer regenerates byte-identically
+    [Documentation]    services/rds/demo/RdsProducer/{lib,main,impl/BUILD.bazel} ==
+    ...                gen-fc --composition RdsProducer output from
+    ...                system/services/rdsdemo/package.art (the rds writer).
+    [Tags]    fc-regen-stability    hermetic    selftest
+    Regen And Diff FC    rdsdemo_producer
+
+
+rdsdemo consumer regenerates byte-identically
+    [Documentation]    services/rds/demo/RdsConsumer/{lib,main,impl/BUILD.bazel} ==
+    ...                gen-fc --composition RdsConsumer output. Its reader
+    ...                declares `from=frame_producer`, so the generated handle
+    ...                must open the WRITER's instance (asserted below).
+    [Tags]    fc-regen-stability    hermetic    selftest
+    Regen And Diff FC    rdsdemo_consumer
+    ${w}=    Get File    ${CURDIR}/../../../../services/rds/demo/RdsProducer/lib/RdsStreams.hh
+    ${r}=    Get File    ${CURDIR}/../../../../services/rds/demo/RdsConsumer/lib/RdsStreams.hh
+    Should Contain    ${w}    resolve_instance("/Frame_producer/frames"
+    Should Contain    ${r}    resolve_instance("/Frame_producer/frames"
 
 
 # Non-services (consuming-workspace) regen coverage lives in the user-flow

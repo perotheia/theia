@@ -118,6 +118,14 @@ FC_SPECS = [
     # regen-stable. The ara::rds transport lib lives in services/rds/transport
     # (a sibling target), not impl/BUILD, so impl/BUILD is gen-fc-default.
     FcSpec("rds", "system/services/rds/package.art", "ara::rds", "services/rds"),
+    # rdsdemo: the requires_rds codegen — two compositions (two processes) whose
+    # streams MEET: the writer keys "/Frame_producer/frames" on itself, the
+    # reader names it with `from=frame_producer`, so both RdsStreams.hh resolve
+    # the same instance. Also guards the requires_rds impl/BUILD state dep.
+    FcSpec("rdsdemo_producer", "system/services/rdsdemo/package.art", "ara::rdsdemo",
+           "services/rds/demo", composition="RdsProducer"),
+    FcSpec("rdsdemo_consumer", "system/services/rdsdemo/package.art", "ara::rdsdemo",
+           "services/rds/demo", composition="RdsConsumer"),
     # Non-services (consuming-workspace) regen coverage moved with the demo/
     # retirement: the user-flow harness (ci/run.sh s2 + ci/test/gen_chain.robot)
     # scaffolds a FRESH workspace per run and drives gen-fc/--composition

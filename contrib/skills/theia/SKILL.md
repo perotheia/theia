@@ -194,8 +194,8 @@ robot test/<X>.robot
 
 Key conventions (each fixes a concrete resolver/label bug — don't "simplify"):
 
-- **Source (`system/`) vs codegen (`src/`) are separate.** `gen-fc --kind
-  package --out src` writes `src/lib/` (regenerated every run, gitignored) +
+- **Source (`system/`) vs codegen (`src/`) are separate.** `gen-fc-lib
+  --out src` writes `src/lib/` (regenerated every run, gitignored) +
   `src/impl/` (the write-once handler bodies + state + your BUILD — **tracked**,
   yours to own after first emit). Never `--out system/<X>` — codegen stays out of
   the hand-edited source tree.

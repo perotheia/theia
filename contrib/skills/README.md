@@ -1,6 +1,6 @@
 # Skills
 
-Project skills for Claude Code, tracked here in `docs/skills/` so they're
+Project skills for Claude Code, tracked here in `contrib/skills/` so they're
 versioned with the repo and shared across the team. Each subdirectory is one
 skill (a `SKILL.md` plus optional `references/`).
 
@@ -20,16 +20,16 @@ mkdir -p .claude/skills
 # Prune any dangling links (e.g. a skill that was renamed or removed).
 for l in .claude/skills/*; do [ -e "$l" ] || rm -f "$l"; done
 # (Re)link every tracked skill.
-for d in docs/skills/*/; do
+for d in contrib/skills/*/; do
     name=$(basename "$d")
-    ln -sfn "../../docs/skills/$name" ".claude/skills/$name"
+    ln -sfn "../../contrib/skills/$name" ".claude/skills/$name"
 done
 ```
 
 This is fully idempotent and self-healing: the first loop drops links whose
 target is gone, the second adds/repoints one per tracked skill. `ln -sfn`
 (`-f` replace, `-n` don't descend into a present target dir). The relative
-target `../../docs/skills/<name>` resolves from `.claude/skills/` back to the
+target `../../contrib/skills/<name>` resolves from `.claude/skills/` back to the
 repo root — keep that depth if you add links by hand.
 
 Verify nothing dangles:
@@ -43,6 +43,6 @@ new set is picked up.
 
 ## When the skill set changes
 
-After you add, remove, or rename a skill under `docs/skills/`, re-run the
+After you add, remove, or rename a skill under `contrib/skills/`, re-run the
 two-loop snippet above — it resyncs `.claude/skills/` in both directions
 (prunes danglers, links new names).

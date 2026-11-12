@@ -167,6 +167,17 @@ node atomic Cam {
 - gen-fc now also gives a `requires_rds` node's state target the
   `//services/rds/transport:rds` dep, and seeds its write-once `_state.hh` with
   the include and a handle hint.
+- **Known gap (not fixed): one stream accessor per stream NAME per FC.** Two
+  prototypes of one writer node (`composition TwoCams { prototype Cam left;
+  prototype Cam right }`) get ONE `frames_spec()` keyed on the LAST prototype
+  (`/Right/frames`), so both publish on the same stream; a package lib with no
+  composition keys on the node TYPE (`/Spr_producer/grid`). Two different node
+  types declaring the same stream name in one FC would emit `frames_spec()`
+  twice. Workaround: give the writer a per-prototype param (e.g. `instance :
+  string = "/Cam_left/frames"`), set it per prototype in the rig, and construct
+  the writer with `ara::rds::StreamWriter(ara::rds::resolve_instance(param,
+  chunk, hist))`; readers resolve the same string. Repro:
+  `/bigdata/work/bond001/s3/q1/`.
 - Size limits: one sample (FrameDescriptor + payload) must fit the
   smallest mempool ≥ its size **plus the iceoryx chunk header**. Size pools a
   little above the payload (1 MB+1 KB, not exactly 1 MB). The largest pool is
@@ -178,6 +189,22 @@ node atomic Cam {
   `rds-roundtrip: OK … producer ptr == reader ptr`; the two
   `services/rds/demo/Rds{Producer,Consumer}/main/rdsdemo` processes log
   `published N` / `received N … bad=0`.
+
+## Several stacks on one host
+
+pascal's assignment: bond001 = supervisor instance 0, bond002 = 2, bond003 = 3.
+`theia start -d --instance N` runs an ISOLATED stack at supervisor `:N`; `theia
+call/cast … --instance N` and `tdb` follow. Since 0f66527 its pg joins and
+heartbeats go to its own supervisor (`THEIA_PG_SUPERVISOR_INSTANCE=N`, set by
+theia start); before, they went to whichever stack held `:0`. `theia start`
+refuses if `0x80020001:N` is already bound: check with `tipc nametable show |
+awk '$1==2147614721'`. The scaffold's `test/<pkg>.robot` probe dials the
+node's declared instance, so it only passes on instance 0; on `:N` use
+`theia call <Node> <Op> --instance N`.
+
+**Re-source `env.sh` in every workspace you `cd` into.** It exports
+`THEIA_WORKSPACE` = the directory it was sourced from, and `theia` uses that
+over the current directory.
 
 ## Tests
 
@@ -293,5 +320,10 @@ its `src/lib` is gitignored codegen, absent from a fresh clone.
   (side effects inside assert); fixed on host-pascal (8ebb408).
 - `services/rds/demo` had only the producer, with no-op bodies; consumer +
   bodies added on host-pascal (9e7e880).
+- Fixed in step 3 (theia 0f66527, artheia 026cefc): package scaffolds all got
+  TIPC 0x800100F0 (now name-derived 0xD0HHHH01); an added composition never
+  reached a pristine executor.py; two enums sharing a value label clashed in
+  the C++ aliases; pg/heartbeats under `--instance N` hit supervisor :0;
+  `theia start -d --instance N` took N as the machine name.
 - This file lives under `/docs/`, which theia's `.gitignore` reserves for a
   separate docs repo: it was force-added. Move it if that clashes.

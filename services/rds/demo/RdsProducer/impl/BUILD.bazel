@@ -21,7 +21,11 @@ cc_library(
     # root is the FC out_dir (one above impl/).
     includes = [".."],
     copts = ["-std=c++17", "-fPIC"],
-    deps = ["//platform/runtime:runtime"],
+    deps = [
+        "//platform/runtime:runtime",
+        # the state holds the ara::rds StreamWriter/StreamReader handle.
+        "//services/rds/transport:rds",
+    ],
 )
 
 cc_library(

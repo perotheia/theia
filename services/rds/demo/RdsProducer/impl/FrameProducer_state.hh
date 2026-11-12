@@ -1,22 +1,20 @@
 // State struct for FrameProducer — APP-OWNED, WRITE-ONCE.
-//
-// `artheia gen-fc` seeds this once and then NEVER overwrites
-// it (unless --force). The node's persistent state is app behaviour,
-// which gen-fc does NOT derive from the .art — so you own this file.
-// Add the fields the node's handlers / init() need here; the generated
-// lib/FrameProducer.hh #includes it and binds it as the GenServer
-// State type.
 
 #pragma once
 
+#include "ara/rds/stream.h"
+
 #include <cstdint>
-#include <string>
+#include <memory>
 
 namespace ara::rdsdemo {
 
 struct FrameProducerState {
-    // Add app fields here, e.g.:
-    //   int32_t counter = 0;
+    // The writer handle for the `frames` stream (rds_streams::make_frames_writer).
+    std::unique_ptr<::ara::rds::StreamWriter> frames;
+    uint64_t next_frame_id = 0;   // frame_id of the next published frame
+    uint64_t published     = 0;   // frames successfully published
+    uint64_t loan_fail     = 0;   // Loan() failures (pool exhausted / no RouDi)
 };
 
 }  // namespace ara::rdsdemo

@@ -23,6 +23,7 @@
 #include "Logger.hh"   // theia::runtime::Logger (the engine's injected sink)
 
 #include <atomic>
+#include <cstdlib>
 #include <chrono>
 #include <deque>
 #include <functional>
@@ -691,7 +692,18 @@ private:
         std::map<pid_t, PgWatcherRec> watchers;
     };
     std::map<std::string, PgGroup> pg_groups_;   // group_name -> group
-    uint32_t pg_next_type_{0x80030001u};         // next free 0x8003 group type
+    // next free 0x8003 group type. TIPC names are CLUSTER-wide, so two ISOLATED
+    // stacks on one host (theia start --instance N sets
+    // THEIA_PG_SUPERVISOR_INSTANCE=N) must not hand out the same group types, or
+    // TIPC round-robins one stack's casts into the other's members. Stack N
+    // allocates from 0x80030001 + (N << 8) (256 groups per stack); unset/0
+    // (every rig, where the master :0 is the one PG registry) is unchanged.
+    uint32_t pg_next_type_{pg_type_start_()};
+    static uint32_t pg_type_start_() {
+        const char* v = std::getenv("THEIA_PG_SUPERVISOR_INSTANCE");
+        uint32_t n = (v && *v) ? static_cast<uint32_t>(std::strtoul(v, nullptr, 10)) : 0u;
+        return 0x80030001u + ((n & 0xFFu) << 8);
+    }
     static constexpr uint32_t kPgTypeBase = 0x80030000u;
 
     // CALL handlers. join (alloc instance) or resolve-only (instance 0); both

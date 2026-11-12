@@ -12,13 +12,26 @@
 #include "ara/rds/stream.h"
 #include "ara/rds/transport_if.h"
 
-#include <cassert>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <thread>
 #include <chrono>
 
 using namespace ara::rds;
+
+// Always-on check, NOT the assert macro: the repo builds -c opt by default
+// (.bazelrc), which defines NDEBUG and compiles asserts away -- including the
+// side effect inside one (the Publish call), so the reader then dereferenced a
+// null chunk and the test segfaulted instead of reporting.
+#define RDS_CHECK(cond, what)                                              \
+    do {                                                                   \
+        if (!(cond)) {                                                     \
+            std::printf("rds-roundtrip: FAIL -- %s (%s:%d)\n", (what),     \
+                        __FILE__, __LINE__);                               \
+            std::exit(1);                                                  \
+        }                                                                  \
+    } while (0)
 
 int main() {
     Runtime::Init("rds_roundtrip");
@@ -39,7 +52,7 @@ int main() {
 
     // ---- PRODUCER: loan → fill → publish (zero malloc) ----
     auto loaned = w.Loan(total);
-    assert(loaned.ok() && "loan a chunk from the pool");
+    RDS_CHECK(loaned.ok(), "loan a chunk from the pool");
     Chunk wc = loaned.value;
     auto* fd = reinterpret_cast<FrameDescriptor*>(wc.data);
     fd->frame_id = 42;
@@ -49,7 +62,7 @@ int main() {
     auto* img = reinterpret_cast<uint8_t*>(wc.data) + sizeof(FrameDescriptor);
     for (uint32_t i = 0; i < payload; ++i) img[i] = (uint8_t)(i & 0xFF);
     void* produced_ptr = wc.data;
-    assert(w.Publish(std::move(wc)) == RdsError::OK);
+    RDS_CHECK(w.Publish(std::move(wc)) == RdsError::OK, "publish the loaned chunk");
 
     // ---- CONSUMER: take → read → release (same memory, zero copy) ----
     Chunk rc;
@@ -58,14 +71,16 @@ int main() {
         if (taken.ok()) { rc = taken.value; break; }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
-    assert(rc.valid() && "reader took the published chunk");
+    RDS_CHECK(rc.valid(), "reader took the published chunk");
 
     auto* rfd = reinterpret_cast<const FrameDescriptor*>(rc.data);
-    assert(rfd->frame_id == 42 && rfd->width == W && rfd->height == H);
-    assert(rfd->format == PixelFormat::RGB8 && rfd->payload_size == payload);
+    RDS_CHECK(rfd->frame_id == 42 && rfd->width == W && rfd->height == H,
+              "descriptor id/size intact");
+    RDS_CHECK(rfd->format == PixelFormat::RGB8 && rfd->payload_size == payload,
+              "descriptor format/payload_size intact");
     auto* rimg = reinterpret_cast<const uint8_t*>(rc.data) + sizeof(FrameDescriptor);
     for (uint32_t i = 0; i < payload; ++i)
-        assert(rimg[i] == (uint8_t)(i & 0xFF) && "payload survived zero-copy");
+        RDS_CHECK(rimg[i] == (uint8_t)(i & 0xFF), "payload survived zero-copy");
 
     // The reader's pointer is shared-memory (the SAME the writer wrote), not a
     // copy on this process's heap — that's the whole point.

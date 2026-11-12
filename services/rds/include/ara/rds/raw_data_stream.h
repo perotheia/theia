@@ -59,7 +59,17 @@ struct Runtime {
 
 // ─── Frame descriptors (the ticket's camera model) ──────────────────────────
 
-enum class PixelFormat : uint32_t { UNKNOWN = 0, RGB8, BGR8, YUV420, NV12, GRAY8 };
+// Wire values are FIXED (a FrameDescriptor crosses processes): append only.
+enum class PixelFormat : uint32_t {
+    UNKNOWN  = 0,
+    RGB8     = 1,
+    BGR8     = 2,
+    YUV420   = 3,
+    NV12     = 4,
+    GRAY8    = 5,
+    DEPTH32F = 6,   // float32 depth in metres per pixel; payload = w*h*4
+    LABEL8   = 7,   // uint8 semantic class id per pixel; payload = w*h
+};
 
 // CPU frame: descriptor + payload in ONE chunk (descriptor, then image bytes).
 struct FrameDescriptor {

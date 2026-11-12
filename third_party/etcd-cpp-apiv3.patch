@@ -1,8 +1,21 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 8c568a5..a56f580 100644
+index 8c568a5..4cfbdd3 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -116,18 +116,39 @@
+@@ -87,7 +87,11 @@ macro(use_cxx target)
+     endif()
+ endmacro(use_cxx)
+ 
+-find_package(Boost REQUIRED COMPONENTS system thread random)
++# Theia patch: Boost.System is header-only since 1.69 and Boost 1.89 removed
++# its stub library + CMake config (boost_systemConfig.cmake), so asking for the
++# `system` COMPONENT fails on newer distros (Ubuntu runners with Boost 1.90).
++# The headers come with Boost itself; only thread + random have libraries.
++find_package(Boost REQUIRED COMPONENTS thread random)
+ if(APPLE)
+     # If we're on OS X check for Homebrew's copy of OpenSSL instead of Apple's
+     if(NOT OpenSSL_DIR)
+@@ -116,18 +120,39 @@ if(Protobuf_PROTOC_EXECUTABLE)
          endif()
      endif()
  endif()

@@ -231,6 +231,10 @@ own `per` (5d8a30b), and that `per` keeps its own etcd keyspace,
 collide. Look at one stack's keys with
 `/bigdata/work/bond001/tools/bin/etcdctl get --prefix /theia/i<N>/config/ --keys-only`.
 
+And the RDS plane and the logs: an isolated stack's iceoryx runtime names are
+`<process>@<N>` (RouDi is host-wide and aborts a second runtime of one name), and
+its `file:` logs go to `<dir>/i<N>/` (`/tmp/theia/i<N>/<process>.log`).
+
 **Re-source `env.sh` in every workspace you `cd` into.** It exports
 `THEIA_WORKSPACE` = the directory it was sourced from, and `theia` uses that
 over the current directory.

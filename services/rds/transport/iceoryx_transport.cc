@@ -24,15 +24,27 @@ extern "C" {
 // asks the C++ ChunkHeader (its header cannot share a TU with the C binding).
 namespace ara::rds::detail { uint32_t chunk_payload_size(const void* user_payload); }
 
+#include <cstdlib>
 #include <cstring>
 
 namespace ara::rds {
 
 void Runtime::Init(const std::string& runtime_name) {
-    // iceoryx runtime names are capped (iox::RUNTIME_MAX_APP_NAME_LENGTH). Trust
-    // the node name to fit; truncate defensively.
+    // RouDi is host-wide and refuses a second runtime of one name (it ABORTS the
+    // newcomer: IPC_INTERFACE__APP_WITH_SAME_NAME_STILL_RUNNING). An isolated
+    // stack (`theia start --instance N`, N != 0: THEIA_PG_SUPERVISOR_INSTANCE=N,
+    // the pg rule) qualifies its names, "<name>@<N>", so two stacks may run the
+    // same composition. The default stack and a rig keep the bare name.
+    std::string n = runtime_name;
+    if (const char* v = std::getenv("THEIA_PG_SUPERVISOR_INSTANCE")) {
+        char* end = nullptr;
+        const unsigned long inst = std::strtoul(v, &end, 10);
+        if (end != v && *end == '\0' && inst != 0) n += "@" + std::to_string(inst);
+    }
+    // iceoryx runtime names are capped (iox::RUNTIME_MAX_APP_NAME_LENGTH, 100):
+    // truncate defensively.
     char name[100];
-    std::snprintf(name, sizeof(name), "%s", runtime_name.c_str());
+    std::snprintf(name, sizeof(name), "%s", n.c_str());
     iox_runtime_init(name);
 }
 

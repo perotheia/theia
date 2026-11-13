@@ -5,6 +5,7 @@
 #include <cerrno>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <string>
@@ -195,6 +196,21 @@ std::shared_ptr<Logger> MakeSyslogLogger(const std::string& ident) noexcept {
     return std::make_shared<SyslogLogger>(ident);
 }
 
+// An isolated stack (`theia start --instance N`, N != 0) writes its file logs
+// one directory down, <dir>/i<N>/<file>, so two stacks with the same process
+// names on one host don't interleave in one file. Default stack: unchanged.
+std::string isolated_log_path(const std::string& path) {
+    const char* v = std::getenv("THEIA_PG_SUPERVISOR_INSTANCE");
+    if (!v || !*v) return path;
+    char* end = nullptr;
+    const unsigned long inst = std::strtoul(v, &end, 10);
+    if (end == v || *end != '\0' || inst == 0) return path;
+    const auto slash = path.find_last_of('/');
+    const std::string dir = slash == std::string::npos ? "." : path.substr(0, slash);
+    const std::string file = slash == std::string::npos ? path : path.substr(slash + 1);
+    return dir + "/i" + std::to_string(inst) + "/" + file;
+}
+
 std::shared_ptr<Logger> MakeLogger(const std::string& spec,
                                    const std::string& ident) noexcept {
     // Split "<kind>[:<arg>]" on the FIRST ':' (a file path may contain more).
@@ -206,7 +222,7 @@ std::shared_ptr<Logger> MakeLogger(const std::string& spec,
     kind = to_lower(kind);
     if (kind.empty() || kind == "stdio") return MakeConsoleLogger();
     if (kind == "null")                  return MakeNullLogger();
-    if (kind == "file")                  return MakeFileLogger(arg);
+    if (kind == "file")                  return MakeFileLogger(isolated_log_path(arg));
     if (kind == "syslog")                return MakeSyslogLogger(ident);
     // Unknown kind: lax fallback to stderr (don't fail process boot on a typo).
     std::fprintf(stderr,

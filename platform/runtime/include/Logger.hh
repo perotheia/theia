@@ -114,12 +114,17 @@ std::shared_ptr<Logger> MakeSyslogLogger(const std::string& ident) noexcept;
 // Selector: parse a THEIA_LOGGER spec "<kind>[:<arg>]" and build the sink.
 //   ""  | "stdio"      -> ConsoleLogger (stderr)            [default]
 //   "null"             -> NullLogger
-//   "file:<path>"      -> FileLogger(path)
+//   "file:<path>"      -> FileLogger(path); in an isolated stack (`theia start
+//                         --instance N`, N != 0) FileLogger(<dir>/i<N>/<file>)
 //   "syslog"           -> SyslogLogger(ident)
 // Unknown kind -> ConsoleLogger (lax, never throws). `ident` is the syslog tag
 // (node name); ignored by the other kinds.
 std::shared_ptr<Logger> MakeLogger(const std::string& spec,
                                    const std::string& ident) noexcept;
+
+// The file-log path for this process: `path`, or <dir>/i<N>/<file> when
+// THEIA_PG_SUPERVISOR_INSTANCE=N (N != 0, an isolated stack).
+std::string isolated_log_path(const std::string& path);
 
 // ---- Process-wide logger handle (#386) ----------------------------------
 //

@@ -160,3 +160,11 @@ cc_test(
     # cleanly when the demo's per-process binaries aren't on PATH —
     # this Bazel test is self-contained.
 )
+
+# An isolated stack's file logs go one directory down (Logger.cc isolated_log_path).
+cc_test(
+    name = "test_isolated_log_path",
+    srcs = ["test/test_isolated_log_path.cc"],
+    copts = ["-std=c++17", "-Wall", "-Wextra"],
+    deps = [":runtime"],
+)

@@ -270,6 +270,25 @@ theia tap replay /bigdata/work/<you>/rec/run1 --instance 3 --speed 2 --only EgoS
 - `--instance N` (default: `$THEIA_PG_SUPERVISOR_INSTANCE`, else 0) picks the
   stack whose supervisor allocates the groups.
 
+## A test-only component and its own port (viz, step 8)
+
+A dev/test LAYER adds the component; the base rig never names it. In the
+workspace's `manifest/<ws>/rig.py`, beside `RIG`:
+
+```python
+RIG_VIZ = RIG.combine(DeploymentLayer(execution=ExecutionLayer(processes={
+    ProcessLayer(name="viz", ..., machine=Explicit("central"),
+                 test_only=Explicit(True),            # production builds refuse it
+                 ports=Explicit((("tcp", 8090),))),   # its own inbound port
+})))
+```
+
+`theia manifest <ws> --attr RIG_VIZ && theia install <ws>` stages it and writes
+`install/<m>/config/fw.d/viz.nft` (`tcp dport 8090 accept`), which the fw FC merges
+into its default-drop input chain: a file from the manifest, not a hand edit.
+`theia dist` / `theia release-swp` refuse a manifest holding a `test_only` process
+(re-run `theia manifest <ws>` with plain `RIG`).
+
 ## Tests
 
 Results on pascal, 2026-11-12:

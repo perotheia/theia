@@ -1,0 +1,14 @@
+# HAND-OWNED. The tap: record / replay any TIPC interface + any RDS stream
+# (INTEGRATION.md 4). tap.py is the driver (TIPC via the probe); tap_rds is the
+# RDS half (raw chunks, the spr rig-recording shape).
+
+load("@rules_cc//cc:defs.bzl", "cc_binary")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_binary(
+    name = "tap_rds",
+    srcs = ["tap_rds.cc"],
+    copts = ["-std=c++17", "-Wall", "-Wextra"],
+    deps = ["//services/rds/transport:rds"],
+)

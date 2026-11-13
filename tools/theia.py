@@ -1056,6 +1056,12 @@ def cmd_cast(args: list[str]) -> int:
     return _probe_send(args, is_call=False)
 
 
+def cmd_tap(args: list[str]) -> int:
+    """record / replay any TIPC interface + any RDS stream (tools/tap/tap.py)."""
+    tap_py = THEIA_ROOT / "tools" / "tap" / "tap.py"
+    return subprocess.call([sys.executable, str(tap_py), *args])
+
+
 def cmd_call(args: list[str]) -> int:
     """call a node operation from JSON, print the reply (test/demo)."""
     if "-h" in args or "--help" in args:
@@ -7775,6 +7781,7 @@ COMMANDS = {
     "stop":        (cmd_stop,        "stop the supervisor started by `theia start` (graceful)"),
     "cast":        (cmd_cast,        "cast <node> <msg> --data '{json}' [--instance N|--machine M] (test/demo)"),
     "call":        (cmd_call,        "call <node> <op> --data '{json}' [--instance N|--machine M] — prints reply (test/demo)"),
+    "tap":         (cmd_tap,         "{record|replay|info} <dir> [--tipc IF,..] [--rds /W/s,..] [--instance N] — record/replay interfaces + streams"),
     "manifest":    (cmd_manifest,    "rig.py → dist/manifest/*.json (sole rig entry for deploy)"),
     "dist":        (cmd_dist,        "<target> [--arch A] — build debs from manifest (runtime deb-set or per-machine app bundle)"),
     "build-debs":  (cmd_build_debs,  "[--arch A] [--distro D] [--ipk] — build the local dev .deb set (framework/runtime/services/rf → dist/debian/)"),

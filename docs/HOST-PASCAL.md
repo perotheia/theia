@@ -235,6 +235,37 @@ collide. Look at one stack's keys with
 `THEIA_WORKSPACE` = the directory it was sourced from, and `theia` uses that
 over the current directory.
 
+## The tap: record and replay any interface (INTEGRATION.md 4)
+
+`theia tap` records any TIPC interface (a pg group) and any RDS stream into one
+directory and plays it back on the same names, one clock for both. Build the RDS
+half once: `bazel build //tools/tap:tap_rds`.
+
+```sh
+# record EgoStateFeed + two cameras on stack :3, 60 s (names resolve against $THEIA_WORKSPACE/system)
+theia tap record /bigdata/work/<you>/rec/run1 --tipc EgoStateFeed,AckermannCmdFeed \
+    --rds /Ego/cam_fl,/Ego/dep_fl --instance 3 --seconds 60
+theia tap info   /bigdata/work/<you>/rec/run1
+# replay into a stack with NO live producer of those names (x2 speed, only the ego state)
+theia tap replay /bigdata/work/<you>/rec/run1 --instance 3 --speed 2 --only EgoStateFeed
+```
+
+- The directory: `meta.yaml`; `<wire_type>.jsonl`, one per interface, one line per
+  message: `{"rx_wall_ns", "tx_ns", "msg": {decoded fields; enums by name},
+  "pb": "<the wire bytes, base64>"}`; `streams.txt` + `<Writer>_<stream>.bin`, the
+  raw chunks in the format of spr's rig recorder (spr_rig.hh: the same
+  `streams.txt` and 16-byte record header).
+- `--tipc` takes an interface (`EgoStateFeed`), a message (`EgoState`) or the wire
+  type (`system_contracts_EgoState`); two packages with one interface name:
+  `system.supervisor.SupervisorEventIf`. An interface with two data elements is
+  two groups (two files).
+- Replay sends the recorded bytes (`pb`). A line with only `msg`, hand-written,
+  is encoded from it: a synthetic input needs no producer.
+- Stamps INSIDE messages and chunks are the recorded ones; only the send times
+  move. C++ group casts carry no header stamp (`tx_ns` is 0 for them).
+- `--instance N` (default: `$THEIA_PG_SUPERVISOR_INSTANCE`, else 0) picks the
+  stack whose supervisor allocates the groups.
+
 ## Tests
 
 Results on pascal, 2026-11-12:

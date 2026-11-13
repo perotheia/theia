@@ -15,15 +15,15 @@ namespace ara::per {
 
 namespace {
 
-constexpr char kPrefix[] = "/theia/config/";
-
-std::string key_for(const std::string& node) { return kPrefix + node; }
+// /theia/config/ for the default stack, /theia/i<N>/config/ for an isolated
+// one (etcd_store.hpp).
+std::string key_for(const std::string& node) { return config_prefix() + node; }
 
 // node name from a full key (strip the prefix); "" if it doesn't match.
 std::string node_from_key(const std::string& key) {
-    const std::size_t n = sizeof(kPrefix) - 1;
-    if (key.compare(0, n, kPrefix) != 0) return "";
-    return key.substr(n);
+    const std::string& p = config_prefix();
+    if (key.compare(0, p.size(), p) != 0) return "";
+    return key.substr(p.size());
 }
 
 // Pack digest + config bytes into one opaque etcd value: "<digest>\0<bytes>".
@@ -83,7 +83,7 @@ public:
         // Recursive watch over the whole config prefix. The lib delivers
         // prev_kv on each event, so we can hand prev+cur to the consumer.
         watcher_ = std::make_unique<etcd::Watcher>(
-            client_, kPrefix,
+            client_, config_prefix(),
             [this](etcd::Response resp) { on_watch(resp); },
             /*recursive=*/true);
     }
@@ -92,7 +92,7 @@ public:
 
     std::vector<std::pair<std::string, StoreValue>> scan() override {
         std::vector<std::pair<std::string, StoreValue>> out;
-        auto resp = client_.ls(kPrefix);   // directory listing under the prefix
+        auto resp = client_.ls(config_prefix());   // directory listing under the prefix
         if (!resp.is_ok()) return out;
         const auto& keys = resp.keys();
         const auto& vals = resp.values();

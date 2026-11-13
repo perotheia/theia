@@ -149,3 +149,7 @@ cc_library(
     copts = ["-std=c++17", "-fPIC"],
     visibility = ["//visibility:public"],
 )
+
+# The Store header alone (inline config_prefix_for), for the etcd-free unit test
+# in services/per/test.
+exports_files(["etcd_store.hpp"])

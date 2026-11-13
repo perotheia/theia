@@ -1,0 +1,9 @@
+# HAND-OWNED. per unit tests that need no etcd (the *.py here are live suites).
+
+load("@rules_cc//cc:defs.bzl", "cc_test")
+
+cc_test(
+    name = "test_config_prefix",
+    srcs = ["test_config_prefix.cc", "//services/per/impl:etcd_store.hpp"],
+    copts = ["-std=c++17", "-Wall", "-Wextra"],
+)

@@ -224,6 +224,13 @@ awk '$1==2147614721'`. The scaffold's `test/<pkg>.robot` probe dials the
 node's declared instance, so it only passes on instance 0; on `:N` use
 `theia call <Node> <Op> --instance N`.
 
+The same rule, the config plane: the config-defaults seed goes to the stack's
+own `per` (5d8a30b), and that `per` keeps its own etcd keyspace,
+`/theia/i<N>/config/<node>` (the default stack and every machine of a rig keep
+`/theia/config/<node>`). One etcd serves every stack; same node names no longer
+collide. Look at one stack's keys with
+`/bigdata/work/bond001/tools/bin/etcdctl get --prefix /theia/i<N>/config/ --keys-only`.
+
 **Re-source `env.sh` in every workspace you `cd` into.** It exports
 `THEIA_WORKSPACE` = the directory it was sourced from, and `theia` uses that
 over the current directory.

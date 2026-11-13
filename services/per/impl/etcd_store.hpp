@@ -8,12 +8,19 @@
 //
 // Layout in etcd (path is STABLE, version-free — the digest rides in the value):
 //   /theia/config/<target_node>   ->  <digest>\0<config-bytes>
+// An ISOLATED stack (`theia start --instance N`, N != 0: theia exports
+// THEIA_PG_SUPERVISOR_INSTANCE=N, the pg fix's rule) keeps its own keyspace,
+//   /theia/i<N>/config/<target_node>
+// so two stacks on one host with the same node names never read or write each
+// other's configs. Unset / 0 (the default stack, every machine of a rig) keeps
+// /theia/config/ as before.
 // We pack digest + bytes into one value with a NUL separator so a single etcd
 // KV holds both (etcd values are opaque byte strings). get/put split/join.
 
 #pragma once
 
 #include <cstdint>
+#include <cstdlib>
 #include <functional>
 #include <memory>
 #include <string>
@@ -21,6 +28,26 @@
 #include <vector>
 
 namespace ara::per {
+
+// The config keyspace prefix for a supervisor instance (the value of
+// THEIA_PG_SUPERVISOR_INSTANCE; nullptr/""/"0"/garbage = the default stack).
+inline std::string config_prefix_for(const char* sup_instance) {
+    unsigned long n = 0;
+    if (sup_instance && *sup_instance) {
+        char* end = nullptr;
+        n = std::strtoul(sup_instance, &end, 10);
+        if (end == sup_instance || *end != '\0') n = 0;
+    }
+    if (n == 0) return "/theia/config/";
+    return "/theia/i" + std::to_string(n) + "/config/";
+}
+
+// This process's prefix (read once from the environment).
+inline const std::string& config_prefix() {
+    static const std::string p =
+        config_prefix_for(std::getenv("THEIA_PG_SUPERVISOR_INSTANCE"));
+    return p;
+}
 
 // One value read back from the store.
 struct StoreValue {
@@ -49,7 +76,7 @@ public:
     virtual int64_t put(const std::string& target_node,
                         const std::string& config, const std::string& digest,
                         int64_t expect_rev) = 0;
-    // Register a watch over the whole /theia/config/ prefix; cb fires on each
+    // Register a watch over the whole config prefix (config_prefix()); cb fires on each
     // change with prev+cur. One watch covers all targets (the cb filters).
     virtual void watch_prefix(std::function<void(const WatchEvent&)> cb) = 0;
     // True if this store delivers changes via watch_prefix (etcd). When true,

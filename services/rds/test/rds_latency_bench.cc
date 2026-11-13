@@ -15,7 +15,8 @@
 //   total    frame start -> last Take
 //
 //   rds_latency_bench [--writers 8] [--bytes 1048576] [--frames 200] [--period-ms 100]
-//                     [--poll-ms 2] (0: spin) [--fill memcpy|none] [--prefix Bench]
+//                     [--poll-ms 2] (0: spin) [--wake 1] (OnData, no poll)
+//                     [--fill memcpy|none] [--prefix Bench]
 #include "ara/rds/stream.h"
 #include "ara/rds/raw_data_stream.h"
 #include "ara/rds/transport_if.h"
@@ -32,6 +33,8 @@
 #include <map>
 #include <string>
 #include <thread>
+#include <condition_variable>
+#include <mutex>
 #include <vector>
 
 namespace {
@@ -56,6 +59,7 @@ struct Stamps {          // written right after the FrameDescriptor
 
 struct Args {
     int writers = 8, frames = 200, period_ms = 100, poll_ms = 2;
+    bool wake = false;   // --wake 1: StreamReader::OnData wakes the reader (no poll)
     uint32_t bytes = 1u << 20;
     bool fill = true;
     std::string prefix = "Bench";
@@ -119,6 +123,7 @@ int main(int argc, char** argv) {
         else if (k == "--poll-ms") a.poll_ms = std::atoi(v.c_str());
         else if (k == "--fill") a.fill = v != "none";
         else if (k == "--prefix") a.prefix = v;
+        else if (k == "--wake") a.wake = v != "0";
         else { std::fprintf(stderr, "unknown %s\n", k.c_str()); return 2; }
     }
     const uint64_t t0 = mono_ns() + 1500000000ull;   // the reader subscribes first
@@ -132,6 +137,12 @@ int main(int argc, char** argv) {
             ara::rds::resolve_instance(stream_of(a, i), a.bytes + 4096, 0)));
         if (r.back()->Connect() != ara::rds::RdsError::OK) { std::fprintf(stderr, "reader connect failed\n"); return 2; }
     }
+    // --wake: like a node that posts itself an info from OnData and drains there
+    std::mutex wmu; std::condition_variable wcv; bool pending = false;
+    if (a.wake)
+        for (auto& rd : r)
+            if (rd->OnData([&] { { std::lock_guard<std::mutex> l(wmu); pending = true; } wcv.notify_one(); })
+                    != ara::rds::RdsError::OK) { std::fprintf(stderr, "OnData failed\n"); return 2; }
     std::vector<double> loan, fill, deliver, w_spread, r_spread, total;
     struct F { uint64_t start = 0, pub_lo = ~0ull, pub_hi = 0, take_lo = ~0ull, take_hi = 0; int n = 0; };
     std::map<uint32_t, F> fr;
@@ -154,7 +165,11 @@ int main(int argc, char** argv) {
                 r[i]->Release(std::move(c.value));
                 ++got;
             }
-        if (a.poll_ms > 0) std::this_thread::sleep_for(std::chrono::milliseconds(a.poll_ms));
+        if (a.wake) {
+            std::unique_lock<std::mutex> l(wmu);
+            wcv.wait_for(l, std::chrono::milliseconds(100), [&] { return pending; });
+            pending = false;
+        } else if (a.poll_ms > 0) std::this_thread::sleep_for(std::chrono::milliseconds(a.poll_ms));
     }
     int complete = 0;
     for (auto& [k, f] : fr)
@@ -168,8 +183,8 @@ int main(int argc, char** argv) {
     auto P = [](const char* n, const std::vector<double>& v) {
         std::printf("\"%s\": {\"p50\": %.1f, \"p99\": %.1f, \"max\": %.1f}", n, pct(v, .5), pct(v, .99), pct(v, 1));
     };
-    std::printf("{\"writers\": %d, \"bytes\": %u, \"fill_mode\": %s, \"poll_ms\": %d, \"frames\": %d, \"chunks\": %ld, \"complete\": %d, ",
-                a.writers, a.bytes, a.fill ? "\"memcpy\"" : "\"none\"", a.poll_ms, a.frames, got, complete);
+    std::printf("{\"wake\": %s, \"writers\": %d, \"bytes\": %u, \"fill_mode\": %s, \"poll_ms\": %d, \"frames\": %d, \"chunks\": %ld, \"complete\": %d, ",
+                a.wake ? "true" : "false", a.writers, a.bytes, a.fill ? "\"memcpy\"" : "\"none\"", a.poll_ms, a.frames, got, complete);
     P("loan", loan); std::printf(", "); P("fill", fill); std::printf(", "); P("deliver", deliver); std::printf(", ");
     P("w_spread", w_spread); std::printf(", "); P("r_spread", r_spread); std::printf(", "); P("total", total);
     std::printf(", \"unit\": \"us\"}\n");

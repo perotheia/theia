@@ -311,6 +311,13 @@ start -> last Take p50 1.4 ms / p99 2.6 ms, of which iceoryx is ~0.01-0.04 ms, t
 into the chunk 0.22 ms, and the poll wait the rest (no poll: 0.36 / 0.64 ms). 8 x 8 MiB:
 2.9 / 4.6 ms (the copy is 1.4 ms).
 
+**Woken readers (step 11).** `StreamReader::OnData(cb)` runs `cb` on the process's
+iceoryx listener thread when chunks arrive, so a node posts itself an info and drains
+there instead of re-arming a poll timer (the coalescing pattern is in
+`ara/rds/stream.h`). `rds_latency_bench --wake 1`, 8 x 1 MiB: publish -> take p50
+0.03 / p99 0.12-0.17 ms (2 ms poll: 1.0 / 2.06), frame start -> last take 0.38 / 0.8-0.9
+ms (poll: 1.3-1.45 / 2.4-2.5); 8 x 8 MiB: 1.57 / 2.22 ms (poll: 2.57 / 3.79).
+
 On a live stack: `THEIA_RDS_TRACE=<dir>` in every process's environment (e.g. exported
 before `theia start`) writes `<dir>/rds-trace-<pid>.csv`, one line per chunk: the
 writer's Loan and Publish, the reader's Take and Release (CLOCK_REALTIME, the clock of

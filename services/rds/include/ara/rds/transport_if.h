@@ -11,6 +11,7 @@
 #include "ara/rds/raw_data_stream.h"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -46,6 +47,9 @@ public:
     virtual Result<Chunk> take() = 0;            // NO_DATA if nothing queued
     virtual void release(Chunk&& c) = 0;
     virtual void disconnect() = 0;
+    // Wake-up instead of polling: `cb` runs (on the process's RDS listener thread)
+    // each time chunks arrive; empty `cb` detaches. After connect().
+    virtual RdsError on_data(std::function<void()> cb) { (void)cb; return RdsError::TRANSPORT_ERROR; }
 };
 
 // Factory — the deployment picks the transport. v1: iceoryx only.

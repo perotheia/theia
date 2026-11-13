@@ -18,6 +18,7 @@ extern "C" {
 #include "iceoryx_binding_c/subscriber.h"
 #include "iceoryx_binding_c/enums.h"
 #include "iceoryx_binding_c/types.h"
+#include "iceoryx_binding_c/listener.h"
 }
 
 // The iceoryx C binding (1.0.1) has no user-payload-size getter; chunk_size.cc
@@ -85,6 +86,20 @@ void Runtime::Init(const std::string& runtime_name) {
 }
 
 namespace {
+
+// The process's ONE iceoryx listener (a thread iceoryx owns), shared by every reader
+// that asked to be woken (StreamReader::OnData). Created on first use; attach /
+// detach are serialized here.
+struct Listener {
+    std::mutex mu;
+    iox_listener_storage_t storage{};
+    iox_listener_t l = nullptr;
+    iox_listener_t get() {
+        if (!l) l = iox_listener_init(&storage);
+        return l;
+    }
+};
+Listener& listener() { static Listener L; return L; }
 
 class IceoryxWriter final : public IWriterTransport {
 public:
@@ -162,15 +177,36 @@ public:
         if (sub_ && c.handle) iox_sub_release_chunk(sub_, c.handle);
         c.data = nullptr; c.handle = nullptr;
     }
+    RdsError on_data(std::function<void()> cb) override {
+        if (!sub_) return RdsError::NOT_CONNECTED;
+        auto& L = listener();
+        std::lock_guard<std::mutex> g(L.mu);
+        if (attached_) { iox_listener_detach_subscriber_event(L.get(), sub_, SubscriberEvent_DATA_RECEIVED); attached_ = false; }
+        cb_ = std::move(cb);
+        if (!cb_) return RdsError::OK;
+        if (iox_listener_attach_subscriber_event_with_context_data(
+                L.get(), sub_, SubscriberEvent_DATA_RECEIVED, &IceoryxReader::wake_, this) !=
+            ListenerResult_SUCCESS)
+            return RdsError::TRANSPORT_ERROR;
+        attached_ = true;
+        return RdsError::OK;
+    }
     void disconnect() override {
+        if (attached_) on_data({});
         if (sub_) { iox_sub_unsubscribe(sub_); iox_sub_deinit(sub_); sub_ = nullptr; }
     }
     ~IceoryxReader() override { disconnect(); }
 
 private:
+    static void wake_(iox_sub_t, void* self) {
+        auto* r = static_cast<IceoryxReader*>(self);
+        if (r->cb_) r->cb_();
+    }
     iox_sub_storage_t storage_{};
     iox_sub_t sub_ = nullptr;
     std::string name_;            // the logical stream, for the trace
+    std::function<void()> cb_;    // OnData (run on the listener thread)
+    bool attached_ = false;
 };
 
 }  // namespace

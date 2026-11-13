@@ -185,21 +185,33 @@ class PerClient:
     the probe resolves per's TIPC addrs + op service_ids straight from the model.
     """
 
-    def __init__(self, ctx, repo) -> None:
+    def __init__(self, ctx, repo, instance: "int | None" = None) -> None:
         self.ctx = ctx
         self.repo = Path(repo)
+        # TIPC instance of the per this client talks to. None = per's declared
+        # instance (0); an ISOLATED stack (theia start --instance N) has its own
+        # per at :N.
+        self.instance = instance
         self.probe = ctx.probe("TdbPer", instance=_unique_instance()).start()
+
+    def target(self, node: str):
+        """`node` (PerClient / PerManager) as a probe target, at self.instance."""
+        if self.instance is None:
+            return node
+        import dataclasses
+        return dataclasses.replace(self.ctx.ref(node), tipc_instance=self.instance)
 
     @classmethod
     def from_workspace(cls, repo: str | Path,
-                       app_proto: "str | Path | None" = None) -> "PerClient":
+                       app_proto: "str | Path | None" = None,
+                       instance: "int | None" = None) -> "PerClient":
         """repo = the framework checkout (owns tdb.art). app_proto = a CONSUMING
         WORKSPACE's proto/ dir, when driving an APP config whose .proto lives
         there (seed.py --workspace); the codec keeps the framework platform/proto
         as a fallback root so platform + tdb node types still resolve. Omit
         app_proto for framework-only configs (services)."""
         repo = Path(repo)
-        return cls(_ctx(repo, proto_root=app_proto), repo)
+        return cls(_ctx(repo, proto_root=app_proto), repo, instance=instance)
 
     def snapshot(self, label: str, timeout: float = 3.0) -> dict[str, Any]:
         return self.probe.call("PerManager", "Snapshot", timeout=timeout,

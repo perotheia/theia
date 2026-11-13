@@ -660,7 +660,7 @@ def cmd_start(args: list[str]) -> int:
             return 1
         # First-boot config seed (see _seed_defaults). Skip with --no-seed.
         if "--no-seed" not in args:
-            _seed_defaults()
+            _seed_defaults(int(instance) if _isolated else None)
         return 0
 
     # ── FOREGROUND (default) ──────────────────────────────────────────────
@@ -676,7 +676,7 @@ def cmd_start(args: list[str]) -> int:
         def _delayed_seed():
             time.sleep(2.0)
             if proc.poll() is None:      # still up
-                _seed_defaults()
+                _seed_defaults(int(instance) if _isolated else None)
         threading.Thread(target=_delayed_seed, daemon=True).start()
     # Block on the supervisor. On Ctrl-C, SIGINT already reached it via the tty
     # (same process group); wait for its clean shutdown, then reap the pidfile.
@@ -692,7 +692,7 @@ def cmd_start(args: list[str]) -> int:
     return rc if rc and rc > 0 else 0
 
 
-def _seed_defaults() -> None:
+def _seed_defaults(per_instance: "int | None" = None) -> None:
     """Seed declared config defaults into etcd via services/per (first-boot).
 
     Generates the schema + config-defaults from the workspace's .art trees and
@@ -770,6 +770,10 @@ def _seed_defaults() -> None:
         seed = [sys.executable, str(seed_py), "defaults",
                 "--defaults", str(defs), "--schema", str(schema),
                 "--workspace", str(WORKSPACE)]
+        # An ISOLATED stack (theia start --instance N) runs its OWN per at :N; a
+        # rig's machine N keeps the master's per (:0), like the pg registry.
+        if per_instance is not None:
+            seed += ["--instance", str(per_instance)]
         for _ in range(7):
             time.sleep(3.0)
             if subprocess.call(seed, stdout=subprocess.DEVNULL,

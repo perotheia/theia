@@ -50,7 +50,7 @@ def seed_defaults(per, cfgdef: dict) -> int:
         # (values == {}): the node still gets a /theia/config/<node> key — an
         # empty proto + its digest — so the key is visible in the Table Viewer
         # and the node has a stored baseline to edit from.
-        cur = per.probe.call("PerClient", "GetConfig", timeout=3.0,
+        cur = per.probe.call(per.target("PerClient"), "GetConfig", timeout=3.0,
                              target_node=node, want_digest="")
         if cur.get("mod_rev", 0):
             print(f"  {node}: already has a stored value — not seeding")
@@ -66,7 +66,7 @@ def seed_defaults(per, cfgdef: dict) -> int:
         except Exception as ex:  # noqa: BLE001
             print(f"  {node}: encode {info.get('config_type')} failed ({ex}) — skip")
             continue
-        rep = per.probe.call("PerClient", "PutConfig", timeout=3.0,
+        rep = per.probe.call(per.target("PerClient"), "PutConfig", timeout=3.0,
                              target_node=node, config=raw,
                              digest=info["digest"], expect_rev=0)
         print(f"  seeded {node} ({info.get('config_type')}@{info['digest']}) "
@@ -84,6 +84,10 @@ def main() -> int:
     ap.add_argument("--schema", type=Path,
                     help="gen-schema output (accepted for symmetry; the "
                          "defaults file carries everything the seed needs)")
+    ap.add_argument("--instance", type=int, default=None,
+                    help="TIPC instance of the target per (an isolated stack "
+                         "started with `theia start --instance N` has its per at N; "
+                         "default: per's declared instance 0)")
     ap.add_argument("--workspace", type=Path, default=Path.cwd(),
                     help="workspace root the probe resolves against "
                          "(default: cwd)")
@@ -97,7 +101,8 @@ def main() -> int:
     # without hand-copying protos into the framework tree.
     ws_proto = a.workspace / "proto"
     app_proto = str(ws_proto) if ws_proto.is_dir() else None
-    per = PerClient.from_workspace(str(_FRAMEWORK), app_proto=app_proto)
+    per = PerClient.from_workspace(str(_FRAMEWORK), app_proto=app_proto,
+                                   instance=a.instance)
     try:
         seed_defaults(per, cfgdef)
         return 0

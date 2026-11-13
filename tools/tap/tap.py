@@ -290,6 +290,7 @@ def cmd_record(a) -> int:
     files = {}
     lock = threading.Lock()
     probe = pg = None
+    joins: list = []
     if wires:
         probe, pg = _pg(inst, f"tap-rec-{os.getpid()}")
         pg.start_keepalive()
@@ -313,11 +314,45 @@ def cmd_record(a) -> int:
                     files[w.flat].write(line + "\n")
                     counts[w.flat] += 1
 
-            rep = pg.join(w.flat, on_cast=on_frame)
-            if int(rep.get("status", 1)) != 0:
-                raise SystemExit(f"tap record: pg join {w.flat} refused by supervisor :{inst}: {rep}")
-            print(f"tap: joined {w.flat} (group 0x{int(rep['group_type']):08x}, member {rep['instance']})",
-                  file=sys.stderr)
+            joins.append((w.flat, on_frame))
+
+    # Join each group with RETRIES and backoff, in the background: a supervisor busy
+    # starting its stack can let a PgJoin call time out (2 s x 5); that must not end the
+    # recording (final run 1, 2026-11-13). Groups that joined record at once; one that
+    # never joins within --join-timeout is reported in the summary, not fatal.
+    join_failed: dict[str, str] = {}
+
+    def join_all():
+        pending = list(joins)
+        deadline = time.monotonic() + a.join_timeout
+        delay = 0.5
+        while pending and not stop.is_set():
+            left = []
+            for flat, cb in pending:
+                try:
+                    rep = pg.join(flat, on_cast=cb)
+                except Exception as e:                    # TimeoutError from call_addr
+                    left.append((flat, cb)); join_failed[flat] = f"{type(e).__name__}: {e}"
+                    continue
+                if int(rep.get("status", 1)) != 0:
+                    left.append((flat, cb)); join_failed[flat] = f"refused: {rep}"
+                    continue
+                join_failed.pop(flat, None)
+                print(f"tap: joined {flat} (group 0x{int(rep['group_type']):08x}, member {rep['instance']})",
+                      file=sys.stderr)
+            pending = left
+            if pending:
+                if time.monotonic() >= deadline:
+                    for flat, _ in pending:
+                        print(f"tap: GAVE UP joining {flat} after {a.join_timeout:.0f} s: "
+                              f"{join_failed.get(flat)}", file=sys.stderr)
+                    return
+                print(f"tap: {len(pending)} group(s) not joined yet (supervisor :{inst} busy?), "
+                      f"retry in {delay:.1f} s", file=sys.stderr)
+                stop.wait(delay)
+                delay = min(delay * 2, 5.0)
+
+    joiner = None
 
     meta = _read_meta(d)
     meta.update({
@@ -330,6 +365,9 @@ def cmd_record(a) -> int:
         "rds": sorted({*(meta.get("rds") or []), *streams}),
     })
     _write_meta(d, meta)
+    if joins:
+        joiner = threading.Thread(target=join_all, daemon=True)
+        joiner.start()
     print(f"tap: recording -> {d} (Ctrl-C to stop)", file=sys.stderr)
     t_end = time.monotonic() + a.seconds if a.seconds else None
     while not stop.is_set():
@@ -340,7 +378,12 @@ def cmd_record(a) -> int:
             break
         stop.wait(0.1)
 
+    stop.set()
+    if joiner:
+        joiner.join(timeout=3)
     summary = {"mode": "record", "dir": str(d), "tipc": dict(counts)}
+    if join_failed:
+        summary["not_joined"] = dict(join_failed)
     if pg:
         pg.shutdown()
         probe.stop()
@@ -529,6 +572,8 @@ def main(argv=None) -> int:
     r.add_argument("--tipc", help="interfaces / messages / wire types, comma-separated")
     r.add_argument("--rds", help="RDS stream instances (/Writer/stream), comma-separated")
     r.add_argument("--seconds", type=float, default=0)
+    r.add_argument("--join-timeout", type=float, default=120.0,
+                   help="keep retrying pg joins this long (s) before reporting a group as not joined")
     p = sub.add_parser("replay", help="replay <dir> at its recorded times")
     p.add_argument("dir")
     p.add_argument("--speed", type=float, default=1.0)

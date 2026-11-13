@@ -75,6 +75,7 @@ def test_framework_messages_resolve_with_the_framework_protos(tmp_path):
 
 
 def test_json_roundtrip_enum_bytes_uint64():
+    pytest.importorskip("grpc_tools", reason="the probe codec compiles .proto with grpc_tools")
     w, = tap.Index(THEIA).resolve("system_services_log_TraceRecord")
     cls = tap._cls(w)
     m = cls(node_name="SmDaemon", ts_ns=(1 << 63) + 5, payload=b"\x00\xffwire", corr_id=7)

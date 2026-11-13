@@ -160,12 +160,9 @@ public:
     template <typename T> void pg_leave() { pg_.leave<T>(); }
     template <typename T>
     void pg_broadcast(uint32_t group_type, const T& msg) {   // allocator escape hatch
-        auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
-        pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
-        if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<T>::fields(), &msg))
-            return;
-        pg_.broadcast<T>(group_type, _buf.data(),
-                         static_cast<uint16_t>(_os.bytes_written));
+        // encode into the thread's pg buffer + multicast; a drop is counted, never
+        // silent, and a type too big for the wire does not build (PgClient.hh)
+        pg_.encode_broadcast<T>(group_type, msg);
     }
 
     // Keep the framework's config-service handler
@@ -296,11 +293,15 @@ inline void FunctionGroupSm::broadcast_broadcast_fg_state(const FgStatusMsg& msg
     // same type → register_cast<FgStatusMsg> delivers to their handle_cast. The impl
     // may pg_members<FgStatusMsg>() to skip work when empty.
     pg_watch<FgStatusMsg>();
-    auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
-    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<FgStatusMsg>::fields(), &msg))
-        return;
-    pg_.broadcast_members<FgStatusMsg>(_buf.data(), static_cast<uint16_t>(_os.bytes_written));
+    // encode into the thread's pg buffer + cast to each member; a drop is counted,
+    // never silent, and a type too big for the wire does not build (PgClient.hh)
+#ifdef system_services_sm_FgStatusMsg_size
+    // nanopb's max encoded size: a type the wire cannot carry does not build
+    static_assert(system_services_sm_FgStatusMsg_size <= ::theia::runtime::kMaxPgPayload,
+                  "pg: FgStatusMsg: nanopb max encoded size > kMaxPgPayload (65000 B): "
+                  "bound its repeated fields / strings smaller, or send it over RDS");
+#endif
+    pg_.encode_broadcast_members<FgStatusMsg>(msg);
 }
 
 

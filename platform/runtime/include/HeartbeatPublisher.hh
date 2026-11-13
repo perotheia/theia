@@ -15,7 +15,7 @@
 // supervisor's NodeReportIf receiver (SupervisorCtl, TIPC 0x80020001/0), keyed
 // by service_id = djb2_low16("system_supervisor_HeartbeatReport") — the same
 // id the supervisor's register_cast<HeartbeatReport> binds, so it matches by
-// construction. We hand-encode the four proto3 fields + frame a TheiaMsgHeader
+// construction. We hand-encode the five proto3 fields (5: pg_drops, PgDrops.hh) + frame a TheiaMsgHeader
 // here rather than pull the supervisor's .pb.h in, because:
 //
 //   * platform/runtime is BELOW the supervisor proto in the build graph — the
@@ -38,6 +38,8 @@
 // the publisher is then inert and the node runs normally.
 
 #pragma once
+
+#include "PgDrops.hh"   // pg_drops: the process's dropped pg messages
 
 #include "TheiaMsgHeader.hh"   // TheiaMsgHeader + kBusTypeRpc / kMsgGenCast
 #include "RemoteCodec.hh"      // hash_msg_type_ — service_id derivation
@@ -157,6 +159,8 @@ public:
         pb_varint_field(rec, 2, zigzag32(self_pid_));               // pid
         pb_varint_field(rec, 3, ++seq_);                            // seq
         pb_varint_field(rec, 4, monotonic_ns());                   // monotonic_ns
+        if (const uint64_t d = PgDrops::get().total())             // pg_drops (proto3:
+            pb_varint_field(rec, 5, d);                             //  0 = absent)
 
         TheiaMsgHeader hdr{};
         hdr.bus_type        = kBusTypeRpc;

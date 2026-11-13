@@ -577,11 +577,20 @@ SystemInfoData Supervisor::ctl_get_system_info() {
 // path. Updates the watchdog table + fires the saved trace/log re-push on the
 // first beat after a gap (#361).
 void Supervisor::ctl_on_heartbeat(const std::string& node_name, pid_t pid,
-                                  uint64_t seq) {
+                                  uint64_t seq, uint64_t pg_drops) {
     auto now = std::chrono::steady_clock::now();
     auto& s = heartbeats_[pid];
     s.last_seen = now;
     s.last_seq  = seq;
+    // A node's dropped pg messages (runtime PgDrops.hh): never silent. Each RISE is
+    // one warning here (the node's own log names the type, once per type); the total
+    // rides NodeState.pg_drops.
+    if (pg_drops > s.pg_drops)
+        engine_log().warn("pg: node " + node_name + " (pid " +
+                          std::to_string(static_cast<int>(pid)) + ") dropped " +
+                          std::to_string(pg_drops - s.pg_drops) + " pg message(s), " +
+                          std::to_string(pg_drops) + " in all: see its log");
+    s.pg_drops = pg_drops;
     engine_log().debug("heartbeat node=" + node_name + " pid=" +
                        std::to_string(static_cast<int>(pid)) + " seq=" +
                        std::to_string(seq));
@@ -1408,7 +1417,7 @@ void Supervisor::dispatch(ExecCommand& cmd) {
             rep.status = ctl_terminate_child(cmd.name);
             break;
         case Op::OnHeartbeat:
-            ctl_on_heartbeat(cmd.name, cmd.pid, cmd.seq);
+            ctl_on_heartbeat(cmd.name, cmd.pid, cmd.seq, cmd.pg_drops);
             break;
         case Op::OnSendTimeout:
             ctl_on_send_timeout(cmd.name, cmd.callee, cmd.iface, cmd.method,
@@ -2664,6 +2673,8 @@ void Supervisor::cast_node_state(const WorkerNode& w) {
             ns.shared_kb = it->second.shared_kb;
             ns.data_kb   = it->second.data_kb;
         }
+        auto hb = heartbeats_.find(w.pid);
+        if (hb != heartbeats_.end()) ns.pg_drops = hb->second.pg_drops;
     }
     emit_.on_node_state(ns);
 }

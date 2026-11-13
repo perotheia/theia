@@ -149,12 +149,9 @@ public:
     // never TIPC-self-CALLing watch/resolve. Normal FCs use broadcast_*().
     template <typename T>
     void pg_broadcast(uint32_t group_type, const T& msg) {
-        auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
-        pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
-        if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<T>::fields(), &msg))
-            return;
-        pg_.broadcast<T>(group_type, _buf.data(),
-                         static_cast<uint16_t>(_os.bytes_written));
+        // encode into the thread's pg buffer + multicast; a drop is counted, never
+        // silent, and a type too big for the wire does not build (PgClient.hh)
+        pg_.encode_broadcast<T>(group_type, msg);
     }
 
 
@@ -238,11 +235,15 @@ inline void ShwaDaemon::broadcast_broadcast_sample(const AccelSample& msg) {
     // The impl can call pg_members<AccelSample>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<AccelSample>();
-    auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
-    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<AccelSample>::fields(), &msg))
-        return;
-    pg_.broadcast_members<AccelSample>(_buf.data(), static_cast<uint16_t>(_os.bytes_written));
+    // encode into the thread's pg buffer + cast to each member; a drop is counted,
+    // never silent, and a type too big for the wire does not build (PgClient.hh)
+#ifdef system_services_shwa_AccelSample_size
+    // nanopb's max encoded size: a type the wire cannot carry does not build
+    static_assert(system_services_shwa_AccelSample_size <= ::theia::runtime::kMaxPgPayload,
+                  "pg: AccelSample: nanopb max encoded size > kMaxPgPayload (65000 B): "
+                  "bound its repeated fields / strings smaller, or send it over RDS");
+#endif
+    pg_.encode_broadcast_members<AccelSample>(msg);
 }
 
 inline void ShwaDaemon::broadcast_excursion_excursion(const ShwaExcursionEvent& msg) {
@@ -251,11 +252,15 @@ inline void ShwaDaemon::broadcast_excursion_excursion(const ShwaExcursionEvent& 
     // The impl can call pg_members<ShwaExcursionEvent>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<ShwaExcursionEvent>();
-    auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
-    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<ShwaExcursionEvent>::fields(), &msg))
-        return;
-    pg_.broadcast_members<ShwaExcursionEvent>(_buf.data(), static_cast<uint16_t>(_os.bytes_written));
+    // encode into the thread's pg buffer + cast to each member; a drop is counted,
+    // never silent, and a type too big for the wire does not build (PgClient.hh)
+#ifdef system_services_shwa_ShwaExcursionEvent_size
+    // nanopb's max encoded size: a type the wire cannot carry does not build
+    static_assert(system_services_shwa_ShwaExcursionEvent_size <= ::theia::runtime::kMaxPgPayload,
+                  "pg: ShwaExcursionEvent: nanopb max encoded size > kMaxPgPayload (65000 B): "
+                  "bound its repeated fields / strings smaller, or send it over RDS");
+#endif
+    pg_.encode_broadcast_members<ShwaExcursionEvent>(msg);
 }
 
 

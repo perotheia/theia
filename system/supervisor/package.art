@@ -243,6 +243,7 @@ message NodeState {
     uint32  threads
     uint64  shared_kb
     uint64  data_kb
+    uint64  pg_drops         // the node's dropped pg messages (its HeartbeatReport.pg_drops)
 }
 
 // One supervision event. kind discriminates the union; payload-specific
@@ -586,6 +587,8 @@ message HeartbeatReport {
     sint32  pid
     uint64  seq                 // monotonic per-node, gaps == missed sends
     uint64  monotonic_ns
+    uint64  pg_drops            // pg / cast messages this process dropped so far (too big
+                                // to encode, truncated, undecodable: runtime PgDrops.hh)
 }
 
 // Emitted by a node when its outbound call/cast/send_request did not

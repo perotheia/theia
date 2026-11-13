@@ -164,12 +164,9 @@ public:
     // never TIPC-self-CALLing watch/resolve. Normal FCs use broadcast_*().
     template <typename T>
     void pg_broadcast(uint32_t group_type, const T& msg) {
-        auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
-        pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
-        if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<T>::fields(), &msg))
-            return;
-        pg_.broadcast<T>(group_type, _buf.data(),
-                         static_cast<uint16_t>(_os.bytes_written));
+        // encode into the thread's pg buffer + multicast; a drop is counted, never
+        // silent, and a type too big for the wire does not build (PgClient.hh)
+        pg_.encode_broadcast<T>(group_type, msg);
     }
 
 
@@ -278,11 +275,15 @@ inline void NmCfgGate::broadcast_txn_add_wifi(const TxnAddWifi& msg) {
     // The impl can call pg_members<TxnAddWifi>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<TxnAddWifi>();
-    auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
-    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<TxnAddWifi>::fields(), &msg))
-        return;
-    pg_.broadcast_members<TxnAddWifi>(_buf.data(), static_cast<uint16_t>(_os.bytes_written));
+    // encode into the thread's pg buffer + cast to each member; a drop is counted,
+    // never silent, and a type too big for the wire does not build (PgClient.hh)
+#ifdef system_services_nm_TxnAddWifi_size
+    // nanopb's max encoded size: a type the wire cannot carry does not build
+    static_assert(system_services_nm_TxnAddWifi_size <= ::theia::runtime::kMaxPgPayload,
+                  "pg: TxnAddWifi: nanopb max encoded size > kMaxPgPayload (65000 B): "
+                  "bound its repeated fields / strings smaller, or send it over RDS");
+#endif
+    pg_.encode_broadcast_members<TxnAddWifi>(msg);
 }
 
 inline void NmCfgGate::broadcast_txn_remove_wifi(const TxnRemoveWifi& msg) {
@@ -291,11 +292,15 @@ inline void NmCfgGate::broadcast_txn_remove_wifi(const TxnRemoveWifi& msg) {
     // The impl can call pg_members<TxnRemoveWifi>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<TxnRemoveWifi>();
-    auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
-    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<TxnRemoveWifi>::fields(), &msg))
-        return;
-    pg_.broadcast_members<TxnRemoveWifi>(_buf.data(), static_cast<uint16_t>(_os.bytes_written));
+    // encode into the thread's pg buffer + cast to each member; a drop is counted,
+    // never silent, and a type too big for the wire does not build (PgClient.hh)
+#ifdef system_services_nm_TxnRemoveWifi_size
+    // nanopb's max encoded size: a type the wire cannot carry does not build
+    static_assert(system_services_nm_TxnRemoveWifi_size <= ::theia::runtime::kMaxPgPayload,
+                  "pg: TxnRemoveWifi: nanopb max encoded size > kMaxPgPayload (65000 B): "
+                  "bound its repeated fields / strings smaller, or send it over RDS");
+#endif
+    pg_.encode_broadcast_members<TxnRemoveWifi>(msg);
 }
 
 inline void NmCfgGate::broadcast_txn_set_vpn(const TxnSetVpn& msg) {
@@ -304,11 +309,15 @@ inline void NmCfgGate::broadcast_txn_set_vpn(const TxnSetVpn& msg) {
     // The impl can call pg_members<TxnSetVpn>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<TxnSetVpn>();
-    auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
-    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<TxnSetVpn>::fields(), &msg))
-        return;
-    pg_.broadcast_members<TxnSetVpn>(_buf.data(), static_cast<uint16_t>(_os.bytes_written));
+    // encode into the thread's pg buffer + cast to each member; a drop is counted,
+    // never silent, and a type too big for the wire does not build (PgClient.hh)
+#ifdef system_services_nm_TxnSetVpn_size
+    // nanopb's max encoded size: a type the wire cannot carry does not build
+    static_assert(system_services_nm_TxnSetVpn_size <= ::theia::runtime::kMaxPgPayload,
+                  "pg: TxnSetVpn: nanopb max encoded size > kMaxPgPayload (65000 B): "
+                  "bound its repeated fields / strings smaller, or send it over RDS");
+#endif
+    pg_.encode_broadcast_members<TxnSetVpn>(msg);
 }
 
 inline void NmCfgGate::broadcast_txn_set_autoconn(const TxnSetAutoConn& msg) {
@@ -317,11 +326,15 @@ inline void NmCfgGate::broadcast_txn_set_autoconn(const TxnSetAutoConn& msg) {
     // The impl can call pg_members<TxnSetAutoConn>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<TxnSetAutoConn>();
-    auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
-    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<TxnSetAutoConn>::fields(), &msg))
-        return;
-    pg_.broadcast_members<TxnSetAutoConn>(_buf.data(), static_cast<uint16_t>(_os.bytes_written));
+    // encode into the thread's pg buffer + cast to each member; a drop is counted,
+    // never silent, and a type too big for the wire does not build (PgClient.hh)
+#ifdef system_services_nm_TxnSetAutoConn_size
+    // nanopb's max encoded size: a type the wire cannot carry does not build
+    static_assert(system_services_nm_TxnSetAutoConn_size <= ::theia::runtime::kMaxPgPayload,
+                  "pg: TxnSetAutoConn: nanopb max encoded size > kMaxPgPayload (65000 B): "
+                  "bound its repeated fields / strings smaller, or send it over RDS");
+#endif
+    pg_.encode_broadcast_members<TxnSetAutoConn>(msg);
 }
 
 inline void NmCfgGate::broadcast_txn_confirm(const TxnConfirm& msg) {
@@ -330,11 +343,15 @@ inline void NmCfgGate::broadcast_txn_confirm(const TxnConfirm& msg) {
     // The impl can call pg_members<TxnConfirm>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<TxnConfirm>();
-    auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
-    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<TxnConfirm>::fields(), &msg))
-        return;
-    pg_.broadcast_members<TxnConfirm>(_buf.data(), static_cast<uint16_t>(_os.bytes_written));
+    // encode into the thread's pg buffer + cast to each member; a drop is counted,
+    // never silent, and a type too big for the wire does not build (PgClient.hh)
+#ifdef system_services_nm_TxnConfirm_size
+    // nanopb's max encoded size: a type the wire cannot carry does not build
+    static_assert(system_services_nm_TxnConfirm_size <= ::theia::runtime::kMaxPgPayload,
+                  "pg: TxnConfirm: nanopb max encoded size > kMaxPgPayload (65000 B): "
+                  "bound its repeated fields / strings smaller, or send it over RDS");
+#endif
+    pg_.encode_broadcast_members<TxnConfirm>(msg);
 }
 
 inline void NmCfgGate::broadcast_txn_abort(const TxnAbort& msg) {
@@ -343,11 +360,15 @@ inline void NmCfgGate::broadcast_txn_abort(const TxnAbort& msg) {
     // The impl can call pg_members<TxnAbort>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<TxnAbort>();
-    auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
-    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<TxnAbort>::fields(), &msg))
-        return;
-    pg_.broadcast_members<TxnAbort>(_buf.data(), static_cast<uint16_t>(_os.bytes_written));
+    // encode into the thread's pg buffer + cast to each member; a drop is counted,
+    // never silent, and a type too big for the wire does not build (PgClient.hh)
+#ifdef system_services_nm_TxnAbort_size
+    // nanopb's max encoded size: a type the wire cannot carry does not build
+    static_assert(system_services_nm_TxnAbort_size <= ::theia::runtime::kMaxPgPayload,
+                  "pg: TxnAbort: nanopb max encoded size > kMaxPgPayload (65000 B): "
+                  "bound its repeated fields / strings smaller, or send it over RDS");
+#endif
+    pg_.encode_broadcast_members<TxnAbort>(msg);
 }
 
 inline void NmCfgGate::broadcast_txn_timeout(const TxnTimeout& msg) {
@@ -356,11 +377,15 @@ inline void NmCfgGate::broadcast_txn_timeout(const TxnTimeout& msg) {
     // The impl can call pg_members<TxnTimeout>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<TxnTimeout>();
-    auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
-    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<TxnTimeout>::fields(), &msg))
-        return;
-    pg_.broadcast_members<TxnTimeout>(_buf.data(), static_cast<uint16_t>(_os.bytes_written));
+    // encode into the thread's pg buffer + cast to each member; a drop is counted,
+    // never silent, and a type too big for the wire does not build (PgClient.hh)
+#ifdef system_services_nm_TxnTimeout_size
+    // nanopb's max encoded size: a type the wire cannot carry does not build
+    static_assert(system_services_nm_TxnTimeout_size <= ::theia::runtime::kMaxPgPayload,
+                  "pg: TxnTimeout: nanopb max encoded size > kMaxPgPayload (65000 B): "
+                  "bound its repeated fields / strings smaller, or send it over RDS");
+#endif
+    pg_.encode_broadcast_members<TxnTimeout>(msg);
 }
 
 

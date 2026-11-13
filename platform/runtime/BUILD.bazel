@@ -168,3 +168,11 @@ cc_test(
     copts = ["-std=c++17", "-Wall", "-Wextra"],
     deps = [":runtime"],
 )
+
+# A dropped pg message is counted per type and in total, never silent (PgDrops.hh).
+cc_test(
+    name = "test_pg_drops",
+    srcs = ["test/test_pg_drops.cc"],
+    copts = ["-std=c++17", "-Wall", "-Wextra"],
+    deps = [":runtime"],
+)

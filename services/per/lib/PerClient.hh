@@ -153,12 +153,9 @@ public:
     // never TIPC-self-CALLing watch/resolve. Normal FCs use broadcast_*().
     template <typename T>
     void pg_broadcast(uint32_t group_type, const T& msg) {
-        auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
-        pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
-        if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<T>::fields(), &msg))
-            return;
-        pg_.broadcast<T>(group_type, _buf.data(),
-                         static_cast<uint16_t>(_os.bytes_written));
+        // encode into the thread's pg buffer + multicast; a drop is counted, never
+        // silent, and a type too big for the wire does not build (PgClient.hh)
+        pg_.encode_broadcast<T>(group_type, msg);
     }
 
 
@@ -238,11 +235,15 @@ inline void PerClient::broadcast_config_out_trace_ctrl(const TraceControlPush& m
     // The impl can call pg_members<TraceControlPush>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<TraceControlPush>();
-    auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
-    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<TraceControlPush>::fields(), &msg))
-        return;
-    pg_.broadcast_members<TraceControlPush>(_buf.data(), static_cast<uint16_t>(_os.bytes_written));
+    // encode into the thread's pg buffer + cast to each member; a drop is counted,
+    // never silent, and a type too big for the wire does not build (PgClient.hh)
+#ifdef platform_runtime_TraceControlPush_size
+    // nanopb's max encoded size: a type the wire cannot carry does not build
+    static_assert(platform_runtime_TraceControlPush_size <= ::theia::runtime::kMaxPgPayload,
+                  "pg: TraceControlPush: nanopb max encoded size > kMaxPgPayload (65000 B): "
+                  "bound its repeated fields / strings smaller, or send it over RDS");
+#endif
+    pg_.encode_broadcast_members<TraceControlPush>(msg);
 }
 
 inline void PerClient::broadcast_config_out_log_level(const LogLevelPush& msg) {
@@ -251,11 +252,15 @@ inline void PerClient::broadcast_config_out_log_level(const LogLevelPush& msg) {
     // The impl can call pg_members<LogLevelPush>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<LogLevelPush>();
-    auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
-    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<LogLevelPush>::fields(), &msg))
-        return;
-    pg_.broadcast_members<LogLevelPush>(_buf.data(), static_cast<uint16_t>(_os.bytes_written));
+    // encode into the thread's pg buffer + cast to each member; a drop is counted,
+    // never silent, and a type too big for the wire does not build (PgClient.hh)
+#ifdef platform_runtime_LogLevelPush_size
+    // nanopb's max encoded size: a type the wire cannot carry does not build
+    static_assert(platform_runtime_LogLevelPush_size <= ::theia::runtime::kMaxPgPayload,
+                  "pg: LogLevelPush: nanopb max encoded size > kMaxPgPayload (65000 B): "
+                  "bound its repeated fields / strings smaller, or send it over RDS");
+#endif
+    pg_.encode_broadcast_members<LogLevelPush>(msg);
 }
 
 inline void PerClient::broadcast_config_out_config_push(const ConfigUpdated& msg) {
@@ -264,11 +269,15 @@ inline void PerClient::broadcast_config_out_config_push(const ConfigUpdated& msg
     // The impl can call pg_members<ConfigUpdated>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<ConfigUpdated>();
-    auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
-    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<ConfigUpdated>::fields(), &msg))
-        return;
-    pg_.broadcast_members<ConfigUpdated>(_buf.data(), static_cast<uint16_t>(_os.bytes_written));
+    // encode into the thread's pg buffer + cast to each member; a drop is counted,
+    // never silent, and a type too big for the wire does not build (PgClient.hh)
+#ifdef platform_runtime_ConfigUpdated_size
+    // nanopb's max encoded size: a type the wire cannot carry does not build
+    static_assert(platform_runtime_ConfigUpdated_size <= ::theia::runtime::kMaxPgPayload,
+                  "pg: ConfigUpdated: nanopb max encoded size > kMaxPgPayload (65000 B): "
+                  "bound its repeated fields / strings smaller, or send it over RDS");
+#endif
+    pg_.encode_broadcast_members<ConfigUpdated>(msg);
 }
 
 inline void PerClient::broadcast_to_phm_report(const FcHealthReport& msg) {
@@ -277,11 +286,15 @@ inline void PerClient::broadcast_to_phm_report(const FcHealthReport& msg) {
     // The impl can call pg_members<FcHealthReport>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<FcHealthReport>();
-    auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
-    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<FcHealthReport>::fields(), &msg))
-        return;
-    pg_.broadcast_members<FcHealthReport>(_buf.data(), static_cast<uint16_t>(_os.bytes_written));
+    // encode into the thread's pg buffer + cast to each member; a drop is counted,
+    // never silent, and a type too big for the wire does not build (PgClient.hh)
+#ifdef system_services_phm_FcHealthReport_size
+    // nanopb's max encoded size: a type the wire cannot carry does not build
+    static_assert(system_services_phm_FcHealthReport_size <= ::theia::runtime::kMaxPgPayload,
+                  "pg: FcHealthReport: nanopb max encoded size > kMaxPgPayload (65000 B): "
+                  "bound its repeated fields / strings smaller, or send it over RDS");
+#endif
+    pg_.encode_broadcast_members<FcHealthReport>(msg);
 }
 
 

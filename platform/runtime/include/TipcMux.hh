@@ -23,6 +23,7 @@
 
 #include "GenServer.hh"
 #include "NodeRef.hh"
+#include "PgDrops.hh"      // never-silent drops (decode failures)
 
 #include <atomic>
 #include <cstdint>
@@ -132,7 +133,10 @@ public:
             }
             Msg msg{};
             pb_istream_t is = pb_istream_from_buffer(payload, len);
-            if (!pb_decode(&is, RemoteCodec<Msg>::fields(), &msg)) return;
+            if (!pb_decode(&is, RemoteCodec<Msg>::fields(), &msg)) {
+                note_pg_drop(msg_type_name<Msg>(), "decode", len);   // never silent (PgDrops.hh)
+                return;
+            }
             auto handler = [msg = std::move(msg), corr](GenServerBase* base) {
                 auto* self = static_cast<NodeT*>(base);
                 auto& tr2 = ::theia::runtime::tracer_for(NodeT::kNodeName);
@@ -184,7 +188,10 @@ public:
             }
             Msg msg{};
             pb_istream_t is = pb_istream_from_buffer(payload, len);
-            if (!pb_decode(&is, RemoteCodec<Msg>::fields(), &msg)) return;
+            if (!pb_decode(&is, RemoteCodec<Msg>::fields(), &msg)) {
+                note_pg_drop(msg_type_name<Msg>(), "decode", len);   // never silent (PgDrops.hh)
+                return;
+            }
             (node.*method)(msg);   // inline on the mux thread — no mailbox
         };
         b->entries[RemoteCodec<Msg>::service_id] = std::move(e);
@@ -212,7 +219,10 @@ public:
             }
             Req req{};
             pb_istream_t is = pb_istream_from_buffer(payload, len);
-            if (!pb_decode(&is, RemoteCodec<Req>::fields(), &req)) return;
+            if (!pb_decode(&is, RemoteCodec<Req>::fields(), &req)) {
+                note_pg_drop(msg_type_name<Req>(), "decode", len);   // never silent (PgDrops.hh)
+                return;
+            }
 
             node.enqueue([req = std::move(req), reply_fd, corr](
                               GenServerBase* base) mutable {

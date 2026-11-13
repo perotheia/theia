@@ -96,6 +96,15 @@ SupervisorCtl* g_ctl = nullptr;
 // only — these forwarders run on the engine/worker thread) and multicasts via
 // pg_broadcast<T>(). group_name = the wire type name (msg_type_name<T>()), the
 // same well-known .art name a member passes to pg_join. See [[runnable-control-and-heartbeat]].
+// The supervisor's own pg casts (pg_emit) fit the wire: checked at build time
+// against nanopb's max encoded sizes (the generated broadcast_*() do the same).
+static_assert(system_supervisor_SupervisionEvent_size <= ::theia::runtime::kMaxPgPayload, "pg: SupervisionEvent too big");
+static_assert(system_supervisor_NodeState_size        <= ::theia::runtime::kMaxPgPayload, "pg: NodeState too big");
+static_assert(system_supervisor_NodeEdge_size         <= ::theia::runtime::kMaxPgPayload, "pg: NodeEdge too big");
+static_assert(system_supervisor_SnapshotBegin_size    <= ::theia::runtime::kMaxPgPayload, "pg: SnapshotBegin too big");
+static_assert(system_supervisor_SnapshotEnd_size      <= ::theia::runtime::kMaxPgPayload, "pg: SnapshotEnd too big");
+static_assert(system_supervisor_HealthBeacon_size     <= ::theia::runtime::kMaxPgPayload, "pg: HealthBeacon too big");
+
 template <typename T>
 void pg_emit(const T& m) {
     if (!g_ctl) return;
@@ -173,6 +182,7 @@ void fwd_node_state(const ::supervisor::NodeStateData& n) {
     m.threads        = n.threads;
     m.shared_kb      = n.shared_kb;
     m.data_kb        = n.data_kb;
+    m.pg_drops       = n.pg_drops;
     pg_emit(m);
 }
 
@@ -356,6 +366,7 @@ void SupervisorCtl::handle_cast(const HeartbeatReport& msg,
     c.name = s(msg.node_name);
     c.pid  = static_cast<pid_t>(msg.pid);
     c.seq  = msg.seq;
+    c.pg_drops = msg.pg_drops;
     e->enqueue(std::move(c));
 }
 

@@ -31,6 +31,7 @@
 #include "RemoteCodec.hh"        // hash_msg_type_, msg_type_name<T>, RemoteCodec
 #include "TheiaMsgHeader.hh"     // TheiaMsgHeader, kBusType*, kMsgGen*
 #include "TipcMux.hh"            // NodeBinding, InboundEntry (the node's demux)
+#include "PgDrops.hh"            // never-silent drops
 
 #include <atomic>
 #include <cstdlib>
@@ -45,6 +46,7 @@
 #include <thread>
 #include <vector>
 
+#include <pb_encode.h>
 #include <sys/socket.h>
 #include <linux/tipc.h>
 #include <unistd.h>
@@ -225,6 +227,34 @@ public:
     template <typename T>
     void broadcast(uint32_t group_type, const uint8_t* payload, uint16_t len) {
         send_multicast_(group_type, RemoteCodec<T>::service_id, payload, len);
+    }
+
+    // Encode `msg` into this thread's pg buffer, then cast it to each watched member
+    // (broadcast_members) / multicast it to the group (broadcast). What the generated
+    // broadcast_*() / pg_broadcast() call. A type whose nanopb max size cannot fit
+    // does not build (the generated broadcast_*() static_asserts <Type>_size against
+    // kMaxPgPayload); an encode failure anyway is counted and logged once (PgDrops).
+    template <typename T>
+    bool encode_broadcast_members(const T& msg) {
+        auto& b = pg_encode_buffer();
+        pb_ostream_t os = pb_ostream_from_buffer(b.data(), b.size());
+        if (!pb_encode(&os, RemoteCodec<T>::fields(), &msg)) {
+            note_pg_drop(msg_type_name<T>(), "encode", os.bytes_written);
+            return false;
+        }
+        broadcast_members<T>(b.data(), static_cast<uint16_t>(os.bytes_written));
+        return true;
+    }
+    template <typename T>
+    bool encode_broadcast(uint32_t group_type, const T& msg) {
+        auto& b = pg_encode_buffer();
+        pb_ostream_t os = pb_ostream_from_buffer(b.data(), b.size());
+        if (!pb_encode(&os, RemoteCodec<T>::fields(), &msg)) {
+            note_pg_drop(msg_type_name<T>(), "encode", os.bytes_written);
+            return false;
+        }
+        broadcast<T>(group_type, b.data(), static_cast<uint16_t>(os.bytes_written));
+        return true;
     }
 
     void shutdown() {
@@ -444,8 +474,13 @@ private:
             static thread_local std::vector<uint8_t> buf(kMaxGroupFrame);
             for (auto& pf : pfds) {
                 if (!(pf.revents & POLLIN)) continue;
-                ssize_t n = ::recv(pf.fd, buf.data(), buf.size(), 0);
+                // MSG_TRUNC: the datagram's REAL length, so a truncated one is seen.
+                ssize_t n = ::recv(pf.fd, buf.data(), buf.size(), MSG_TRUNC);
                 if (n <= static_cast<ssize_t>(sizeof(TheiaMsgHeader))) continue;
+                if (static_cast<size_t>(n) > buf.size()) {
+                    note_pg_drop("pg frame", "truncated on receive", static_cast<size_t>(n));
+                    continue;
+                }
                 dispatch_frame_(buf.data(), static_cast<size_t>(n));
             }
         }
@@ -457,7 +492,12 @@ private:
         TheiaMsgHeader hdr{};
         std::memcpy(&hdr, frame, sizeof(hdr));
         uint16_t len = hdr.proto_len;
-        if (sizeof(hdr) + len > n) len = static_cast<uint16_t>(n - sizeof(hdr));
+        if (sizeof(hdr) + len > n) {      // shorter than its header says: never half-decode it
+            char what[32];
+            std::snprintf(what, sizeof(what), "pg sid 0x%04x", unsigned(hdr.rpc.service_id));
+            note_pg_drop(what, "short frame", n);
+            return;
+        }
         // A PgMembership push (OTP pg:monitor) ALWAYS refreshes the watch cache,
         // whether this client has a node binding (a GenServer watcher) or a bare
         // recv socket (a runnable watcher, e.g. the LOG pump).

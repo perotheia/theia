@@ -149,12 +149,9 @@ public:
     // never TIPC-self-CALLing watch/resolve. Normal FCs use broadcast_*().
     template <typename T>
     void pg_broadcast(uint32_t group_type, const T& msg) {
-        auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
-        pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
-        if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<T>::fields(), &msg))
-            return;
-        pg_.broadcast<T>(group_type, _buf.data(),
-                         static_cast<uint16_t>(_os.bytes_written));
+        // encode into the thread's pg buffer + multicast; a drop is counted, never
+        // silent, and a type too big for the wire does not build (PgClient.hh)
+        pg_.encode_broadcast<T>(group_type, msg);
     }
 
 
@@ -239,11 +236,15 @@ inline void IdsmDaemon::broadcast_broadcast_status(const IdsStatusMsg& msg) {
     // The impl can call pg_members<IdsStatusMsg>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<IdsStatusMsg>();
-    auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
-    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<IdsStatusMsg>::fields(), &msg))
-        return;
-    pg_.broadcast_members<IdsStatusMsg>(_buf.data(), static_cast<uint16_t>(_os.bytes_written));
+    // encode into the thread's pg buffer + cast to each member; a drop is counted,
+    // never silent, and a type too big for the wire does not build (PgClient.hh)
+#ifdef system_services_idsm_IdsStatusMsg_size
+    // nanopb's max encoded size: a type the wire cannot carry does not build
+    static_assert(system_services_idsm_IdsStatusMsg_size <= ::theia::runtime::kMaxPgPayload,
+                  "pg: IdsStatusMsg: nanopb max encoded size > kMaxPgPayload (65000 B): "
+                  "bound its repeated fields / strings smaller, or send it over RDS");
+#endif
+    pg_.encode_broadcast_members<IdsStatusMsg>(msg);
 }
 
 inline void IdsmDaemon::broadcast_to_sm_mode_input(const IdsmModeInput& msg) {
@@ -252,11 +253,15 @@ inline void IdsmDaemon::broadcast_to_sm_mode_input(const IdsmModeInput& msg) {
     // The impl can call pg_members<IdsmModeInput>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<IdsmModeInput>();
-    auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
-    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<IdsmModeInput>::fields(), &msg))
-        return;
-    pg_.broadcast_members<IdsmModeInput>(_buf.data(), static_cast<uint16_t>(_os.bytes_written));
+    // encode into the thread's pg buffer + cast to each member; a drop is counted,
+    // never silent, and a type too big for the wire does not build (PgClient.hh)
+#ifdef system_services_idsm_IdsmModeInput_size
+    // nanopb's max encoded size: a type the wire cannot carry does not build
+    static_assert(system_services_idsm_IdsmModeInput_size <= ::theia::runtime::kMaxPgPayload,
+                  "pg: IdsmModeInput: nanopb max encoded size > kMaxPgPayload (65000 B): "
+                  "bound its repeated fields / strings smaller, or send it over RDS");
+#endif
+    pg_.encode_broadcast_members<IdsmModeInput>(msg);
 }
 
 inline void IdsmDaemon::broadcast_to_phm_report(const FcHealthReport& msg) {
@@ -265,11 +270,15 @@ inline void IdsmDaemon::broadcast_to_phm_report(const FcHealthReport& msg) {
     // The impl can call pg_members<FcHealthReport>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<FcHealthReport>();
-    auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
-    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<FcHealthReport>::fields(), &msg))
-        return;
-    pg_.broadcast_members<FcHealthReport>(_buf.data(), static_cast<uint16_t>(_os.bytes_written));
+    // encode into the thread's pg buffer + cast to each member; a drop is counted,
+    // never silent, and a type too big for the wire does not build (PgClient.hh)
+#ifdef system_services_phm_FcHealthReport_size
+    // nanopb's max encoded size: a type the wire cannot carry does not build
+    static_assert(system_services_phm_FcHealthReport_size <= ::theia::runtime::kMaxPgPayload,
+                  "pg: FcHealthReport: nanopb max encoded size > kMaxPgPayload (65000 B): "
+                  "bound its repeated fields / strings smaller, or send it over RDS");
+#endif
+    pg_.encode_broadcast_members<FcHealthReport>(msg);
 }
 
 

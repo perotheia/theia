@@ -94,6 +94,7 @@ message NodeState {
     uint32 threads = 12;
     uint64 shared_kb = 13;
     uint64 data_kb = 14;
+    uint64 pg_drops = 15;
 }
 
 message SupervisionEvent {
@@ -252,6 +253,7 @@ message HeartbeatReport {
     sint32 pid = 2;
     uint64 seq = 3;
     uint64 monotonic_ns = 4;
+    uint64 pg_drops = 5;
 }
 
 message SendTimeoutReport {

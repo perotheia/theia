@@ -182,12 +182,9 @@ public:
     // never TIPC-self-CALLing watch/resolve. Normal FCs use broadcast_*().
     template <typename T>
     void pg_broadcast(uint32_t group_type, const T& msg) {
-        uint8_t _buf[8192];
-        pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
-        if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<T>::fields(), &msg))
-            return;
-        pg_.broadcast<T>(group_type, _buf,
-                         static_cast<uint16_t>(_os.bytes_written));
+        // encode into the thread's pg buffer + multicast; a drop is counted, never
+        // silent, and a type too big for the wire does not build (PgClient.hh)
+        pg_.encode_broadcast<T>(group_type, msg);
     }
 
 
@@ -323,11 +320,15 @@ inline void SupervisorCtl::broadcast_events_event(const SupervisionEvent& msg) {
     // The impl can call pg_members<SupervisionEvent>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<SupervisionEvent>();
-    uint8_t _buf[8192];
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
-    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<SupervisionEvent>::fields(), &msg))
-        return;
-    pg_.broadcast_members<SupervisionEvent>(_buf, static_cast<uint16_t>(_os.bytes_written));
+    // encode into the thread's pg buffer + cast to each member; a drop is counted,
+    // never silent, and a type too big for the wire does not build (PgClient.hh)
+#ifdef system_supervisor_SupervisionEvent_size
+    // nanopb's max encoded size: a type the wire cannot carry does not build
+    static_assert(system_supervisor_SupervisionEvent_size <= ::theia::runtime::kMaxPgPayload,
+                  "pg: SupervisionEvent: nanopb max encoded size > kMaxPgPayload (65000 B): "
+                  "bound its repeated fields / strings smaller, or send it over RDS");
+#endif
+    pg_.encode_broadcast_members<SupervisionEvent>(msg);
 }
 
 inline void SupervisorCtl::broadcast_events_health(const HealthBeacon& msg) {
@@ -336,11 +337,15 @@ inline void SupervisorCtl::broadcast_events_health(const HealthBeacon& msg) {
     // The impl can call pg_members<HealthBeacon>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<HealthBeacon>();
-    uint8_t _buf[8192];
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
-    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<HealthBeacon>::fields(), &msg))
-        return;
-    pg_.broadcast_members<HealthBeacon>(_buf, static_cast<uint16_t>(_os.bytes_written));
+    // encode into the thread's pg buffer + cast to each member; a drop is counted,
+    // never silent, and a type too big for the wire does not build (PgClient.hh)
+#ifdef system_supervisor_HealthBeacon_size
+    // nanopb's max encoded size: a type the wire cannot carry does not build
+    static_assert(system_supervisor_HealthBeacon_size <= ::theia::runtime::kMaxPgPayload,
+                  "pg: HealthBeacon: nanopb max encoded size > kMaxPgPayload (65000 B): "
+                  "bound its repeated fields / strings smaller, or send it over RDS");
+#endif
+    pg_.encode_broadcast_members<HealthBeacon>(msg);
 }
 
 inline void SupervisorCtl::broadcast_events_snap_begin(const SnapshotBegin& msg) {
@@ -349,11 +354,15 @@ inline void SupervisorCtl::broadcast_events_snap_begin(const SnapshotBegin& msg)
     // The impl can call pg_members<SnapshotBegin>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<SnapshotBegin>();
-    uint8_t _buf[8192];
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
-    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<SnapshotBegin>::fields(), &msg))
-        return;
-    pg_.broadcast_members<SnapshotBegin>(_buf, static_cast<uint16_t>(_os.bytes_written));
+    // encode into the thread's pg buffer + cast to each member; a drop is counted,
+    // never silent, and a type too big for the wire does not build (PgClient.hh)
+#ifdef system_supervisor_SnapshotBegin_size
+    // nanopb's max encoded size: a type the wire cannot carry does not build
+    static_assert(system_supervisor_SnapshotBegin_size <= ::theia::runtime::kMaxPgPayload,
+                  "pg: SnapshotBegin: nanopb max encoded size > kMaxPgPayload (65000 B): "
+                  "bound its repeated fields / strings smaller, or send it over RDS");
+#endif
+    pg_.encode_broadcast_members<SnapshotBegin>(msg);
 }
 
 inline void SupervisorCtl::broadcast_events_edge(const NodeEdge& msg) {
@@ -362,11 +371,15 @@ inline void SupervisorCtl::broadcast_events_edge(const NodeEdge& msg) {
     // The impl can call pg_members<NodeEdge>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<NodeEdge>();
-    uint8_t _buf[8192];
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
-    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<NodeEdge>::fields(), &msg))
-        return;
-    pg_.broadcast_members<NodeEdge>(_buf, static_cast<uint16_t>(_os.bytes_written));
+    // encode into the thread's pg buffer + cast to each member; a drop is counted,
+    // never silent, and a type too big for the wire does not build (PgClient.hh)
+#ifdef system_supervisor_NodeEdge_size
+    // nanopb's max encoded size: a type the wire cannot carry does not build
+    static_assert(system_supervisor_NodeEdge_size <= ::theia::runtime::kMaxPgPayload,
+                  "pg: NodeEdge: nanopb max encoded size > kMaxPgPayload (65000 B): "
+                  "bound its repeated fields / strings smaller, or send it over RDS");
+#endif
+    pg_.encode_broadcast_members<NodeEdge>(msg);
 }
 
 inline void SupervisorCtl::broadcast_events_node_state(const NodeState& msg) {
@@ -375,11 +388,15 @@ inline void SupervisorCtl::broadcast_events_node_state(const NodeState& msg) {
     // The impl can call pg_members<NodeState>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<NodeState>();
-    uint8_t _buf[8192];
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
-    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<NodeState>::fields(), &msg))
-        return;
-    pg_.broadcast_members<NodeState>(_buf, static_cast<uint16_t>(_os.bytes_written));
+    // encode into the thread's pg buffer + cast to each member; a drop is counted,
+    // never silent, and a type too big for the wire does not build (PgClient.hh)
+#ifdef system_supervisor_NodeState_size
+    // nanopb's max encoded size: a type the wire cannot carry does not build
+    static_assert(system_supervisor_NodeState_size <= ::theia::runtime::kMaxPgPayload,
+                  "pg: NodeState: nanopb max encoded size > kMaxPgPayload (65000 B): "
+                  "bound its repeated fields / strings smaller, or send it over RDS");
+#endif
+    pg_.encode_broadcast_members<NodeState>(msg);
 }
 
 inline void SupervisorCtl::broadcast_events_snap_end(const SnapshotEnd& msg) {
@@ -388,11 +405,15 @@ inline void SupervisorCtl::broadcast_events_snap_end(const SnapshotEnd& msg) {
     // The impl can call pg_members<SnapshotEnd>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<SnapshotEnd>();
-    uint8_t _buf[8192];
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
-    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<SnapshotEnd>::fields(), &msg))
-        return;
-    pg_.broadcast_members<SnapshotEnd>(_buf, static_cast<uint16_t>(_os.bytes_written));
+    // encode into the thread's pg buffer + cast to each member; a drop is counted,
+    // never silent, and a type too big for the wire does not build (PgClient.hh)
+#ifdef system_supervisor_SnapshotEnd_size
+    // nanopb's max encoded size: a type the wire cannot carry does not build
+    static_assert(system_supervisor_SnapshotEnd_size <= ::theia::runtime::kMaxPgPayload,
+                  "pg: SnapshotEnd: nanopb max encoded size > kMaxPgPayload (65000 B): "
+                  "bound its repeated fields / strings smaller, or send it over RDS");
+#endif
+    pg_.encode_broadcast_members<SnapshotEnd>(msg);
 }
 
 inline void SupervisorCtl::broadcast_child_ctrl_trace_ctrl(const TraceControlPush& msg) {
@@ -401,11 +422,15 @@ inline void SupervisorCtl::broadcast_child_ctrl_trace_ctrl(const TraceControlPus
     // The impl can call pg_members<TraceControlPush>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<TraceControlPush>();
-    uint8_t _buf[8192];
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
-    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<TraceControlPush>::fields(), &msg))
-        return;
-    pg_.broadcast_members<TraceControlPush>(_buf, static_cast<uint16_t>(_os.bytes_written));
+    // encode into the thread's pg buffer + cast to each member; a drop is counted,
+    // never silent, and a type too big for the wire does not build (PgClient.hh)
+#ifdef platform_runtime_TraceControlPush_size
+    // nanopb's max encoded size: a type the wire cannot carry does not build
+    static_assert(platform_runtime_TraceControlPush_size <= ::theia::runtime::kMaxPgPayload,
+                  "pg: TraceControlPush: nanopb max encoded size > kMaxPgPayload (65000 B): "
+                  "bound its repeated fields / strings smaller, or send it over RDS");
+#endif
+    pg_.encode_broadcast_members<TraceControlPush>(msg);
 }
 
 inline void SupervisorCtl::broadcast_child_ctrl_log_level(const LogLevelPush& msg) {
@@ -414,11 +439,15 @@ inline void SupervisorCtl::broadcast_child_ctrl_log_level(const LogLevelPush& ms
     // The impl can call pg_members<LogLevelPush>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<LogLevelPush>();
-    uint8_t _buf[8192];
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
-    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<LogLevelPush>::fields(), &msg))
-        return;
-    pg_.broadcast_members<LogLevelPush>(_buf, static_cast<uint16_t>(_os.bytes_written));
+    // encode into the thread's pg buffer + cast to each member; a drop is counted,
+    // never silent, and a type too big for the wire does not build (PgClient.hh)
+#ifdef platform_runtime_LogLevelPush_size
+    // nanopb's max encoded size: a type the wire cannot carry does not build
+    static_assert(platform_runtime_LogLevelPush_size <= ::theia::runtime::kMaxPgPayload,
+                  "pg: LogLevelPush: nanopb max encoded size > kMaxPgPayload (65000 B): "
+                  "bound its repeated fields / strings smaller, or send it over RDS");
+#endif
+    pg_.encode_broadcast_members<LogLevelPush>(msg);
 }
 
 inline void SupervisorCtl::broadcast_child_ctrl_config_push(const ConfigUpdated& msg) {
@@ -427,11 +456,15 @@ inline void SupervisorCtl::broadcast_child_ctrl_config_push(const ConfigUpdated&
     // The impl can call pg_members<ConfigUpdated>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<ConfigUpdated>();
-    uint8_t _buf[8192];
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
-    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<ConfigUpdated>::fields(), &msg))
-        return;
-    pg_.broadcast_members<ConfigUpdated>(_buf, static_cast<uint16_t>(_os.bytes_written));
+    // encode into the thread's pg buffer + cast to each member; a drop is counted,
+    // never silent, and a type too big for the wire does not build (PgClient.hh)
+#ifdef platform_runtime_ConfigUpdated_size
+    // nanopb's max encoded size: a type the wire cannot carry does not build
+    static_assert(platform_runtime_ConfigUpdated_size <= ::theia::runtime::kMaxPgPayload,
+                  "pg: ConfigUpdated: nanopb max encoded size > kMaxPgPayload (65000 B): "
+                  "bound its repeated fields / strings smaller, or send it over RDS");
+#endif
+    pg_.encode_broadcast_members<ConfigUpdated>(msg);
 }
 
 

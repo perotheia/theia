@@ -158,12 +158,9 @@ public:
     // never TIPC-self-CALLing watch/resolve. Normal FCs use broadcast_*().
     template <typename T>
     void pg_broadcast(uint32_t group_type, const T& msg) {
-        auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
-        pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
-        if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<T>::fields(), &msg))
-            return;
-        pg_.broadcast<T>(group_type, _buf.data(),
-                         static_cast<uint16_t>(_os.bytes_written));
+        // encode into the thread's pg buffer + multicast; a drop is counted, never
+        // silent, and a type too big for the wire does not build (PgClient.hh)
+        pg_.encode_broadcast<T>(group_type, msg);
     }
 
 
@@ -253,11 +250,15 @@ inline void NmPoller::broadcast_events_link_up(const LinkUp& msg) {
     // The impl can call pg_members<LinkUp>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<LinkUp>();
-    auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
-    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<LinkUp>::fields(), &msg))
-        return;
-    pg_.broadcast_members<LinkUp>(_buf.data(), static_cast<uint16_t>(_os.bytes_written));
+    // encode into the thread's pg buffer + cast to each member; a drop is counted,
+    // never silent, and a type too big for the wire does not build (PgClient.hh)
+#ifdef system_services_nm_LinkUp_size
+    // nanopb's max encoded size: a type the wire cannot carry does not build
+    static_assert(system_services_nm_LinkUp_size <= ::theia::runtime::kMaxPgPayload,
+                  "pg: LinkUp: nanopb max encoded size > kMaxPgPayload (65000 B): "
+                  "bound its repeated fields / strings smaller, or send it over RDS");
+#endif
+    pg_.encode_broadcast_members<LinkUp>(msg);
 }
 
 inline void NmPoller::broadcast_events_link_down(const LinkDown& msg) {
@@ -266,11 +267,15 @@ inline void NmPoller::broadcast_events_link_down(const LinkDown& msg) {
     // The impl can call pg_members<LinkDown>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<LinkDown>();
-    auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
-    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<LinkDown>::fields(), &msg))
-        return;
-    pg_.broadcast_members<LinkDown>(_buf.data(), static_cast<uint16_t>(_os.bytes_written));
+    // encode into the thread's pg buffer + cast to each member; a drop is counted,
+    // never silent, and a type too big for the wire does not build (PgClient.hh)
+#ifdef system_services_nm_LinkDown_size
+    // nanopb's max encoded size: a type the wire cannot carry does not build
+    static_assert(system_services_nm_LinkDown_size <= ::theia::runtime::kMaxPgPayload,
+                  "pg: LinkDown: nanopb max encoded size > kMaxPgPayload (65000 B): "
+                  "bound its repeated fields / strings smaller, or send it over RDS");
+#endif
+    pg_.encode_broadcast_members<LinkDown>(msg);
 }
 
 inline void NmPoller::broadcast_events_addr_acquired(const AddrAcquired& msg) {
@@ -279,11 +284,15 @@ inline void NmPoller::broadcast_events_addr_acquired(const AddrAcquired& msg) {
     // The impl can call pg_members<AddrAcquired>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<AddrAcquired>();
-    auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
-    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<AddrAcquired>::fields(), &msg))
-        return;
-    pg_.broadcast_members<AddrAcquired>(_buf.data(), static_cast<uint16_t>(_os.bytes_written));
+    // encode into the thread's pg buffer + cast to each member; a drop is counted,
+    // never silent, and a type too big for the wire does not build (PgClient.hh)
+#ifdef system_services_nm_AddrAcquired_size
+    // nanopb's max encoded size: a type the wire cannot carry does not build
+    static_assert(system_services_nm_AddrAcquired_size <= ::theia::runtime::kMaxPgPayload,
+                  "pg: AddrAcquired: nanopb max encoded size > kMaxPgPayload (65000 B): "
+                  "bound its repeated fields / strings smaller, or send it over RDS");
+#endif
+    pg_.encode_broadcast_members<AddrAcquired>(msg);
 }
 
 inline void NmPoller::broadcast_events_addr_lost(const AddrLost& msg) {
@@ -292,11 +301,15 @@ inline void NmPoller::broadcast_events_addr_lost(const AddrLost& msg) {
     // The impl can call pg_members<AddrLost>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<AddrLost>();
-    auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
-    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<AddrLost>::fields(), &msg))
-        return;
-    pg_.broadcast_members<AddrLost>(_buf.data(), static_cast<uint16_t>(_os.bytes_written));
+    // encode into the thread's pg buffer + cast to each member; a drop is counted,
+    // never silent, and a type too big for the wire does not build (PgClient.hh)
+#ifdef system_services_nm_AddrLost_size
+    // nanopb's max encoded size: a type the wire cannot carry does not build
+    static_assert(system_services_nm_AddrLost_size <= ::theia::runtime::kMaxPgPayload,
+                  "pg: AddrLost: nanopb max encoded size > kMaxPgPayload (65000 B): "
+                  "bound its repeated fields / strings smaller, or send it over RDS");
+#endif
+    pg_.encode_broadcast_members<AddrLost>(msg);
 }
 
 inline void NmPoller::broadcast_events_wifi_associated(const WifiAssociated& msg) {
@@ -305,11 +318,15 @@ inline void NmPoller::broadcast_events_wifi_associated(const WifiAssociated& msg
     // The impl can call pg_members<WifiAssociated>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<WifiAssociated>();
-    auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
-    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<WifiAssociated>::fields(), &msg))
-        return;
-    pg_.broadcast_members<WifiAssociated>(_buf.data(), static_cast<uint16_t>(_os.bytes_written));
+    // encode into the thread's pg buffer + cast to each member; a drop is counted,
+    // never silent, and a type too big for the wire does not build (PgClient.hh)
+#ifdef system_services_nm_WifiAssociated_size
+    // nanopb's max encoded size: a type the wire cannot carry does not build
+    static_assert(system_services_nm_WifiAssociated_size <= ::theia::runtime::kMaxPgPayload,
+                  "pg: WifiAssociated: nanopb max encoded size > kMaxPgPayload (65000 B): "
+                  "bound its repeated fields / strings smaller, or send it over RDS");
+#endif
+    pg_.encode_broadcast_members<WifiAssociated>(msg);
 }
 
 inline void NmPoller::broadcast_events_wifi_disassociated(const WifiDisassociated& msg) {
@@ -318,11 +335,15 @@ inline void NmPoller::broadcast_events_wifi_disassociated(const WifiDisassociate
     // The impl can call pg_members<WifiDisassociated>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<WifiDisassociated>();
-    auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
-    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<WifiDisassociated>::fields(), &msg))
-        return;
-    pg_.broadcast_members<WifiDisassociated>(_buf.data(), static_cast<uint16_t>(_os.bytes_written));
+    // encode into the thread's pg buffer + cast to each member; a drop is counted,
+    // never silent, and a type too big for the wire does not build (PgClient.hh)
+#ifdef system_services_nm_WifiDisassociated_size
+    // nanopb's max encoded size: a type the wire cannot carry does not build
+    static_assert(system_services_nm_WifiDisassociated_size <= ::theia::runtime::kMaxPgPayload,
+                  "pg: WifiDisassociated: nanopb max encoded size > kMaxPgPayload (65000 B): "
+                  "bound its repeated fields / strings smaller, or send it over RDS");
+#endif
+    pg_.encode_broadcast_members<WifiDisassociated>(msg);
 }
 
 inline void NmPoller::broadcast_events_vpn_up(const VpnUp& msg) {
@@ -331,11 +352,15 @@ inline void NmPoller::broadcast_events_vpn_up(const VpnUp& msg) {
     // The impl can call pg_members<VpnUp>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<VpnUp>();
-    auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
-    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<VpnUp>::fields(), &msg))
-        return;
-    pg_.broadcast_members<VpnUp>(_buf.data(), static_cast<uint16_t>(_os.bytes_written));
+    // encode into the thread's pg buffer + cast to each member; a drop is counted,
+    // never silent, and a type too big for the wire does not build (PgClient.hh)
+#ifdef system_services_nm_VpnUp_size
+    // nanopb's max encoded size: a type the wire cannot carry does not build
+    static_assert(system_services_nm_VpnUp_size <= ::theia::runtime::kMaxPgPayload,
+                  "pg: VpnUp: nanopb max encoded size > kMaxPgPayload (65000 B): "
+                  "bound its repeated fields / strings smaller, or send it over RDS");
+#endif
+    pg_.encode_broadcast_members<VpnUp>(msg);
 }
 
 inline void NmPoller::broadcast_events_vpn_down(const VpnDown& msg) {
@@ -344,11 +369,15 @@ inline void NmPoller::broadcast_events_vpn_down(const VpnDown& msg) {
     // The impl can call pg_members<VpnDown>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<VpnDown>();
-    auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
-    if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<VpnDown>::fields(), &msg))
-        return;
-    pg_.broadcast_members<VpnDown>(_buf.data(), static_cast<uint16_t>(_os.bytes_written));
+    // encode into the thread's pg buffer + cast to each member; a drop is counted,
+    // never silent, and a type too big for the wire does not build (PgClient.hh)
+#ifdef system_services_nm_VpnDown_size
+    // nanopb's max encoded size: a type the wire cannot carry does not build
+    static_assert(system_services_nm_VpnDown_size <= ::theia::runtime::kMaxPgPayload,
+                  "pg: VpnDown: nanopb max encoded size > kMaxPgPayload (65000 B): "
+                  "bound its repeated fields / strings smaller, or send it over RDS");
+#endif
+    pg_.encode_broadcast_members<VpnDown>(msg);
 }
 
 

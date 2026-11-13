@@ -93,6 +93,7 @@ struct NodeStateData {
     uint32_t threads{0};
     uint64_t shared_kb{0};
     uint64_t data_kb{0};
+    uint64_t pg_drops{0};   // its HeartbeatReport.pg_drops (runtime PgDrops.hh)
 };
 
 // Host facts for GetSystemInfo (replaces the libprotobuf SystemInfo).
@@ -262,6 +263,7 @@ struct ExecCommand {
 
     pid_t                    pid{-1};       // OnHeartbeat
     uint64_t                 seq{0};        // OnHeartbeat
+    uint64_t                 pg_drops{0};   // OnHeartbeat: the node's dropped pg messages
 
     std::string              callee;        // OnSendTimeout
     std::string              iface;         // OnSendTimeout
@@ -449,7 +451,7 @@ public:
 
     // HeartbeatReport ingress (SupervisorCtl::handle_cast posts this).
     void ctl_on_heartbeat(const std::string& node_name, pid_t pid,
-                          uint64_t seq);
+                          uint64_t seq, uint64_t pg_drops = 0);
     // SendTimeoutReport ingress → a kind=7 supervision event.
     void ctl_on_send_timeout(const std::string& caller, const std::string& callee,
                              const std::string& iface, const std::string& method,
@@ -653,6 +655,7 @@ private:
     struct HeartbeatState {
         std::chrono::steady_clock::time_point last_seen;
         uint64_t                              last_seq{0};
+        uint64_t                              pg_drops{0};   // the last reported total
     };
     std::map<pid_t, HeartbeatState>  heartbeats_;
     void check_heartbeats();

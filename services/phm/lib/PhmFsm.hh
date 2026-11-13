@@ -156,11 +156,11 @@ public:
     template <typename T> void pg_leave() { pg_.leave<T>(); }
     template <typename T>
     void pg_broadcast(uint32_t group_type, const T& msg) {   // allocator escape hatch
-        uint8_t _buf[8192];
-        pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
+        auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
+        pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
         if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<T>::fields(), &msg))
             return;
-        pg_.broadcast<T>(group_type, _buf,
+        pg_.broadcast<T>(group_type, _buf.data(),
                          static_cast<uint16_t>(_os.bytes_written));
     }
 
@@ -277,11 +277,11 @@ inline void PhmFsm::broadcast_to_sm_health(const PhmHealthStatus& msg) {
     // same type → register_cast<PhmHealthStatus> delivers to their handle_cast. The impl
     // may pg_members<PhmHealthStatus>() to skip work when empty.
     pg_watch<PhmHealthStatus>();
-    uint8_t _buf[8192];
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
+    auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
+    pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
     if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<PhmHealthStatus>::fields(), &msg))
         return;
-    pg_.broadcast_members<PhmHealthStatus>(_buf, static_cast<uint16_t>(_os.bytes_written));
+    pg_.broadcast_members<PhmHealthStatus>(_buf.data(), static_cast<uint16_t>(_os.bytes_written));
 }
 
 inline void PhmFsm::broadcast_dtc_out_fault(const PhmFaultEvent& msg) {
@@ -290,11 +290,11 @@ inline void PhmFsm::broadcast_dtc_out_fault(const PhmFaultEvent& msg) {
     // same type → register_cast<PhmFaultEvent> delivers to their handle_cast. The impl
     // may pg_members<PhmFaultEvent>() to skip work when empty.
     pg_watch<PhmFaultEvent>();
-    uint8_t _buf[8192];
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
+    auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
+    pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
     if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<PhmFaultEvent>::fields(), &msg))
         return;
-    pg_.broadcast_members<PhmFaultEvent>(_buf, static_cast<uint16_t>(_os.bytes_written));
+    pg_.broadcast_members<PhmFaultEvent>(_buf.data(), static_cast<uint16_t>(_os.bytes_written));
 }
 
 

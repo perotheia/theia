@@ -158,11 +158,11 @@ public:
     // never TIPC-self-CALLing watch/resolve. Normal FCs use broadcast_*().
     template <typename T>
     void pg_broadcast(uint32_t group_type, const T& msg) {
-        uint8_t _buf[8192];
-        pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
+        auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
+        pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
         if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<T>::fields(), &msg))
             return;
-        pg_.broadcast<T>(group_type, _buf,
+        pg_.broadcast<T>(group_type, _buf.data(),
                          static_cast<uint16_t>(_os.bytes_written));
     }
 
@@ -259,11 +259,11 @@ inline void TsyncCtl::broadcast_to_phm_report(const FcHealthReport& msg) {
     // The impl can call pg_members<FcHealthReport>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<FcHealthReport>();
-    uint8_t _buf[8192];
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
+    auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
+    pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
     if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<FcHealthReport>::fields(), &msg))
         return;
-    pg_.broadcast_members<FcHealthReport>(_buf, static_cast<uint16_t>(_os.bytes_written));
+    pg_.broadcast_members<FcHealthReport>(_buf.data(), static_cast<uint16_t>(_os.bytes_written));
 }
 
 

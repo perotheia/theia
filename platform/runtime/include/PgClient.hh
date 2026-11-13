@@ -52,11 +52,24 @@
 
 namespace theia { namespace runtime {
 
+// The largest pg payload a node encodes: below the frame's uint16_t length and, with
+// the 24-byte TheiaMsgHeader, inside TIPC's 66000-byte maximum user message. It was a
+// fixed 8 KB stack buffer in every generated broadcast_*(): a larger message (a full
+// SprLaneSet is 35.9 KB, TrafficControlSet 8.7 KB) FAILED to encode and was dropped
+// without a word. One buffer per thread (the casts of one node run on its thread).
+constexpr size_t kMaxPgPayload = 65000;
+inline std::vector<uint8_t>& pg_encode_buffer() {
+    static thread_local std::vector<uint8_t> b(kMaxPgPayload);
+    return b;
+}
+
 class PgClient {
 public:
     // The supervisor's control node (SupervisorControlIf — the CALL target).
     static constexpr uint32_t kSupTipcType     = 0x80020001u;
     static constexpr uint32_t kSupTipcInstance = 0u;
+    // The largest group frame received: TIPC's maximum user message (TIPC_MAX_USER_MSG_SIZE).
+    static constexpr size_t kMaxGroupFrame = 66000;
 
     // The supervisor this process's PG joins / heartbeats target. Instance 0 by
     // default: on a multi-machine rig the PG registry is the MASTER's (machine 0).
@@ -424,12 +437,16 @@ private:
             for (int fd : fds) pfds.push_back({fd, POLLIN, 0});
             int r = ::poll(pfds.data(), pfds.size(), 200);
             if (r <= 0) continue;
+            // A group datagram can be as large as TIPC allows (66000 B: SprLaneSet's
+            // limit is 35.9 KB, TrafficControlSet's 8.7 KB). The buffer was 8 KB on the
+            // stack: a larger frame was TRUNCATED by recv and dropped by the decoder,
+            // silently. One heap buffer for this thread, of TIPC's maximum.
+            static thread_local std::vector<uint8_t> buf(kMaxGroupFrame);
             for (auto& pf : pfds) {
                 if (!(pf.revents & POLLIN)) continue;
-                uint8_t buf[8192];
-                ssize_t n = ::recv(pf.fd, buf, sizeof(buf), 0);
+                ssize_t n = ::recv(pf.fd, buf.data(), buf.size(), 0);
                 if (n <= static_cast<ssize_t>(sizeof(TheiaMsgHeader))) continue;
-                dispatch_frame_(buf, static_cast<size_t>(n));
+                dispatch_frame_(buf.data(), static_cast<size_t>(n));
             }
         }
     }

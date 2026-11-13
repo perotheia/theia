@@ -149,11 +149,11 @@ public:
     // never TIPC-self-CALLing watch/resolve. Normal FCs use broadcast_*().
     template <typename T>
     void pg_broadcast(uint32_t group_type, const T& msg) {
-        uint8_t _buf[8192];
-        pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
+        auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
+        pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
         if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<T>::fields(), &msg))
             return;
-        pg_.broadcast<T>(group_type, _buf,
+        pg_.broadcast<T>(group_type, _buf.data(),
                          static_cast<uint16_t>(_os.bytes_written));
     }
 
@@ -238,11 +238,11 @@ inline void ShwaDaemon::broadcast_broadcast_sample(const AccelSample& msg) {
     // The impl can call pg_members<AccelSample>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<AccelSample>();
-    uint8_t _buf[8192];
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
+    auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
+    pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
     if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<AccelSample>::fields(), &msg))
         return;
-    pg_.broadcast_members<AccelSample>(_buf, static_cast<uint16_t>(_os.bytes_written));
+    pg_.broadcast_members<AccelSample>(_buf.data(), static_cast<uint16_t>(_os.bytes_written));
 }
 
 inline void ShwaDaemon::broadcast_excursion_excursion(const ShwaExcursionEvent& msg) {
@@ -251,11 +251,11 @@ inline void ShwaDaemon::broadcast_excursion_excursion(const ShwaExcursionEvent& 
     // The impl can call pg_members<ShwaExcursionEvent>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<ShwaExcursionEvent>();
-    uint8_t _buf[8192];
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
+    auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
+    pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
     if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<ShwaExcursionEvent>::fields(), &msg))
         return;
-    pg_.broadcast_members<ShwaExcursionEvent>(_buf, static_cast<uint16_t>(_os.bytes_written));
+    pg_.broadcast_members<ShwaExcursionEvent>(_buf.data(), static_cast<uint16_t>(_os.bytes_written));
 }
 
 

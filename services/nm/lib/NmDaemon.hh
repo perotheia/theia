@@ -173,11 +173,11 @@ public:
     template <typename T> void pg_leave() { pg_.leave<T>(); }
     template <typename T>
     void pg_broadcast(uint32_t group_type, const T& msg) {   // allocator escape hatch
-        uint8_t _buf[8192];
-        pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
+        auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
+        pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
         if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<T>::fields(), &msg))
             return;
-        pg_.broadcast<T>(group_type, _buf,
+        pg_.broadcast<T>(group_type, _buf.data(),
                          static_cast<uint16_t>(_os.bytes_written));
     }
 
@@ -427,11 +427,11 @@ inline void NmDaemon::broadcast_broadcast_status(const NmStatusMsg& msg) {
     // same type → register_cast<NmStatusMsg> delivers to their handle_cast. The impl
     // may pg_members<NmStatusMsg>() to skip work when empty.
     pg_watch<NmStatusMsg>();
-    uint8_t _buf[8192];
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
+    auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
+    pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
     if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<NmStatusMsg>::fields(), &msg))
         return;
-    pg_.broadcast_members<NmStatusMsg>(_buf, static_cast<uint16_t>(_os.bytes_written));
+    pg_.broadcast_members<NmStatusMsg>(_buf.data(), static_cast<uint16_t>(_os.bytes_written));
 }
 
 inline void NmDaemon::broadcast_to_phm_report(const FcHealthReport& msg) {
@@ -440,11 +440,11 @@ inline void NmDaemon::broadcast_to_phm_report(const FcHealthReport& msg) {
     // same type → register_cast<FcHealthReport> delivers to their handle_cast. The impl
     // may pg_members<FcHealthReport>() to skip work when empty.
     pg_watch<FcHealthReport>();
-    uint8_t _buf[8192];
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
+    auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
+    pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
     if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<FcHealthReport>::fields(), &msg))
         return;
-    pg_.broadcast_members<FcHealthReport>(_buf, static_cast<uint16_t>(_os.bytes_written));
+    pg_.broadcast_members<FcHealthReport>(_buf.data(), static_cast<uint16_t>(_os.bytes_written));
 }
 
 

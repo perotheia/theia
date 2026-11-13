@@ -158,11 +158,11 @@ public:
     // never TIPC-self-CALLing watch/resolve. Normal FCs use broadcast_*().
     template <typename T>
     void pg_broadcast(uint32_t group_type, const T& msg) {
-        uint8_t _buf[8192];
-        pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
+        auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
+        pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
         if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<T>::fields(), &msg))
             return;
-        pg_.broadcast<T>(group_type, _buf,
+        pg_.broadcast<T>(group_type, _buf.data(),
                          static_cast<uint16_t>(_os.bytes_written));
     }
 
@@ -253,11 +253,11 @@ inline void NmPoller::broadcast_events_link_up(const LinkUp& msg) {
     // The impl can call pg_members<LinkUp>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<LinkUp>();
-    uint8_t _buf[8192];
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
+    auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
+    pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
     if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<LinkUp>::fields(), &msg))
         return;
-    pg_.broadcast_members<LinkUp>(_buf, static_cast<uint16_t>(_os.bytes_written));
+    pg_.broadcast_members<LinkUp>(_buf.data(), static_cast<uint16_t>(_os.bytes_written));
 }
 
 inline void NmPoller::broadcast_events_link_down(const LinkDown& msg) {
@@ -266,11 +266,11 @@ inline void NmPoller::broadcast_events_link_down(const LinkDown& msg) {
     // The impl can call pg_members<LinkDown>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<LinkDown>();
-    uint8_t _buf[8192];
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
+    auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
+    pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
     if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<LinkDown>::fields(), &msg))
         return;
-    pg_.broadcast_members<LinkDown>(_buf, static_cast<uint16_t>(_os.bytes_written));
+    pg_.broadcast_members<LinkDown>(_buf.data(), static_cast<uint16_t>(_os.bytes_written));
 }
 
 inline void NmPoller::broadcast_events_addr_acquired(const AddrAcquired& msg) {
@@ -279,11 +279,11 @@ inline void NmPoller::broadcast_events_addr_acquired(const AddrAcquired& msg) {
     // The impl can call pg_members<AddrAcquired>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<AddrAcquired>();
-    uint8_t _buf[8192];
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
+    auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
+    pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
     if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<AddrAcquired>::fields(), &msg))
         return;
-    pg_.broadcast_members<AddrAcquired>(_buf, static_cast<uint16_t>(_os.bytes_written));
+    pg_.broadcast_members<AddrAcquired>(_buf.data(), static_cast<uint16_t>(_os.bytes_written));
 }
 
 inline void NmPoller::broadcast_events_addr_lost(const AddrLost& msg) {
@@ -292,11 +292,11 @@ inline void NmPoller::broadcast_events_addr_lost(const AddrLost& msg) {
     // The impl can call pg_members<AddrLost>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<AddrLost>();
-    uint8_t _buf[8192];
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
+    auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
+    pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
     if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<AddrLost>::fields(), &msg))
         return;
-    pg_.broadcast_members<AddrLost>(_buf, static_cast<uint16_t>(_os.bytes_written));
+    pg_.broadcast_members<AddrLost>(_buf.data(), static_cast<uint16_t>(_os.bytes_written));
 }
 
 inline void NmPoller::broadcast_events_wifi_associated(const WifiAssociated& msg) {
@@ -305,11 +305,11 @@ inline void NmPoller::broadcast_events_wifi_associated(const WifiAssociated& msg
     // The impl can call pg_members<WifiAssociated>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<WifiAssociated>();
-    uint8_t _buf[8192];
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
+    auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
+    pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
     if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<WifiAssociated>::fields(), &msg))
         return;
-    pg_.broadcast_members<WifiAssociated>(_buf, static_cast<uint16_t>(_os.bytes_written));
+    pg_.broadcast_members<WifiAssociated>(_buf.data(), static_cast<uint16_t>(_os.bytes_written));
 }
 
 inline void NmPoller::broadcast_events_wifi_disassociated(const WifiDisassociated& msg) {
@@ -318,11 +318,11 @@ inline void NmPoller::broadcast_events_wifi_disassociated(const WifiDisassociate
     // The impl can call pg_members<WifiDisassociated>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<WifiDisassociated>();
-    uint8_t _buf[8192];
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
+    auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
+    pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
     if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<WifiDisassociated>::fields(), &msg))
         return;
-    pg_.broadcast_members<WifiDisassociated>(_buf, static_cast<uint16_t>(_os.bytes_written));
+    pg_.broadcast_members<WifiDisassociated>(_buf.data(), static_cast<uint16_t>(_os.bytes_written));
 }
 
 inline void NmPoller::broadcast_events_vpn_up(const VpnUp& msg) {
@@ -331,11 +331,11 @@ inline void NmPoller::broadcast_events_vpn_up(const VpnUp& msg) {
     // The impl can call pg_members<VpnUp>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<VpnUp>();
-    uint8_t _buf[8192];
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
+    auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
+    pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
     if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<VpnUp>::fields(), &msg))
         return;
-    pg_.broadcast_members<VpnUp>(_buf, static_cast<uint16_t>(_os.bytes_written));
+    pg_.broadcast_members<VpnUp>(_buf.data(), static_cast<uint16_t>(_os.bytes_written));
 }
 
 inline void NmPoller::broadcast_events_vpn_down(const VpnDown& msg) {
@@ -344,11 +344,11 @@ inline void NmPoller::broadcast_events_vpn_down(const VpnDown& msg) {
     // The impl can call pg_members<VpnDown>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<VpnDown>();
-    uint8_t _buf[8192];
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
+    auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
+    pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
     if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<VpnDown>::fields(), &msg))
         return;
-    pg_.broadcast_members<VpnDown>(_buf, static_cast<uint16_t>(_os.bytes_written));
+    pg_.broadcast_members<VpnDown>(_buf.data(), static_cast<uint16_t>(_os.bytes_written));
 }
 
 

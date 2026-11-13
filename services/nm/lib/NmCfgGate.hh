@@ -164,11 +164,11 @@ public:
     // never TIPC-self-CALLing watch/resolve. Normal FCs use broadcast_*().
     template <typename T>
     void pg_broadcast(uint32_t group_type, const T& msg) {
-        uint8_t _buf[8192];
-        pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
+        auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
+        pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
         if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<T>::fields(), &msg))
             return;
-        pg_.broadcast<T>(group_type, _buf,
+        pg_.broadcast<T>(group_type, _buf.data(),
                          static_cast<uint16_t>(_os.bytes_written));
     }
 
@@ -278,11 +278,11 @@ inline void NmCfgGate::broadcast_txn_add_wifi(const TxnAddWifi& msg) {
     // The impl can call pg_members<TxnAddWifi>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<TxnAddWifi>();
-    uint8_t _buf[8192];
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
+    auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
+    pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
     if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<TxnAddWifi>::fields(), &msg))
         return;
-    pg_.broadcast_members<TxnAddWifi>(_buf, static_cast<uint16_t>(_os.bytes_written));
+    pg_.broadcast_members<TxnAddWifi>(_buf.data(), static_cast<uint16_t>(_os.bytes_written));
 }
 
 inline void NmCfgGate::broadcast_txn_remove_wifi(const TxnRemoveWifi& msg) {
@@ -291,11 +291,11 @@ inline void NmCfgGate::broadcast_txn_remove_wifi(const TxnRemoveWifi& msg) {
     // The impl can call pg_members<TxnRemoveWifi>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<TxnRemoveWifi>();
-    uint8_t _buf[8192];
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
+    auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
+    pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
     if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<TxnRemoveWifi>::fields(), &msg))
         return;
-    pg_.broadcast_members<TxnRemoveWifi>(_buf, static_cast<uint16_t>(_os.bytes_written));
+    pg_.broadcast_members<TxnRemoveWifi>(_buf.data(), static_cast<uint16_t>(_os.bytes_written));
 }
 
 inline void NmCfgGate::broadcast_txn_set_vpn(const TxnSetVpn& msg) {
@@ -304,11 +304,11 @@ inline void NmCfgGate::broadcast_txn_set_vpn(const TxnSetVpn& msg) {
     // The impl can call pg_members<TxnSetVpn>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<TxnSetVpn>();
-    uint8_t _buf[8192];
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
+    auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
+    pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
     if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<TxnSetVpn>::fields(), &msg))
         return;
-    pg_.broadcast_members<TxnSetVpn>(_buf, static_cast<uint16_t>(_os.bytes_written));
+    pg_.broadcast_members<TxnSetVpn>(_buf.data(), static_cast<uint16_t>(_os.bytes_written));
 }
 
 inline void NmCfgGate::broadcast_txn_set_autoconn(const TxnSetAutoConn& msg) {
@@ -317,11 +317,11 @@ inline void NmCfgGate::broadcast_txn_set_autoconn(const TxnSetAutoConn& msg) {
     // The impl can call pg_members<TxnSetAutoConn>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<TxnSetAutoConn>();
-    uint8_t _buf[8192];
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
+    auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
+    pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
     if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<TxnSetAutoConn>::fields(), &msg))
         return;
-    pg_.broadcast_members<TxnSetAutoConn>(_buf, static_cast<uint16_t>(_os.bytes_written));
+    pg_.broadcast_members<TxnSetAutoConn>(_buf.data(), static_cast<uint16_t>(_os.bytes_written));
 }
 
 inline void NmCfgGate::broadcast_txn_confirm(const TxnConfirm& msg) {
@@ -330,11 +330,11 @@ inline void NmCfgGate::broadcast_txn_confirm(const TxnConfirm& msg) {
     // The impl can call pg_members<TxnConfirm>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<TxnConfirm>();
-    uint8_t _buf[8192];
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
+    auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
+    pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
     if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<TxnConfirm>::fields(), &msg))
         return;
-    pg_.broadcast_members<TxnConfirm>(_buf, static_cast<uint16_t>(_os.bytes_written));
+    pg_.broadcast_members<TxnConfirm>(_buf.data(), static_cast<uint16_t>(_os.bytes_written));
 }
 
 inline void NmCfgGate::broadcast_txn_abort(const TxnAbort& msg) {
@@ -343,11 +343,11 @@ inline void NmCfgGate::broadcast_txn_abort(const TxnAbort& msg) {
     // The impl can call pg_members<TxnAbort>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<TxnAbort>();
-    uint8_t _buf[8192];
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
+    auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
+    pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
     if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<TxnAbort>::fields(), &msg))
         return;
-    pg_.broadcast_members<TxnAbort>(_buf, static_cast<uint16_t>(_os.bytes_written));
+    pg_.broadcast_members<TxnAbort>(_buf.data(), static_cast<uint16_t>(_os.bytes_written));
 }
 
 inline void NmCfgGate::broadcast_txn_timeout(const TxnTimeout& msg) {
@@ -356,11 +356,11 @@ inline void NmCfgGate::broadcast_txn_timeout(const TxnTimeout& msg) {
     // The impl can call pg_members<TxnTimeout>() first to skip work when the list
     // is empty (e.g. logcat stop-tailing) — this default just fans out to all.
     pg_watch<TxnTimeout>();
-    uint8_t _buf[8192];
-    pb_ostream_t _os = pb_ostream_from_buffer(_buf, sizeof(_buf));
+    auto& _buf = ::theia::runtime::pg_encode_buffer();   // up to the wire's limit (PgClient.hh)
+    pb_ostream_t _os = pb_ostream_from_buffer(_buf.data(), _buf.size());
     if (!pb_encode(&_os, ::theia::runtime::RemoteCodec<TxnTimeout>::fields(), &msg))
         return;
-    pg_.broadcast_members<TxnTimeout>(_buf, static_cast<uint16_t>(_os.bytes_written));
+    pg_.broadcast_members<TxnTimeout>(_buf.data(), static_cast<uint16_t>(_os.bytes_written));
 }
 
 

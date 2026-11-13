@@ -11,6 +11,7 @@
 #include "ara/rds/transport_if.h"
 
 #include <cctype>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -46,6 +47,15 @@ StreamSpec resolve_instance(const std::string& instance_specifier,
     s.max_chunk = max_chunk;
     s.history   = history;
     return s;
+}
+
+std::string stack_qualified(const std::string& id) {
+    if (const char* v = std::getenv("THEIA_PG_SUPERVISOR_INSTANCE")) {
+        char* end = nullptr;
+        const unsigned long inst = std::strtoul(v, &end, 10);
+        if (end != v && *end == '\0' && inst != 0) return id + "@" + std::to_string(inst);
+    }
+    return id;
 }
 
 std::string owner_instance(const std::string& owner, const std::string& stream) {

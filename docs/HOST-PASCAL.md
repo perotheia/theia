@@ -232,8 +232,14 @@ collide. Look at one stack's keys with
 `/bigdata/work/bond001/tools/bin/etcdctl get --prefix /theia/i<N>/config/ --keys-only`.
 
 And the RDS plane and the logs: an isolated stack's iceoryx runtime names are
-`<process>@<N>` (RouDi is host-wide and aborts a second runtime of one name), and
-its `file:` logs go to `<dir>/i<N>/` (`/tmp/theia/i<N>/<process>.log`).
+`<process>@<N>` (RouDi is host-wide and aborts a second runtime of one name),
+its streams are too: the iceoryx SERVICE of a stream on stack N is `<Service>@N`
+(`/Cam_left/frames` → `Cam_left@4/frames/frame`; `ara::rds::stack_qualified`,
+applied at connect), so two same-named camera stacks run side by side and a
+kinematic-sim stack runs next to the CARLA one; and its `file:` logs go to
+`<dir>/i<N>/` (`/tmp/theia/i<N>/<process>.log`). Logical names never change
+(`resolve_instance`, manifests, `theia tap` stream names): `theia tap --instance N`
+records and replays stack N's streams.
 
 **Re-source `env.sh` in every workspace you `cd` into.** It exports
 `THEIA_WORKSPACE` = the directory it was sourced from, and `theia` uses that

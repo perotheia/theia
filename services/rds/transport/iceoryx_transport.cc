@@ -35,12 +35,7 @@ void Runtime::Init(const std::string& runtime_name) {
     // stack (`theia start --instance N`, N != 0: THEIA_PG_SUPERVISOR_INSTANCE=N,
     // the pg rule) qualifies its names, "<name>@<N>", so two stacks may run the
     // same composition. The default stack and a rig keep the bare name.
-    std::string n = runtime_name;
-    if (const char* v = std::getenv("THEIA_PG_SUPERVISOR_INSTANCE")) {
-        char* end = nullptr;
-        const unsigned long inst = std::strtoul(v, &end, 10);
-        if (end != v && *end == '\0' && inst != 0) n += "@" + std::to_string(inst);
-    }
+    const std::string n = stack_qualified(runtime_name);
     // iceoryx runtime names are capped (iox::RUNTIME_MAX_APP_NAME_LENGTH, 100):
     // truncate defensively.
     char name[100];
@@ -56,7 +51,8 @@ public:
         iox_pub_options_t opts;
         iox_pub_options_init(&opts);
         opts.historyCapacity = s.history;
-        pub_ = iox_pub_init(&storage_, s.service.c_str(), s.instance.c_str(),
+        const std::string service = stack_qualified(s.service);   // "<Service>@N" on stack N != 0
+        pub_ = iox_pub_init(&storage_, service.c_str(), s.instance.c_str(),
                             s.event.c_str(), &opts);
         return pub_ ? RdsError::OK : RdsError::TRANSPORT_ERROR;
     }
@@ -92,7 +88,8 @@ public:
         iox_sub_options_init(&opts);
         opts.historyRequest = s.history;
         opts.queueCapacity = s.history ? s.history : 4;
-        sub_ = iox_sub_init(&storage_, s.service.c_str(), s.instance.c_str(),
+        const std::string service = stack_qualified(s.service);   // "<Service>@N" on stack N != 0
+        sub_ = iox_sub_init(&storage_, service.c_str(), s.instance.c_str(),
                             s.event.c_str(), &opts);
         if (!sub_) return RdsError::TRANSPORT_ERROR;
         iox_sub_subscribe(sub_);

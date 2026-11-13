@@ -4,13 +4,21 @@
 # cc_binary (not a sandboxed cc_test — it needs the live RouDi + shared memory);
 # the robot suite runs it, skipping cleanly if RouDi is down.
 
-load("@rules_cc//cc:defs.bzl", "cc_binary")
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_test")
 
 package(default_visibility = ["//visibility:public"])
 
 cc_binary(
     name = "rds_roundtrip",
     srcs = ["rds_roundtrip.cc"],
+    copts = ["-std=c++17", "-fPIC"],
+    deps = ["//services/rds/transport:rds"],
+)
+
+# The isolated-stack naming rule (no RouDi needed).
+cc_test(
+    name = "test_stack_qualified",
+    srcs = ["test_stack_qualified.cc"],
     copts = ["-std=c++17", "-fPIC"],
     deps = ["//services/rds/transport:rds"],
 )

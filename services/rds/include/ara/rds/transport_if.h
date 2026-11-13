@@ -65,4 +65,13 @@ std::string owner_instance(const std::string& owner, const std::string& stream);
 StreamSpec resolve_instance(const std::string& instance_specifier,
                             uint32_t max_chunk = 0, uint32_t history = 0);
 
+// The isolated-stack rule (the pg rule, THEIA_PG_SUPERVISOR_INSTANCE=N set by
+// `theia start --instance N`): RouDi is host-wide, so for N != 0 an id becomes
+// "<id>@<N>" — the runtime name and the iceoryx SERVICE of every stream (the
+// transport applies it at connect). Two stacks of one composition then run side
+// by side without seeing each other's streams. The default stack and every
+// machine of a rig (unset / 0) keep the bare id. Logical names (InstanceSpecifier,
+// StreamSpec, `theia tap` streams.txt) never change.
+std::string stack_qualified(const std::string& id);
+
 }  // namespace ara::rds

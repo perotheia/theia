@@ -230,6 +230,14 @@ def _pg(instance: int, name: str):
     return probe, PgProbe(probe, node_name=name, sup_instance_=instance)
 
 
+def _rds_env(inst: int) -> dict:
+    """tap_rds follows the stack's naming rule (ara::rds::stack_qualified: streams of
+    stack N != 0 are "<Service>@N"), so it gets the stack's instance, flag or env."""
+    env = dict(os.environ)
+    env["THEIA_PG_SUPERVISOR_INSTANCE"] = str(inst)
+    return env
+
+
 def _tap_rds() -> Path:
     b = THEIA_ROOT / "bazel-bin/tools/tap/tap_rds"
     if not b.is_file():
@@ -276,7 +284,7 @@ def cmd_record(a) -> int:
     rds = None
     if streams:
         cmd = [str(_tap_rds()), "record", str(d), ",".join(streams)]
-        rds = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True)
+        rds = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True, env=_rds_env(inst))
 
     counts: dict[str, int] = {}
     files = {}
@@ -433,7 +441,7 @@ def cmd_replay(a) -> int:
                "--start-wall-ns", str(start), "--rx0-ns", str(rx0)]
         if rds_only:
             cmd += ["--only", ",".join(rds_only)]
-        rds = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True)
+        rds = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True, env=_rds_env(inst))
 
     stop = threading.Event()
     signal.signal(signal.SIGINT, lambda *_: stop.set())

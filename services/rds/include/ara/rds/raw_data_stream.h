@@ -48,6 +48,7 @@ struct Chunk {
     void*    data = nullptr;
     uint32_t size = 0;
     void*    handle = nullptr;   // opaque (the iceoryx chunk header) — don't touch
+    uint64_t taken_ns = 0;       // the RDS trace only (THEIA_RDS_TRACE): when Take() returned it
     bool     valid() const { return data != nullptr; }
 };
 

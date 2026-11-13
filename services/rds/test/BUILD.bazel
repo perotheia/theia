@@ -22,3 +22,12 @@ cc_test(
     copts = ["-std=c++17", "-fPIC"],
     deps = ["//services/rds/transport:rds"],
 )
+
+# The RDS path's own latency (Loan -> Take) for N streams written at once and polled
+# by one reader in another process; needs the host RouDi. docs/HOST-PASCAL.md.
+cc_binary(
+    name = "rds_latency_bench",
+    srcs = ["rds_latency_bench.cc"],
+    copts = ["-std=c++17", "-fPIC", "-O2"],
+    deps = ["//services/rds/transport:rds"],
+)

@@ -295,6 +295,36 @@ into its default-drop input chain: a file from the manifest, not a hand edit.
 `theia dist` / `theia release-swp` refuse a manifest holding a `test_only` process
 (re-run `theia manifest <ws>` with plain `RIG`).
 
+## RDS latency: the bench and the trace (step 10)
+
+The framework's own share of a camera rig's latency, without a simulator:
+
+```sh
+bazel build -c opt //services/rds/test:rds_latency_bench      # the host RouDi must be up
+bazel-bin/services/rds/test/rds_latency_bench --writers 8 --bytes 1048576 --poll-ms 2 --frames 200
+```
+
+N writer threads publish one frame each at the same instant (one per sensor, like
+carla_ws SimTick's Listen callbacks); one reader in another process polls all N (like
+SprTruth: Take until empty, then wait poll_ms). On pascal, 8 x 1 MiB, 2 ms poll: frame
+start -> last Take p50 1.4 ms / p99 2.6 ms, of which iceoryx is ~0.01-0.04 ms, the copy
+into the chunk 0.22 ms, and the poll wait the rest (no poll: 0.36 / 0.64 ms). 8 x 8 MiB:
+2.9 / 4.6 ms (the copy is 1.4 ms).
+
+On a live stack: `THEIA_RDS_TRACE=<dir>` in every process's environment (e.g. exported
+before `theia start`) writes `<dir>/rds-trace-<pid>.csv`, one line per chunk: the
+writer's Loan and Publish, the reader's Take and Release (CLOCK_REALTIME, the clock of
+spr's timing CSV). Unset, it costs one branch per chunk.
+
+```sh
+python3 tools/rds_trace.py <dir> --streams /T/dep_fl,/T/dep_fr,... [--spr-timing <spr timing csv>]
+```
+
+splits a frame into: capture -> first Loan (the source: CARLA render + its delivery to
+the client), loan_spread (how far apart the source handed the images over), fill (the
+writer between Loan and Publish: encode, stamping, waits), rds (Publish -> Take), hold
+(the reader's own work).
+
 ## Tests
 
 Results on pascal, 2026-11-12:

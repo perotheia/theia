@@ -24,10 +24,51 @@ extern "C" {
 // asks the C++ ChunkHeader (its header cannot share a TU with the C binding).
 namespace ara::rds::detail { uint32_t chunk_payload_size(const void* user_payload); }
 
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
+#include <mutex>
+#include <unistd.h>
 
 namespace ara::rds {
+
+// ---- the latency trace (opt-in: THEIA_RDS_TRACE=<dir>) ------------------------
+// One CSV per process, <dir>/rds-trace-<pid>.csv, one line per chunk:
+//   ev,stream,frame_id,t0_ns,t1_ns
+//   pub   t0 = Loan() returned, t1 = Publish() called       (writer)
+//   take  t0 = Take() returned, t1 = Release() called       (reader)
+// frame_id = the chunk's FrameDescriptor.frame_id (the chunk is one), else 0.
+// CLOCK_REALTIME ns, the clock of spr's timing CSV, so the two join on frame_id.
+// Off (unset), it costs one branch per chunk.
+namespace {
+uint64_t real_ns() {
+    timespec ts; clock_gettime(CLOCK_REALTIME, &ts);
+    return uint64_t(ts.tv_sec) * 1000000000ull + uint64_t(ts.tv_nsec);
+}
+struct Trace {
+    FILE* f = nullptr;
+    std::mutex mu;
+    Trace() {
+        const char* d = std::getenv("THEIA_RDS_TRACE");
+        if (!d || !*d) return;
+        char path[512];
+        std::snprintf(path, sizeof(path), "%s/rds-trace-%d.csv", d, int(getpid()));
+        f = std::fopen(path, "w");
+        if (f) std::fprintf(f, "ev,stream,frame_id,t0_ns,t1_ns\n");
+    }
+    void put(const char* ev, const std::string& stream, const void* data, uint32_t size,
+             uint64_t t0, uint64_t t1) {
+        const uint64_t id = (data && size >= sizeof(FrameDescriptor))
+                                ? static_cast<const FrameDescriptor*>(data)->frame_id : 0;
+        std::lock_guard<std::mutex> l(mu);
+        std::fprintf(f, "%s,%s,%llu,%llu,%llu\n", ev, stream.c_str(), (unsigned long long)id,
+                     (unsigned long long)t0, (unsigned long long)t1);
+        std::fflush(f);
+    }
+};
+Trace& trace() { static Trace t; return t; }
+}  // namespace
 
 void Runtime::Init(const std::string& runtime_name) {
     // RouDi is host-wide and refuses a second runtime of one name (it ABORTS the
@@ -54,6 +95,7 @@ public:
         const std::string service = stack_qualified(s.service);   // "<Service>@N" on stack N != 0
         pub_ = iox_pub_init(&storage_, service.c_str(), s.instance.c_str(),
                             s.event.c_str(), &opts);
+        name_ = "/" + s.service + "/" + s.instance;
         return pub_ ? RdsError::OK : RdsError::TRANSPORT_ERROR;
     }
     Result<Chunk> loan(uint32_t size) override {
@@ -62,11 +104,13 @@ public:
         if (iox_pub_loan_chunk(pub_, &payload, size) != AllocationResult_SUCCESS)
             return Result<Chunk>::bad(RdsError::LOAN_FAILED);
         Chunk c; c.data = payload; c.size = size; c.handle = payload;
+        if (trace().f) { loaned_ns_ = real_ns(); }
         return Result<Chunk>::good(c);
     }
     RdsError publish(Chunk&& c) override {
         if (!pub_) return RdsError::NOT_CONNECTED;
         if (!c.valid()) return RdsError::BAD_STREAM;
+        if (trace().f) trace().put("pub", name_, c.data, c.size, loaned_ns_, real_ns());
         iox_pub_publish_chunk(pub_, c.data);
         c.data = nullptr;   // ownership handed to the pool
         return RdsError::OK;
@@ -79,6 +123,8 @@ public:
 private:
     iox_pub_storage_t storage_{};
     iox_pub_t pub_ = nullptr;
+    std::string name_;            // the logical stream, for the trace
+    uint64_t loaned_ns_ = 0;      // the trace: the last Loan (one writer = one thread)
 };
 
 class IceoryxReader final : public IReaderTransport {
@@ -91,6 +137,7 @@ public:
         const std::string service = stack_qualified(s.service);   // "<Service>@N" on stack N != 0
         sub_ = iox_sub_init(&storage_, service.c_str(), s.instance.c_str(),
                             s.event.c_str(), &opts);
+        name_ = "/" + s.service + "/" + s.instance;
         if (!sub_) return RdsError::TRANSPORT_ERROR;
         iox_sub_subscribe(sub_);
         return RdsError::OK;
@@ -107,9 +154,11 @@ public:
         // The loaned size, as the writer asked for it (a FrameDescriptor reader
         // may still read its own payload_size; a generic reader needs this).
         c.size = ara::rds::detail::chunk_payload_size(payload);
+        if (trace().f) c.taken_ns = real_ns();
         return Result<Chunk>::good(c);
     }
     void release(Chunk&& c) override {
+        if (trace().f && c.handle) trace().put("take", name_, c.handle, c.size, c.taken_ns, real_ns());
         if (sub_ && c.handle) iox_sub_release_chunk(sub_, c.handle);
         c.data = nullptr; c.handle = nullptr;
     }
@@ -121,6 +170,7 @@ public:
 private:
     iox_sub_storage_t storage_{};
     iox_sub_t sub_ = nullptr;
+    std::string name_;            // the logical stream, for the trace
 };
 
 }  // namespace

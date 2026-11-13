@@ -20,6 +20,10 @@ extern "C" {
 #include "iceoryx_binding_c/types.h"
 }
 
+// The iceoryx C binding (1.0.1) has no user-payload-size getter; chunk_size.cc
+// asks the C++ ChunkHeader (its header cannot share a TU with the C binding).
+namespace ara::rds::detail { uint32_t chunk_payload_size(const void* user_payload); }
+
 #include <cstring>
 
 namespace ara::rds {
@@ -91,7 +95,9 @@ public:
         Chunk c;
         c.data = const_cast<void*>(payload);
         c.handle = const_cast<void*>(payload);
-        c.size = 0;   // size is carried in the app's FrameDescriptor header
+        // The loaned size, as the writer asked for it (a FrameDescriptor reader
+        // may still read its own payload_size; a generic reader needs this).
+        c.size = ara::rds::detail::chunk_payload_size(payload);
         return Result<Chunk>::good(c);
     }
     void release(Chunk&& c) override {

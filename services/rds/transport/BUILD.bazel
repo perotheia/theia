@@ -13,6 +13,7 @@ cc_library(
     srcs = [
         "iceoryx_transport.cc",
         "deployment_resolver.cc",
+        "chunk_size.cc",
     ],
     hdrs = ["//services/rds/include/ara/rds:headers"],
     # Apps include "ara/rds/stream.h" — the include root is services/rds/include.

@@ -287,7 +287,19 @@ def _is_framework_target(target: str) -> bool:
 def _bazel_bin(target: str) -> Path:
     """//pkg/dir:name -> <root>/bazel-bin/pkg/dir/name. Framework targets read
     from THEIA_ROOT's bazel-bin; the workspace's own app targets from WORKSPACE's
-    (or THEIA_ROOT's when the workspace has no MODULE.bazel)."""
+    (or THEIA_ROOT's when the workspace has no MODULE.bazel).
+    An EXTERNAL label (@repo//pkg:name, @@repo+//pkg:name): @pero_theia is the framework
+    (THEIA_ROOT's own build); any other module is the workspace's build output under
+    bazel-bin/external/<repo>+/ (bzlmod's canonical dir), not bazel-bin/@repo/ (bond003's
+    carla_gt staging finding, 2026-11-13)."""
+    if target.startswith("@"):
+        repo, rest = target.lstrip("@").split("//", 1)
+        repo = repo.rstrip("+")
+        pkg, name = rest.split(":", 1)
+        if repo == "pero_theia":
+            return THEIA_ROOT / "bazel-bin" / pkg / name
+        root = WORKSPACE if (WORKSPACE / "MODULE.bazel").is_file() else THEIA_ROOT
+        return root / "bazel-bin" / "external" / f"{repo}+" / pkg / name
     pkg, name = target.lstrip("/").split(":", 1)
     if _is_framework_target(target):
         root = THEIA_ROOT
@@ -1370,7 +1382,11 @@ def cmd_install(args: list[str]) -> int:
     # scaffolds manifest/<name>/; nothing guarantees any particular target
     # name), so guessing wrong used to surface as a bare
     # ModuleNotFoundError deep in artheia's import machinery.
-    positionals = [a for a in args if not a.startswith("-")]
+    # A value-taking flag's VALUE is not a positional (`--attr RIG_VIZ` was read as the
+    # machine "RIG_VIZ": bond003's finding, 2026-11-13).
+    _valued = {"--attr", "--machine", "--instance", "--from", "--out"}
+    positionals = [a for i, a in enumerate(args)
+                   if not a.startswith("-") and not (i > 0 and args[i - 1] in _valued)]
     if not positionals:
         print("theia install: missing <target> — pass the manifest target "
               "(the manifest/<target>/rig.py dir name, e.g. "
@@ -1872,7 +1888,9 @@ def cmd_manifest(args: list[str]) -> int:
 
     # No default target — see cmd_install for why (no target name is
     # guaranteed to exist).
-    target = next((a for a in args if not a.startswith("-")), None)
+    _valued = {"--attr", "--machine", "--out"}
+    target = next((a for i, a in enumerate(args)
+                   if not a.startswith("-") and not (i > 0 and args[i - 1] in _valued)), None)
     if target is None:
         print("theia manifest: missing <target> — pass the manifest target "
               "(the manifest/<target>/rig.py dir name, e.g. "

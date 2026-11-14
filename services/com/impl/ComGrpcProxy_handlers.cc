@@ -1358,6 +1358,10 @@ void start_gateway(const char* who) {
     gw.start();
     g_gw_svc = std::make_unique<GatewayImpl>();
     grpc::ServerBuilder b;
+    // NO SO_REUSEPORT (gRPC's default): a second stack on this host must FAIL to bind an
+    // occupied port, not silently share it (the kernel then splits the connections
+    // between the two servers: a gateway client reached the other stack's com, 2026-11-14).
+    b.AddChannelArgument(GRPC_ARG_ALLOW_REUSEPORT, 0);
     b.AddListeningPort(listen, services_com::make_server_creds(who));
     b.RegisterService(g_gw_svc.get());
     g_gw_server = b.BuildAndStart();
@@ -1547,6 +1551,10 @@ void ComGrpcProxy::do_start() {
     constexpr int kBindBackoffMs = 500;
     for (int attempt = 1; attempt <= kBindAttempts && !g_server; ++attempt) {
         grpc::ServerBuilder b;
+        // NO SO_REUSEPORT (gRPC's default): a second stack on this host must FAIL to bind an
+        // occupied port, not silently share it (the kernel then splits the connections
+        // between the two servers: a gateway client reached the other stack's com, 2026-11-14).
+        b.AddChannelArgument(GRPC_ARG_ALLOW_REUSEPORT, 0);
         b.AddListeningPort(listen, services_com::make_server_creds(kNodeName));
         b.RegisterService(g_sup_svc.get());
         b.RegisterService(g_per_svc.get());

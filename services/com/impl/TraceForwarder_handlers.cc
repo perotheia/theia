@@ -150,6 +150,10 @@ void TraceForwarder::do_start() {
     g_svc = std::make_unique<TraceStreamImpl>();
     const std::string listen = trace_listen_addr();
     grpc::ServerBuilder b;
+    // NO SO_REUSEPORT (gRPC's default): a second stack on this host must FAIL to bind an
+    // occupied port, not silently share it (the kernel then splits the connections
+    // between the two servers: a gateway client reached the other stack's com, 2026-11-14).
+    b.AddChannelArgument(GRPC_ARG_ALLOW_REUSEPORT, 0);
     b.AddListeningPort(listen, services_com::make_server_creds(kNodeName));
     b.RegisterService(g_svc.get());
     g_server = b.BuildAndStart();

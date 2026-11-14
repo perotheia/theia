@@ -37,6 +37,7 @@
 #include <cstdlib>
 #include <cstdint>
 #include <cstdio>
+#include <cerrno>
 #include <cstring>
 #include <functional>
 #include <map>
@@ -563,8 +564,15 @@ private:
         std::string frame(sizeof(hdr) + len, '\0');
         std::memcpy(&frame[0], &hdr, sizeof(hdr));
         if (len) std::memcpy(&frame[sizeof(hdr)], payload, len);
-        (void)::sendto(fd, frame.data(), frame.size(), MSG_NOSIGNAL | MSG_DONTWAIT,
-                       reinterpret_cast<struct sockaddr*>(&a), sizeof(a));
+        // Non-blocking: a member whose queue is full (or gone) must not stall the
+        // producer, but the lost cast is COUNTED, never silent (PgDrops.hh).
+        if (::sendto(fd, frame.data(), frame.size(), MSG_NOSIGNAL | MSG_DONTWAIT,
+                     reinterpret_cast<struct sockaddr*>(&a), sizeof(a)) < 0) {
+            char what[48];
+            std::snprintf(what, sizeof(what), "pg sid 0x%04x -> 0x%08x:%u", unsigned(service_id),
+                          type, instance);
+            note_pg_drop(what, std::strerror(errno), frame.size());
+        }
         ::close(fd);
     }
 

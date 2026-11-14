@@ -331,6 +331,8 @@ def cmd_record(a) -> int:
             cls = _cls(w)
 
             def on_frame(fields, w=w, sid=sid, cls=cls):
+                if stop.is_set():                 # stopped: nothing is recorded after it
+                    return
                 rx = time.time_ns()
                 raw = fields.get("_raw")
                 if raw is None or fields.get("_service_id") != sid:
@@ -341,6 +343,8 @@ def cmd_record(a) -> int:
                                    "msg": to_json(m), "pb": base64.b64encode(raw).decode()})
                 key = _counter(m)
                 with lock:
+                    if files[w.flat].closed:
+                        return
                     files[w.flat].write(line + "\n")
                     counts[w.flat] += 1
                     if key is not None:
@@ -411,8 +415,11 @@ def cmd_record(a) -> int:
         stop.wait(0.1)
 
     stop.set()
+    with lock:                                    # nothing written after the stop
+        for f in files.values():
+            f.close()
     if joiner:
-        joiner.join(timeout=3)
+        joiner.join(timeout=1)
     summary = {"mode": "record", "dir": str(d), "tipc": dict(counts)}
     # RECORDED vs EXPECTED per feed, from its counter (tick / seq / sequence / frame, per run):
     # the span the producer emitted while we listened. A gap = casts this member missed (a
@@ -427,10 +434,13 @@ def cmd_record(a) -> int:
     if join_failed:
         summary["not_joined"] = dict(join_failed)
     if pg:
-        pg.shutdown()
+        # Leaves are best-effort and must not hold the exit: with the stack's supervisor gone
+        # (an orphaned recorder) each leave call waits out its timeout. The watchdog reaps
+        # a member that stops beating anyway.
+        t = threading.Thread(target=pg.shutdown, daemon=True)
+        t.start()
+        t.join(timeout=1.0)
         probe.stop()
-    for f in files.values():
-        f.close()
     rc = 0
     if rds:
         if rds.poll() is None:

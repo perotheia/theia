@@ -13,6 +13,9 @@
 // (type,instance) + hand-encodes the proto3 payload, but never opens a socket
 // itself (the old hand-rolled GwHdrWire send_gw_cast_to_tipc_name is gone).
 
+#include <sys/socket.h>
+#include <poll.h>
+#include <linux/tipc.h>
 #include "runtime.h"
 
 #include "Logger.hh"   // platform/runtime — process_logger()
@@ -616,6 +619,39 @@ void Supervisor::ctl_on_heartbeat(const std::string& node_name, pid_t pid,
 // watchdog reap only. NO membership push / per-member loop: the kernel fans out.
 // ---------------------------------------------------------------------------
 
+// Is the TIPC name {type, instance} bound by any socket right now? One query to the
+// kernel topology server (a zero-timeout subscription reports the existing binding,
+// then times out). On any failure: false (allocate as before).
+static bool tipc_name_bound_(uint32_t type, uint32_t instance) {
+    int fd = ::socket(AF_TIPC, SOCK_SEQPACKET, 0);
+    if (fd < 0) return false;
+    struct sockaddr_tipc topsrv{};
+    topsrv.family = AF_TIPC;
+    topsrv.addrtype = TIPC_SERVICE_ADDR;
+    topsrv.addr.name.name.type = TIPC_TOP_SRV;
+    topsrv.addr.name.name.instance = TIPC_TOP_SRV;
+    bool bound = false;
+    if (::connect(fd, reinterpret_cast<sockaddr*>(&topsrv), sizeof(topsrv)) == 0) {
+        struct tipc_subscr sub{};
+        sub.seq.type = type;
+        sub.seq.lower = instance;
+        sub.seq.upper = instance;
+        sub.timeout = 0;                         // report what exists, then time out
+        sub.filter = TIPC_SUB_SERVICE;
+        if (::send(fd, &sub, sizeof(sub), 0) == static_cast<ssize_t>(sizeof(sub))) {
+            struct pollfd p{fd, POLLIN, 0};
+            struct tipc_event ev{};
+            while (::poll(&p, 1, 200) > 0 && ::recv(fd, &ev, sizeof(ev), 0) == static_cast<ssize_t>(sizeof(ev))) {
+                if (ev.event == TIPC_PUBLISHED) { bound = true; break; }
+                if (ev.event == TIPC_SUBSCR_TIMEOUT) break;
+            }
+        }
+    }
+    ::close(fd);
+    return bound;
+}
+
+
 // PgJoin/Resolve: allocate (or look up) the group's type; for join, allocate a
 // unique instance + record the holding pid (so the watchdog can free it). For
 // resolve-only (join=false) just return the type with instance 0.
@@ -633,14 +669,24 @@ void Supervisor::ctl_pg_join(const std::string& node, pid_t pid,
     out_status = 0;
     if (!join) return;                           // resolve-only (a pure sender)
 
-    // Allocate an instance: reuse a freed one, else bump next_instance.
-    uint32_t inst;
-    if (!g.free_instances.empty()) {
-        inst = g.free_instances.back();
-        g.free_instances.pop_back();
-    } else {
-        inst = g.next_instance++;
+    // Allocate an instance: reuse a freed one, else bump next_instance. Never one whose
+    // TIPC NAME is still bound: a member left over from an EARLIER supervisor of this
+    // stack (an orphaned sidecar, same group types) would share the name, and TIPC
+    // round-robins the casts between the two sockets (the 2026-11-14 tap drops).
+    uint32_t inst = 0;
+    for (int tries = 0; tries < 64; ++tries) {
+        if (!g.free_instances.empty()) {
+            inst = g.free_instances.back();
+            g.free_instances.pop_back();
+        } else {
+            inst = g.next_instance++;
+        }
+        if (!tipc_name_bound_(g.group_type, inst)) break;
+        engine_log().warn("pg join group=" + group_name + ": instance " + std::to_string(inst) +
+                          " is still bound by a stale socket (a member of an earlier supervisor?); skipping it");
+        inst = 0;
     }
+    if (inst == 0) inst = g.next_instance++;     // 64 stale names in a row: give up checking
     // Record the member's DELIVERY address (where producers cast). A member that
     // binds its allocated {group_type, instance} passes that here; if it passes 0
     // (didn't bind a distinct recv addr), fall back to {group_type, instance}.

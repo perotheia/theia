@@ -1059,7 +1059,11 @@ def cmd_cast(args: list[str]) -> int:
 def cmd_tap(args: list[str]) -> int:
     """record / replay any TIPC interface + any RDS stream (tools/tap/tap.py)."""
     tap_py = THEIA_ROOT / "tools" / "tap" / "tap.py"
-    return subprocess.call([sys.executable, str(tap_py), *args])
+    # EXEC, not a child: a SIGTERM / SIGINT to `theia tap` must reach the recorder itself
+    # (a subprocess.call wrapper died and left tap.py recording the NEXT runs into its dir,
+    # bond007's baseline, 2026-11-14). tap.py handles both signals (stop, flush, stop tap_rds).
+    sys.stdout.flush(); sys.stderr.flush()
+    os.execv(sys.executable, [sys.executable, str(tap_py), *args])
 
 
 def cmd_call(args: list[str]) -> int:

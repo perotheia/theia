@@ -100,3 +100,40 @@ def test_info_counts_both_halves(tmp_path, capsys):
     assert out["tipc"]["system_x_M"] == {"messages": 3, "seconds": 2.0}
     assert out["rds"]["/W/s"] == {"chunks": 4, "bytes": 40, "seconds": 1.5}
     assert tap._rds_first_rx(tmp_path, []) == 0
+
+
+def test_record_stops_on_sigterm(tmp_path):
+    """`theia tap record` exits within 2 s of SIGTERM to the process we started, and
+    nothing writes to its dir afterwards (the wrapper EXECs tap.py; bond007's baseline
+    runs were contaminated by a recorder that outlived its `theia tap`)."""
+    import os, signal, socket, subprocess, time
+    if not hasattr(socket, "AF_TIPC"):
+        pytest.skip("no AF_TIPC")
+    try:
+        socket.socket(socket.AF_TIPC, socket.SOCK_RDM).close()
+    except OSError:
+        pytest.skip("TIPC module not loaded")
+    root = Path(__file__).resolve().parents[1]
+    d = tmp_path / "rec"
+    # instance 99: no supervisor answers, so the recorder sits in its join retries
+    p = subprocess.Popen([str(root / "theia"), "tap", "record", str(d), "--tipc", "system_supervisor_NodeState",
+                          "--instance", "99", "--seconds", "60"],
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+    time.sleep(2.0)
+    assert p.poll() is None, p.stderr.read().decode()[-500:]
+    t0 = time.monotonic()
+    p.send_signal(signal.SIGTERM)                       # to the pid we started, as a supervisor would
+    p.wait(timeout=5)
+    assert time.monotonic() - t0 < 2.0
+    # nothing of the process group survives (no orphaned recorder), nothing writes after it
+    time.sleep(0.5)
+    try:
+        os.killpg(p.pid, 0)
+        alive = True
+    except ProcessLookupError:
+        alive = False
+    assert not alive, "a process of the tap's group outlived SIGTERM"
+    before = {f: f.stat().st_mtime_ns for f in d.glob("*")} if d.exists() else {}
+    time.sleep(1.0)
+    after = {f: f.stat().st_mtime_ns for f in d.glob("*")} if d.exists() else {}
+    assert before == after

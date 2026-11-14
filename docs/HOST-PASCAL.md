@@ -239,7 +239,11 @@ applied at connect), so two same-named camera stacks run side by side and a
 kinematic-sim stack runs next to the CARLA one; and its `file:` logs go to
 `<dir>/i<N>/` (`/tmp/theia/i<N>/<process>.log`). Logical names never change
 (`resolve_instance`, manifests, `theia tap` stream names): `theia tap --instance N`
-records and replays stack N's streams.
+records and replays stack N's streams. com's PORTS follow the same rule: on stack N
+every listen port (configured or default) is shifted by 100*N: SupervisorView 7700 -> 7700+100N,
+trace 7710, log 7711, the gateway 7720 -> 7720+100N (stack 3: 8000 / 8010 / 8011 / 8020); a
+client (rtdb, the GUI, a gateway client) targets the shifted port; an explicit
+$THEIA_COM_*_LISTEN is used as given.
 
 **Re-source `env.sh` in every workspace you `cd` into.** It exports
 `THEIA_WORKSPACE` = the directory it was sourced from, and `theia` uses that

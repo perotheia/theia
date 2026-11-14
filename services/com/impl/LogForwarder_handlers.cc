@@ -44,7 +44,7 @@ namespace {
 // TraceForwarder :7710) so the three runnables are independently restartable.
 std::string log_listen_addr() {
     if (const char* e = std::getenv("THEIA_COM_LOG_LISTEN")) return e;
-    return ::theia::runtime::get_config().node(LogForwarder::kNodeName).str("grpc_listen", "0.0.0.0:7711");
+    return services_com::stack_listen(::theia::runtime::get_config().node(LogForwarder::kNodeName).str("grpc_listen", "0.0.0.0:7711"));
 }
 
 // One gRPC subscriber: a bounded queue + a CV. LogLink's sink pushes raw record

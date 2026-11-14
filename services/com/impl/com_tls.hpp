@@ -70,6 +70,26 @@ inline unsigned theia_crypto_instance() {
     return 0;
 }
 
+// The isolated-stack rule for com's PORTS (like the pg / RDS names): on stack N != 0
+// (THEIA_PG_SUPERVISOR_INSTANCE=N, `theia start --instance N`) every configured or default
+// listen port shifts by 100*N (7700 -> 7800 on stack 1, gateway 7720 -> 7820, ...), so two
+// stacks of one composition run side by side on one host (they collided on 7700/7720:
+// bond007, 2026-11-14). The default stack and every machine of a rig keep their ports. An
+// address given by its $THEIA_COM_*_LISTEN env var is used AS GIVEN (the caller's choice).
+inline std::string stack_listen(const std::string& addr) {
+    unsigned n = 0;
+    if (const char* v = std::getenv("THEIA_PG_SUPERVISOR_INSTANCE"); v && *v) {
+        char* end = nullptr;
+        const unsigned long x = std::strtoul(v, &end, 10);
+        if (end != v && *end == '\0') n = static_cast<unsigned>(x);
+    }
+    const auto colon = addr.rfind(':');
+    if (n == 0 || colon == std::string::npos) return addr;
+    const unsigned long port = std::strtoul(addr.c_str() + colon + 1, nullptr, 10);
+    if (port == 0 || port + 100ul * n > 65535) return addr;
+    return addr.substr(0, colon + 1) + std::to_string(port + 100ul * n);
+}
+
 enum class CryptoCert { CERT_OK, NO_CERT, UNREACHABLE };
 
 inline CryptoCert crypto_get_cert(const char* who, const std::string& slot,

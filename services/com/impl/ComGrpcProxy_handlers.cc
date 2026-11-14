@@ -105,9 +105,9 @@ constexpr uint32_t kOpConfigureLogLevel = 11;  // #385
 // rf-theia connect to. Read once at server bootstrap (static param).
 std::string listen_addr() {
     if (const char* e = std::getenv("THEIA_COM_LISTEN")) return e;
-    return ::theia::runtime::get_config()
+    return services_com::stack_listen(::theia::runtime::get_config()
         .node(ComGrpcProxy::kNodeName)
-        .str("grpc_listen", "0.0.0.0:7700");
+        .str("grpc_listen", "0.0.0.0:7700"));
 }
 
 // ---- SHWA AccelTelemetry fold-in (gated at com) --------------------------
@@ -1348,6 +1348,7 @@ std::unique_ptr<grpc::Server>               g_gw_server;
 void start_gateway(const char* who) {
     const auto& cfg = ::theia::runtime::get_config().node(ComGrpcProxy::kNodeName);
     std::string listen = cfg.str("gateway_listen", "");
+    if (!listen.empty()) listen = services_com::stack_listen(listen);   // stack N: + 100*N
     if (const char* e = std::getenv("THEIA_COM_GATEWAY_LISTEN")) listen = e;
     if (listen.empty()) return;                                   // OFF: nothing changes
     auto& gw = services_com::GwLink::instance();

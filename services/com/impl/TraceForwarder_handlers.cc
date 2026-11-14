@@ -14,7 +14,8 @@
 #include "lib/TraceForwarder.hh"
 
 #include "impl/trace_link.hpp"   // TraceLink: TIPC subscriber → raw-bytes sink
-#include "impl/com_tls.hpp"      // shared TLS-or-insecure ServerCredentials
+#include "impl/com_tls.hpp"
+#include "ParamsConfig.hh"        // get_config(): grpc_listen      // shared TLS-or-insecure ServerCredentials
 
 #include "supervisor_bridge.grpc.pb.h"
 
@@ -43,7 +44,7 @@ namespace {
 // SupervisorView :7700) so the two runnables are independently restartable.
 std::string trace_listen_addr() {
     if (const char* e = std::getenv("THEIA_COM_TRACE_LISTEN")) return e;
-    return "0.0.0.0:7710";
+    return ::theia::runtime::get_config().node(TraceForwarder::kNodeName).str("grpc_listen", "0.0.0.0:7710");
 }
 
 // One gRPC subscriber: a bounded queue + a CV. TraceLink's sink pushes raw

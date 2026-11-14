@@ -173,6 +173,11 @@ node runnable TraceForwarder {
     tipc type=0x8001000A instance=0
     reporting = false
     tag = "TRCF"
+    params {
+        // gRPC listen address (like ComGrpcProxy's): a test layer can keep it on loopback
+        // ("127.0.0.1:7710"). $THEIA_COM_TRACE_LISTEN still wins.
+        grpc_listen : string = "0.0.0.0:7710"
+    }
 }
 
 // ---- LogForwarder (the LOG EGRESS gRPC thread) --------------------------
@@ -189,6 +194,11 @@ node runnable LogForwarder {
     tipc type=0x8001000B instance=0
     reporting = false
     tag = "LOGF"
+    params {
+        // gRPC listen address (like ComGrpcProxy's): a test layer can keep it on loopback
+        // ("127.0.0.1:7711"). $THEIA_COM_LOG_LISTEN still wins.
+        grpc_listen : string = "0.0.0.0:7711"
+    }
 }
 
 // ---- Probe (test agent) -------------------------------------------------

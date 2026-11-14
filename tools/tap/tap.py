@@ -210,6 +210,34 @@ def from_json(w: Wire, d: dict) -> bytes:
     return m.SerializeToString()
 
 
+
+# ---- recorded / expected ---------------------------------------------------
+_COUNTERS = ("seq", "sequence", "tick", "frame")   # a message's OWN counter first (Trajectory.tick = the EgoState it answers)
+
+
+def _counter(m) -> "tuple | None":
+    """(run, value) of the message's first counter field, or None (no counter)."""
+    names = {f.name for f in m.DESCRIPTOR.fields}
+    for c in _COUNTERS:
+        if c in names:
+            run = getattr(m, "run", 0) if "run" in names else 0
+            return (int(run), (c, int(getattr(m, c))))
+    return None
+
+
+def _expected(seen: dict) -> dict:
+    out = {}
+    for flat, runs in seen.items():
+        rec = exp = 0
+        counter = ""
+        for run, vals in runs.items():
+            nums = sorted(v for _, v in vals)
+            counter = next(iter(vals))[0]
+            rec += len(nums)
+            exp += nums[-1] - nums[0] + 1
+        out[flat] = {"counter": counter, "recorded": rec, "expected": exp, "missing": exp - rec}
+    return out
+
 # ---- the probe / pg plumbing --------------------------------------------------------
 def _sup_instance(arg: "int | None") -> int:
     if arg is not None:
@@ -287,6 +315,7 @@ def cmd_record(a) -> int:
         rds = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True, env=_rds_env(inst))
 
     counts: dict[str, int] = {}
+    seen: dict[str, dict] = {}      # flat -> run -> the counter values received
     files = {}
     lock = threading.Lock()
     probe = pg = None
@@ -310,9 +339,12 @@ def cmd_record(a) -> int:
                 m.ParseFromString(raw)
                 line = json.dumps({"rx_wall_ns": rx, "tx_ns": fields.get("_tx_ns", 0),
                                    "msg": to_json(m), "pb": base64.b64encode(raw).decode()})
+                key = _counter(m)
                 with lock:
                     files[w.flat].write(line + "\n")
                     counts[w.flat] += 1
+                    if key is not None:
+                        seen.setdefault(w.flat, {}).setdefault(key[0], set()).add(key[1])
 
             joins.append((w.flat, on_frame))
 
@@ -382,6 +414,16 @@ def cmd_record(a) -> int:
     if joiner:
         joiner.join(timeout=3)
     summary = {"mode": "record", "dir": str(d), "tipc": dict(counts)}
+    # RECORDED vs EXPECTED per feed, from its counter (tick / seq / sequence / frame, per run):
+    # the span the producer emitted while we listened. A gap = casts this member missed (a
+    # shared member name, a congested socket): warned, never silent.
+    exp = _expected(seen)
+    if exp:
+        summary["expected"] = exp
+        for flat, e in exp.items():
+            if e["missing"]:
+                print(f"tap: WARNING {flat}: recorded {e['recorded']} of {e['expected']} expected "
+                      f"(by {e['counter']}), {e['missing']} missing", file=sys.stderr)
     if join_failed:
         summary["not_joined"] = dict(join_failed)
     if pg:

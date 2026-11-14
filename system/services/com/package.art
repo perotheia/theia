@@ -144,6 +144,13 @@ node runnable ComGrpcProxy {
         // an ad-hoc shift. Default = the historical 0.0.0.0:7700 the GUI/tdb/
         // rf-theia connect to.
         grpc_listen : string = "0.0.0.0:7700"
+        // The GATEWAY (services/com/proto/gateway.proto): an external client reaches
+        // ALLOWLISTED Theia services as raw contract bytes over its OWN TLS port (the same
+        // certs as 7700). "" = OFF (default): the stack runs unchanged. A test-only port: a
+        // rig that turns it on also opens it in its firewall (ProcessLayer.ports).
+        gateway_listen : string = ""      // e.g. "0.0.0.0:7720"
+        gateway_calls  : string = ""      // "RoadDomainIf=0xTYPE:INST,..." (clientServer servers)
+        gateway_feeds  : string = ""      // "system_contracts_RoadReply,..." (pg feeds, wire types)
     }
 }
 

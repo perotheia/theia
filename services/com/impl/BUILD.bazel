@@ -162,6 +162,17 @@ cc_library(
     ],
 )
 
+# The GATEWAY link (gw_link.hpp): raw-bytes calls to allowlisted Theia services + pg feeds
+# with a resume ring. Runtime only (no contract headers: payloads stay opaque bytes).
+cc_library(
+    name = "gw_link",
+    srcs = ["gw_link.cc"],
+    hdrs = ["gw_link.hpp"],
+    includes = [".."],
+    copts = ["-std=c++17", "-Wall", "-Wextra", "-fPIC"],
+    deps = ["//platform/runtime:runtime"],
+)
+
 # per (persistency) proxy link — isolated nanopb TU like sup_link/trace_link.
 # Includes the NANOPB per headers (per_codecs.hh → per.pb.h, C structs) for the
 # ListSchemas/Snapshot RemoteRef-calls to PerManager (0x80010016); com_impl's
@@ -354,5 +365,8 @@ cc_library(
         # Cluster machine index→name map (THEIA_MACHINE_MANIFEST) for labelling
         # per-machine AccelTelemetry with a human machine name.
         ":machine_manifest",
+        # The GATEWAY (proto/gateway.proto, its own TLS port, off unless gateway_listen).
+        ":gw_link",
+        "//services/com:com_gateway_grpc",
     ],
 )

@@ -1,0 +1,21 @@
+// com's GATEWAY: an external client (a phone, a sidecar on another host) reaches an
+// ALLOWLISTED Theia service through com's TLS gRPC, as raw contract bytes (the payloads
+// are the contract package's own proto messages, unchanged: com never decodes them, so
+// the framework does not depend on the contract). OFF unless com's gateway_listen is set.
+//   Call    a clientServer operation: the request's WIRE TYPE name (e.g.
+//           "system_contracts_RoadIntent") picks the operation (service_id = its djb2),
+//           `iface` must be allowlisted (gateway_calls: iface=0xTYPE:INST); the reply's bytes back.
+//   Stream  a senderReceiver feed by wire type (allowlisted in gateway_feeds): every frame since
+//           `since_seq` from com's resume ring (gateway seq, per feed), then live until cancelled.
+syntax = "proto3";
+package theia.com.gateway;
+
+message GwCall   { string iface = 1; string req_type = 2; bytes payload = 3; uint32 timeout_ms = 4; }
+message GwReply  { int32 status = 1; string error = 2; bytes payload = 3; }   // 0 = OK
+message GwStream { string msg_type = 1; uint64 since_seq = 2; }
+message GwFrame  { uint64 seq = 1; string msg_type = 2; bytes payload = 3; uint64 rx_wall_ns = 4; }
+
+service ComGateway {
+    rpc Call(GwCall) returns (GwReply);
+    rpc Stream(GwStream) returns (stream GwFrame);
+}

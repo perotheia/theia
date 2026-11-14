@@ -16,6 +16,7 @@
 // SEQPACKET call, encoding the request with the crypto FC's nanopb types and
 // the runtime's TheiaMsgHeader. Load via OpenSSL's dynamic engine loader.
 
+#include <cstdlib>
 #include <openssl/engine.h>
 #include <openssl/rsa.h>
 #include <openssl/pem.h>
@@ -45,7 +46,20 @@ constexpr const char* kEngineName = "Theia crypto FC RSA proxy engine";
 
 // services/crypto CryptoProvider node (the oneshot port serves PrivateKeyOp).
 constexpr uint32_t kCryptoType     = 0x80010006u;
-constexpr uint32_t kCryptoInstance = 0u;
+// The crypto FC's TIPC instance: THEIA_CRYPTO_INSTANCE if set, else the isolated stack's
+// (THEIA_PG_SUPERVISOR_INSTANCE = N, `theia start --instance N`: every FC of stack N serves
+// at instance N), else 0 (the default stack). Was a hard 0: on an isolated stack com could
+// not reach its own crypto and failed closed.
+static unsigned theia_crypto_instance() {
+    for (const char* e : {"THEIA_CRYPTO_INSTANCE", "THEIA_PG_SUPERVISOR_INSTANCE"}) {
+        if (const char* v = std::getenv(e); v && *v) {
+            char* end = nullptr;
+            const unsigned long n = std::strtoul(v, &end, 10);
+            if (end != v && *end == '\0') return static_cast<unsigned>(n);
+        }
+    }
+    return 0;
+}
 
 // Per-key app-data: the slot name (the FC reference). Stored on the RSA via an
 // ex-data index so the sign callback knows which slot to ask the FC for.
@@ -65,7 +79,7 @@ std::vector<uint8_t> fc_priv_op(const std::string& slot,
     addr.family   = AF_TIPC;
     addr.addrtype = TIPC_SERVICE_ADDR;
     addr.addr.name.name.type     = kCryptoType;
-    addr.addr.name.name.instance = kCryptoInstance;
+    addr.addr.name.name.instance = theia_crypto_instance();
     addr.addr.name.domain = 0;
     if (::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
         std::fprintf(stderr, "[theia_engine] connect crypto 0x%08x failed\n",

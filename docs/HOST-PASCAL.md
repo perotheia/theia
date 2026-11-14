@@ -332,6 +332,34 @@ the client), loan_spread (how far apart the source handed the images over), fill
 writer between Loan and Publish: encode, stamping, waits), rds (Publish -> Take), hold
 (the reader's own work).
 
+## The gateway: an external client to an allowlisted service (P3, 2026-11-14)
+
+com serves `services/com/proto/gateway.proto` (ComGateway: `Call`, `Stream`) on its OWN TLS
+port when `gateway_listen` is set, else nothing changes. Payloads are the contract's proto
+bytes, never decoded by com (the framework does not depend on the contract). Config
+(`deploy/config/<machine>/com.json`, node `com_grpc_proxy`):
+
+```json
+{"nodes": {"com_grpc_proxy": {"gateway_listen": "0.0.0.0:7720",
+  "gateway_calls": "RoadDomainIf=0xd0400001:0", "gateway_feeds": "system_contracts_RoadReply"}}}
+```
+
+`Call(iface, req_type, payload)` goes to the allowlisted clientServer (service id = the djb2 of
+the request's wire type), `Stream(msg_type, since_seq)` serves an allowlisted pg feed from a
+resume ring. TLS = com's (the same certs as 7700). With the key in the CRYPTO FC (the private
+key never in com): a slot `<name>` = `<slot_dir>/<name>.{crt,key}` (crypto's `slot_dir`
+param), and the stack started with
+
+```sh
+THEIA_COM_TLS_SLOT=<name> THEIA_CRYPTO_SLOT_DIR=<slot_dir> \
+THEIA_CRYPTO_ENGINE=$THEIA_ROOT/bazel-bin/services/crypto/engine/theia_crypto_engine.so \
+theia start -d --instance N
+```
+
+The typed client for the road domain: contracts `clients/road_client.py` (gate:
+`clients/gate_road_gateway.py`, mock domain: `clients/mock_road_domain.py`). A rig that turns
+the gateway on also opens its port (ProcessLayer.ports, test-only).
+
 ## Tests
 
 Results on pascal, 2026-11-12:

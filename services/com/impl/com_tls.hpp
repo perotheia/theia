@@ -55,6 +55,21 @@ namespace services_com {
 //                      insecure port. The caller fails CLOSED.
 // This is the com/crypto certificate agreement: insecure ONLY on crypto's
 // explicit "no cert", never on a crypto outage.
+// The crypto FC's TIPC instance: THEIA_CRYPTO_INSTANCE if set, else the isolated stack's
+// (THEIA_PG_SUPERVISOR_INSTANCE = N, `theia start --instance N`: every FC of stack N serves
+// at instance N), else 0 (the default stack). Was a hard 0: on an isolated stack com could
+// not reach its own crypto and failed closed.
+inline unsigned theia_crypto_instance() {
+    for (const char* e : {"THEIA_CRYPTO_INSTANCE", "THEIA_PG_SUPERVISOR_INSTANCE"}) {
+        if (const char* v = std::getenv(e); v && *v) {
+            char* end = nullptr;
+            const unsigned long n = std::strtoul(v, &end, 10);
+            if (end != v && *end == '\0') return static_cast<unsigned>(n);
+        }
+    }
+    return 0;
+}
+
 enum class CryptoCert { CERT_OK, NO_CERT, UNREACHABLE };
 
 inline CryptoCert crypto_get_cert(const char* who, const std::string& slot,
@@ -67,11 +82,11 @@ inline CryptoCert crypto_get_cert(const char* who, const std::string& slot,
     addr.family   = AF_TIPC;
     addr.addrtype = TIPC_SERVICE_ADDR;
     addr.addr.name.name.type     = kCryptoType;
-    addr.addr.name.name.instance = 0;
+    addr.addr.name.name.instance = theia_crypto_instance();
     addr.addr.name.domain = 0;
     if (::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
         std::fprintf(stderr, "[%s] gRPC: crypto FC unreachable (connect "
-                     "0x%08x) — cannot confirm cert\n", who, kCryptoType);
+                     "0x%08x:%u) — cannot confirm cert\n", who, kCryptoType, theia_crypto_instance());
         ::close(fd);
         return CryptoCert::UNREACHABLE;
     }

@@ -47,6 +47,8 @@
 #include "impl/shwa_link.hpp"     // SHWA AccelTelemetry egress receiver (GPU/host)
 #include "impl/machine_manifest.hpp"  // cluster index→name map (per-machine label)
 #include "impl/com_tls.hpp"       // shared TLS-or-insecure ServerCredentials
+#include "impl/gw_link.hpp"       // the GATEWAY: raw calls + feeds to allowlisted services
+#include "gateway.grpc.pb.h"      // proto/gateway.proto (ComGateway)
 #include "ParamsConfig.hh"        // get_config() — static param grpc_listen
 
 #include "TipcTopology.hh"        // Stage 3: live supervisor-instance discovery
@@ -1301,6 +1303,75 @@ std::unique_ptr<ProvisioningImpl>           g_prov_svc;
 std::unique_ptr<grpc::Server>               g_server;
 std::atomic<bool>                           g_up{false};
 
+// ---- the GATEWAY (proto/gateway.proto) -------------------------------------
+// Its OWN TLS gRPC server on gateway_listen (default "": OFF, the stack unchanged).
+// Call -> an allowlisted Theia clientServer as raw contract bytes (gw_link); Stream -> an
+// allowlisted pg feed from com's resume ring. Never decodes a payload.
+class GatewayImpl final : public theia::com::gateway::ComGateway::Service {
+public:
+    grpc::Status Call(grpc::ServerContext*, const theia::com::gateway::GwCall* req,
+                      theia::com::gateway::GwReply* rep) override {
+        std::string out, err;
+        const int st = services_com::GwLink::instance().call(
+            req->iface(), req->req_type(), req->payload(), req->timeout_ms(), out, err);
+        rep->set_status(st);
+        rep->set_error(err);
+        rep->set_payload(out);
+        return grpc::Status::OK;
+    }
+    grpc::Status Stream(grpc::ServerContext* ctx, const theia::com::gateway::GwStream* req,
+                        grpc::ServerWriter<theia::com::gateway::GwFrame>* w) override {
+        auto& gw = services_com::GwLink::instance();
+        if (!gw.feed_allowed(req->msg_type()))
+            return grpc::Status(grpc::StatusCode::PERMISSION_DENIED,
+                                "feed not allowlisted: " + req->msg_type());
+        uint64_t since = req->since_seq();
+        while (!ctx->IsCancelled() && g_up.load()) {
+            for (const auto& f : gw.frames_since(req->msg_type(), since, /*wait_ms=*/500)) {
+                theia::com::gateway::GwFrame fr;
+                fr.set_seq(f.seq);
+                fr.set_msg_type(req->msg_type());
+                fr.set_payload(f.payload);
+                fr.set_rx_wall_ns(f.rx_wall_ns);
+                if (!w->Write(fr)) return grpc::Status::OK;   // the client went away
+                since = f.seq;
+            }
+        }
+        return grpc::Status::OK;
+    }
+};
+std::unique_ptr<GatewayImpl>                g_gw_svc;
+std::unique_ptr<grpc::Server>               g_gw_server;
+
+// The gateway's params (com.json, ComGrpcProxy node): gateway_listen ("" = off),
+// gateway_calls ("RoadDomainIf=0xTYPE:INST,..."), gateway_feeds ("system_contracts_RoadReply,...").
+void start_gateway(const char* who) {
+    const auto& cfg = ::theia::runtime::get_config().node(ComGrpcProxy::kNodeName);
+    std::string listen = cfg.str("gateway_listen", "");
+    if (const char* e = std::getenv("THEIA_COM_GATEWAY_LISTEN")) listen = e;
+    if (listen.empty()) return;                                   // OFF: nothing changes
+    auto& gw = services_com::GwLink::instance();
+    if (!gw.configure(cfg.str("gateway_calls", ""), cfg.str("gateway_feeds", ""))) {
+        std::fprintf(stderr, "[%s] gateway: bad gateway_calls / gateway_feeds; gateway OFF\n", who);
+        return;
+    }
+    gw.start();
+    g_gw_svc = std::make_unique<GatewayImpl>();
+    grpc::ServerBuilder b;
+    b.AddListeningPort(listen, services_com::make_server_creds(who));
+    b.RegisterService(g_gw_svc.get());
+    g_gw_server = b.BuildAndStart();
+    if (!g_gw_server) {
+        std::fprintf(stderr, "[%s] gateway: gRPC server failed to start on %s; gateway OFF\n",
+                     who, listen.c_str());
+        gw.stop();
+        g_gw_svc.reset();
+        return;
+    }
+    std::fprintf(stderr, "[%s] gateway listening on %s (calls '%s', feeds '%s')\n", who,
+                 listen.c_str(), cfg.str("gateway_calls", "").c_str(), cfg.str("gateway_feeds", "").c_str());
+}
+
 }  // namespace
 
 // One-time setup on the worker thread, before do_loop(): open the supervisor
@@ -1515,6 +1586,7 @@ void ComGrpcProxy::do_start() {
                  "[%s] gRPC SupervisorView + PerView + NmView + DiagView + "
                  "Provisioning listening on %s\n", kNodeName, listen.c_str());
     g_up.store(true);
+    start_gateway(kNodeName);   // its own port; OFF unless gateway_listen is set
 }
 
 // The body. grpc::Server runs its own thread pool from BuildAndStart(), so
@@ -1583,6 +1655,13 @@ void ComGrpcProxy::do_loop() {
 // deadline so in-flight RPCs finish), then close the supervisor uplink.
 void ComGrpcProxy::do_stop() {
     std::fprintf(stderr, "[%s] runnable stopping\n", kNodeName);
+    g_up.store(false);                                    // ends the gateway's streams
+    if (g_gw_server) {
+        g_gw_server->Shutdown(std::chrono::system_clock::now() + std::chrono::milliseconds(500));
+        g_gw_server.reset();
+    }
+    g_gw_svc.reset();
+    services_com::GwLink::instance().stop();
     if (g_server) {
         g_server->Shutdown(std::chrono::system_clock::now() +
                            std::chrono::milliseconds(500));

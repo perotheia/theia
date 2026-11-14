@@ -235,3 +235,44 @@ cc_library(
         ],
     })
 )
+
+# com's GATEWAY (proto/gateway.proto): raw contract bytes to allowlisted Theia services.
+# Self-contained (no imports); the grpc++ link comes from com_bridge_grpc's linkopts.
+genrule(
+    name = "com_gateway_grpc_gen",
+    srcs = ["proto/gateway.proto"],
+    outs = [
+        "gw/gateway.pb.cc",
+        "gw/gateway.pb.h",
+        "gw/gateway.grpc.pb.cc",
+        "gw/gateway.grpc.pb.h",
+    ],
+    tools = select({
+        "//rules/config:arm64_cross_orin": [
+            "@theia_codegen//:protoc",
+            "@theia_codegen//:grpc_cpp_plugin",
+            "@theia_codegen//:libs",
+        ],
+        "//rules/config:arm64_cross": [
+            "@theia_codegen//:protoc",
+            "@theia_codegen//:grpc_cpp_plugin",
+            "@theia_codegen//:libs",
+        ],
+        "//conditions:default": [],
+    }),
+    cmd = ("set -e;" +
+           _PROTOC_SETUP +
+           " gwd=$$(dirname $(location proto/gateway.proto));" +
+           " gwo=$$(dirname $(location gw/gateway.pb.cc));" +
+           " $$protoc -I $$gwd --cpp_out=$$gwo --grpc_out=$$gwo" +
+           "   --plugin=protoc-gen-grpc=$$grpc_plugin $$gwd/gateway.proto;"),
+)
+
+cc_library(
+    name = "com_gateway_grpc",
+    srcs = ["gw/gateway.pb.cc", "gw/gateway.grpc.pb.cc"],
+    hdrs = ["gw/gateway.pb.h", "gw/gateway.grpc.pb.h"],
+    includes = ["gw"],
+    copts = ["-std=c++17", "-Wno-unused-parameter"],
+    deps = [":com_bridge_grpc"],
+)

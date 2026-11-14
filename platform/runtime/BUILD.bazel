@@ -176,3 +176,12 @@ cc_test(
     copts = ["-std=c++17", "-Wall", "-Wextra"],
     deps = [":runtime"],
 )
+
+# PgClient::name_bindings (a member refuses a TIPC name shared with a stale socket).
+cc_test(
+    name = "test_pg_name_bindings",
+    srcs = ["test/test_pg_name_bindings.cc"],
+    copts = ["-std=c++17", "-Wall", "-Wextra"],
+    deps = [":runtime"],
+    tags = ["requires-network"],
+)

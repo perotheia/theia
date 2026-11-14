@@ -115,14 +115,43 @@ public:
         binding_   = binding;
     }
 
+    // How many sockets are bound to the TIPC name {type, instance} right now (a zero-
+    // timeout TIPC_SUB_PORTS subscription: one PUBLISHED event per binding). -1 = unknown.
+    static int name_bindings(uint32_t type, uint32_t instance) {
+        int fd = ::socket(AF_TIPC, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
+        if (fd < 0) return -1;
+        struct sockaddr_tipc top{};
+        top.family = AF_TIPC;
+        top.addrtype = TIPC_SERVICE_ADDR;
+        top.addr.name.name.type = TIPC_TOP_SRV;
+        top.addr.name.name.instance = TIPC_TOP_SRV;
+        int n = -1;
+        if (::connect(fd, reinterpret_cast<sockaddr*>(&top), sizeof(top)) == 0) {
+            struct tipc_subscr sub{};
+            sub.seq.type = type; sub.seq.lower = instance; sub.seq.upper = instance;
+            sub.timeout = 0;
+            sub.filter = TIPC_SUB_PORTS;
+            if (::send(fd, &sub, sizeof(sub), 0) == static_cast<ssize_t>(sizeof(sub))) {
+                n = 0;
+                struct pollfd p{fd, POLLIN, 0};
+                struct tipc_event ev{};
+                while (::poll(&p, 1, 200) > 0 &&
+                       ::recv(fd, &ev, sizeof(ev), 0) == static_cast<ssize_t>(sizeof(ev))) {
+                    if (ev.event == TIPC_PUBLISHED) ++n;
+                    else if (ev.event == TIPC_SUBSCR_TIMEOUT) break;
+                }
+            }
+        }
+        ::close(fd);
+        return n;
+    }
+
     // RECEIVER: join the group for message T. CALL the supervisor → it allocates
     // {group_type, instance}; bind a SOCK_RDM recv socket at that address and
     // start (or extend) the recv thread that dispatches group frames through the
     // node's demux. group name = msg_type_name<T>() (the .art-derived wire name).
     template <typename T> Group join() {
-        Group g = call_join_(msg_type_name<T>(), /*join=*/true);
-        if (g.ok) bind_recv_(g.type, g.instance, msg_type_name<T>());
-        return g;
+        return join_checked_(msg_type_name<T>());
     }
     // BROADCASTER: resolve the group's TIPC type (allocate it if new) WITHOUT
     // taking an instance — so a pure sender learns where to multicast.
@@ -215,9 +244,7 @@ public:
     Group join_raw_named(const char* group_name,
                          std::function<void(const uint8_t*, uint16_t)> sink) {
         raw_sink_ = std::move(sink);
-        Group g = call_join_(group_name, /*join=*/true);
-        if (g.ok) bind_recv_(g.type, g.instance, group_name);
-        return g;
+        return join_checked_(group_name);
     }
 
     // Broadcast `payload` (already proto-encoded T) to the WHOLE group: one
@@ -414,6 +441,32 @@ private:
     }
 
     // ---- the receive side: bind {group_type, instance}, dispatch via demux --
+
+
+    // join + bind, then make sure this member is ALONE on its name: another socket bound
+    // to {type, instance} (a stale member of an earlier supervisor) would make TIPC
+    // round-robin the casts between the two (the 2026-11-14 planner starvation). Not
+    // alone -> logged, left, rejoined (the supervisor skips a still-bound instance).
+    Group join_checked_(const char* group_name) {
+        Group g;
+        for (int attempt = 0; attempt < 3; ++attempt) {
+            g = call_join_(group_name, /*join=*/true);
+            if (!g.ok) return g;
+            bind_recv_(g.type, g.instance, group_name);
+            const int n = name_bindings(g.type, g.instance);
+            if (n <= 1) return g;                 // alone (or unknown: as before)
+            process_logger().error(std::string("pg: ") + group_name + " member name 0x" +
+                                   hex32_(g.type) + ":" + std::to_string(g.instance) + " is bound by " +
+                                   std::to_string(n) + " sockets (a stale member?): rejoining on a new instance");
+            unbind_recv_(group_name);
+            call_leave_(group_name, g.type, g.instance);
+        }
+        return g;                                 // 3 tries: keep the last one (logged)
+    }
+    static std::string hex32_(uint32_t v) {
+        char b[12]; std::snprintf(b, sizeof b, "%08x", v); return b;
+    }
+
     void bind_recv_(uint32_t type, uint32_t instance, const char* group_name) {
         int fd = ::socket(AF_TIPC, SOCK_RDM | SOCK_CLOEXEC, 0);
         if (fd < 0) return;

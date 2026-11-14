@@ -429,6 +429,53 @@ def _sup_pidfile(dest: Path) -> Path:
     return dest / "supervisor.pid"
 
 
+_INSTANCES_DIR = Path("/tmp/theia/instances")
+
+
+def _instance_register(instance: int, pid: int) -> None:
+    """Host-wide note of who runs supervisor instance N (read by a refused start)."""
+    import json, time
+    try:
+        _INSTANCES_DIR.mkdir(parents=True, exist_ok=True)
+        (_INSTANCES_DIR / f"i{instance}.json").write_text(json.dumps(
+            {"pid": pid, "workspace": str(WORKSPACE), "user": os.environ.get("USER", "?"),
+             "started": time.strftime("%Y-%m-%d %H:%M:%S")}))
+    except OSError:
+        pass
+
+
+def _supervisor_holder(instance: int) -> "tuple[int, str, str] | None":
+    """(pid, workspace) of the RUNNING supervisor serving instance N on this host, if one
+    can be seen: its command line carries --tipc=supervisor_ctl=:N (or no --tipc for 0) and
+    its cwd is <workspace>/install/<machine>. None if not found (another user, a netns)."""
+    import glob as _glob, json
+    reg = _INSTANCES_DIR / f"i{instance}.json"
+    try:
+        r = json.loads(reg.read_text())
+        if os.path.exists(f"/proc/{int(r['pid'])}"):
+            return int(r["pid"]), r.get("workspace", "?"), f"user {r.get('user', '?')}, since {r.get('started', '?')}"
+    except (OSError, ValueError, KeyError):
+        pass
+    for d in _glob.glob("/proc/[0-9]*"):
+        try:
+            argv = open(f"{d}/cmdline", "rb").read().split(b"\0")
+        except OSError:
+            continue
+        if not argv or not argv[0].endswith(b"supervisor"):
+            continue
+        args = b" ".join(argv).decode(errors="replace")
+        mine = f"supervisor_ctl=:{instance}" in args or (instance == 0 and "supervisor_ctl=" not in args)
+        if not mine:
+            continue
+        try:
+            cwd = os.readlink(f"{d}/cwd")
+        except OSError:
+            cwd = "?"
+        ws = cwd.split("/install/")[0] if "/install/" in cwd else cwd
+        return int(d.rsplit("/", 1)[1]), ws, "found in /proc"
+    return None
+
+
 def _tipc_addr_bound(tipc_type: int, instance: int) -> bool:
     """True if a TIPC name (type, instance) is currently published on this host.
 
@@ -538,9 +585,13 @@ def cmd_start(args: list[str]) -> int:
     # silently co-bind.
     _sup_bound = _tipc_addr_bound(0x80020001, int(machine_instance))
     if _sup_bound:
+        _holder = _supervisor_holder(int(machine_instance))
+        _who = (f" HELD BY pid {_holder[0]}, workspace {_holder[1]} ({_holder[2]}): stop it "
+                f"there (cd {_holder[1]} && theia stop --instance {machine_instance}) or pick "
+                f"another --instance." if _holder else "")
         print(f"theia: a supervisor is ALREADY bound at TIPC 0x80020001:"
               f"{machine_instance} on this host (not from this workspace — its "
-              f"pidfile is separate).\n"
+              f"pidfile is separate).{_who}\n"
               f"  Two supervisors sharing one TIPC address anycast-collide: "
               f"`tdb ps` / probes hit the wrong one or time out.\n"
               f"  Fix: stop the other stack (`theia stop` in its workspace).\n"
@@ -656,6 +707,7 @@ def cmd_start(args: list[str]) -> int:
         start_new_session=detach,
     )
     pidfile.write_text(str(proc.pid) + "\n")
+    _instance_register(int(machine_instance), proc.pid)
     import time
 
     if detach:

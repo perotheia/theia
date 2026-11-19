@@ -100,7 +100,7 @@ if [[ -z "${THEIA_TIPC_NETID:-}" ]] \
     # without a JSON dep (theia-run.sh stays shell-only): "tipc_netid": <n>.
     _mnet="$(grep -oE '"tipc_netid"[[:space:]]*:[[:space:]]*[0-9]+' \
              "$THEIA_ROOT_DIR/current/config/machines.json" 2>/dev/null \
-             | grep -oE '[0-9]+$' | head -1)"
+             | grep -oE '[0-9]+$' | head -1 || true)"   # no tipc_netid in machines.json is normal: do not die under pipefail
     [[ -n "$_mnet" ]] && THEIA_TIPC_NETID="$_mnet" \
         && echo "theia-run: TIPC netid $_mnet from manifest (machines.json)" >&2
 fi

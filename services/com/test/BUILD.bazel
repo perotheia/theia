@@ -32,3 +32,16 @@ cc_test(
         "//services/com/impl:com_impl",
     ],
 )
+
+# Per-RPC roles (hardening F, impl/com_authz.hpp): the role table covers every RPC of the bridge proto,
+# and an in-process server built with com's real credentials (THEIA_COM_TLS_REQUIRED=1) answers rig /
+# operator / gs certificates generated in the test as the table says (debug RPCs, Provision CN gate,
+# unknown RPCs denied; a developer run stays open). Loopback only, always-on.
+cc_test(
+    name = "com_roles_test",
+    srcs = ["test_com_roles.cc"],
+    copts = ["-std=c++17", "-fPIC"],
+    deps = [
+        "//services/com/impl:com_impl",
+    ],
+)

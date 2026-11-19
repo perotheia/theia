@@ -38,6 +38,7 @@
 #include "TheiaMsgHeader.hh"   // wire header + kBusTypeRpc / kMsgGenCall
 #include "RemoteCodec.hh"      // hash_msg_type_ (service_id)
 #include "system/services/crypto/crypto.pb.h"   // CertReq / CertReply / CryptoStatus
+#include "impl/com_authz.hpp"   // per-RPC roles (ComAuthzProcessor), attached on a deployed rig
 
 namespace services_com {
 
@@ -235,6 +236,19 @@ inline std::shared_ptr<grpc::ServerCredentials> insecure_or_fatal_(const char* w
     if (tls_required_()) tls_fatal_(who, why);
     return grpc::InsecureServerCredentials();
 }
+// The TLS credentials of a com server. On a deployed rig they carry the per-RPC role check
+// (com_authz.hpp): every call is authorized from the verified client certificate before any
+// handler runs. A developer run (no REQUIRED) stays open, as before.
+inline std::shared_ptr<grpc::ServerCredentials> ssl_creds_(
+        const char* who, const grpc::SslServerCredentialsOptions& opts) {
+    auto creds = grpc::SslServerCredentials(opts);
+    if (tls_required_()) {
+        creds->SetAuthMetadataProcessor(std::make_shared<ComAuthzProcessor>(who));
+        std::fprintf(stderr, "[%s] gRPC: per-RPC roles on (rig < operator < gs; debug RPCs %s)\n",
+                     who, debug_rpcs_enabled() ? "ENABLED by THEIA_COM_DEBUG_RPCS=1" : "off");
+    }
+    return creds;
+}
 
 inline std::shared_ptr<grpc::ServerCredentials> make_server_creds(
         const char* who,
@@ -300,7 +314,7 @@ inline std::shared_ptr<grpc::ServerCredentials> make_server_creds(
         std::fprintf(stderr, "[%s] gRPC: TLS on (slot '%s', cert from crypto, "
                      "engine key — private key never in com; %s)\n",
                      who, slot, client_auth_str);
-        return grpc::SslServerCredentials(ssl_opts);
+        return ssl_creds_(who, ssl_opts);
     }
 
     // ---- mode 2: file PEM (phase 1) ---------------------------------------
@@ -325,7 +339,7 @@ inline std::shared_ptr<grpc::ServerCredentials> make_server_creds(
     ssl_opts.pem_key_cert_pairs.push_back({server_key, server_cert});
     std::fprintf(stderr, "[%s] gRPC: TLS on (cert=%s, file key; %s)\n",
                  who, cert_path.c_str(), client_auth_str);
-    return grpc::SslServerCredentials(ssl_opts);
+    return ssl_creds_(who, ssl_opts);
 }
 
 }  // namespace services_com

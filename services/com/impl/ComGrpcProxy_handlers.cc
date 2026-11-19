@@ -1192,33 +1192,19 @@ public:
         // AUTHENTICATED PROVISIONING (hardening C2). Provision rewrites the rig's identity and
         // key material, so on a deployed rig (mutual TLS mandatory) only the ground station may call
         // it: the verified client certificate's CN must be in THEIA_COM_PROVISION_CN (default
-        // "fleet-gs"). A developer run (no THEIA_COM_TLS_REQUIRED) is unchanged.
-        {
-            const char* req_tls = std::getenv("THEIA_COM_TLS_REQUIRED");
-            const char* insecure = std::getenv("THEIA_COM_INSECURE");
-            const bool deployed = req_tls && *req_tls && std::string(req_tls) != "0";
-            const bool debug = insecure && std::string(insecure) == "1";
-            std::string peer_cn;
-            if (ctx && ctx->auth_context()) {
-                auto cns = ctx->auth_context()->FindPropertyValues("x509_common_name");
-                if (!cns.empty()) peer_cn.assign(cns[0].data(), cns[0].size());
-            }
-            const char* allow_env = std::getenv("THEIA_COM_PROVISION_CN");
-            const std::string allow = (allow_env && *allow_env) ? allow_env : "fleet-gs";
-            bool cn_ok = false;
-            for (size_t i = 0; !peer_cn.empty() && i <= allow.size();) {
-                size_t j = allow.find(',', i);
-                if (j == std::string::npos) j = allow.size();
-                if (allow.compare(i, j - i, peer_cn) == 0) { cn_ok = true; break; }
-                i = j + 1;
-            }
-            if (deployed && !cn_ok) {
+        // "fleet-gs"). The per-RPC role check (com_authz.hpp, role gs + this CN) already refused any
+        // other caller before this handler runs; this is the same gate again, kept in the handler so
+        // it holds even if the server were built without the role processor. A developer run (no
+        // THEIA_COM_TLS_REQUIRED) is unchanged.
+        if (services_com::tls_required_()) {
+            const auto caller = services_com::caller_from_auth_context(
+                ctx ? ctx->auth_context().get() : nullptr);
+            if (!services_com::provision_cn_allowed(caller.cn)) {
                 std::fprintf(stderr, "[com] Provision REFUSED: peer CN '%s' is not a provisioner\n",
-                             peer_cn.c_str());
+                             caller.cn.c_str());
                 return grpc::Status(grpc::StatusCode::PERMISSION_DENIED,
                                     "Provision: the caller's certificate is not a provisioner");
             }
-            (void)debug;   // a developer run (neither variable) keeps the old open behaviour
         }
         const std::string machine = req->machine().empty()
             ? this_machine() : req->machine();

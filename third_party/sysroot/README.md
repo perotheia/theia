@@ -8,6 +8,9 @@ recreate them on demand.
 | Script | Target | Result |
 |---|---|---|
 | `setup_rpi4.sh` | Raspberry Pi 4 (aarch64, Debian 12 bookworm) | `rpi4/` (~444 MB) |
+| `setup_orin.sh` | Jetson Orin (aarch64, Ubuntu 22.04 jammy) | `orin/` |
+| `setup_ai64.sh` | BeagleBone AI-64 (aarch64, Debian 13 trixie, glibc 2.41) | `ai64/` (~800 MB; may be a symlink, or `THEIA_AI64_SYSROOT`) — build with `bazel build --config=ai64 …`; needs an Ubuntu 24.04+ build host |
+| `setup_codegen_x86.sh` | host-x86 protoc 3.21.12 / grpc 1.51 toolset (called by `setup_ai64.sh`) | `../codegen-bookworm-x86/` |
 
 > Sysroot suite is **bookworm**, not the Pi's trixie: the host's gcc-11/12 cross
 > toolchain can't resolve trixie's glibc-2.38 / GLIBCXX-3.4.32 symbols. bookworm

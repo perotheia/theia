@@ -2019,7 +2019,12 @@ def cmd_dist(args: list[str]) -> int:
         (//dist/manifest:<host>_pkg, rules/dist_ipk.bzl) — the self-contained app
         bundle Ansible copies + dpkg -i's. Staged next to the machine's manifest.
 
-    `theia release <target>` builds via this verb then pushes to S3."""
+    `theia release <target>` builds via this verb then pushes to S3.
+
+    NO-KEYS GATE: every staged .deb is scanned (tools/no_keys_gate.py); key
+    material (a *.key, a private-key PEM, an O=Theia Dev certificate, tskey-, S3
+    secrets — e.g. through a manifest resource) fails the build and the .deb is
+    removed. --allow-dev-certs tolerates the dev cert set (LOCAL bundle only)."""
     import json
     if "-h" in args or "--help" in args:
         print(cmd_dist.__doc__, file=sys.stderr)
@@ -2056,13 +2061,15 @@ def cmd_dist(args: list[str]) -> int:
     # (pack one self-contained .deb per machine).
     machines = mdoc["machines"]
     is_runtime = not mdoc.get("apps")
+    allow_dev = _ALLOW_DEV_CERTS in args
 
     if is_runtime:
-        return _dist_runtime(mdir, machines, arch_override)
-    return _dist_app(mdir, machines, arch_override)
+        return _dist_runtime(mdir, machines, arch_override, allow_dev)
+    return _dist_app(mdir, machines, arch_override, allow_dev)
 
 
-def _dist_app(mdir: Path, machines: list, arch_override) -> int:
+def _dist_app(mdir: Path, machines: list, arch_override,
+              allow_dev: bool = False) -> int:
     """APP manifest → ONE self-contained .deb per machine (the Ansible bundle).
 
     //dist/manifest:<host>_pkg (rules/dist_ipk.bzl), cross-compiled per machine.
@@ -2113,6 +2120,10 @@ def _dist_app(mdir: Path, machines: list, arch_override) -> int:
         # so — like _inject_services_config — we repack the built deb here.
         if (rc := _inject_resources(staged, mdir / host)) != 0:
             rc_final = rc
+            continue
+        if not _keys_gate("theia dist", [staged], allow_dev_certs=allow_dev,
+                          remove_on_fail=True):
+            rc_final = 1
             continue
         print(f"theia dist: staged {staged} ({staged.stat().st_size} bytes)")
     return rc_final
@@ -2402,7 +2413,8 @@ def _fix_deb_depends(deb: Path) -> int:
         _sh.rmtree(work, ignore_errors=True)
 
 
-def _dist_runtime(mdir: Path, machines: list, arch_override) -> int:
+def _dist_runtime(mdir: Path, machines: list, arch_override,
+                  allow_dev: bool = False) -> int:
     """RUNTIME manifest → the framework theia-runtime + theia-services Deb set.
 
     The manifest is ASSOCIATED with the runtime plane's prebuilt package targets
@@ -2472,6 +2484,9 @@ def _dist_runtime(mdir: Path, machines: list, arch_override) -> int:
             # sonames regardless of the bazel --define. No-op for the arm64 cross
             # build (static closure, no ELF sys-deps). See _fix_deb_depends.
             _fix_deb_depends(dst_f)
+            if not _keys_gate("theia dist", [dst_f], allow_dev_certs=allow_dev,
+                              remove_on_fail=True):
+                rc_final = 1
     return rc_final
 
 
@@ -2572,6 +2587,10 @@ def _build_framework_deb(out_dir: Path, version: str = "0.3.0") -> int:
     # `theia` shim and the deb bin shim resolve it the same way.
     (opt / "tools").mkdir(parents=True, exist_ok=True)
     shutil.copy2(THEIA_ROOT / "tools" / "theia.py", opt / "tools" / "theia.py")
+    # The no-keys gate theia.py runs on every package it builds (hardening H):
+    # without it an installed `theia release-swp` would refuse to ship anything.
+    shutil.copy2(THEIA_ROOT / "tools" / "no_keys_gate.py",
+                 opt / "tools" / "no_keys_gate.py")
     for s in ("setup.sh",):
         shutil.copy2(pkg_root / s, opt / s)
     # tdb / rtdb — the Python live-inspect CLIs. They're NOT bazel artifacts and
@@ -2686,6 +2705,65 @@ def _du_kb(path: Path) -> int:
         return 0
 
 
+# ── NO KEY MATERIAL IN ANY PACKAGE (hardening H) ─────────────────────────────
+# Every packaging verb (release, release-swp, release-role, dist, build-debs,
+# models push) runs its finished artifacts through tools/no_keys_gate.py — ONE
+# scanner — and FAILS on a finding: *.key / private-key PEM / O=Theia Dev certs /
+# tskey- / S3 secrets, in a directory or any archive (tar/zip/.deb/.mender,
+# nested). `--allow-dev-certs` tolerates only the dev cert set (certs/ dirs) and
+# only for a LOCAL bundle: every verb refuses it together with --s3.
+_ALLOW_DEV_CERTS = "--allow-dev-certs"
+
+
+def _keys_gate(verb: str, paths: "list", allow_dev_certs: bool = False,
+               remove_on_fail: bool = False) -> bool:
+    """Run the no-keys gate over `paths` (dirs or archives). True = may ship.
+    On a finding the message names the file inside each artifact; with
+    remove_on_fail the offending artifacts are deleted so they cannot be pushed
+    by hand. Fails CLOSED if the scanner itself cannot be loaded."""
+    try:
+        import no_keys_gate as _nk
+    except ImportError:
+        try:
+            import importlib.util
+            spec = importlib.util.spec_from_file_location(
+                "no_keys_gate", Path(__file__).resolve().parent / "no_keys_gate.py")
+            _nk = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(_nk)   # type: ignore[union-attr]
+        except (OSError, AttributeError, ImportError) as e:
+            print(f"{verb}: NO-KEYS GATE cannot load tools/no_keys_gate.py ({e}) "
+                  "— refusing to ship unscanned artifacts.", file=sys.stderr)
+            return False
+    paths = [Path(p) for p in paths if p]
+    if not paths:
+        return True
+    labels = {}
+    for p in paths:
+        try:
+            labels[str(p)] = str(p.relative_to(WORKSPACE))
+        except ValueError:
+            labels[str(p)] = str(p)
+    ok = _nk.gate(paths, verb=verb, allow_dev_certs=allow_dev_certs,
+                  labels=labels)
+    if not ok and remove_on_fail:
+        for p in paths:
+            if p.is_file():
+                p.unlink()
+                print(f"{verb}: removed {labels[str(p)]} (failed the no-keys gate)",
+                      file=sys.stderr)
+    return ok
+
+
+def _refuse_dev_certs_with_s3(verb: str, args: "list[str]", s3_url) -> bool:
+    """--allow-dev-certs is for a LOCAL dev bundle; never on a publish."""
+    if _ALLOW_DEV_CERTS in args and s3_url:
+        print(f"{verb}: {_ALLOW_DEV_CERTS} is for a LOCAL dev bundle only and is "
+              "refused with --s3 (a published package never carries key material).",
+              file=sys.stderr)
+        return True
+    return False
+
+
 def _release_runtime_plane(target: str, args: list[str]) -> int:
     """Build (via `theia dist <target>`) + push the RUNTIME plane to S3.
 
@@ -2712,10 +2790,14 @@ def _release_runtime_plane(target: str, args: list[str]) -> int:
     s3_url = _opt("--s3")
     bucket = _opt("--bucket") or os.environ.get("THEIA_RUNTIME_BUCKET", "theia-runtime")
     arch_opt = _opt("--arch")
+    allow_dev = _ALLOW_DEV_CERTS in args
+    if _refuse_dev_certs_with_s3("theia release", args, s3_url):
+        return 2
 
     # Build the runtime debs into dist/debian/ via the shared dist path (passes
     # --arch through so the runtime is released for the requested arch/os).
-    dist_args = [target] + (["--arch", arch_opt] if arch_opt else [])
+    dist_args = ([target] + (["--arch", arch_opt] if arch_opt else [])
+                 + ([_ALLOW_DEV_CERTS] if allow_dev else []))
     if (rc := cmd_dist(dist_args)) != 0:
         print("theia release: dist build failed — nothing to push.",
               file=sys.stderr)
@@ -2731,6 +2813,8 @@ def _release_runtime_plane(target: str, args: list[str]) -> int:
         return 1
 
     if not s3_url:
+        if not _keys_gate("theia release", debs, allow_dev_certs=allow_dev):
+            return 1
         print(f"theia release: built {len(debs)} runtime .deb(s) → {deb_dir}/ "
               "(no --s3 → local only).", file=sys.stderr)
         for d in debs:
@@ -2746,9 +2830,6 @@ def _release_runtime_plane(target: str, args: list[str]) -> int:
            "AWS_SECRET_ACCESS_KEY": os.environ.get("MINIO_PASSWORD", "theiaminio"),
            "AWS_DEFAULT_REGION": "us-east-1"}
     aws = ["aws", "--endpoint-url", s3_url, "s3"]
-    subprocess.run([*aws, "mb", f"s3://{bucket}"], env=env)  # idempotent
-    rc_final = 0
-    pushed = []
     # Group debs by KEY (<ver>-<abi>) — a mixed-arch runtime manifest lands each
     # board's slice under its own key. The abi is the REGISTRY abi_key when
     # --arch names a registry target (bookworm-arm64 vs focal-arm64 vs
@@ -2780,6 +2861,67 @@ def _release_runtime_plane(target: str, args: list[str]) -> int:
             continue
         abi = _abi_override or _fn_arch
         by_key.setdefault(f"{ver}-{abi}", []).append((d, abi))
+
+    # ── Everything this release uploads is ASSEMBLED FIRST and run through the
+    # no-keys gate before a single byte leaves the host: the debs, the manifest
+    # tree and the manifest tarball per key. The manifest is uploaded from a COPY
+    # (dist/debian/_manifest-upload/) that already lacks debs / BUILD files /
+    # certs/ / *.key, so the scanned set IS the uploaded set (2026-11-19: the
+    # dev PRIVATE keys in <machine>/certs/ reached the anonymously readable
+    # runtime bucket).
+    import tarfile
+    man_dir = WORKSPACE / _MANIFEST_DIR
+    man_up = deb_dir / "_manifest-upload"
+    if man_up.exists():
+        shutil.rmtree(man_up)
+    man_tgzs: dict = {}
+    if man_dir.is_dir():
+        for p in sorted(man_dir.rglob("*")):
+            rel = p.relative_to(man_dir)
+            if (p.is_file() and not p.is_symlink()
+                    and p.suffix not in (".deb", ".key")
+                    and p.name != "BUILD.bazel" and "certs" not in rel.parts):
+                (man_up / rel).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(p, man_up / rel)
+        man_up.mkdir(parents=True, exist_ok=True)
+        # ALSO ship the manifest as ONE tarball so colony can pull it with a
+        # single HTTP GET + unpack (MinIO buckets are anon-readable over HTTP
+        # but not S3-LIST'able without the aws cli, and per-file get_url is
+        # fragile). manifest.tar.gz = the upload copy above.
+        ota_dir = THEIA_ROOT / "platform" / "runtime" / "ota"
+        for key in by_key:
+            man_tgz = deb_dir / f"manifest-{key}.tar.gz"
+            with tarfile.open(man_tgz, "w:gz") as tf:
+                for p in sorted(man_up.rglob("*")):
+                    if p.is_file():
+                        tf.add(p, arcname=str(p.relative_to(man_up)))
+                # The on-device OTA assets theia authors (platform/runtime/ota/):
+                # the launcher (theia-run.sh) + the Mender update-modules
+                # (theia-swp/theia-app/theia-release) + state-scripts. Travel them
+                # WITH the S3 manifest so colony pushes them to EVERY rig — container
+                # and physical board alike — with no theia checkout on the
+                # controller. colony reads them from the S3 cache (ota/…).
+                if ota_dir.is_dir():
+                    # theia-run.sh at the tarball root (colony's theia_run_src
+                    # default is <cache>/theia-run.sh) + ota/ for modules+scripts.
+                    run_sh = ota_dir / "theia-run.sh"
+                    if run_sh.is_file():
+                        tf.add(run_sh, arcname="theia-run.sh")
+                    for p in sorted(ota_dir.rglob("*")):
+                        if p.is_file():
+                            tf.add(p, arcname="ota/" + str(p.relative_to(ota_dir)))
+            man_tgzs[key] = man_tgz
+    gated = ([d for es in by_key.values() for d, _ in es]
+             + ([man_up] if man_up.is_dir() else []) + list(man_tgzs.values()))
+    if not _keys_gate("theia release", gated):
+        for t in man_tgzs.values():
+            t.unlink(missing_ok=True)
+        print("theia release: NOTHING pushed to S3.", file=sys.stderr)
+        return 1
+
+    subprocess.run([*aws, "mb", f"s3://{bucket}"], env=env)  # idempotent
+    rc_final = 0
+    pushed = []
     for key, entries in by_key.items():
         deb_meta = []
         for d, abi in entries:
@@ -2817,49 +2959,21 @@ def _release_runtime_plane(target: str, args: list[str]) -> int:
         # <key>/manifest/<machine>/ from S3 (fetch-manifest-s3.yml). Ship the whole
         # serialized tree under the runtime key so a fresh board is self-serving
         # from S3: `theia manifest <target>` wrote it to dist/manifest/ (cmd_dist
-        # ran it), so sync that dir. `aws s3 sync` uploads machines.json +
-        # <machine>/{machine,execution,executor,application}.json + config/.
-        man_dir = WORKSPACE / _MANIFEST_DIR
-        if man_dir.is_dir():
-            if subprocess.run([*aws, "sync", str(man_dir),
+        # ran it), so sync its gated upload copy (man_up, built above). `aws s3
+        # sync` uploads machines.json + <machine>/{machine,execution,executor,
+        # application}.json + config/.
+        if key in man_tgzs:
+            if subprocess.run([*aws, "sync", str(man_up),
                                f"s3://{bucket}/{key}/manifest",
+                               # belt + braces: the copy has none of these already.
                                "--exclude", "*.deb", "--exclude", "BUILD.bazel",
-                               # NEVER publish key material: the staged dev certs + PRIVATE KEYS
-                               # (<machine>/certs/) are for a local `theia start`; the runtime plane
-                               # is read by every rig (hardening C3).
                                "--exclude", "*/certs/*", "--exclude", "*.key"],
                               env=env).returncode != 0:
                 rc_final = 1
             else:
-                print(f"$ aws sync {man_dir} → s3://{bucket}/{key}/manifest/",
+                print(f"$ aws sync {man_up} → s3://{bucket}/{key}/manifest/",
                       file=sys.stderr)
-            # ALSO ship the manifest as ONE tarball so colony can pull it with a
-            # single HTTP GET + unpack (MinIO buckets are anon-readable over HTTP
-            # but not S3-LIST'able without the aws cli, and per-file get_url is
-            # fragile). manifest.tar.gz = the whole tree minus debs/BUILD.
-            import tarfile
-            man_tgz = deb_dir / f"manifest-{key}.tar.gz"
-            with tarfile.open(man_tgz, "w:gz") as tf:
-                for p in sorted(man_dir.rglob("*")):
-                    if (p.is_file() and p.suffix not in (".deb", ".key")
-                            and p.name != "BUILD.bazel" and "certs" not in p.relative_to(man_dir).parts):
-                        tf.add(p, arcname=str(p.relative_to(man_dir)))
-                # The on-device OTA assets theia authors (platform/runtime/ota/):
-                # the launcher (theia-run.sh) + the Mender update-modules
-                # (theia-swp/theia-app/theia-release) + state-scripts. Travel them
-                # WITH the S3 manifest so colony pushes them to EVERY rig — container
-                # and physical board alike — with no theia checkout on the
-                # controller. colony reads them from the S3 cache (ota/…).
-                ota_dir = THEIA_ROOT / "platform" / "runtime" / "ota"
-                if ota_dir.is_dir():
-                    # theia-run.sh at the tarball root (colony's theia_run_src
-                    # default is <cache>/theia-run.sh) + ota/ for modules+scripts.
-                    run_sh = ota_dir / "theia-run.sh"
-                    if run_sh.is_file():
-                        tf.add(run_sh, arcname="theia-run.sh")
-                    for p in sorted(ota_dir.rglob("*")):
-                        if p.is_file():
-                            tf.add(p, arcname="ota/" + str(p.relative_to(ota_dir)))
+            man_tgz = man_tgzs[key]
             if subprocess.run([*aws, "cp", str(man_tgz),
                                f"s3://{bucket}/{key}/manifest.tar.gz"],
                               env=env).returncode != 0:
@@ -2890,6 +3004,11 @@ def cmd_release(args: list[str]) -> int:
     To BUILD the local dev .deb set (framework/runtime/services/rf) — no S3, no
     target — use `theia build-debs`. That used to be `theia release` with no
     target; it was split out so this verb means exactly one thing (S3 push).
+
+    NO-KEYS GATE: the debs, the manifest upload copy (never certs/ or *.key) and
+    manifest.tar.gz are scanned by tools/no_keys_gate.py BEFORE any upload; a
+    finding fails the release and nothing is pushed. `--allow-dev-certs` tolerates
+    the dev cert set for a LOCAL build only (refused with --s3).
 
     NOTE: patch-versioning is an APP-PLANE concern and lives on `release-swp`. The
     RUNTIME plane is FIXED per install — rolling it means a re-provision (colony/
@@ -2939,7 +3058,11 @@ def cmd_build_debs(args: list[str]) -> int:
       --ipk              ALSO emit the embedded/opkg .ipk under dist/ipkg/.
       --runtime          ONLY the two on-device debs (theia-runtime +
                          theia-services), skipping framework + rf + -dev.
-      --python-only      skip the C++/bazel set (just framework + rf wheels)."""
+      --python-only      skip the C++/bazel set (just framework + rf wheels).
+      --allow-dev-certs  tolerate the dev cert set in the no-keys gate (LOCAL).
+
+    NO-KEYS GATE: every package written (debs, ipks, wheels) is scanned by
+    tools/no_keys_gate.py; key material fails the build."""
     import shutil
 
     if "-h" in args or "--help" in args:
@@ -2998,6 +3121,10 @@ def cmd_build_debs(args: list[str]) -> int:
             return rc
 
         if python_only:
+            if not _keys_gate("theia build-debs",
+                              sorted(fw_out.glob("*.deb")) + sorted(rf_out.glob("*.whl")),
+                              allow_dev_certs=_ALLOW_DEV_CERTS in args):
+                return 1
             print(f"theia build-debs: python wheels → {fw_out}, {rf_out}",
                   file=sys.stderr)
             return 0
@@ -3058,6 +3185,12 @@ def cmd_build_debs(args: list[str]) -> int:
             shutil.copy2(f, dst / f.name)
             n_ipk += 1
 
+    # NO-KEYS GATE over everything this verb wrote (debs, ipks, wheels).
+    _built = [f for d in (deb_dir, ipk_dir) if d.is_dir()
+              for f in sorted(d.glob("*/*")) if f.suffix in (".deb", ".ipk", ".whl")]
+    if not _keys_gate("theia build-debs", _built,
+                      allow_dev_certs=_ALLOW_DEV_CERTS in args):
+        return 1
     msg = f"theia build-debs: {n_deb} .deb → {deb_dir}/"
     if want_ipk:
         msg += f", {n_ipk} .ipk → {ipk_dir}/"
@@ -3260,6 +3393,15 @@ def cmd_release_swp(args: list[str]) -> int:
                          regression-A/B path — install several versions, then
                          `theia release-flip <app>-<V>` re-aims current by hand.
                          NOT an OTA/Mender path; no S3, no GS.
+        --allow-dev-certs  carry the DEV cert set (dist/manifest/<m>/certs, keys
+                         included) into a LOCAL dev bundle. Refused with --s3.
+                         Default: the dev certs are NOT shipped (rigs serve mTLS
+                         from the fleet PKI in /etc/theia/pki).
+
+    NO-KEYS GATE: the payload tarball, the .mender and the --deb are scanned by
+    tools/no_keys_gate.py; a *.key, a private-key PEM, an O=Theia Dev certificate,
+    a tskey- or an S3 secret anywhere in the payload (e.g. via --asset) FAILS the
+    release, the artifacts are removed and nothing is published.
 
     Output (ABI-keyed — <V> below is <swp-version>-<abi> for cross-built boards):
       dist/apps/<app>/<app>-<V>.mender   the Mender artifact (theia-swp module)
@@ -3378,6 +3520,11 @@ def cmd_release_swp(args: list[str]) -> int:
     # /opt/theia/releases/<name>-<ver>/, flip by hand with `theia release-flip`).
     # A dev-box regression-A/B path — NOT Mender/OTA. Implies no S3 requirement.
     want_deb = "--deb" in args
+    # --allow-dev-certs: a LOCAL dev bundle may carry the dev cert set; never a
+    # published SWP (the S3 package plane is read by every rig).
+    allow_dev = _ALLOW_DEV_CERTS in args
+    if _refuse_dev_certs_with_s3("theia release-swp", args, s3_url):
+        return 2
 
     # ── MAJOR (.art interface change): FORCE the runtime pin + a migration part. ──
     # A major SWP is not a free swap; it depends on a specific runtime and needs a
@@ -3717,16 +3864,23 @@ def cmd_release_swp(args: list[str]) -> int:
                         dst_fn.write_text(json.dumps(_ex, indent=2))
                     else:
                         _sh.copy2(msrc / fn, dst_fn)
-            # Dev mTLS certs: `theia manifest` staged the set under
-            # dist/manifest/<machine>/certs/. Carry it into the SWP payload so the
-            # deployed release serves mTLS (the read side — a dev `theia start` on
-            # the flipped current/config, or the GUI/rtdb — points at the same CA +
-            # client identity). Absent (a plaintext dev loop / fleet-cert rig that
-            # provisions certs out of band) → nothing to ship.
+            # Dev mTLS certs (`theia manifest` stages them under dist/manifest/
+            # <machine>/certs/, PRIVATE keys included) are NOT shipped: a deployed
+            # rig serves mTLS from the fleet PKI (/etc/theia/pki, key generated on
+            # the rig), and the theia-swp module no longer lays config/certs
+            # (hardening H). Only a LOCAL dev bundle carries them, on request.
             csrc = msrc / "certs"
             if csrc.is_dir():
-                cdst = stage / "manifest" / mname / "certs"
-                _sh.copytree(csrc, cdst, dirs_exist_ok=True)
+                if allow_dev:
+                    cdst = stage / "manifest" / mname / "certs"
+                    _sh.copytree(csrc, cdst, dirs_exist_ok=True)
+                    print(f"theia release-swp: --allow-dev-certs: dev cert set of "
+                          f"{mname} packed (LOCAL bundle — never publish)",
+                          file=sys.stderr)
+                else:
+                    print(f"theia release-swp: not shipping {csrc.relative_to(WORKSPACE)} "
+                          "(dev keys; rigs use the fleet PKI in /etc/theia/pki)",
+                          file=sys.stderr)
     # LAZY-RESOURCE descriptor: collect the `model:` resources this SWP's FCs
     # declared (from each machine's execution.json — where serialize-manifest emits
     # processes[].resources[]) into stage/manifest/models.json. The on-device
@@ -3835,6 +3989,13 @@ def cmd_release_swp(args: list[str]) -> int:
     import tarfile
     with tarfile.open(tarball, "w:gz") as tf:
         tf.add(stage, arcname=".")
+    # NO-KEYS GATE on the payload as it ships (the tarball IS the .mender payload
+    # and the source of the S3 manifest/ + migration/ syncs). Fail → removed.
+    if not _keys_gate("theia release-swp", [tarball], allow_dev_certs=allow_dev,
+                      remove_on_fail=True):
+        print("theia release-swp: REFUSED — key material in the SWP payload; "
+              "nothing packed or published.", file=sys.stderr)
+        return 1
 
     # --deb: wrap the SAME staged payload as a host-local release deb (dpkg -i →
     # /opt/theia/releases/<name>-<ver_key>/; flip by hand). Dev regression A/B, no
@@ -3843,6 +4004,9 @@ def cmd_release_swp(args: list[str]) -> int:
     if want_deb:
         deb = _build_swp_deb(stage, swp_name, app_ver, tgt["deb_arch"],
                              ver_key, out_dir)
+        if deb and not _keys_gate("theia release-swp", [deb],
+                                  allow_dev_certs=allow_dev, remove_on_fail=True):
+            return 1
         return 0 if deb else 1
 
     ma = _mender_artifact_bin()    # prefers the OpenSSL-1.1-shim wrapper on a host
@@ -3883,6 +4047,12 @@ def cmd_release_swp(args: list[str]) -> int:
                   "key; a fleet with ArtifactVerifyKey set will REJECT it. Run "
                   "`theia cert generate` first, or pass --sign-key / "
                   "$THEIA_SWP_SIGN_KEY)", file=sys.stderr)
+        # The .mender as built (tar of tars: header + data/0000.tar.gz + the
+        # loose --file parts) passes the same gate before it can be published.
+        if not _keys_gate("theia release-swp", [mender_out],
+                          allow_dev_certs=allow_dev, remove_on_fail=True):
+            tarball.unlink(missing_ok=True)
+            return 1
     else:
         print("theia release-swp: mender-artifact not installed — staged tree + "
               f"{tarball} written; pack on the GW.", file=sys.stderr)
@@ -4208,6 +4378,12 @@ def cmd_release_role(args: list[str]) -> int:
         --runtime-deb P  the theia-runtime .deb (the supervisor) to fold in too.
         --s3 URL         publish to the role plane on this MinIO (the bundle base).
         --mender-only    just write dist/roles/<role>-<V>.mender (no S3 push).
+        --allow-dev-certs  tolerate the dev cert set in the no-keys gate (LOCAL
+                         only; refused with --s3).
+
+    NO-KEYS GATE: the release tarball and the .mender are scanned by
+    tools/no_keys_gate.py before any publish; key material fails the build and
+    the artifact is removed.
 
     Output:
       dist/roles/<role>-<V>.mender   the role Mender artifact (theia-release module)
@@ -4238,8 +4414,11 @@ def cmd_release_role(args: list[str]) -> int:
     services_deb = _opt("--deb")
     runtime_deb = _opt("--runtime-deb")
     mender_only = "--mender-only" in args or not s3_url
+    allow_dev = _ALLOW_DEV_CERTS in args
     if not role:
         print("theia release-role: --role <board> required.", file=sys.stderr)
+        return 2
+    if _refuse_dev_certs_with_s3("theia release-role", args, s3_url):
         return 2
 
     ma = _mender_artifact_bin()
@@ -4291,6 +4470,11 @@ def cmd_release_role(args: list[str]) -> int:
         tarball = tdp / "release.tar.gz"
         with tarfile.open(tarball, "w:gz") as tf:
             tf.add(rel, arcname=".")
+        if not _keys_gate("theia release-role", [tarball],
+                          allow_dev_certs=allow_dev):
+            print("theia release-role: REFUSED — key material in the role "
+                  "payload; nothing packed or published.", file=sys.stderr)
+            return 1
 
         mender_out = out_dir / f"{artifact_name}.mender"
         rc = _run([ma, "write", "module-image",
@@ -4303,6 +4487,9 @@ def cmd_release_role(args: list[str]) -> int:
         if rc != 0:
             print("theia release-role: mender-artifact pack failed.", file=sys.stderr)
             return rc
+        if not _keys_gate("theia release-role", [mender_out],
+                          allow_dev_certs=allow_dev, remove_on_fail=True):
+            return 1
         print(f"theia release-role: wrote {mender_out} "
               f"(role={role} arch={arch} v{ver})", file=sys.stderr)
 
@@ -6751,6 +6938,12 @@ def cmd_models(args: list[str]) -> int:
             return 1
         vdir = model_root / ver
         key = f"{fleet}/{cat}/{name}/{ver}"
+        # NO-KEYS GATE: the metadata/ files are uploaded raw (git/system
+        # provenance can carry a token); scan them before the push. The weights
+        # are opaque tensors and are not scanned.
+        if (vdir / "metadata").is_dir() and not _keys_gate(
+                "theia models push", [vdir / "metadata"]):
+            return 1
         subprocess.run([*aws, "mb", f"s3://{bucket}"], env=env,
                        capture_output=True)   # idempotent
         pushed, meta_files = [], []

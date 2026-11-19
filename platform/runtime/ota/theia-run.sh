@@ -45,11 +45,6 @@ if [[ -f "$THEIA_ROOT_DIR/current/config/machines.json" ]]; then
     export THEIA_MACHINE_MANIFEST="${THEIA_MACHINE_MANIFEST:-$THEIA_ROOT_DIR/current/config}"
 fi
 
-# mTLS opt-in (mirrors tools/theia.py cmd_start): when the flipped release carries
-# certs (config/certs/, staged by `theia manifest` → carried in the SWP → laid by
-# the theia-swp module), export THEIA_COM_TLS_* so com serves mutual TLS and the
-# GUI/rtdb trust the same CA. Absent (a plaintext loop, or a fleet rig that
-# provisions certs out of band via the com bridge) → com stays plaintext.
 # DEPLOYED DEFAULT = MUTUAL TLS (hardening C1). The rig's own certificate comes from the fleet PKI
 # (colony tasks/pki-enroll.yml: /etc/theia/pki/{device.crt,device.key,ca.crt}; the key was generated on this
 # rig). With it com REQUIRES and verifies client certificates and refuses to start without TLS
@@ -69,12 +64,12 @@ else
     export THEIA_COM_TLS_REQUIRED=1
     echo "theia-run: mTLS REQUIRED but no fleet certificate in $_PKI (run the provision / pki-enroll); com will refuse to start. Debug: THEIA_COM_INSECURE=1" >&2
 fi
-_CERTS="$THEIA_ROOT_DIR/current/config/certs"
-if [[ -z "${THEIA_COM_TLS_CERT:-}" && "${THEIA_COM_INSECURE:-0}" != "1" && -f "$_CERTS/server.crt" && -f "$_CERTS/server.key" ]]; then
-    export THEIA_COM_TLS_CERT="${THEIA_COM_TLS_CERT:-$_CERTS/server.crt}"
-    export THEIA_COM_TLS_KEY="${THEIA_COM_TLS_KEY:-$_CERTS/server.key}"
-    [[ -f "$_CERTS/ca.crt" ]] && export THEIA_COM_TLS_CA="${THEIA_COM_TLS_CA:-$_CERTS/ca.crt}"
-    echo "theia-run: mTLS on — com serves TLS from $_CERTS" >&2
+# The fleet PKI above is the ONLY certificate source on a rig (hardening H): the
+# legacy current/config/certs (the DEV cert set an old SWP carried, keys included)
+# is never read. A rig that still has one is told to clean it up (docs:
+# platform/runtime/ota/README.md "No key material in packages").
+if [[ -d "$THEIA_ROOT_DIR/current/config/certs" ]]; then
+    echo "theia-run: WARNING — ignoring legacy $THEIA_ROOT_DIR/current/config/certs (dev certs from an old SWP); remove it, the rig uses $_PKI" >&2
 fi
 
 # THEIA_MACHINE_INSTANCE persistence: the board's TIPC instance is a DEPLOY fact

@@ -12,6 +12,7 @@ load("@rules_cc//cc:defs.bzl", "cc_library")
 load("@rules_foreign_cc//foreign_cc:defs.bzl", "cmake")
 load("@rpi4_sysroot//:path.bzl", "RPI4_SYSROOT")
 load("@orin_sysroot//:path.bzl", "ORIN_SYSROOT")
+load("@ai64_sysroot//:path.bzl", "AI64_CODEGEN_DIR", "AI64_SYSROOT")
 load(":patch_tree.bzl", "patched_source_tree")
 
 package(default_visibility = ["//visibility:public"])
@@ -62,6 +63,21 @@ _ETCD_CROSS_CACHE = select({
         "GRPC_CPP_PLUGIN": _CG_DIR_ORIN + "/bin/grpc_cpp_plugin",
         "_GRPC_CPP_PLUGIN_EXECUTABLE": _CG_DIR_ORIN + "/bin/grpc_cpp_plugin",
     },
+    # ai64 CROSS (trixie sysroot): the rpi4 shape — grpc 1.51.1 / protobuf
+    # 3.21.12 from the sysroot's own Debian packages, codegen by the SAME staged
+    # x86 toolset (trixie and bookworm carry the same releases).
+    "//rules/config:arm64_cross_ai64": {
+        "CMAKE_SYSROOT": AI64_SYSROOT,
+        "CMAKE_FIND_ROOT_PATH": AI64_SYSROOT,
+        "CMAKE_FIND_ROOT_PATH_MODE_PROGRAM": "NEVER",
+        "CMAKE_FIND_ROOT_PATH_MODE_LIBRARY": "ONLY",
+        "CMAKE_FIND_ROOT_PATH_MODE_INCLUDE": "ONLY",
+        "CMAKE_FIND_ROOT_PATH_MODE_PACKAGE": "ONLY",
+        "PKG_CONFIG_EXECUTABLE": "/usr/bin/pkg-config",
+        "Protobuf_PROTOC_EXECUTABLE": AI64_CODEGEN_DIR + "/bin/protoc",
+        "_PROTOBUF_PROTOC": AI64_CODEGEN_DIR + "/bin/protoc",
+        "_GRPC_CPP_PLUGIN_EXECUTABLE": AI64_CODEGEN_DIR + "/bin/grpc_cpp_plugin",
+    },
     "//rules/config:arm64_cross": {
         "CMAKE_SYSROOT": RPI4_SYSROOT,
         "CMAKE_FIND_ROOT_PATH": RPI4_SYSROOT,
@@ -100,6 +116,12 @@ _ETCD_CROSS_ENV = select({
                            ORIN_SYSROOT + "/usr/local/lib/pkgconfig",
         "PKG_CONFIG_SYSROOT_DIR": ORIN_SYSROOT,
         "LD_LIBRARY_PATH": _CG_DIR + "/lib",
+    },
+    "//rules/config:arm64_cross_ai64": {
+        "CCACHE_DISABLE": "1",
+        "PKG_CONFIG_PATH": AI64_SYSROOT + "/usr/lib/aarch64-linux-gnu/pkgconfig",
+        "PKG_CONFIG_SYSROOT_DIR": AI64_SYSROOT,
+        "LD_LIBRARY_PATH": AI64_CODEGEN_DIR + "/lib",
     },
     "//rules/config:arm64_cross": {
         "CCACHE_DISABLE": "1",

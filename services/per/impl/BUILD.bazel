@@ -5,6 +5,7 @@
 # won't reach in and squash that).
 
 load("@rules_cc//cc:defs.bzl", "cc_library")
+load("//third_party:absl_static.bzl", "ABSL_STATIC_GROUP_TRIXIE")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -88,6 +89,10 @@ cc_library(
             "-lssl", "-lcrypto", "-latomic", "-lrt", "-ldl", "-lpthread", "-lm",
         ],
         "//conditions:default": ["-labsl_synchronization"],
+    }) + select({
+        # trixie's abseil 20240722 has more archives than the list above.
+        "@pero_theia//rules/config:target_ai64": ABSL_STATIC_GROUP_TRIXIE,
+        "//conditions:default": [],
     }),
     # NOTE on cross-compile: etcd_store.cc includes the etcd-cpp-apiv3 headers
     # system-style (<etcd/SyncClient.hpp>); the foreign_cc cmake() exposes them

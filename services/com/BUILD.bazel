@@ -16,6 +16,7 @@
 # wire) — the deliberate two-codec, one-process design.
 
 load("@rules_cc//cc:defs.bzl", "cc_library")
+load("//third_party:absl_static.bzl", "ABSL_STATIC_GROUP_TRIXIE")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -40,6 +41,12 @@ _PROTOC_SETUP = select({
     # Orin cross: same staged x86 toolset (3.21/1.51 — matches the jammy
     # sysroot's from-source closure).
     "//rules/config:arm64_cross_orin": (
+        " protoc=$(location @theia_codegen//:protoc);" +
+        " grpc_plugin=$(location @theia_codegen//:grpc_cpp_plugin);" +
+        " export LD_LIBRARY_PATH=\"$$(dirname $$(dirname $$protoc))/lib:$${LD_LIBRARY_PATH:-}\";"
+    ),
+    # ai64 cross: trixie carries the same protobuf 3.21.12 / grpc 1.51.1.
+    "//rules/config:arm64_cross_ai64": (
         " protoc=$(location @theia_codegen//:protoc);" +
         " grpc_plugin=$(location @theia_codegen//:grpc_cpp_plugin);" +
         " export LD_LIBRARY_PATH=\"$$(dirname $$(dirname $$protoc))/lib:$${LD_LIBRARY_PATH:-}\";"
@@ -99,6 +106,11 @@ genrule(
     # system protoc (harmless to list them on host). See _PROTOC_SETUP above.
     tools = select({
         "//rules/config:arm64_cross_orin": [
+            "@theia_codegen//:protoc",
+            "@theia_codegen//:grpc_cpp_plugin",
+            "@theia_codegen//:libs",
+        ],
+        "//rules/config:arm64_cross_ai64": [
             "@theia_codegen//:protoc",
             "@theia_codegen//:grpc_cpp_plugin",
             "@theia_codegen//:libs",
@@ -233,5 +245,9 @@ cc_library(
             "-lgrpc++", "-lgrpc", "-lgpr", "-labsl_synchronization",
             "-lssl", "-lcrypto", "-lpthread",
         ],
+    }) + select({
+        # trixie's abseil 20240722 has more archives than the list above.
+        "@pero_theia//rules/config:target_ai64": ABSL_STATIC_GROUP_TRIXIE,
+        "//conditions:default": [],
     })
 )

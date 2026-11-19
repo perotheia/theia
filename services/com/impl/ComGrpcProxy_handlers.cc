@@ -1185,12 +1185,48 @@ public:
 class ProvisioningImpl final : public services::com::Provisioning::Service {
 public:
     grpc::Status Provision(
-            grpc::ServerContext*,
+            grpc::ServerContext* ctx,
             const services::com::ProvisionRequest* req,
             services::com::ProvisionReply* out) override {
         if (!req) return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "no request");
+        // AUTHENTICATED PROVISIONING (hardening C2). Provision rewrites the rig's identity and
+        // key material, so on a deployed rig (mutual TLS mandatory) only the ground station may call
+        // it: the verified client certificate's CN must be in THEIA_COM_PROVISION_CN (default
+        // "fleet-gs"). A developer run (no THEIA_COM_TLS_REQUIRED) is unchanged.
+        {
+            const char* req_tls = std::getenv("THEIA_COM_TLS_REQUIRED");
+            const char* insecure = std::getenv("THEIA_COM_INSECURE");
+            const bool deployed = req_tls && *req_tls && std::string(req_tls) != "0";
+            const bool debug = insecure && std::string(insecure) == "1";
+            std::string peer_cn;
+            if (ctx && ctx->auth_context()) {
+                auto cns = ctx->auth_context()->FindPropertyValues("x509_common_name");
+                if (!cns.empty()) peer_cn.assign(cns[0].data(), cns[0].size());
+            }
+            const char* allow_env = std::getenv("THEIA_COM_PROVISION_CN");
+            const std::string allow = (allow_env && *allow_env) ? allow_env : "fleet-gs";
+            bool cn_ok = false;
+            for (size_t i = 0; !peer_cn.empty() && i <= allow.size();) {
+                size_t j = allow.find(',', i);
+                if (j == std::string::npos) j = allow.size();
+                if (allow.compare(i, j - i, peer_cn) == 0) { cn_ok = true; break; }
+                i = j + 1;
+            }
+            if (deployed && !cn_ok) {
+                std::fprintf(stderr, "[com] Provision REFUSED: peer CN '%s' is not a provisioner\n",
+                             peer_cn.c_str());
+                return grpc::Status(grpc::StatusCode::PERMISSION_DENIED,
+                                    "Provision: the caller's certificate is not a provisioner");
+            }
+            (void)debug;   // a developer run (neither variable) keeps the old open behaviour
+        }
         const std::string machine = req->machine().empty()
             ? this_machine() : req->machine();
+        // the name becomes a directory: identifiers only (no '/', no '..')
+        if (machine.empty() || machine.size() > 63 ||
+            machine.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-") != std::string::npos ||
+            machine.find("..") != std::string::npos || machine[0] == '.' || machine[0] == '-')
+            return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "Provision: machine is not a valid name");
         const std::string base = manifest_dir(machine);
         const std::string certs = base + "/certs";
 

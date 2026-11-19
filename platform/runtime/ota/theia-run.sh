@@ -50,8 +50,27 @@ fi
 # the theia-swp module), export THEIA_COM_TLS_* so com serves mutual TLS and the
 # GUI/rtdb trust the same CA. Absent (a plaintext loop, or a fleet rig that
 # provisions certs out of band via the com bridge) → com stays plaintext.
+# DEPLOYED DEFAULT = MUTUAL TLS (hardening C1). The rig's own certificate comes from the fleet PKI
+# (colony tasks/pki-enroll.yml: /etc/theia/pki/{device.crt,device.key,ca.crt}; the key was generated on this
+# rig). With it com REQUIRES and verifies client certificates and refuses to start without TLS
+# (THEIA_COM_TLS_REQUIRED=1). Plaintext is an explicit DEBUG choice only: THEIA_COM_INSECURE=1 in the unit's
+# environment (colony never sets it); it is logged here and marked in $THEIA_ROOT_DIR/config/com-insecure.
+_PKI="${THEIA_PKI_DIR:-/etc/theia/pki}"
+rm -f "$THEIA_ROOT_DIR/config/com-insecure" 2>/dev/null || true
+if [[ "${THEIA_COM_INSECURE:-0}" == "1" ]]; then
+    unset THEIA_COM_TLS_REQUIRED
+    echo "theia-run: WARNING — THEIA_COM_INSECURE=1: com serves PLAINTEXT gRPC (debug only, never on a deployed rig)" >&2
+    date -u +%FT%TZ > "$THEIA_ROOT_DIR/config/com-insecure" 2>/dev/null || true
+elif [[ -r "$_PKI/device.crt" && -r "$_PKI/device.key" && -r "$_PKI/ca.crt" ]]; then
+    export THEIA_COM_TLS_CERT="$_PKI/device.crt" THEIA_COM_TLS_KEY="$_PKI/device.key" THEIA_COM_TLS_CA="$_PKI/ca.crt"
+    export THEIA_COM_TLS_REQUIRED=1
+    echo "theia-run: mTLS REQUIRED — com serves mutual TLS with the fleet certificate in $_PKI" >&2
+else
+    export THEIA_COM_TLS_REQUIRED=1
+    echo "theia-run: mTLS REQUIRED but no fleet certificate in $_PKI (run the provision / pki-enroll); com will refuse to start. Debug: THEIA_COM_INSECURE=1" >&2
+fi
 _CERTS="$THEIA_ROOT_DIR/current/config/certs"
-if [[ -f "$_CERTS/server.crt" && -f "$_CERTS/server.key" ]]; then
+if [[ -z "${THEIA_COM_TLS_CERT:-}" && "${THEIA_COM_INSECURE:-0}" != "1" && -f "$_CERTS/server.crt" && -f "$_CERTS/server.key" ]]; then
     export THEIA_COM_TLS_CERT="${THEIA_COM_TLS_CERT:-$_CERTS/server.crt}"
     export THEIA_COM_TLS_KEY="${THEIA_COM_TLS_KEY:-$_CERTS/server.key}"
     [[ -f "$_CERTS/ca.crt" ]] && export THEIA_COM_TLS_CA="${THEIA_COM_TLS_CA:-$_CERTS/ca.crt}"

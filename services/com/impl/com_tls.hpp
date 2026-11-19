@@ -214,6 +214,28 @@ inline bool engine_mode_key(const char* who, const std::string& slot,
 // Client cert is OPTIONAL in both TLS modes.
 //
 // `who` is the caller node name, for the one-line log.
+// DEPLOYMENT POLICY (hardening C1). A deployed rig's launcher (theia-run.sh) exports
+// THEIA_COM_TLS_REQUIRED=1: then com serves MUTUAL TLS or does not start. A missing certificate,
+// key or CA, or an empty crypto slot, is fatal (std::abort), never a silent plaintext fallback, and
+// client certificates are always required and verified against the CA. Plaintext exists only as an
+// explicit debug choice (THEIA_COM_INSECURE=1, see theia-run.sh), which removes REQUIRED and is
+// logged on every start. Without either variable (a developer's `theia start`) the old opt-in
+// behaviour stays.
+inline bool tls_required_() {
+    const char* e = std::getenv("THEIA_COM_TLS_REQUIRED");
+    return e && *e && std::string(e) != "0";
+}
+[[noreturn]] inline void tls_fatal_(const char* who, const char* why) {
+    std::fprintf(stderr, "[%s] gRPC: THEIA_COM_TLS_REQUIRED=1 and %s — refusing to serve "
+                 "(mutual TLS is mandatory on a deployed rig; debug: THEIA_COM_INSECURE=1)\n", who, why);
+    std::fflush(stderr);
+    std::abort();
+}
+inline std::shared_ptr<grpc::ServerCredentials> insecure_or_fatal_(const char* who, const char* why) {
+    if (tls_required_()) tls_fatal_(who, why);
+    return grpc::InsecureServerCredentials();
+}
+
 inline std::shared_ptr<grpc::ServerCredentials> make_server_creds(
         const char* who,
         const std::string& cert_param = "",
@@ -221,6 +243,8 @@ inline std::shared_ptr<grpc::ServerCredentials> make_server_creds(
         const std::string& ca_param = "") {
     const std::string ca_path  = tls_path_("THEIA_COM_TLS_CA",  ca_param);
     const std::string ca_cert  = read_file_(ca_path);   // "" = no CA pinning
+    if (ca_cert.empty() && tls_required_())
+        tls_fatal_(who, "no readable CA (THEIA_COM_TLS_CA): client certificates could not be verified");
 
     // MUTUAL auth when a CA is pinned: a CA means we know who may connect, so
     // REQUIRE + VERIFY the client cert (the GUI/rtdb present one signed by the
@@ -248,7 +272,7 @@ inline std::shared_ptr<grpc::ServerCredentials> make_server_creds(
             std::fprintf(stderr, "[%s] gRPC: crypto reports NO certificate for "
                          "slot '%s' (not deployed) — running INSECURE by "
                          "agreement\n", who, slot);
-            return grpc::InsecureServerCredentials();
+            return insecure_or_fatal_(who, "no usable server certificate/key");
         }
         if (agree == CryptoCert::UNREACHABLE) {
             // FAIL-CLOSED: we could not get crypto's authoritative answer, so we
@@ -284,7 +308,7 @@ inline std::shared_ptr<grpc::ServerCredentials> make_server_creds(
     if (cert_path.empty()) {
         std::fprintf(stderr, "[%s] gRPC: TLS off (no THEIA_COM_TLS_SLOT / "
                      "THEIA_COM_TLS_CERT) — InsecureServerCredentials\n", who);
-        return grpc::InsecureServerCredentials();
+        return insecure_or_fatal_(who, "no usable server certificate/key");
     }
     const std::string key_path = tls_path_("THEIA_COM_TLS_KEY", key_param);
     const std::string server_cert = read_file_(cert_path);
@@ -293,7 +317,7 @@ inline std::shared_ptr<grpc::ServerCredentials> make_server_creds(
         std::fprintf(stderr, "[%s] gRPC: TLS requested but cert/key unreadable "
                      "(cert=%s key=%s) — falling back to INSECURE\n",
                      who, cert_path.c_str(), key_path.c_str());
-        return grpc::InsecureServerCredentials();
+        return insecure_or_fatal_(who, "no usable server certificate/key");
     }
 
     grpc::SslServerCredentialsOptions ssl_opts(client_auth);

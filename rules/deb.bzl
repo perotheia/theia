@@ -18,6 +18,12 @@ pkg_deb(format="ipk") for back-compat.
 `files` is the single-file → explicit-dest map (binaries, scripts); `data` +
 `prefix` stages whole source/header trees preserving their workspace-relative
 path. Both land in the same data.tar.gz.
+
+NO-KEYS GATE (hardening H): before packing, the staged tree is scanned by
+tools/no_keys_gate.py — a *.key, a private-key PEM, an O=Theia Dev certificate,
+a tskey- or an S3 secret anywhere in the package FAILS the build action (the
+message names the file). There is no opt-out at this level: the packaged debs are
+release artifacts.
 """
 
 # Bazel CPU constraint value → arch name, per format.
@@ -116,6 +122,7 @@ def _pkg_deb_impl(ctx):
         )
 
     # Installed-Size is in KiB of the staged data tree (dpkg convention).
+    gate = ctx.file._keys_gate
     script = (
         "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n" +
         "set -e\n" +
@@ -126,6 +133,8 @@ def _pkg_deb_impl(ctx):
         "CTRL=\"$TMP/ctrl\"\n" +
         "mkdir -p \"$STAGE\" \"$CTRL\"\n" +
         "\n".join(copy_cmds) + "\n" +
+        # NO-KEYS GATE on exactly what is about to be packed.
+        "python3 '" + gate.path + "' --label '" + deb_name + "' \"$STAGE\"\n" +
         "INSTALLED_KB=$(du -sk \"$STAGE\" | cut -f1)\n" +
         # control rendered at action time so Installed-Size reflects the stage.
         "cat > \"$CTRL/control\" << __CONTROL_EOF__\n" +
@@ -148,7 +157,7 @@ def _pkg_deb_impl(ctx):
 
     ctx.actions.run_shell(
         command = script,
-        inputs = depset(src_files),
+        inputs = depset(src_files + [gate]),
         outputs = [out_deb],
         mnemonic = "PkgDeb",
         progress_message = "PkgDeb " + deb_name,
@@ -182,6 +191,11 @@ pkg_deb = rule(
         # "deb" (default, Debian arch names + Installed-Size) or "ipk" (opkg arch
         # names, leaner control). Same archive either way.
         "format": attr.string(default = "deb", values = ["deb", "ipk"]),
+        # The no-keys scanner (stdlib python) run over the staged tree.
+        "_keys_gate": attr.label(
+            default = Label("//tools:no_keys_gate.py"),
+            allow_single_file = True,
+        ),
     },
 )
 

@@ -144,6 +144,11 @@ jobs:
           done
           ls -la out/
 
+      # NO KEY MATERIAL IN ANY PACKAGE (hardening H): the same scanner theia.py
+      # runs (tools/no_keys_gate.py) over exactly what is uploaded. Fails the job.
+      - name: No-keys gate
+        run: python3 tools/no_keys_gate.py out/*.deb
+
       - uses: actions/upload-artifact@v4
         with:
           name: theia-deb-ubuntu${{ matrix.ubuntu }}
@@ -209,6 +214,9 @@ jobs:
           base="$(basename "$f" .deb)"
           cp "$f" "out/${base%_*}_ubuntu${{ matrix.ubuntu }}_${base##*_}.deb"
           ls -la out/
+
+      - name: No-keys gate
+        run: python3 tools/no_keys_gate.py out/*.deb
 
       - uses: actions/upload-artifact@v4
         with:

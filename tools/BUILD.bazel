@@ -11,5 +11,10 @@ package(default_visibility = ["//visibility:public"])
 # An executable file. Genrules reference via $(rootpath
 # //tools:artheia_wrapper.sh) and invoke as `bash $(rootpath ...)`.
 exports_files(
-    ["artheia_wrapper.sh"],
+    [
+        "artheia_wrapper.sh",
+        # The no-keys gate (hardening H): rules/deb.bzl runs it over every
+        # staged .deb/.ipk tree; theia.py imports it for every packaging verb.
+        "no_keys_gate.py",
+    ],
 )

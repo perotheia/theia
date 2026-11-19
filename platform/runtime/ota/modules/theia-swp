@@ -387,10 +387,13 @@ _stage_and_flip() {
         cp -a "$f" "$stage/config/$b"
     done
     [ -f "$work/manifest/machines.json" ] && cp -a "$work/manifest/machines.json" "$stage/config/machines.json"
-    # Dev mTLS certs (if the SWP carries them): land them at config/certs/ so a dev
-    # `theia start` on the flipped release exports THEIA_COM_TLS_* + com serves mTLS.
-    # Fleet rigs provision certs out of band (the com bridge cert path) — absent here.
-    [ -d "$work/$mdir/certs" ] && { mkdir -p "$stage/config/certs"; cp -a "$work/$mdir/certs/." "$stage/config/certs/"; }
+    # NO key material from a package (hardening H): the rig serves mTLS from the
+    # fleet PKI in /etc/theia/pki (key generated on the rig, pki-enroll). An SWP
+    # that still carries a certs/ dir (an old or --allow-dev-certs build) is NOT
+    # laid into config/certs — nothing on the rig reads config/certs any more.
+    if [ -d "$work/$mdir/certs" ]; then
+        echo "theia-swp: WARNING — payload carries $mdir/certs/ (dev certs); NOT installed (the rig uses /etc/theia/pki)" >&2
+    fi
     echo "$ver" > "$stage/.mender_version"
     echo "theia-swp: staged SWP release $ver → $stage (services from $(basename "$base_rel_dir"))"
 

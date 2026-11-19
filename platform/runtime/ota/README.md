@@ -90,6 +90,53 @@ validation block:
   `ArtifactRollback`. `THEIA_OTA_HEALTH_WAIT_S=0` disables the gate (lab only).
 - **Rollback with no `previous`** exits non-zero (`theia-release`, `theia-swp`).
 
+## No key material in packages (hardening H)
+
+No software package theia builds carries a private key or the dev CA. One
+scanner, `tools/no_keys_gate.py`, gates every packaging path and FAILS the build
+on a `*.key` / `*.p12` / `*.pfx`, a `*.pem` with `PRIVATE KEY`, any PEM private
+key (RSA/EC/DSA/ENCRYPTED/OPENSSH/PGP) in any file, a certificate with
+`O=Theia Dev`, a `tskey-` Tailscale key, an AWS key id or an S3/MinIO secret
+assignment, in a directory or any archive (tar/tgz/zip/whl/.deb/.ipk/.mender,
+nested, zstd included). The message names the file inside the artifact.
+
+| path | gated |
+|---|---|
+| `theia release` | runtime debs + manifest upload copy + `manifest.tar.gz`, before any upload |
+| `theia release-swp` | payload tarball, `.mender`, `--deb`; failing artifacts are removed |
+| `theia release-role` | release tarball + `.mender` |
+| `theia dist` | every staged `.deb` (app per-machine and runtime) |
+| `theia build-debs` | every `.deb` / `.ipk` / wheel written |
+| `theia models push` | the `metadata/` files |
+| bazel `pkg_deb` (`rules/deb.bzl`) | the staged tree, inside the build action |
+| CI `release-deb.yml` | every `.deb` before upload |
+
+`--allow-dev-certs` tolerates the dev cert set (dev-CA certs + keys inside a
+`certs/` dir) for a LOCAL dev bundle; every verb refuses it with `--s3`.
+`release-swp` no longer copies `dist/manifest/<machine>/certs` into the SWP unless
+`--allow-dev-certs` is given.
+
+On the rig: the `theia-swp` module no longer lays `config/certs` (it warns if a
+payload still carries `certs/`), and `theia-run.sh` reads certificates ONLY from
+the fleet PKI (`/etc/theia/pki/{device.crt,device.key,ca.crt}`); the legacy
+`current/config/certs` branch is gone. A rig without a fleet certificate now
+refuses to start com (`THEIA_COM_TLS_REQUIRED=1`) instead of falling back to the
+dev certs: run the provision / `pki-enroll` first (debug only: `THEIA_COM_INSECURE=1`).
+
+**Migration for rigs that have the old certs.** Rigs installed from an SWP built
+before this change hold the dev cert set, PRIVATE keys included, in
+`/opt/theia/releases/<ver>/config/certs/` (and `current/config/certs` through the
+symlink); `theia-run.sh` logs `ignoring legacy …/config/certs` while one exists.
+1. Enroll the rig in the fleet PKI (colony `tasks/pki-enroll.yml`) BEFORE the
+   next restart, so com finds `/etc/theia/pki`.
+2. Remove the dev material: `rm -rf /opt/theia/releases/*/config/certs`.
+3. Treat the dev CA as compromised: it was published (2026-11-19, runtime bucket);
+   nothing may trust `O=Theia Dev` outside a developer's own box.
+
+Follow-up (colony, NOT done here): add a cleanup task to the orchestrate play that
+removes `<manifest>/certs/*.key` (and `/opt/theia/releases/*/config/certs`) from
+every rig and from the controller's S3 manifest cache.
+
 Tests (normal user, host or build container, no root, nothing outside a temp dir):
 
 ```sh

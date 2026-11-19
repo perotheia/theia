@@ -26,6 +26,7 @@ Extra args after the verb pass through (e.g. `theia rig up central`,
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -3397,6 +3398,17 @@ def cmd_release_swp(args: list[str]) -> int:
                          included) into a LOCAL dev bundle. Refused with --s3.
                          Default: the dev certs are NOT shipped (rigs serve mTLS
                          from the fleet PKI in /etc/theia/pki).
+        --health P       ship the executable P as the SWP's commit-gate `health`
+                         hook (default: apps/<app>/health if it exists). On the rig
+                         it runs after the app processes are stable: as user theia,
+                         cwd = the release, LD_LIBRARY_PATH = <release>/lib, killed
+                         after hook_timeout_s (default 10); exit 0 = healthy, else
+                         the commit fails and Mender rolls back. Its last stdout
+                         line goes to the gate log.
+        --gate K=N[,K=N] the SWP's own commit-gate timings, K in wait_s (default
+                         60, rig cap 300), stable_s (10, cap 60), hook_timeout_s
+                         (10, cap 60) — e.g. --gate wait_s=180 for a node that
+                         loads a model. Values above the cap are clamped on the rig.
 
     NO-KEYS GATE: the payload tarball, the .mender and the --deb are scanned by
     tools/no_keys_gate.py; a *.key, a private-key PEM, an O=Theia Dev certificate,
@@ -3409,8 +3421,16 @@ def cmd_release_swp(args: list[str]) -> int:
 
     The artifact payload (consumed by the on-device `theia-swp` update module):
       bin/<fc>          the SWP's FC executables (ALL compositions; the overlay)
-      swp.json          {name, version, abi, roles, arity, processes[], subtree}
+      manifest/         machines.json + manifest/<machine>/{machine,executor,
+                        application}.json (the release config)
+      app.json          {name, artifact, abi, requires_runtime, health, [gate],
+                        processes: [{name, exe}]} — the processes this SWP ADDS
+                        (exe = the bin/ basename the supervisor execs); the
+                        theia-swp commit gate checks each one runs from the new
+                        release with a stable pid (G1)
+      health            optional commit-gate hook (--health)
       version.txt       <app>-<V>  (the module's artifact-name gate)
+      requires_runtime.txt
     """
     import json
     import shutil
@@ -3423,7 +3443,8 @@ def cmd_release_swp(args: list[str]) -> int:
     # options (e.g. `--to 2.0.0` must not make "2.0.0" the app).
     _VALUE_OPTS = {"--swp-version", "--app-version", "--fleet", "--arch", "--machine",
                    "--s3", "--from", "--to", "--requires-runtime", "--migration",
-                   "--from-schema", "--asset", "--env", "--sign-key"}
+                   "--from-schema", "--asset", "--env", "--sign-key",
+                   "--health", "--gate"}
     _skip = {i + 1 for i, a in enumerate(args)
              if a in _VALUE_OPTS and i + 1 < len(args)}
     app = next((a for i, a in enumerate(args)
@@ -3931,6 +3952,45 @@ def cmd_release_swp(args: list[str]) -> int:
     # satisfies it (major.minor match, patch-tolerant). Empty = no pin (a legacy
     # / unpinned SWP installs immediately, as before).
     (stage / "requires_runtime.txt").write_text((requires_runtime or "") + "\n")
+    # app.json — the commit-gate contract with the on-device theia-swp module (G1):
+    # the processes this SWP ADDS (name + the bin/ basename the supervisor execs,
+    # from each node's start_cmd), the optional `health` hook and the optional
+    # per-SWP gate timings. Written flat (no nested objects inside `processes` /
+    # `gate`): the module parses it with sed, no JSON tool on the rig.
+    gate_spec, gate_err = _parse_swp_gate(_opt("--gate"))
+    if gate_err:
+        print(f"theia release-swp: {gate_err}", file=sys.stderr)
+        return 2
+    health_src = Path(_opt("--health")) if _opt("--health") else (
+        WORKSPACE / "apps" / app / "health")
+    if _opt("--health") and not health_src.is_file():
+        print(f"theia release-swp: --health {health_src} not found.", file=sys.stderr)
+        return 1
+    has_health = health_src.is_file()
+    if has_health:
+        _sh.copy2(health_src, stage / "health")
+        (stage / "health").chmod(0o755)
+        print(f"theia release-swp: packed commit-gate hook {health_src} → health",
+              file=sys.stderr)
+    swp_processes = [] if is_null else _swp_process_list(exec_subtree, app_procs)
+    for _pr in swp_processes:
+        for _v in _pr.values():
+            if not _SWP_NAME_RE.match(_v):
+                print(f"theia release-swp: process name/exe {_v!r} is not a safe "
+                      "path component (the rig would refuse the SWP).",
+                      file=sys.stderr)
+                return 2
+    app_json = {"name": swp_name, "artifact": artifact_name, "abi": abi,
+                "requires_runtime": requires_runtime,
+                "health": "health" if has_health else None}
+    if gate_spec:
+        app_json["gate"] = gate_spec
+    app_json["processes"] = swp_processes
+    (stage / "app.json").write_text(json.dumps(app_json, indent=2) + "\n")
+    print(f"theia release-swp: app.json declares {len(swp_processes)} process(es) "
+          f"for the commit gate: {[p['name'] for p in swp_processes]}"
+          + ("" if swp_processes else " (supervisor-only gate on the rig)"),
+          file=sys.stderr)
     # (c) A MAJOR SWP ships its migration as a PACKAGE PART: stage/migration/<name>
     # goes into the tarball (→ on-device payload, run during ArtifactInstall) AND is
     # synced to S3 alongside the artifact (see _publish_swp_plane). The index records
@@ -3977,6 +4037,9 @@ def cmd_release_swp(args: list[str]) -> int:
                 # base_version). It's a --migrate MINOR bump, not a major
                 # version — the name is the GS-side flag for the pinned case.
                 "migration": migration_name, "major": bool(is_migrate),
+                # (f) the commit-gate contract (app.json): what the rig checks.
+                "processes": [p["name"] for p in swp_processes],
+                "health_hook": has_health, "gate": gate_spec,
                 # (e) the config transforms the SWP applies (GS catalog surface).
                 "config_transforms": [
                     {k: st[k] for k in ("config_type", "from_digest", "to_digest")}
@@ -4190,6 +4253,42 @@ def cmd_release_flip(args: list[str]) -> int:
 def _sh_which_ok(name: str) -> bool:
     """True if `name` is on PATH (thin wrapper so the flip verb reads clean)."""
     return shutil.which(name) is not None
+
+
+# The on-device modules' _valid_name: one safe path component.
+_SWP_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$")
+# Rig-side caps of the per-SWP gate timings (platform/runtime/ota/modules/theia-swp).
+_SWP_GATE_CAPS = {"wait_s": 300, "stable_s": 60, "hook_timeout_s": 60}
+
+
+def _swp_process_list(exec_subtree: "dict | None", procs: list[str]) -> list[dict]:
+    """The processes an SWP adds, for the theia-swp commit gate: one
+    {"name": <proc>, "exe": <basename of the start_cmd executable>} per proc
+    (exe defaults to the proc name — release-swp stages every FC as bin/<proc>)."""
+    starts = {}
+    for node in (exec_subtree or {}).get("nodes", []) or []:
+        cmd = (node.get("start_cmd") or "").split()
+        if node.get("name") and cmd:
+            starts[node["name"]] = Path(cmd[0]).name
+    return [{"name": p, "exe": starts.get(p, p)} for p in procs]
+
+
+def _parse_swp_gate(spec: "str | None") -> "tuple[dict, str]":
+    """--gate wait_s=180,stable_s=20,hook_timeout_s=15 → ({...}, ""), or
+    ({}, error). Values above the rig caps are kept (the rig clamps) but warned."""
+    if not spec:
+        return {}, ""
+    out: dict = {}
+    for item in spec.split(","):
+        k, sep, v = item.strip().partition("=")
+        if not sep or k not in _SWP_GATE_CAPS or not v.isdigit() or int(v) <= 0:
+            return {}, (f"bad --gate item {item!r} (want K=N, K in "
+                        f"{sorted(_SWP_GATE_CAPS)}, N a positive integer)")
+        out[k] = int(v)
+        if out[k] > _SWP_GATE_CAPS[k]:
+            print(f"theia release-swp: WARNING — --gate {k}={v} is above the rig "
+                  f"cap {_SWP_GATE_CAPS[k]}; the rig will clamp it", file=sys.stderr)
+    return out, ""
 
 
 def _extract_swp_subtree(executor: dict, app: str, procs: list[str]):

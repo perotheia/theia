@@ -25,8 +25,14 @@
 # Artifact payload (produced by `theia release-swp`):
 #   <app>-<ver>.tar.gz   tar of { bin/<fc>, manifest/machines.json,
 #                                 manifest/<machine>/{machine,executor,application}.json,
-#                                 version.txt, requires_runtime.txt, [migration/] }
+#                                 version.txt, requires_runtime.txt, [migration/],
+#                                 app.json, [health] }
 #   version.txt          <app>-<ver>-<abi>  (the artifact-name gate + release dir name)
+#   app.json             {"processes": [{"name": <proc>, "exe": <bin/ basename>}, …], …}
+#                        — the processes this SWP ADDS; the commit gate checks each
+#                        (see _app_gate). Laid into releases/<ver>/app.json.
+#   health               OPTIONAL executable app-level check (see _run_health_hook),
+#                        laid into releases/<ver>/health.
 #
 # Hardening (the payload is untrusted input to a root script):
 #   * version.txt must be ONE safe path component (see _valid_name) and must not
@@ -34,9 +40,13 @@
 #   * the tarball is listed first and refused if it has an absolute path, a '..'
 #     component, or any symlink/hardlink/device member; it is extracted with
 #     --no-same-owner --no-same-permissions.
-#   * ArtifactCommit is a HEALTH GATE (see _health_gate): no stable supervisor on
-#     the new release within THEIA_OTA_HEALTH_WAIT_S (30) seconds → exit 1 →
-#     Mender rolls back. ArtifactRollback with no `previous` exits non-zero.
+#   * ArtifactCommit is a HEALTH GATE (see _health_gate): a stable supervisor, then
+#     every process app.json declares running FROM the new release with one pid
+#     for THEIA_OTA_APP_STABLE_S (10) seconds, all within THEIA_OTA_HEALTH_WAIT_S
+#     (60) seconds, then the optional `health` hook → else exit 1 → Mender rolls
+#     back. ArtifactRollback with no `previous` exits non-zero.
+#   * app.json process names / exe basenames must pass _valid_name (refused at
+#     ArtifactInstall).
 #
 # Mender invokes:  theia-swp <STATE> <payload-files-dir>
 set -eu
@@ -261,19 +271,199 @@ _reload_supervisor() {
 
 # ---- commit health gate --------------------------------------------------------
 # ArtifactCommit restarts the supervisor onto the flipped release; the commit only
-# STANDS if the supervisor then comes up and stays up. The health signal is the
-# simplest one every rig has (no python/tdb/TIPC dependency):
+# STANDS if the supervisor AND the SWP's own processes then come up and stay up.
+# The signals need no python/tdb/TIPC (sh, ls, sed, awk, coreutils `timeout`):
 #
-#   a process named `supervisor` whose executable is $THEIA_ROOT/bin/supervisor
-#   (the binary theia-run execs) is running, `current/config/executor.json` (the
-#   manifest it was started on) exists, and the SAME pid is seen on
-#   THEIA_OTA_HEALTH_STABLE (default 3) consecutive probes one second apart — a
-#   supervisor that crash-loops on the new release never holds a pid that long.
+#  1. SUPERVISOR: a process named `supervisor` whose executable is
+#     $THEIA_ROOT/bin/supervisor (the binary theia-run execs) is running,
+#     `current/config/executor.json` (the manifest it was started on) exists, and
+#     the SAME pid is seen on THEIA_OTA_HEALTH_STABLE (default 3) consecutive
+#     probes one second apart.
+#  2. APP PROCESSES (_app_gate): every process current/app.json declares is
+#     running FROM the flipped release — /proc/<pid>/exe is exactly
+#     <release>/bin/<exe> (not a deleted file, not the previous release's binary) —
+#     and its pid stays the same for THEIA_OTA_APP_STABLE_S (default 10)
+#     consecutive seconds. A node that crashes or restart-loops under a healthy
+#     supervisor never holds a pid that long.
+#  3. HOOK (_run_health_hook): if the release carries an executable `health`, it
+#     must exit 0.
 #
-# The gate waits at most THEIA_OTA_HEALTH_WAIT_S seconds (default 30). No signal
-# in that time → non-zero exit → Mender runs ArtifactRollback (current → previous
-# + restart). THEIA_OTA_HEALTH_WAIT_S=0 DISABLES the gate (lab rigs whose
-# supervisor is not started from $THEIA_ROOT/bin); never set it on a fleet rig.
+# 1 and 2 share ONE budget: THEIA_OTA_HEALTH_WAIT_S seconds (default 60) from the
+# start of the gate; the hook has its own timeout. Any failure → a log line naming
+# the process (MISSING / RESTARTING / OLD BINARY / NOT STABLE / hook exit N) →
+# non-zero exit → Mender runs ArtifactRollback (current → previous + restart, so
+# the previous app version runs again). An SWP with no app.json processes keeps
+# the supervisor-only gate, with a WARNING. THEIA_OTA_HEALTH_WAIT_S=0 DISABLES the
+# whole gate (lab rigs whose supervisor is not started from $THEIA_ROOT/bin);
+# never set it on a fleet rig.
+#
+# TIMINGS: an SWP may set its own in app.json `gate` (a node that loads a model
+# needs longer than 60 s): {"wait_s": W, "stable_s": S, "hook_timeout_s": H}.
+# Precedence: env (THEIA_OTA_HEALTH_WAIT_S / THEIA_OTA_APP_STABLE_S /
+# THEIA_OTA_HOOK_TIMEOUT_S, lab use, NOT capped) > the SWP's `gate` (capped on the
+# rig: wait_s <= 300, stable_s <= 60, hook_timeout_s <= 60; a larger value is
+# clamped with a log line) > the defaults 60 / 10 / 10.
+#
+# HOOK CONTRACT (releases/<ver>/health, optional): run as user `theia` when the
+# module is root (refused if there is no such user), cwd = the release dir, stdin
+# /dev/null, env THEIA_ROOT, THEIA_RELEASE (the release dir), THEIA_ARTIFACT
+# (version.txt) and LD_LIBRARY_PATH=<release>/lib (the SWP's own libs), killed
+# after hook_timeout_s (default 10). Exit 0 = healthy; anything else (or the
+# timeout) fails the commit. The LAST line of its stdout goes into the gate log;
+# its stderr goes to the deployment log.
+_GATE_CAP_WAIT=300; _GATE_CAP_STABLE=60; _GATE_CAP_HOOK=60
+
+# _swp_processes <app.json>: print "<name> <exe>" per declared process. The file
+# is parsed without a JSON tool: release-swp writes `processes` as an array of
+# flat {"name": …, "exe": …} objects (exe defaults to name). Every name/exe must
+# pass _valid_name — else a message and exit 1.
+_swp_processes() (
+    [ -f "$1" ] || exit 0
+    tr '\n\r\t' '   ' < "$1" \
+      | sed -n 's/.*"processes"[[:space:]]*:[[:space:]]*\[\([^]]*\)\].*/\1/p' \
+      | tr '}' '\n' \
+      | while IFS= read -r obj; do
+            n="$(printf '%s\n' "$obj" | sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+            e="$(printf '%s\n' "$obj" | sed -n 's/.*"exe"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+            [ -n "$n" ] || continue
+            [ -n "$e" ] || e="$n"
+            _require_name "app.json process name" "$n" || exit 1
+            _require_name "app.json process exe" "$e" || exit 1
+            echo "$n $e"
+        done
+)
+# _swp_gate_value <app.json> <key>: the integer `gate.<key>` of app.json, or "".
+_swp_gate_value() {
+    [ -f "$1" ] || return 0
+    tr '\n\r\t' '   ' < "$1" \
+      | sed -n 's/.*"gate"[[:space:]]*:[[:space:]]*{\([^}]*\)}.*/\1/p' \
+      | sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p"
+}
+# _gate_timing <env value> <app.json> <key> <default> <cap>: echo the effective
+# seconds (env > SWP gate value clamped to cap > default); logs where it came from.
+_gate_timing() {
+    _ev="$1"; _key="$3"; _def="$4"; _cap="$5"
+    case "$_ev" in ''|*[!0-9]*) ;; *) echo "$_ev"; return 0 ;; esac
+    _sv="$(_swp_gate_value "$2" "$_key")"
+    case "$_sv" in ''|*[!0-9]*) echo "$_def"; return 0 ;; esac
+    if [ "$_sv" -gt "$_cap" ]; then
+        echo "theia-swp: gate.$_key=$_sv from app.json CLAMPED to the rig cap $_cap" >&2
+        _sv="$_cap"
+    else
+        echo "theia-swp: gate.$_key=$_sv from app.json" >&2
+    fi
+    echo "$_sv"
+}
+# _proc_table: "<pid> <exe target>" for every process whose /proc/<pid>/exe is
+# readable (all of them as root). One ls + one sed per probe.
+_proc_table() {
+    LC_ALL=C ls -l /proc/[0-9]*/exe 2>/dev/null \
+      | sed -n 's|^.* /proc/\([0-9][0-9]*\)/exe -> \(..*\)$|\1 \2|p'
+}
+# _app_gate <release dir> <"name exe" lines> <t0> <wait_s> <stable_s>: probe once
+# a second until every declared process holds one pid running <release>/bin/<exe>
+# for stable_s seconds (→ 0) or the clock (started at t0) passes wait_s (→ 1, one
+# COMMIT FAILED line per failing process).
+_app_gate() {
+    rel="$1"; plist="$2"; t="$3"; wait_s="$4"; stable_s="$5"
+    n=0
+    while read -r _pn _pe; do
+        [ -n "$_pn" ] || continue
+        n=$((n + 1))
+        eval "pn_$n=\$_pn; pe_$n=\$_pe; sig_$n=''; since_$n=0; chg_$n=0; seen_$n=0; old_$n=''"
+    done <<EOF
+$plist
+EOF
+    while :; do
+        tbl="$(_proc_table)"
+        good=0; i=1
+        while [ "$i" -le "$n" ]; do
+            eval "e=\$pe_$i; last=\$sig_$i"
+            want="$rel/bin/$e"
+            sig="$(printf '%s\n' "$tbl" | awk -v w="$want" \
+                '{ p = $1; sub(/^[0-9]+ /, ""); if ($0 == w) print p }' | sort -n | tr '\n' ' ')"
+            sig="${sig% }"
+            old="$(printf '%s\n' "$tbl" | awk -v w="$want" -v b="/$e" \
+                '{ p = $1; sub(/^[0-9]+ /, ""); x = $0; sub(/ \(deleted\)$/, "", x);
+                   if ($0 != w && substr(x, length(x) - length(b) + 1) == b) { print p " " $0; exit } }')"
+            if [ "$sig" != "$last" ]; then
+                eval "since_$i=\$t"
+                [ -n "$last" ] && eval "chg_$i=\$((chg_$i + 1))"
+            fi
+            [ -n "$sig" ] && eval "seen_$i=1"
+            eval "sig_$i=\$sig; old_$i=\$old; since=\$since_$i"
+            if [ -n "$sig" ] && [ $((t - since)) -ge "$stable_s" ]; then good=$((good + 1)); fi
+            i=$((i + 1))
+        done
+        if [ "$good" -eq "$n" ]; then
+            i=1
+            while [ "$i" -le "$n" ]; do
+                eval "echo \"theia-swp: app process '\$pn_$i' OK — pid \$sig_$i runs $rel/bin/\$pe_$i, stable \$((t - since_$i))s\""
+                i=$((i + 1))
+            done
+            return 0
+        fi
+        [ "$t" -lt "$wait_s" ] || break
+        sleep 1; t=$((t + 1))
+    done
+    i=1
+    while [ "$i" -le "$n" ]; do
+        eval "pn=\$pn_$i; e=\$pe_$i; sig=\$sig_$i; since=\$since_$i; chg=\$chg_$i; seen=\$seen_$i; old=\$old_$i"
+        up=$((t - since)); want="$rel/bin/$e"
+        why=""
+        if [ -n "$sig" ] && [ "$up" -ge "$stable_s" ]; then :
+        elif [ -n "$sig" ] && [ "$chg" -gt 0 ]; then
+            why="RESTARTING — pid changed $chg time(s), now $sig up ${up}s (needs ${stable_s}s)"
+        elif [ -n "$sig" ]; then
+            why="NOT STABLE — pid $sig up only ${up}s (needs ${stable_s}s)"
+        elif [ -n "$old" ]; then
+            why="OLD BINARY — pid ${old%% *} runs ${old#* }, not $want"
+        elif [ "$seen" = 1 ]; then
+            why="RESTARTING — exited after start ($chg pid change(s)), not running now"
+        else
+            why="MISSING — no process runs $want"
+        fi
+        [ -n "$why" ] && echo "theia-swp: COMMIT FAILED — app process '$pn' $why (gate ${wait_s}s) — Mender will roll back" >&2
+        i=$((i + 1))
+    done
+    return 1
+}
+# _run_health_hook <release dir> <timeout s>: the optional per-SWP check (contract
+# above). 0 = healthy or no hook.
+_run_health_hook() {
+    rel="$1"; hs="$2"; hook="$rel/health"
+    [ -e "$hook" ] || return 0
+    if [ ! -f "$hook" ] || [ ! -x "$hook" ]; then
+        echo "theia-swp: COMMIT FAILED — health hook $hook is not an executable file — Mender will roll back" >&2
+        return 1
+    fi
+    command -v timeout >/dev/null 2>&1 || {
+        echo "theia-swp: COMMIT FAILED — health hook present but no timeout(1) on the rig — Mender will roll back" >&2
+        return 1; }
+    set --
+    if [ "$(id -u)" = 0 ]; then
+        if ! getent passwd theia >/dev/null 2>&1; then
+            echo "theia-swp: COMMIT FAILED — health hook present but no user 'theia' to run it as — Mender will roll back" >&2
+            return 1
+        fi
+        if command -v runuser >/dev/null 2>&1; then set -- runuser -u theia --
+        else set -- setpriv --reuid=theia --regid=theia --init-groups --; fi
+    fi
+    art="$(cat "$rel/.mender_version" 2>/dev/null || true)"
+    echo "theia-swp: running health hook $hook (as $([ $# -gt 0 ] && echo theia || id -un), timeout ${hs}s)"
+    hrc=0
+    hout="$(cd "$rel" && "$@" env THEIA_ROOT="$THEIA_ROOT" THEIA_RELEASE="$rel" \
+             THEIA_ARTIFACT="$art" LD_LIBRARY_PATH="$rel/lib" \
+             timeout -k 2 "$hs" ./health </dev/null)" || hrc=$?
+    hlast="$(printf '%s\n' "$hout" | tail -n 1 | cut -c1-240)"
+    echo "theia-swp: health hook said: ${hlast:-<no output>}"
+    case "$hrc" in
+      0)       echo "theia-swp: health hook OK (exit 0)"; return 0 ;;
+      124|137) echo "theia-swp: COMMIT FAILED — health hook TIMED OUT after ${hs}s — Mender will roll back" >&2 ;;
+      *)       echo "theia-swp: COMMIT FAILED — health hook exit $hrc — Mender will roll back" >&2 ;;
+    esac
+    return 1
+}
 _supervisor_pid() {   # echo the pid of OUR supervisor ($THEIA_ROOT/bin/supervisor)
     want="$(readlink -f "$THEIA_ROOT/bin/supervisor" 2>/dev/null || true)"
     [ -n "$want" ] || return 1
@@ -285,14 +475,18 @@ _supervisor_pid() {   # echo the pid of OUR supervisor ($THEIA_ROOT/bin/supervis
     return 1
 }
 _health_gate() {
-    wait_s="${THEIA_OTA_HEALTH_WAIT_S:-30}"
+    appj="$CURRENT/app.json"
+    wait_s="$(_gate_timing "${THEIA_OTA_HEALTH_WAIT_S:-}" "$appj" wait_s 60 "$_GATE_CAP_WAIT")"
+    stable_s="$(_gate_timing "${THEIA_OTA_APP_STABLE_S:-}" "$appj" stable_s 10 "$_GATE_CAP_STABLE")"
+    hook_s="$(_gate_timing "${THEIA_OTA_HOOK_TIMEOUT_S:-}" "$appj" hook_timeout_s 10 "$_GATE_CAP_HOOK")"
     need="${THEIA_OTA_HEALTH_STABLE:-3}"
-    case "$wait_s" in ''|*[!0-9]*) wait_s=30 ;; esac
     case "$need"   in ''|*[!0-9]*|0) need=3 ;; esac
+    [ "$hook_s" -gt 0 ] 2>/dev/null || hook_s=10
     if [ "$wait_s" -eq 0 ]; then
-        echo "theia-swp: WARNING — commit health gate DISABLED (THEIA_OTA_HEALTH_WAIT_S=0)" >&2
+        echo "theia-swp: WARNING — commit health gate DISABLED (THEIA_OTA_HEALTH_WAIT_S=0): no supervisor, app-process or hook check" >&2
         return 0
     fi
+    echo "theia-swp: commit gate: wait ${wait_s}s, app stable ${stable_s}s, hook timeout ${hook_s}s"
     t=0; streak=0; last=""
     while :; do
         pid=""
@@ -303,13 +497,26 @@ _health_gate() {
         last="$pid"
         if [ "$streak" -ge "$need" ]; then
             echo "theia-swp: health OK — supervisor pid $pid stable on $(readlink "$CURRENT" 2>/dev/null) after ${t}s"
-            return 0
+            break
         fi
-        [ "$t" -lt "$wait_s" ] || break
+        if [ "$t" -ge "$wait_s" ]; then
+            echo "theia-swp: COMMIT FAILED — no healthy supervisor ($THEIA_ROOT/bin/supervisor) on $(readlink "$CURRENT" 2>/dev/null || echo none) within ${wait_s}s — Mender will roll back" >&2
+            return 1
+        fi
         sleep 1; t=$((t + 1))
     done
-    echo "theia-swp: COMMIT FAILED — no healthy supervisor ($THEIA_ROOT/bin/supervisor) on $(readlink "$CURRENT" 2>/dev/null || echo none) within ${wait_s}s — Mender will roll back" >&2
-    return 1
+    rel="$(readlink -f "$CURRENT")"
+    plist="$(_swp_processes "$appj")" || {
+        echo "theia-swp: COMMIT FAILED — invalid process list in $appj — Mender will roll back" >&2
+        return 1; }
+    if [ -z "$plist" ]; then
+        echo "theia-swp: WARNING — the SWP declares no processes (no app.json processes[]): commit gate checks the supervisor only" >&2
+    else
+        _app_gate "$rel" "$plist" "$t" "$wait_s" "$stable_s" || return 1
+    fi
+    _run_health_hook "$rel" "$hook_s" || return 1
+    echo "theia-swp: health OK — $(readlink "$CURRENT" 2>/dev/null)"
+    return 0
 }
 
 # ---- prune stale SWP releases (mirrors UCM's prune_releases) -----------------
@@ -387,6 +594,18 @@ _stage_and_flip() {
         cp -a "$f" "$stage/config/$b"
     done
     [ -f "$work/manifest/machines.json" ] && cp -a "$work/manifest/machines.json" "$stage/config/machines.json"
+    # The commit gate's inputs: app.json (the processes this SWP adds + optional
+    # gate timings) and the optional `health` hook, at the release root.
+    if [ -f "$work/app.json" ]; then
+        cp "$work/app.json" "$stage/app.json"
+        echo "theia-swp: app processes: $(_swp_processes "$stage/app.json" | cut -d' ' -f1 | tr '\n' ' ' | sed 's/ $//')"
+    else
+        echo "theia-swp: WARNING — SWP has no app.json (no declared processes): the commit gate will check the supervisor only" >&2
+    fi
+    if [ -f "$work/health" ]; then
+        cp "$work/health" "$stage/health"; chmod 755 "$stage/health"
+        echo "theia-swp: SWP health hook staged ($stage/health)"
+    fi
     # NO key material from a package (hardening H): the rig serves mTLS from the
     # fleet PKI in /etc/theia/pki (key generated on the rig, pki-enroll). An SWP
     # that still carries a certs/ dir (an old or --allow-dev-certs build) is NOT
@@ -445,6 +664,9 @@ case "$STATE" in
     [ -n "$tarball" ] || { echo "theia-swp: no SWP tarball in payload" >&2; exit 1; }
     work="$(mktemp -d)"
     _tar_extract "$tarball" "$work" || { rm -rf "$work"; exit 1; }
+    # app.json process names/exes become paths the gate probes: validate up front.
+    _swp_processes "$work/app.json" >/dev/null || {
+        echo "theia-swp: REFUSED — invalid app.json process list" >&2; rm -rf "$work"; exit 1; }
 
     # runtime precondition (deploy sequencing).
     req_rt="$(_payload requires_runtime.txt)"

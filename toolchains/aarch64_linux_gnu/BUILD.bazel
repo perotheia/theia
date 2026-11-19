@@ -18,6 +18,7 @@ package(default_visibility = ["//visibility:public"])
 # the repo lives (dev host or /opt in CI).
 load("@rpi4_sysroot//:path.bzl", "RPI4_SYSROOT")
 load("@orin_sysroot//:path.bzl", "ORIN_SYSROOT")
+load("@ai64_sysroot//:path.bzl", "AI64_SYSROOT")
 
 # ONE aarch64 toolchain, sysroot selected by --define theia_target (both
 # rpi4/bookworm and orin/jammy are cpu:aarch64 — toolchain RESOLUTION cannot
@@ -27,6 +28,7 @@ cc_toolchain_config(
     name = "aarch64_config",
     sysroot = select({
         "//rules/config:target_orin": ORIN_SYSROOT,
+        "//rules/config:target_ai64": AI64_SYSROOT,
         "//conditions:default": RPI4_SYSROOT,
     }),
 )

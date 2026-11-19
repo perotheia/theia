@@ -102,6 +102,17 @@ TARGETS = {
         "sysroot": "third_party/sysroot/orin",
         "abi_key": "jammy-arm64", "libc_min": "2.35", "deb_arch": "arm64",
     },
+    # BeagleBone AI-64 (TI TDA4VM) — aarch64, Debian 13 trixie (glibc 2.41).
+    # FOURTH aarch64 ABI: built against the board's OWN suite (not the rpi4
+    # bookworm sysroot), so trixie's abseil 20240722 / nanopb 0.4.9 / iceoryx
+    # 2.0.x are what the binaries link. CROSS-compiled; sysroot bootstrapped by
+    # third_party/sysroot/setup_ai64.sh. Needs a build host whose aarch64 cross
+    # libstdc++ is >= trixie's (Ubuntu 24.04: yes; 22.04: no).
+    "ai64": {
+        "cpu": "aarch64", "gcc_prefix": "aarch64-linux-gnu-",
+        "sysroot": "third_party/sysroot/ai64",
+        "abi_key": "trixie-arm64", "libc_min": "2.41", "deb_arch": "arm64",
+    },
 }
 
 def target_for_arch(arch):

@@ -1724,6 +1724,10 @@ _TARGETS = {
     # an OTA-updated mobile target is never a build host.
     "orin":   {"cfg": "orin",   "cpu": "aarch64", "abi_key": "jammy-arm64",
                "deb_arch": "arm64", "libc_min": "2.35"},
+    # BeagleBone AI-64 — Debian 13 trixie/glibc 2.41, the fourth aarch64 ABI.
+    # CROSS-compiled against its own trixie sysroot (setup_ai64.sh).
+    "ai64":   {"cfg": "ai64",   "cpu": "aarch64", "abi_key": "trixie-arm64",
+               "deb_arch": "arm64", "libc_min": "2.41"},
 }
 
 

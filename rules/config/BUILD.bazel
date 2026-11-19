@@ -101,6 +101,22 @@ config_setting(
     constraint_values = ["@platforms//cpu:aarch64"],
     values = {"define": "theia_target=orin"},
 )
+# BeagleBone AI-64 (TDA4VM) — aarch64, Debian 13 trixie (glibc 2.41). The fourth
+# aarch64 ABI; CROSS-compiled like rpi4/orin against its own trixie sysroot
+# (third_party/sysroot/setup_ai64.sh). `--config=ai64` sets the platform + the
+# define.
+platform(
+    name = "ai64",
+    constraint_values = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:linux",
+    ],
+)
+config_setting(
+    name = "target_ai64",
+    constraint_values = ["@platforms//cpu:aarch64"],
+    values = {"define": "theia_target=ai64"},
+)
 config_setting(
     name = "target_rpi4",
     constraint_values = ["@platforms//cpu:aarch64"],
@@ -136,6 +152,14 @@ config_setting(
     name = "arm64_cross_orin",
     constraint_values = ["@platforms//cpu:aarch64"],
     values = {"define": "theia_target=orin"},
+)
+
+# The ai64 CROSS build (trixie sysroot) — the third x86→aarch64 cross target;
+# same role as arm64_cross / arm64_cross_orin in the etcd/com selects.
+config_setting(
+    name = "arm64_cross_ai64",
+    constraint_values = ["@platforms//cpu:aarch64"],
+    values = {"define": "theia_target=ai64"},
 )
 
 # Opt-in eBPF backend for services/idsm (the connect() ringbuf, Cat B v2). OFF by

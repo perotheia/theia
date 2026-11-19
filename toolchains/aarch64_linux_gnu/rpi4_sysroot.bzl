@@ -1,12 +1,12 @@
 """Repository rules capturing ABSOLUTE paths to the gitignored aarch64
-sysroots (third_party/sysroot/{rpi4,orin}), so the cross cc_toolchain can pass
+sysroots (third_party/sysroot/{rpi4,orin,ai64}), so the cross cc_toolchain can pass
 a real absolute --sysroot regardless of where the repo lives.
 
 ANCHORING: the path is derived from the FRAMEWORK module's own root (resolved
 via a label into this module), NOT rctx.workspace_root — a CONSUMING workspace
 (bazel_dep on pero_theia) has its own workspace root with no sysroot under it,
 which silently produced a dangling --sysroot for ws cross builds. Env overrides
-(THEIA_RPI4_SYSROOT / THEIA_ORIN_SYSROOT) still win.
+(THEIA_RPI4_SYSROOT / THEIA_ORIN_SYSROOT / THEIA_AI64_SYSROOT) still win.
 """
 
 def _module_root(rctx, anchor):
@@ -43,6 +43,30 @@ def _orin_sysroot_impl(rctx):
         path = _module_root(rctx, rctx.attr._anchor) + "/third_party/sysroot/orin"
     rctx.file("BUILD.bazel", 'exports_files(["path.bzl"])\n')
     rctx.file("path.bzl", 'ORIN_SYSROOT = "%s"\n' % path)
+
+def _ai64_sysroot_impl(rctx):
+    root = _module_root(rctx, rctx.attr._anchor)
+    override = rctx.os.environ.get("THEIA_AI64_SYSROOT", "")
+    path = override if override else root + "/third_party/sysroot/ai64"
+
+    # third_party/sysroot/ai64 may be a SYMLINK to a bigger disk. Publish the
+    # REAL path (the same reason _module_root does: gcc's .d output vs the
+    # toolchain's builtin dirs), and publish the codegen dir separately — a
+    # "<sysroot>/../.." walk from a symlinked sysroot leaves the repo.
+    p = rctx.path(path)
+    if p.exists:
+        path = str(p.realpath)
+    rctx.file("BUILD.bazel", 'exports_files(["path.bzl"])\n')
+    rctx.file("path.bzl", 'AI64_SYSROOT = "%s"\nAI64_CODEGEN_DIR = "%s"\n' %
+                          (path, root + "/third_party/codegen-bookworm-x86"))
+
+# Same shape for the TRIXIE (BeagleBone AI-64) sysroot — setup_ai64.sh.
+ai64_sysroot = repository_rule(
+    implementation = _ai64_sysroot_impl,
+    attrs = {"_anchor": attr.label(default = Label("//:MODULE.bazel"))},
+    environ = ["THEIA_AI64_SYSROOT"],
+    local = True,
+)
 
 # Same shape for the JAMMY (Jetson Orin) sysroot — setup_orin.sh bootstraps it.
 orin_sysroot = repository_rule(

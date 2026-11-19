@@ -69,3 +69,10 @@ try-import %workspace%/user.bazelrc
 # Same sandbox exemption as rpi4: the sysroot is host data.
 build:orin --platforms=//rules/config:orin --define=theia_target=orin
 build:orin --strategy=CppCompile=local --strategy=CppLink=local
+
+# ── BeagleBone AI-64 (aarch64, Debian 13 trixie) — cross-compile ─────────
+# Needs gcc-aarch64-linux-gnu + the sysroot at third_party/sysroot/ai64
+# (setup_ai64.sh; the dir may be a symlink, or set THEIA_AI64_SYSROOT). Same
+# sandbox exemption as rpi4/orin: the sysroot is host data.
+build:ai64 --platforms=//rules/config:ai64 --define=theia_target=ai64
+build:ai64 --strategy=CppCompile=local --strategy=CppLink=local

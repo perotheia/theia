@@ -145,6 +145,10 @@ def _impl(ctx):
             sysroot_abs + "/usr/local/include",
             sysroot_abs + "/usr/include",
             sysroot_abs + "/usr/include/" + _TRIPLE,
+            # trixie (ai64): <sysroot>/usr/include/<triple>/asm is a symlink
+            # into /usr/lib/linux/uapi/arm64 (linux-libc-dev, arch-all since
+            # 6.x) — gcc reports the resolved path. Absent on older suites.
+            sysroot_abs + "/usr/lib/linux/uapi",
             sysroot_abs + "/../../etcd-cpp-apiv3",
         ],
         builtin_sysroot = sysroot_abs,

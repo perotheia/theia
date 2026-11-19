@@ -18,6 +18,8 @@
 #include "GenStateM.hh"         // theia::runtime::post_event
 #include "NodeRef.hh"           // theia::runtime::LocalRef + cast
 
+#include "impl/ucm_validate.hpp"   // valid_version
+
 #include <cstring>
 #include <string>
 
@@ -53,6 +55,15 @@ UcmReply UcmDaemon::handle_call(
 
     if (!req.version[0]) {
         this->log().warn("RequestUpdate rejected — empty version");
+        reply.status = 1;   // reject
+        return reply;
+    }
+    // The version becomes a path component (<releases>/<version>) — accept only
+    // ^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$ (no '/', never ".."). The value is NOT
+    // echoed into the log (it is untrusted).
+    if (!valid_version(req.version)) {
+        this->log().warn("RequestUpdate rejected — invalid version (must match "
+                         "^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$)");
         reply.status = 1;   // reject
         return reply;
     }

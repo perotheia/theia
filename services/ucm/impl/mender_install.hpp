@@ -13,6 +13,12 @@
 //
 // Pluggable: THEIA_UCM_MENDER selects the back-end —
 //   "mender"   (default): exec `mender install <url>` (or `mender-update install`)
+//                         — fork/execvp with an argv vector, NO shell. The
+//                         reference must be an absolute path under an allowed
+//                         directory (THEIA_UCM_ARTIFACT_DIRS, default
+//                         /opt/theia:/var/lib/theia) or an https:// URL; any
+//                         other form (relative, http://, s3://, …) is refused
+//                         and fails the install. See impl/ucm_validate.hpp.
 //   "simulate"          : log + succeed (the role artifact is assumed pre-staged,
 //                         e.g. the colony local-install / the L4-B marker test) so
 //                         the ARA fan-out + role-resolution run without a live

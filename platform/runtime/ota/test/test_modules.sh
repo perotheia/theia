@@ -202,6 +202,154 @@ run "$R" "$SWP" ArtifactRollback ""
 check "swp: rollback WITHOUT previous fails" rc_fail
 check "swp: ... with a clear message" said "no previous release to roll back to"
 
+# ------------------------------------------------------------------------------
+# G1 app-process commit gate (spec hil-app-ota G1). Each case: a rig with a
+# stable stand-in supervisor, app demo-1.0 installed, then demo-1.1 installed
+# (current → demo-1.1, previous → demo-1.0); ArtifactCommit runs the gate; a
+# failing gate is followed by ArtifactRollback, which must put demo-1.0 back.
+# Case names "G1.<id>" are stable: release notes cite them.
+# ------------------------------------------------------------------------------
+SLEEP="$(command -v sleep)"
+APPJ='{"name": "demo", "processes": [{"name": "demo_node", "exe": "demo_fc"}]}'
+mkappswp() {   # $1 = src dir, $2 = app.json ("" = none), $3 = health hook body ("" = none)
+    s="$1"; mkswpsrc "$s"; rm -f "$s/bin/demo_fc"; cp "$SLEEP" "$s/bin/demo_fc"; chmod 755 "$s/bin/demo_fc"
+    [ -n "$2" ] && printf '%s\n' "$2" > "$s/app.json"
+    if [ -n "${3:-}" ]; then printf '#!/bin/sh\n%s\n' "$3" > "$s/health"; chmod 755 "$s/health"; fi
+    mkdir -p "$s/lib"; echo marker > "$s/lib/libswp_marker.so"
+    ( cd "$s" && tar -czf "$s.tar.gz" . )
+}
+mkappswp "$W/app"           "$APPJ"
+mkappswp "$W/app-noprocs"   ""
+mkappswp "$W/app-hookfail"  "$APPJ" 'echo "no MavLink heartbeat"; exit 1'
+mkappswp "$W/app-hookslow"  "$APPJ" 'echo "waiting"; sleep 30; exit 0'
+mkappswp "$W/app-hookok"    "$APPJ" \
+    '[ -f "$LD_LIBRARY_PATH/libswp_marker.so" ] || { echo "no SWP lib on LD_LIBRARY_PATH=$LD_LIBRARY_PATH"; exit 1; }
+echo "starting"; echo "lib ok: LD_LIBRARY_PATH=$LD_LIBRARY_PATH cwd=$(pwd)"'
+mkappswp "$W/app-timing"    '{"name": "demo", "gate": {"wait_s": 4, "stable_s": 1, "hook_timeout_s": 3},
+  "processes": [{"name": "demo_node", "exe": "demo_fc"}]}'
+mkappswp "$W/app-badname"   '{"name": "demo", "processes": [{"name": "x", "exe": "../../bin/sh"}]}'
+
+LOOP=""
+g1_setup() {   # $1 = case id, $2 = the demo-1.1 SWP tarball
+    C="$TMP/g1-$1"; R="$C/opt-theia"; mkroot "$R"
+    cp "$SLEEP" "$R/bin/supervisor"; "$R/bin/supervisor" 300 & SUP_PIDS="$SUP_PIDS $!"
+    mktree "$C/t10" "demo-1.0" "$W/app.tar.gz"; run "$R" "$SWP" ArtifactInstall "$C/t10"
+    mktree "$C/t11" "demo-1.1" "$2";            run "$R" "$SWP" ArtifactInstall "$C/t11"
+}
+g1_app() {     # start the app process the way the supervisor does: from current/bin
+    "$R/current/bin/demo_fc" 300 & SUP_PIDS="$SUP_PIDS $!"
+}
+G1T="THEIA_OTA_HEALTH_STABLE=2 THEIA_OTA_HEALTH_WAIT_S=6 THEIA_OTA_APP_STABLE_S=2 THEIA_OTA_HOOK_TIMEOUT_S=2"
+g1_commit() {  # [env args] — default: the fast test timings $G1T (later VAR=v wins)
+    # shellcheck disable=SC2086  # $G1T is a word list on purpose
+    [ $# -gt 0 ] || set -- $G1T
+    env "$@" THEIA_ROOT="$R" sh "$SWP" ArtifactCommit "$C/t11" >"$OUT" 2>&1; RC=$?
+    [ "$VERBOSE" = 1 ] && sed 's/^/       > /' "$OUT"
+    return 0
+}
+g1_rolls_back() {   # $1 = case id: commit failed AND the rollback restores demo-1.0
+    check "G1.$1: commit FAILS (rc != 0)" rc_fail
+    cp "$OUT" "$C/commit.out"
+    run "$R" "$SWP" ArtifactRollback "$C/t11"
+    check "G1.$1: ArtifactRollback → current = releases/demo-1.0 (previous app)" \
+          sh -c "test $RC -eq 0 && test \"\$(readlink '$R/current')\" = releases/demo-1.0"
+    cp "$C/commit.out" "$OUT"
+}
+g1_done() {
+    [ -n "$LOOP" ] && { kill "$LOOP" 2>/dev/null; wait "$LOOP" 2>/dev/null; LOOP=""; }
+    pkill -f "$C/opt-theia/" 2>/dev/null; sleep 0.2
+}
+
+g1_setup healthy-commits "$W/app.tar.gz"; g1_app
+check "G1.healthy-commits: install laid app.json into the release" test -f "$R/releases/demo-1.1/app.json"
+g1_commit
+check "G1.healthy-commits: commit PASSES (rc 0)" rc_is 0
+check "G1.healthy-commits: ... names the process OK" said "app process 'demo_node' OK"
+check "G1.healthy-commits: ... from the new release" said "runs $(readlink -f "$R")/releases/demo-1.1/bin/demo_fc"
+g1_done
+
+g1_setup missing-rolls-back "$W/app.tar.gz"
+g1_commit
+check "G1.missing-rolls-back: log names the process as MISSING" said "app process 'demo_node' MISSING"
+g1_rolls_back missing-rolls-back
+g1_done
+
+g1_setup restart-loop-rolls-back "$W/app.tar.gz"
+( while :; do "$R/current/bin/demo_fc" 1; done ) & LOOP=$!
+g1_commit
+check "G1.restart-loop-rolls-back: log names the process as RESTARTING" said "app process 'demo_node' RESTARTING"
+g1_rolls_back restart-loop-rolls-back
+g1_done
+
+g1_setup old-binary-rolls-back "$W/app.tar.gz"
+"$R/releases/demo-1.0/bin/demo_fc" 300 & SUP_PIDS="$SUP_PIDS $!"
+sleep 0.2; rm -f "$R/releases/demo-1.0/bin/demo_fc"     # the old file is gone under it
+g1_commit
+check "G1.old-binary-rolls-back: log names the process as OLD BINARY" said "app process 'demo_node' OLD BINARY"
+check "G1.old-binary-rolls-back: ... and the deleted path" said "demo-1.0/bin/demo_fc (deleted)"
+g1_rolls_back old-binary-rolls-back
+g1_done
+
+g1_setup hook-exit1-rolls-back "$W/app-hookfail.tar.gz"; g1_app
+g1_commit
+check "G1.hook-exit1-rolls-back: processes passed first" said "app process 'demo_node' OK"
+check "G1.hook-exit1-rolls-back: log says hook exit 1" said "health hook exit 1"
+check "G1.hook-exit1-rolls-back: ... with the hook's last stdout line" said "health hook said: no MavLink heartbeat"
+g1_rolls_back hook-exit1-rolls-back
+g1_done
+
+g1_setup hook-timeout-rolls-back "$W/app-hookslow.tar.gz"; g1_app
+g1_commit
+check "G1.hook-timeout-rolls-back: log says TIMED OUT" said "health hook TIMED OUT after 2s"
+g1_rolls_back hook-timeout-rolls-back
+g1_done
+
+g1_setup hook-sees-swp-lib "$W/app-hookok.tar.gz"; g1_app
+g1_commit
+check "G1.hook-sees-swp-lib: commit PASSES with the hook (rc 0)" rc_is 0
+check "G1.hook-sees-swp-lib: hook ran with LD_LIBRARY_PATH = the release lib, cwd = the release" \
+      said "health hook said: lib ok: LD_LIBRARY_PATH=$(readlink -f "$R")/releases/demo-1.1/lib cwd=$(readlink -f "$R")/releases/demo-1.1"
+check "G1.hook-sees-swp-lib: only the LAST stdout line is logged" sh -c "! grep -q 'said: starting' '$OUT'"
+g1_done
+
+g1_setup no-processes-supervisor-only "$W/app-noprocs.tar.gz"
+g1_commit
+check "G1.no-processes-supervisor-only: commit PASSES on the supervisor alone" rc_is 0
+check "G1.no-processes-supervisor-only: ... with a WARNING" said "WARNING — the SWP declares no processes"
+g1_done
+
+g1_setup swp-timing-honoured "$W/app-timing.tar.gz"
+g1_commit -u THEIA_OTA_HEALTH_WAIT_S -u THEIA_OTA_APP_STABLE_S -u THEIA_OTA_HOOK_TIMEOUT_S THEIA_OTA_HEALTH_STABLE=2
+check "G1.swp-timing-honoured: app.json gate timings used" said "commit gate: wait 4s, app stable 1s, hook timeout 3s"
+check "G1.swp-timing-honoured: ... the failure reports the SWP's 4 s budget" said "MISSING .*(gate 4s)"
+g1_rolls_back swp-timing-honoured
+g1_done
+g1_setup swp-timing-env-overrides "$W/app-timing.tar.gz"
+# shellcheck disable=SC2086
+g1_commit $G1T THEIA_OTA_HEALTH_WAIT_S=3
+check "G1.swp-timing-env-overrides: env THEIA_OTA_HEALTH_WAIT_S beats app.json" said "commit gate: wait 3s, app stable 2s, hook timeout 2s"
+g1_done
+
+# clamping (a real 300 s gate is too slow for a test: drive the timing helper)
+printf '%s\n' '{"gate": {"wait_s": 900, "stable_s": 120, "hook_timeout_s": 600}, "processes": []}' > "$TMP/clamp.json"
+timing() {   # $1 = env value, $2 = key, $3 = default, $4 = cap
+    THEIA_SWP_SOURCE_ONLY=1 sh -c '. "$1"; _gate_timing "$2" "$3" "$4" "$5" "$6"' _ \
+        "$SWP" "$1" "$TMP/clamp.json" "$2" "$3" "$4" 2>"$OUT"
+}
+check "G1.swp-timing-clamped: wait_s 900 → 300" test "$(timing '' wait_s 60 300)" = 300
+check "G1.swp-timing-clamped: ... with a log line" said "gate.wait_s=900 from app.json CLAMPED to the rig cap 300"
+check "G1.swp-timing-clamped: stable_s 120 → 60" test "$(timing '' stable_s 10 60)" = 60
+check "G1.swp-timing-clamped: hook_timeout_s 600 → 60" test "$(timing '' hook_timeout_s 10 60)" = 60
+check "G1.swp-timing-clamped: env is not capped (lab override)" test "$(timing 900 wait_s 60 300)" = 900
+check "G1.swp-timing-clamped: no gate block → default" \
+      sh -c "printf '{}' > '$TMP/clamp.json'; test \"\$(THEIA_SWP_SOURCE_ONLY=1 sh -c '. \"\$1\"; _gate_timing \"\" \"\$2\" wait_s 60 300' _ '$SWP' '$TMP/clamp.json' 2>/dev/null)\" = 60"
+
+C="$TMP/g1-badname"; R="$C/opt-theia"; mkroot "$R"
+mktree "$C/t" "demo-1.1" "$W/app-badname.tar.gz"
+run "$R" "$SWP" ArtifactInstall "$C/t"
+check "G1.invalid-process-name-refused: app.json exe '../../bin/sh' is refused at install" refused
+check "G1.invalid-process-name-refused: ... nothing flipped" cur_is "$R" "releases/runtime-1.0"
+
 # ==============================================================================
 # theia-release
 # ==============================================================================

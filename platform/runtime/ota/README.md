@@ -83,11 +83,48 @@ validation block:
   fifo member; extraction uses `--no-same-owner --no-same-permissions`.
   **Build release tarballs from plain files and directories only.**
 - **Commit health gate (`theia-swp`).** `ArtifactCommit` restarts the supervisor,
-  then waits up to `THEIA_OTA_HEALTH_WAIT_S` (default 30) seconds for a
-  `supervisor` process whose executable is `$THEIA_ROOT/bin/supervisor` to hold
-  one pid for `THEIA_OTA_HEALTH_STABLE` (default 3) consecutive 1 s probes, with
-  `current/config/executor.json` present. No signal → exit 1 → Mender runs
-  `ArtifactRollback`. `THEIA_OTA_HEALTH_WAIT_S=0` disables the gate (lab only).
+  then, within ONE budget of `THEIA_OTA_HEALTH_WAIT_S` (default 60) seconds:
+  1. a `supervisor` process whose executable is `$THEIA_ROOT/bin/supervisor`
+     holds one pid for `THEIA_OTA_HEALTH_STABLE` (default 3) consecutive 1 s
+     probes, with `current/config/executor.json` present;
+  2. every process the SWP declares in `app.json` (written by `theia
+     release-swp`, laid into `releases/<ver>/app.json`) runs FROM the flipped
+     release (`/proc/<pid>/exe` is exactly `<release>/bin/<exe>`: not a deleted
+     file, not the previous release's binary) and keeps one pid for
+     `THEIA_OTA_APP_STABLE_S` (default 10) consecutive seconds;
+  3. the optional `health` hook (below) exits 0.
+
+  Any failure → a `COMMIT FAILED` line naming the process (`MISSING`,
+  `RESTARTING`, `OLD BINARY`, `NOT STABLE`, `health hook exit N` / `TIMED OUT`)
+  → exit 1 → Mender runs `ArtifactRollback` (current → previous + supervisor
+  restart: the previous app version runs again). An SWP that declares no
+  processes keeps the supervisor-only gate with a WARNING.
+  `THEIA_OTA_HEALTH_WAIT_S=0` disables the whole gate (lab only).
+
+  `app.json` (flat; the module parses it with sed):
+
+  ```json
+  {"name": "wc", "artifact": "wc-0.1.0-<abi>", "abi": "<abi>",
+   "requires_runtime": "0.3.1", "health": "health",
+   "gate": {"wait_s": 180, "stable_s": 20, "hook_timeout_s": 15},
+   "processes": [{"name": "ingest", "exe": "ingest"}, {"name": "link", "exe": "link"}]}
+  ```
+
+  **Timings:** env (`THEIA_OTA_HEALTH_WAIT_S`, `THEIA_OTA_APP_STABLE_S`,
+  `THEIA_OTA_HOOK_TIMEOUT_S`; lab, not capped) > the SWP's `gate` (`release-swp
+  --gate`; clamped on the rig to wait_s ≤ 300, stable_s ≤ 60, hook_timeout_s ≤ 60,
+  with a log line) > defaults 60 / 10 / 10.
+
+  **Health hook contract** (`release-swp --health P`, or `apps/<app>/health`;
+  shipped as `releases/<ver>/health`): run after the processes are stable, as user
+  `theia` (the commit fails if the rig has no such user), cwd = the release dir,
+  stdin `/dev/null`, env `THEIA_ROOT`, `THEIA_RELEASE`, `THEIA_ARTIFACT` and
+  `LD_LIBRARY_PATH=<release>/lib` (the SWP's own libs), killed after
+  `hook_timeout_s` (default 10). Exit 0 = healthy; anything else or the timeout
+  fails the commit. The LAST stdout line goes into the gate log (`health hook
+  said: …`); stderr goes to the deployment log.
+
+  Regression: `sh platform/runtime/ota/test/test_modules.sh`, cases `G1.*`.
 - **Rollback with no `previous`** exits non-zero (`theia-release`, `theia-swp`).
 
 ## No key material in packages (hardening H)

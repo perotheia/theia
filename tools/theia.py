@@ -2823,7 +2823,11 @@ def _release_runtime_plane(target: str, args: list[str]) -> int:
         if man_dir.is_dir():
             if subprocess.run([*aws, "sync", str(man_dir),
                                f"s3://{bucket}/{key}/manifest",
-                               "--exclude", "*.deb", "--exclude", "BUILD.bazel"],
+                               "--exclude", "*.deb", "--exclude", "BUILD.bazel",
+                               # NEVER publish key material: the staged dev certs + PRIVATE KEYS
+                               # (<machine>/certs/) are for a local `theia start`; the runtime plane
+                               # is read by every rig (hardening C3).
+                               "--exclude", "*/certs/*", "--exclude", "*.key"],
                               env=env).returncode != 0:
                 rc_final = 1
             else:
@@ -2837,7 +2841,8 @@ def _release_runtime_plane(target: str, args: list[str]) -> int:
             man_tgz = deb_dir / f"manifest-{key}.tar.gz"
             with tarfile.open(man_tgz, "w:gz") as tf:
                 for p in sorted(man_dir.rglob("*")):
-                    if p.is_file() and p.suffix != ".deb" and p.name != "BUILD.bazel":
+                    if (p.is_file() and p.suffix not in (".deb", ".key")
+                            and p.name != "BUILD.bazel" and "certs" not in p.relative_to(man_dir).parts):
                         tf.add(p, arcname=str(p.relative_to(man_dir)))
                 # The on-device OTA assets theia authors (platform/runtime/ota/):
                 # the launcher (theia-run.sh) + the Mender update-modules
@@ -4519,7 +4524,8 @@ def _publish_swp_plane(s3_url: str, fleet: str, app: str, ver: str,
     stage_manifest = (tarball.parent / "_stage" / "manifest") if tarball else None
     if stage_manifest and stage_manifest.is_dir():
         if _aws([*aws, "sync", str(stage_manifest),
-                 f"s3://{bucket}/{key}/manifest"]) != 0:
+                 f"s3://{bucket}/{key}/manifest",
+                 "--exclude", "*/certs/*", "--exclude", "*.key"]) != 0:   # no key material in S3
             return 1
         print(f"$ aws sync {stage_manifest} → s3://{bucket}/{key}/manifest/",
               file=sys.stderr)

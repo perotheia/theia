@@ -74,7 +74,11 @@ def _make_channel(target: str) -> "grpc.Channel":
     creds = grpc.ssl_channel_credentials(
         root_certificates=ca,
         private_key=client_key, certificate_chain=client_cert)
-    return grpc.secure_channel(target, creds)
+    # THEIA_COM_TLS_NAME: the name to verify in the server certificate when the target is an ADDRESS
+    # (a fleet rig's certificate names the rig and "rig.fleet.theia", never its IP).
+    name = os.environ.get("THEIA_COM_TLS_NAME")
+    opts = (("grpc.ssl_target_name_override", name),) if name else None
+    return grpc.secure_channel(target, creds, options=opts)
 
 # The grpc_tools-generated stubs use flat-style imports (import Foo_pb2), so
 # their dir must be on sys.path before we import them. Regenerate with

@@ -54,6 +54,18 @@ std::shared_ptr<grpc::ChannelCredentials> channel_creds() {
     opts.pem_private_key = read_file_("THEIA_COM_TLS_CLIENT_KEY");
     return grpc::SslCredentials(opts);
 }
+
+// Every channel goes through here. THEIA_COM_TLS_NAME = the name to verify in the server certificate
+// when the target is an ADDRESS (a fleet rig's certificate names the rig and "rig.fleet.theia",
+// never its IP). Unset: gRPC verifies the host part of the target, as before.
+std::shared_ptr<grpc::Channel> make_channel_(
+        const std::string& target, const std::shared_ptr<grpc::ChannelCredentials>& creds) {
+    const char* name = std::getenv("THEIA_COM_TLS_NAME");
+    if (!name || !*name) return grpc::CreateChannel(target, creds);
+    grpc::ChannelArguments args;
+    args.SetSslTargetNameOverride(name);
+    return grpc::CreateCustomChannel(target, creds, args);
+}
 }  // namespace
 
 GrpcClient::GrpcClient(std::string machine_name,
@@ -112,7 +124,7 @@ std::string GrpcClient::trace_endpoint() const {
 void GrpcClient::run_trace() {
     const std::string endpoint = trace_endpoint();
     while (running_.load()) {
-        trace_channel_ = grpc::CreateChannel(
+        trace_channel_ = make_channel_(
             endpoint, channel_creds());
         auto ci = std::static_pointer_cast< ::grpc::ChannelInterface>(
             trace_channel_);
@@ -151,7 +163,7 @@ std::string GrpcClient::log_endpoint() const {
 void GrpcClient::run_log() {
     const std::string endpoint = log_endpoint();
     while (running_.load()) {
-        log_channel_ = grpc::CreateChannel(endpoint, channel_creds());
+        log_channel_ = make_channel_(endpoint, channel_creds());
         auto ci = std::static_pointer_cast< ::grpc::ChannelInterface>(log_channel_);
         auto stub = ::services::com::LogStream::NewStub(ci);
         ::services::com::LogSubscribeRequest req;   // level_min=0, all tags
@@ -181,7 +193,7 @@ int GrpcClient::configure_trace(const std::string& target_node,
     // tracer) is ConfigureTrace on SupervisorView (:7700) — the SAME RPC
     // rtdb / tdb drive. (TraceStream is the EGRESS stream on :7710, a
     // separate service; control stays on SupervisorView.)
-    auto chan = grpc::CreateChannel(host_port_,
+    auto chan = make_channel_(host_port_,
                                     channel_creds());
     auto ci = std::static_pointer_cast< ::grpc::ChannelInterface>(chan);
     auto stub = ::services::com::SupervisorView::NewStub(ci);
@@ -212,7 +224,7 @@ int GrpcClient::configure_trace(const std::string& target_node,
 std::vector<GrpcClient::SchemaRow>
 GrpcClient::list_schemas(const std::string& config_type, bool* ok) {
     std::vector<SchemaRow> out;
-    auto chan = grpc::CreateChannel(host_port_,
+    auto chan = make_channel_(host_port_,
                                     channel_creds());
     auto ci = std::static_pointer_cast< ::grpc::ChannelInterface>(chan);
     auto stub = ::services::com::PerView::NewStub(ci);
@@ -235,7 +247,7 @@ GrpcClient::list_schemas(const std::string& config_type, bool* ok) {
 }
 
 int GrpcClient::snapshot(const std::string& label, std::string* msg) {
-    auto chan = grpc::CreateChannel(host_port_,
+    auto chan = make_channel_(host_port_,
                                     channel_creds());
     auto ci = std::static_pointer_cast< ::grpc::ChannelInterface>(chan);
     auto stub = ::services::com::PerView::NewStub(ci);
@@ -258,7 +270,7 @@ int GrpcClient::snapshot(const std::string& label, std::string* msg) {
 std::vector<GrpcClient::StoreRow>
 GrpcClient::get_store_snapshot(const std::string& config_type, bool* ok) {
     std::vector<StoreRow> out;
-    auto chan = grpc::CreateChannel(host_port_, channel_creds());
+    auto chan = make_channel_(host_port_, channel_creds());
     auto ci = std::static_pointer_cast< ::grpc::ChannelInterface>(chan);
     auto stub = ::services::com::PerView::NewStub(ci);
     ::services::com::GetSnapshotCall req;
@@ -283,7 +295,7 @@ GrpcClient::get_store_snapshot(const std::string& config_type, bool* ok) {
 GrpcClient::UdsResult GrpcClient::send_uds(uint32_t target_addr,
                                           const std::string& uds) {
     UdsResult out;
-    auto chan = grpc::CreateChannel(host_port_, channel_creds());
+    auto chan = make_channel_(host_port_, channel_creds());
     auto ci = std::static_pointer_cast< ::grpc::ChannelInterface>(chan);
     auto stub = ::services::com::DiagView::NewStub(ci);
     ::services::com::DiagUdsRequest req;
@@ -311,7 +323,7 @@ GrpcClient::UdsResult GrpcClient::send_uds(uint32_t target_addr,
 GrpcClient::TombstoneResult
 GrpcClient::get_tombstone(const std::string& child_name, bool* ok) {
     TombstoneResult out;
-    auto chan = grpc::CreateChannel(host_port_,
+    auto chan = make_channel_(host_port_,
                                     channel_creds());
     auto ci = std::static_pointer_cast< ::grpc::ChannelInterface>(chan);
     auto stub = ::services::com::SupervisorView::NewStub(ci);
@@ -342,7 +354,7 @@ GrpcClient::get_tombstone(const std::string& child_name, bool* ok) {
 // drives). Synchronous unary, fresh channel.
 int GrpcClient::configure_log_level(const std::string& target_node,
                                     const std::string& level) {
-    auto chan = grpc::CreateChannel(host_port_,
+    auto chan = make_channel_(host_port_,
                                     channel_creds());
     auto ci = std::static_pointer_cast< ::grpc::ChannelInterface>(chan);
     auto stub = ::services::com::SupervisorView::NewStub(ci);
@@ -367,7 +379,7 @@ int GrpcClient::configure_log_level(const std::string& target_node,
 // node isn't found (not reporting yet) or the RPC fails.
 std::string GrpcClient::get_log_level(const std::string& node) {
     static const char* kLvl[] = {"TRACE", "DEBUG", "INFO", "WARN", "ERROR"};
-    auto chan = grpc::CreateChannel(host_port_,
+    auto chan = make_channel_(host_port_,
                                     channel_creds());
     auto ci = std::static_pointer_cast< ::grpc::ChannelInterface>(chan);
     auto stub = ::services::com::SupervisorView::NewStub(ci);
@@ -398,7 +410,7 @@ int GrpcClient::terminate_child(const std::string& name, std::string* msg) {
 }
 int GrpcClient::child_op(const std::string& name, bool no_restart,
                          const char* which, std::string* msg) {
-    auto chan = grpc::CreateChannel(host_port_,
+    auto chan = make_channel_(host_port_,
                                     channel_creds());
     auto ci = std::static_pointer_cast< ::grpc::ChannelInterface>(chan);
     auto stub = ::services::com::SupervisorView::NewStub(ci);
@@ -423,7 +435,7 @@ int GrpcClient::child_op(const std::string& name, bool no_restart,
 
 void GrpcClient::run() {
     while (running_.load()) {
-        channel_ = grpc::CreateChannel(host_port_,
+        channel_ = make_channel_(host_port_,
                                         channel_creds());
         // NewStub wants shared_ptr<ChannelInterface>. Channel inherits
         // from it but the implicit conversion isn't picked up in

@@ -62,7 +62,40 @@ rootfs-image — no A/B). Quirks found on the live run:
   `deploy/vucm/campaign.sh`'s probe path) so the on-device UCM agent runs the AUTOSAR
   lifecycle: stop/restart the affected FCs → PHM-health verify → ACTIVE or ROLLBACK.
   Non-zero exit → Mender rolls the install back (module restores `previous`).
-  Standalone (no UCM up) → no-op success; the symlink switch IS the install.
+  **Fail-closed:** UCM unreachable / not wired, or no `theia-migrate` on the rig,
+  FAILS the install. A rig that runs no UCM (lab, bare dev box) opts out with
+  `THEIA_OTA_ALLOW_NO_UCM=1` in the Mender client's environment — then the symlink
+  switch IS the install. An explicit UCM reject always fails.
+
+## Hardening (the payload is untrusted input to root scripts)
+
+All three modules (`theia-release`, `theia-swp`, `theia-app`) carry the same
+validation block:
+
+- **Names.** `version.txt` (→ `releases/<ver>`) and the `app.json` name
+  (→ `apps/<app>`) must match `^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$` — one path
+  component, no `/`, never `..`. Anything else is refused before any write.
+- **No re-install of the running release.** `theia-release` / `theia-swp` refuse a
+  version that resolves to what `current` points at (staging would overwrite or
+  delete the live tree). Roll forward to a new version instead.
+- **Archives.** The tarball is listed (`tar -tv`) before extraction and refused if
+  it has an absolute path, a `..` component, or any symlink / hardlink / device /
+  fifo member; extraction uses `--no-same-owner --no-same-permissions`.
+  **Build release tarballs from plain files and directories only.**
+- **Commit health gate (`theia-swp`).** `ArtifactCommit` restarts the supervisor,
+  then waits up to `THEIA_OTA_HEALTH_WAIT_S` (default 30) seconds for a
+  `supervisor` process whose executable is `$THEIA_ROOT/bin/supervisor` to hold
+  one pid for `THEIA_OTA_HEALTH_STABLE` (default 3) consecutive 1 s probes, with
+  `current/config/executor.json` present. No signal → exit 1 → Mender runs
+  `ArtifactRollback`. `THEIA_OTA_HEALTH_WAIT_S=0` disables the gate (lab only).
+- **Rollback with no `previous`** exits non-zero (`theia-release`, `theia-swp`).
+
+Tests (normal user, host or build container, no root, nothing outside a temp dir):
+
+```sh
+sh platform/runtime/ota/test/test_modules.sh        # -v shows module output
+python3 -m pytest testing/deploy/test_ucm_adopt.py
+```
 
 ## Role split (see docs/tasks/TODO/ansible-mender-migration.md)
 

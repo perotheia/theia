@@ -1,0 +1,24 @@
+# HAND-OWNED. ucm tests.
+#
+# Unit check for the manifest validators + the Mender argv (impl/ucm_validate.hpp).
+# Pure std C++ — runs in the sandbox.
+
+load("@rules_cc//cc:defs.bzl", "cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_test(
+    name = "test_ucm_validate",
+    srcs = ["test_ucm_validate.cc"],
+    copts = ["-std=c++17", "-Wall", "-Wextra", "-fPIC"],
+    deps = ["//services/ucm/impl:ucm_validate"],
+)
+
+# The exec path of the Mender back-end against a stub `mender` on PATH: one argv
+# element per reference, no shell, invalid references refused before any exec.
+cc_test(
+    name = "test_mender_exec",
+    srcs = ["test_mender_exec.cc"],
+    copts = ["-std=c++17", "-Wall", "-Wextra", "-fPIC"],
+    deps = ["//services/ucm/impl:mender_install"],
+)

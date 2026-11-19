@@ -33,6 +33,7 @@
 #include <pb_decode.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <string>
@@ -222,12 +223,17 @@ int main(int argc, char** argv) {
     // adopt — hand a landed release to UCM (the native ucm-adopt.py replacement).
     // Exit 0 on accept OR transient-unreachable (symlink stands); 1 only on an
     // explicit UCM reject, so a not-yet-adopted rig still completes the install.
+    // STRICT mode (env THEIA_MIGRATE_ADOPT_STRICT=1, set by the Mender state
+    // script ArtifactInstall_Leave_01_ucm-request): unreachable / not-wired is
+    // reported as exit 3 instead of 0, so the caller can fail the install closed.
     if (verb == "adopt") {
         const std::string version = argv[2];
         const std::string scope   = argc > 3 ? argv[3] : "full";
         const std::string fc      = argc > 4 ? argv[4] : "";
         const std::string apath   = argc > 5 ? argv[5] : "";
         const int rc = adopt(version, scope, fc, apath);
+        const char* strict = std::getenv("THEIA_MIGRATE_ADOPT_STRICT");
+        if (rc == 2 && strict && std::string(strict) == "1") return 3;
         return rc == 1 ? 1 : 0;   // reject → fail; accept/unreachable → ok
     }
 

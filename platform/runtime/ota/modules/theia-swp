@@ -28,6 +28,16 @@
 #                                 version.txt, requires_runtime.txt, [migration/] }
 #   version.txt          <app>-<ver>-<abi>  (the artifact-name gate + release dir name)
 #
+# Hardening (the payload is untrusted input to a root script):
+#   * version.txt must be ONE safe path component (see _valid_name) and must not
+#     name the currently running release — both are refused in ArtifactInstall.
+#   * the tarball is listed first and refused if it has an absolute path, a '..'
+#     component, or any symlink/hardlink/device member; it is extracted with
+#     --no-same-owner --no-same-permissions.
+#   * ArtifactCommit is a HEALTH GATE (see _health_gate): no stable supervisor on
+#     the new release within THEIA_OTA_HEALTH_WAIT_S (30) seconds → exit 1 →
+#     Mender rolls back. ArtifactRollback with no `previous` exits non-zero.
+#
 # Mender invokes:  theia-swp <STATE> <payload-files-dir>
 set -eu
 
@@ -39,6 +49,77 @@ RELEASES="$THEIA_ROOT/releases"
 CURRENT="$THEIA_ROOT/current"
 PREVIOUS="$THEIA_ROOT/previous"
 MACHINE="${THEIA_MACHINE:-master}"       # the role whose executor slice to activate
+
+MOD=theia-swp
+
+# ---- hardening: untrusted-input validation -----------------------------------
+# (The SAME block lives in theia-swp / theia-app / theia-release — the modules are
+# dependency-free /bin/sh scripts, so the helpers are copied, not sourced. Keep
+# the three copies identical; platform/runtime/ota/test/test_modules.sh checks it.)
+#
+# Everything in the payload (version.txt, app.json, the tarball) is UNTRUSTED
+# input to a root script.
+#
+# _valid_name: a release / app name becomes ONE path component under $THEIA_ROOT
+# (releases/<name>, apps/<name>), so it must match
+#     ^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$
+# — no '/', never '.' or '..', no whitespace/newline, at most 64 characters.
+_valid_name() (
+    LC_ALL=C
+    [ "${#1}" -le 64 ] || exit 1
+    case "$1" in
+      ''|[!A-Za-z0-9]*|*[!A-Za-z0-9._+-]*) exit 1 ;;
+    esac
+    exit 0
+)
+_require_name() {   # $1 = what it is (for the message), $2 = the value
+    _valid_name "$2" && return 0
+    echo "$MOD: REFUSED — invalid $1 (must match ^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}\$)" >&2
+    return 1
+}
+# _is_current: does releases/<name> resolve to the tree `current` points at? A
+# re-install of the RUNNING release would overwrite/delete the live tree, so the
+# callers refuse it (roll forward to a new version, or roll back, instead).
+_is_current() {
+    [ -e "$CURRENT" ] || return 1
+    _cur="$(readlink -f "$CURRENT" 2>/dev/null || true)"
+    _new="$(readlink -f "$THEIA_ROOT/releases/$1" 2>/dev/null || true)"
+    [ -n "$_cur" ] && [ "$_cur" = "$_new" ]
+}
+# _tar <tarball> <tar-args…>: run tar over a (possibly zstd) payload tarball.
+_tar() {
+    _tb="$1"; shift
+    case "$_tb" in
+      *.zst) zstd -dc "$_tb" | tar "$@" -f - ;;
+      *)     tar "$@" -f "$_tb" ;;
+    esac
+}
+# _tar_check: list the archive BEFORE extracting and refuse it unless every
+# member is a plain file or directory with a relative, '..'-free name: no
+# absolute paths, no '..' components, no symlinks / hardlinks / devices / fifos.
+_tar_check() {
+    _names="$(_tar "$1" -t 2>/dev/null)" || {
+        echo "$MOD: REFUSED — unreadable archive $(basename "$1")" >&2; return 1; }
+    _listing="$(_tar "$1" -tv 2>/dev/null)" || {
+        echo "$MOD: REFUSED — unreadable archive $(basename "$1")" >&2; return 1; }
+    [ -n "$_listing" ] || return 0
+    if printf '%s\n' "$_names" | LC_ALL=C grep -Eq '^/|(^|/)\.\.(/|$)'; then
+        echo "$MOD: REFUSED — archive has an absolute path or a '..' member" >&2
+        return 1
+    fi
+    if printf '%s\n' "$_listing" | LC_ALL=C grep -qv '^[-d]'; then
+        echo "$MOD: REFUSED — archive has a symlink/hardlink/device member (only plain files + dirs allowed)" >&2
+        return 1
+    fi
+    return 0
+}
+# _tar_extract <tarball> <dest>: checked extraction. Ownership and mode bits come
+# from this process (umask), never from the archive.
+_tar_extract() {
+    _tar_check "$1" || return 1
+    _tar "$1" -x --no-same-owner --no-same-permissions -C "$2"
+}
+# ---- end hardening block ------------------------------------------------------
 
 _payload() {   # echo the path to a payload file, files/ or bare
     if [ -f "$FILES/files/$1" ]; then echo "$FILES/files/$1";
@@ -178,6 +259,59 @@ _reload_supervisor() {
     fi
 }
 
+# ---- commit health gate --------------------------------------------------------
+# ArtifactCommit restarts the supervisor onto the flipped release; the commit only
+# STANDS if the supervisor then comes up and stays up. The health signal is the
+# simplest one every rig has (no python/tdb/TIPC dependency):
+#
+#   a process named `supervisor` whose executable is $THEIA_ROOT/bin/supervisor
+#   (the binary theia-run execs) is running, `current/config/executor.json` (the
+#   manifest it was started on) exists, and the SAME pid is seen on
+#   THEIA_OTA_HEALTH_STABLE (default 3) consecutive probes one second apart — a
+#   supervisor that crash-loops on the new release never holds a pid that long.
+#
+# The gate waits at most THEIA_OTA_HEALTH_WAIT_S seconds (default 30). No signal
+# in that time → non-zero exit → Mender runs ArtifactRollback (current → previous
+# + restart). THEIA_OTA_HEALTH_WAIT_S=0 DISABLES the gate (lab rigs whose
+# supervisor is not started from $THEIA_ROOT/bin); never set it on a fleet rig.
+_supervisor_pid() {   # echo the pid of OUR supervisor ($THEIA_ROOT/bin/supervisor)
+    want="$(readlink -f "$THEIA_ROOT/bin/supervisor" 2>/dev/null || true)"
+    [ -n "$want" ] || return 1
+    for pid in $(pgrep -x supervisor 2>/dev/null); do
+        exe="$(readlink "/proc/$pid/exe" 2>/dev/null || true)"
+        exe="${exe% (deleted)}"      # the binary was replaced on disk under it
+        if [ "$exe" = "$want" ]; then echo "$pid"; return 0; fi
+    done
+    return 1
+}
+_health_gate() {
+    wait_s="${THEIA_OTA_HEALTH_WAIT_S:-30}"
+    need="${THEIA_OTA_HEALTH_STABLE:-3}"
+    case "$wait_s" in ''|*[!0-9]*) wait_s=30 ;; esac
+    case "$need"   in ''|*[!0-9]*|0) need=3 ;; esac
+    if [ "$wait_s" -eq 0 ]; then
+        echo "theia-swp: WARNING — commit health gate DISABLED (THEIA_OTA_HEALTH_WAIT_S=0)" >&2
+        return 0
+    fi
+    t=0; streak=0; last=""
+    while :; do
+        pid=""
+        [ -f "$CURRENT/config/executor.json" ] && pid="$(_supervisor_pid || true)"
+        if [ -n "$pid" ] && [ "$pid" = "$last" ]; then streak=$((streak + 1))
+        elif [ -n "$pid" ]; then streak=1
+        else streak=0; fi
+        last="$pid"
+        if [ "$streak" -ge "$need" ]; then
+            echo "theia-swp: health OK — supervisor pid $pid stable on $(readlink "$CURRENT" 2>/dev/null) after ${t}s"
+            return 0
+        fi
+        [ "$t" -lt "$wait_s" ] || break
+        sleep 1; t=$((t + 1))
+    done
+    echo "theia-swp: COMMIT FAILED — no healthy supervisor ($THEIA_ROOT/bin/supervisor) on $(readlink "$CURRENT" 2>/dev/null || echo none) within ${wait_s}s — Mender will roll back" >&2
+    return 1
+}
+
 # ---- prune stale SWP releases (mirrors UCM's prune_releases) -----------------
 # Standalone Mender installs (no UCM driving the lifecycle) otherwise pile up old
 # releases/<swp>-<ver> forever — the "tangled symlinks" a rig accrues. Keep the
@@ -235,6 +369,11 @@ _stage_and_flip() {
     # release's lib (theia-run sets LD_LIBRARY_PATH=current/lib, so the dir must
     # exist even when empty — services link system .so's + bundled libs from here);
     # SWP config.
+    # Defence in depth for the rm -rf below (ArtifactInstall already checked both).
+    _require_name "release name" "$ver" || return 1
+    if _is_current "$ver"; then
+        echo "theia-swp: REFUSED — '$ver' is the currently running release" >&2; return 1
+    fi
     stage="$RELEASES/$ver"
     rm -rf "$stage"; mkdir -p "$stage/bin" "$stage/lib" "$stage/config"
     cp -a "$base_rel_dir/bin/." "$stage/bin/" 2>/dev/null || true       # services baseline
@@ -283,15 +422,26 @@ case "$STATE" in
     art="$(_artifact_name)"
     [ "$art" != "unknown" ] || { echo "theia-swp: no version.txt" >&2; exit 1; }
 
+    # Snapshot the rollback target BEFORE the first refusal point: Mender runs
+    # ArtifactRollback after a failed ArtifactInstall, and a stale `previous`
+    # would then drop the board to the release-before-last. (_stage_and_flip
+    # repeats the same snapshot; it is idempotent.)
+    if [ -L "$CURRENT" ]; then
+        ln -sfn "$(readlink "$CURRENT")" "$PREVIOUS"
+    fi
+    # version.txt is untrusted and becomes releases/<art> (which _stage_and_flip
+    # rm -rf's): one safe path component only, and never the RUNNING release.
+    _require_name "release name (version.txt)" "$art" || exit 1
+    if _is_current "$art"; then
+        echo "theia-swp: REFUSED — '$art' is the currently running release (re-install would delete the live tree)" >&2
+        exit 1
+    fi
+
     tarball="$(ls "$FILES"/files/*.tar.* 2>/dev/null | head -1 || true)"
     [ -n "$tarball" ] || tarball="$(ls "$FILES"/*.tar.* 2>/dev/null | head -1 || true)"
     [ -n "$tarball" ] || { echo "theia-swp: no SWP tarball in payload" >&2; exit 1; }
     work="$(mktemp -d)"
-    case "$tarball" in
-      *.zst) zstd -dc "$tarball" | tar -x -C "$work" ;;
-      *.gz)  tar -xzf "$tarball" -C "$work" ;;
-      *)     tar -xf "$tarball"  -C "$work" ;;
-    esac
+    _tar_extract "$tarball" "$work" || { rm -rf "$work"; exit 1; }
 
     # runtime precondition (deploy sequencing).
     req_rt="$(_payload requires_runtime.txt)"
@@ -312,6 +462,8 @@ case "$STATE" in
     # The flip happened in ArtifactInstall; restart the supervisor so it adopts
     # current/config (the SWP's executor). Standalone this is the activation.
     _reload_supervisor
+    # Health gate: a non-zero exit here makes Mender run ArtifactRollback.
+    _health_gate || exit 1
     echo "theia-swp: committed current=$(readlink "$CURRENT" 2>/dev/null)"
     ;;
 
@@ -324,7 +476,10 @@ case "$STATE" in
         echo "theia-swp: ROLLBACK current → $prev"
         _reload_supervisor
     else
-        echo "theia-swp: no previous to roll back to" >&2
+        # Nothing to restore: fail loudly, so Mender records the rollback as
+        # failed instead of reporting a clean rollback that never ran.
+        echo "theia-swp: ROLLBACK FAILED — no previous release to roll back to (current=$(readlink "$CURRENT" 2>/dev/null || echo none))" >&2
+        exit 1
     fi
     ;;
 

@@ -7,10 +7,11 @@ native C++, no python/artheia probe on the rig; the retired ucm-adopt.py python
 driver used the probe and was deleted).
 
 The LIVE hand-off (RequestUpdate → FSM → VALIDATED→STAGED) is verified against a
-running UCM on a rig. Here we test the GRACEFUL-DEGRADATION contract a
-state-script depends on: it must exit 0 (the symlink switch IS the install) when
-no UCM / no adopter is present, so a standalone `mender install` never fails for
-lack of a running agent.
+running UCM on a rig. Here we test the state-script's FAIL-CLOSED contract: no
+adopter / UCM unreachable fails the install (→ Mender ArtifactRollback) unless the
+rig opted out with THEIA_OTA_ALLOW_NO_UCM=1 (lab rigs that run no UCM), where the
+symlink switch IS the install. An explicit UCM reject always fails.
+(The shell-level cases live in platform/runtime/ota/test/test_modules.sh.)
 """
 import os
 import subprocess
@@ -22,17 +23,54 @@ STATE_SCRIPT = (REPO / "platform" / "runtime" / "ota" / "state-scripts"
                 / "ArtifactInstall_Leave_01_ucm-request")
 
 
-def test_state_script_degrades_without_adopter(tmp_path):
-    """No $THEIA_ROOT/bin/theia-migrate (bare box) → exit 0 with a current release.
-    The symlink switch is the install; the supervisor adopts `current` on restart."""
+def _env(root, **extra):
+    env = {k: v for k, v in os.environ.items() if k != "THEIA_OTA_ALLOW_NO_UCM"}
+    return {**env, "THEIA_ROOT": str(root), **extra}
+
+
+def test_state_script_fails_closed_without_adopter(tmp_path):
+    """No $THEIA_ROOT/bin/theia-migrate and no opt-out → the hook FAILS: a release
+    nobody handed to UCM is not a good install."""
     root = tmp_path / "opt-theia"
     (root / "releases" / "1.0.0").mkdir(parents=True)
     os.symlink("releases/1.0.0", root / "current")
-    env = {**os.environ, "THEIA_ROOT": str(root)}
-    r = subprocess.run(["sh", str(STATE_SCRIPT)], env=env,
+    r = subprocess.run(["sh", str(STATE_SCRIPT)], env=_env(root),
+                       capture_output=True, text=True)
+    assert r.returncode != 0, f"hook passed:\n{r.stdout}\n{r.stderr}"
+    assert "THEIA_OTA_ALLOW_NO_UCM" in (r.stdout + r.stderr)
+
+
+def test_state_script_degrades_without_adopter_when_opted_out(tmp_path):
+    """THEIA_OTA_ALLOW_NO_UCM=1 (bare box / lab rig) → exit 0 with a current
+    release. The symlink switch is the install; the supervisor adopts `current`
+    on restart."""
+    root = tmp_path / "opt-theia"
+    (root / "releases" / "1.0.0").mkdir(parents=True)
+    os.symlink("releases/1.0.0", root / "current")
+    r = subprocess.run(["sh", str(STATE_SCRIPT)],
+                       env=_env(root, THEIA_OTA_ALLOW_NO_UCM="1"),
                        capture_output=True, text=True)
     assert r.returncode == 0, f"hook failed:\n{r.stdout}\n{r.stderr}"
     assert "symlink-only install" in (r.stdout + r.stderr)
+
+
+def test_state_script_fails_closed_when_ucm_unreachable(tmp_path):
+    """Adopter exit 3 (strict mode: UCM unreachable / not wired) fails the install
+    by default and passes only with the explicit opt-out."""
+    root = tmp_path / "opt-theia"
+    (root / "releases" / "2.3.0").mkdir(parents=True)
+    (root / "bin").mkdir()
+    os.symlink("releases/2.3.0", root / "current")
+    stub = root / "bin" / "theia-migrate"
+    stub.write_text('#!/bin/sh\n[ "$THEIA_MIGRATE_ADOPT_STRICT" = 1 ] || exit 9\nexit 3\n')
+    stub.chmod(0o755)
+    r = subprocess.run(["sh", str(STATE_SCRIPT)], env=_env(root),
+                       capture_output=True, text=True)
+    assert r.returncode == 1, f"{r.stdout}\n{r.stderr}"
+    r = subprocess.run(["sh", str(STATE_SCRIPT)],
+                       env=_env(root, THEIA_OTA_ALLOW_NO_UCM="1"),
+                       capture_output=True, text=True)
+    assert r.returncode == 0, f"{r.stdout}\n{r.stderr}"
 
 
 def test_state_script_fails_with_no_current(tmp_path):

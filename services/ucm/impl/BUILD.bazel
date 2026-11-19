@@ -42,13 +42,34 @@ cc_library(
     ],
 )
 
+# The manifest validators (version shape, allowed artifact references) + the
+# Mender argv builder. Header-only and std-only so //services/ucm/test can unit-
+# test it without the runtime. HAND-OWNED — keep on regen.
+cc_library(
+    name = "ucm_validate",
+    hdrs = ["ucm_validate.hpp"],
+    includes = [".."],
+    copts = ["-std=c++17", "-fPIC"],
+)
+
+# The Mender standalone-install back-end (role resolution + the fork/execvp of
+# the Mender CLI). Its own target — std-only — so //services/ucm/test can drive
+# the real exec path against a stub CLI. HAND-OWNED — keep on regen.
+cc_library(
+    name = "mender_install",
+    srcs = ["mender_install.cc"],
+    hdrs = ["mender_install.hpp"],
+    includes = [".."],
+    copts = ["-std=c++17", "-Wall", "-Wextra", "-fPIC"],
+    deps = [":ucm_validate"],
+)
+
 cc_library(
     name = "ucm_impl",
     srcs = [
         "UcmFsm_handlers.cc",
         "UcmGate_handlers.cc",
         "UcmDaemon_handlers.cc",
-        "mender_install.cc",       # L4-C: standalone-mender-install back-end
     ],
     # release_dir.hpp is the release-directory model (A/B replacement) UcmGate
     # #includes as "impl/release_dir.hpp" — the FC out_dir (one above impl/) is
@@ -58,7 +79,6 @@ cc_library(
     # mender_install.hpp: the role-resolution + Mender standalone-install back-end.
     hdrs = [
         "release_dir.hpp",
-        "mender_install.hpp",
     ],
     includes = [".."],
     copts = [
@@ -73,5 +93,7 @@ cc_library(
         # executes on the STANDALONE overlay path) — HAND-OWNED dep, keep on regen.
         "//third_party:nlohmann_json",
         ":per_migrate",   # shared migration mechanism (also used by V-UCM)
+        ":ucm_validate",  # manifest validators — HAND-OWNED dep, keep on regen
+        ":mender_install",  # L4-C: standalone-mender-install back-end (+ its hpp)
     ],
 )

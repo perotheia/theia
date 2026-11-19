@@ -36,7 +36,7 @@ def wc_ws(tmp_path, monkeypatch):
     (d / "executor.json").write_text(json.dumps({"name": "root", "children": [
         {"name": "applications_sup", "children": [
             {"name": "ingest", "start_cmd": "bin/ingest"},
-            {"name": "link", "start_cmd": "bin/link --mock"}]}]}))
+            {"name": "link", "start_cmd": ["bin/link", "--mock"]}]}]}))
     (d / "execution.json").write_text(json.dumps({"processes": []}))
     exe = tmp_path / "bazel-bin" / "apps" / "wc" / "main" / "wc"
     exe.parent.mkdir(parents=True)

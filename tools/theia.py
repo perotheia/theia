@@ -4267,7 +4267,11 @@ def _swp_process_list(exec_subtree: "dict | None", procs: list[str]) -> list[dic
     (exe defaults to the proc name — release-swp stages every FC as bin/<proc>)."""
     starts = {}
     for node in (exec_subtree or {}).get("nodes", []) or []:
-        cmd = (node.get("start_cmd") or "").split()
+        # executor.json's start_cmd is an argv LIST (serialize-manifest); accept
+        # the legacy single-string form too.
+        cmd = node.get("start_cmd") or []
+        if isinstance(cmd, str):
+            cmd = cmd.split()
         if node.get("name") and cmd:
             starts[node["name"]] = Path(cmd[0]).name
     return [{"name": p, "exe": starts.get(p, p)} for p in procs]

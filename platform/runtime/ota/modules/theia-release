@@ -18,11 +18,19 @@
 #   ArtifactInstall  — stage + atomically switch current → the new release. By this
 #                      state Mender has materialised the payload into <tree>/files/.
 #   ArtifactCommit   — keep it (drop the rollback marker)
-#   ArtifactRollback — restore current → previous (rollback in seconds)
+#   ArtifactRollback — restore current → previous (rollback in seconds); exits
+#                      NON-ZERO when there is no `previous` to restore.
 #   ArtifactFailure / Cleanup ... — best-effort / no-op
 #
 # Install:  copy this file to /usr/share/mender/modules/v3/theia-release (0755).
 # THEIA_ROOT defaults to /opt/theia; override via the env for testing.
+#
+# Hardening (the payload is untrusted input to a root script):
+#   * version.txt must be ONE safe path component (see _valid_name) and must not
+#     name the currently running release — both are refused in ArtifactInstall.
+#   * the tarball is listed first and refused if it has an absolute path, a '..'
+#     component, or any symlink/hardlink/device member; it is extracted with
+#     --no-same-owner --no-same-permissions.
 set -eu
 
 STATE="$1"
@@ -32,6 +40,77 @@ THEIA_ROOT="${THEIA_ROOT:-/opt/theia}"
 RELEASES="$THEIA_ROOT/releases"
 CURRENT="$THEIA_ROOT/current"
 PREVIOUS="$THEIA_ROOT/previous"
+
+MOD=theia-release
+
+# ---- hardening: untrusted-input validation -----------------------------------
+# (The SAME block lives in theia-swp / theia-app / theia-release — the modules are
+# dependency-free /bin/sh scripts, so the helpers are copied, not sourced. Keep
+# the three copies identical; platform/runtime/ota/test/test_modules.sh checks it.)
+#
+# Everything in the payload (version.txt, app.json, the tarball) is UNTRUSTED
+# input to a root script.
+#
+# _valid_name: a release / app name becomes ONE path component under $THEIA_ROOT
+# (releases/<name>, apps/<name>), so it must match
+#     ^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$
+# — no '/', never '.' or '..', no whitespace/newline, at most 64 characters.
+_valid_name() (
+    LC_ALL=C
+    [ "${#1}" -le 64 ] || exit 1
+    case "$1" in
+      ''|[!A-Za-z0-9]*|*[!A-Za-z0-9._+-]*) exit 1 ;;
+    esac
+    exit 0
+)
+_require_name() {   # $1 = what it is (for the message), $2 = the value
+    _valid_name "$2" && return 0
+    echo "$MOD: REFUSED — invalid $1 (must match ^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}\$)" >&2
+    return 1
+}
+# _is_current: does releases/<name> resolve to the tree `current` points at? A
+# re-install of the RUNNING release would overwrite/delete the live tree, so the
+# callers refuse it (roll forward to a new version, or roll back, instead).
+_is_current() {
+    [ -e "$CURRENT" ] || return 1
+    _cur="$(readlink -f "$CURRENT" 2>/dev/null || true)"
+    _new="$(readlink -f "$THEIA_ROOT/releases/$1" 2>/dev/null || true)"
+    [ -n "$_cur" ] && [ "$_cur" = "$_new" ]
+}
+# _tar <tarball> <tar-args…>: run tar over a (possibly zstd) payload tarball.
+_tar() {
+    _tb="$1"; shift
+    case "$_tb" in
+      *.zst) zstd -dc "$_tb" | tar "$@" -f - ;;
+      *)     tar "$@" -f "$_tb" ;;
+    esac
+}
+# _tar_check: list the archive BEFORE extracting and refuse it unless every
+# member is a plain file or directory with a relative, '..'-free name: no
+# absolute paths, no '..' components, no symlinks / hardlinks / devices / fifos.
+_tar_check() {
+    _names="$(_tar "$1" -t 2>/dev/null)" || {
+        echo "$MOD: REFUSED — unreadable archive $(basename "$1")" >&2; return 1; }
+    _listing="$(_tar "$1" -tv 2>/dev/null)" || {
+        echo "$MOD: REFUSED — unreadable archive $(basename "$1")" >&2; return 1; }
+    [ -n "$_listing" ] || return 0
+    if printf '%s\n' "$_names" | LC_ALL=C grep -Eq '^/|(^|/)\.\.(/|$)'; then
+        echo "$MOD: REFUSED — archive has an absolute path or a '..' member" >&2
+        return 1
+    fi
+    if printf '%s\n' "$_listing" | LC_ALL=C grep -qv '^[-d]'; then
+        echo "$MOD: REFUSED — archive has a symlink/hardlink/device member (only plain files + dirs allowed)" >&2
+        return 1
+    fi
+    return 0
+}
+# _tar_extract <tarball> <dest>: checked extraction. Ownership and mode bits come
+# from this process (umask), never from the archive.
+_tar_extract() {
+    _tar_check "$1" || return 1
+    _tar "$1" -x --no-same-owner --no-same-permissions -C "$2"
+}
+# ---- end hardening block ------------------------------------------------------
 
 # The artifact's version = the packed version.txt (== the Mender artifact name).
 # Materialised under <tree>/files/ by ArtifactInstall time.
@@ -65,15 +144,21 @@ case "$STATE" in
     if [ -L "$CURRENT" ]; then
         ln -sfn "$(readlink "$CURRENT")" "$PREVIOUS"
     fi
-    stage="$RELEASES/$ver"
-    mkdir -p "$stage"
+    # version.txt is untrusted and becomes releases/<ver>: one safe path component
+    # only, and never the RUNNING release (staging would overwrite the live tree).
+    # (Checked AFTER the `previous` snapshot above, so the ArtifactRollback Mender
+    # runs on a refusal re-aims current at the release that is running now.)
+    _require_name "release version (version.txt)" "$ver" || exit 1
+    if _is_current "$ver"; then
+        echo "theia-release: REFUSED — '$ver' is the currently running release (re-install would overwrite the live tree)" >&2
+        exit 1
+    fi
     tarball="$(ls "$FILES"/files/release.tar.* 2>/dev/null | head -1 || true)"
     [ -n "$tarball" ] || { echo "theia-release: no release.tar.* in payload" >&2; exit 1; }
-    case "$tarball" in
-      *.zst) zstd -dc "$tarball" | tar -x -C "$stage" ;;
-      *.gz)  tar -xzf "$tarball" -C "$stage" ;;
-      *)     tar -xf "$tarball"  -C "$stage" ;;
-    esac
+    _tar_check "$tarball" || exit 1          # before anything is created on disk
+    stage="$RELEASES/$ver"
+    mkdir -p "$stage"
+    _tar "$tarball" -x --no-same-owner --no-same-permissions -C "$stage"
     echo "$ver" > "$stage/.mender_version"
     echo "theia-release: staged release $ver → $stage"
     # atomic re-aim: write a temp symlink + rename(2) over current
@@ -102,7 +187,10 @@ case "$STATE" in
         mv -T "$tmp" "$CURRENT"
         echo "theia-release: ROLLBACK current → $prev"
     else
-        echo "theia-release: no previous to roll back to" >&2
+        # Nothing to restore: say so with a FAILING exit, so Mender records the
+        # rollback as failed instead of reporting a clean rollback that never ran.
+        echo "theia-release: ROLLBACK FAILED — no previous release to roll back to (current=$(readlink "$CURRENT" 2>/dev/null || echo none))" >&2
+        exit 1
     fi
     ;;
 

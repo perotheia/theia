@@ -24,6 +24,12 @@
 #   - back up the prior {bin copies, executor} so ArtifactRollback restores them.
 #   - reload the supervisor (tdb reload if present) so it (re)spawns the app FCs.
 #
+# Hardening (the payload is untrusted input to a root script): the artifact name
+# and the app name must each be ONE safe path component (see _valid_name); the
+# tarball is listed first and refused if it has an absolute path, a '..'
+# component, or any symlink/hardlink/device member, and is extracted with
+# --no-same-owner --no-same-permissions.
+#
 # Mender invokes:  theia-app <STATE> <payload-files-dir>
 set -eu
 
@@ -34,6 +40,77 @@ THEIA_ROOT="${THEIA_ROOT:-/opt/theia}"
 CURRENT="$THEIA_ROOT/current"
 EXEC="$THEIA_ROOT/config/executor.json"
 APPS_STATE="$THEIA_ROOT/apps"            # per-app install records (for rollback)
+
+MOD=theia-app
+
+# ---- hardening: untrusted-input validation -----------------------------------
+# (The SAME block lives in theia-swp / theia-app / theia-release — the modules are
+# dependency-free /bin/sh scripts, so the helpers are copied, not sourced. Keep
+# the three copies identical; platform/runtime/ota/test/test_modules.sh checks it.)
+#
+# Everything in the payload (version.txt, app.json, the tarball) is UNTRUSTED
+# input to a root script.
+#
+# _valid_name: a release / app name becomes ONE path component under $THEIA_ROOT
+# (releases/<name>, apps/<name>), so it must match
+#     ^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$
+# — no '/', never '.' or '..', no whitespace/newline, at most 64 characters.
+_valid_name() (
+    LC_ALL=C
+    [ "${#1}" -le 64 ] || exit 1
+    case "$1" in
+      ''|[!A-Za-z0-9]*|*[!A-Za-z0-9._+-]*) exit 1 ;;
+    esac
+    exit 0
+)
+_require_name() {   # $1 = what it is (for the message), $2 = the value
+    _valid_name "$2" && return 0
+    echo "$MOD: REFUSED — invalid $1 (must match ^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}\$)" >&2
+    return 1
+}
+# _is_current: does releases/<name> resolve to the tree `current` points at? A
+# re-install of the RUNNING release would overwrite/delete the live tree, so the
+# callers refuse it (roll forward to a new version, or roll back, instead).
+_is_current() {
+    [ -e "$CURRENT" ] || return 1
+    _cur="$(readlink -f "$CURRENT" 2>/dev/null || true)"
+    _new="$(readlink -f "$THEIA_ROOT/releases/$1" 2>/dev/null || true)"
+    [ -n "$_cur" ] && [ "$_cur" = "$_new" ]
+}
+# _tar <tarball> <tar-args…>: run tar over a (possibly zstd) payload tarball.
+_tar() {
+    _tb="$1"; shift
+    case "$_tb" in
+      *.zst) zstd -dc "$_tb" | tar "$@" -f - ;;
+      *)     tar "$@" -f "$_tb" ;;
+    esac
+}
+# _tar_check: list the archive BEFORE extracting and refuse it unless every
+# member is a plain file or directory with a relative, '..'-free name: no
+# absolute paths, no '..' components, no symlinks / hardlinks / devices / fifos.
+_tar_check() {
+    _names="$(_tar "$1" -t 2>/dev/null)" || {
+        echo "$MOD: REFUSED — unreadable archive $(basename "$1")" >&2; return 1; }
+    _listing="$(_tar "$1" -tv 2>/dev/null)" || {
+        echo "$MOD: REFUSED — unreadable archive $(basename "$1")" >&2; return 1; }
+    [ -n "$_listing" ] || return 0
+    if printf '%s\n' "$_names" | LC_ALL=C grep -Eq '^/|(^|/)\.\.(/|$)'; then
+        echo "$MOD: REFUSED — archive has an absolute path or a '..' member" >&2
+        return 1
+    fi
+    if printf '%s\n' "$_listing" | LC_ALL=C grep -qv '^[-d]'; then
+        echo "$MOD: REFUSED — archive has a symlink/hardlink/device member (only plain files + dirs allowed)" >&2
+        return 1
+    fi
+    return 0
+}
+# _tar_extract <tarball> <dest>: checked extraction. Ownership and mode bits come
+# from this process (umask), never from the archive.
+_tar_extract() {
+    _tar_check "$1" || return 1
+    _tar "$1" -x --no-same-owner --no-same-permissions -C "$2"
+}
+# ---- end hardening block ------------------------------------------------------
 
 _payload() {   # echo the path to a payload file, files/ or bare
     if [ -f "$FILES/files/$1" ]; then echo "$FILES/files/$1";
@@ -92,6 +169,9 @@ case "$STATE" in
     appjson="$(_payload app.json)"
     [ -n "$appjson" ] || { echo "theia-app: no app.json in payload" >&2; exit 1; }
     app="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["name"])' "$appjson")"
+    # version.txt + app.json are untrusted; the app name becomes apps/<app>.
+    _require_name "artifact name (version.txt)" "$art" || exit 1
+    _require_name "app name (app.json)" "$app" || exit 1
     [ -d "$CURRENT" ] || { echo "theia-app: no $CURRENT (provision the runtime first)" >&2; exit 1; }
 
     # unpack the bundle tar to a temp dir
@@ -99,11 +179,7 @@ case "$STATE" in
     [ -n "$tarball" ] || tarball="$(ls "$FILES"/*.tar.* 2>/dev/null | head -1 || true)"
     [ -n "$tarball" ] || { echo "theia-app: no app tarball in payload" >&2; exit 1; }
     work="$(mktemp -d)"
-    case "$tarball" in
-      *.zst) zstd -dc "$tarball" | tar -x -C "$work" ;;
-      *.gz)  tar -xzf "$tarball" -C "$work" ;;
-      *)     tar -xf "$tarball"  -C "$work" ;;
-    esac
+    _tar_extract "$tarball" "$work" || { rm -rf "$work"; exit 1; }
 
     # back up the prior install of THIS app (bin copies + the executor) for rollback
     rec="$APPS_STATE/$app"

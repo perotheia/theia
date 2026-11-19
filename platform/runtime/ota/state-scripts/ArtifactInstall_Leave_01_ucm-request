@@ -15,9 +15,20 @@
 # The hand-off is NATIVE: `theia-migrate adopt` (the C++ tool that ships in the
 # theia-runtime deb) makes the SAME RequestUpdate call the retired python
 # ucm-adopt.py made, but over the runtime's own RemoteRef — NO python, NO
-# artheia probe on the rig (the probe is a dev tool; it ships to no board). For a
-# standalone (no UCM running) install it is a no-op success.
+# artheia probe on the rig (the probe is a dev tool; it ships to no board).
+#
+# FAIL-CLOSED: a release that UCM did not accept is NOT a good install. The hook
+# exits non-zero (→ Mender ArtifactRollback) when
+#   * UCM explicitly REJECTS the release (adopter exit 1),
+#   * UCM is unreachable / not wired yet (adopter exit 3), or
+#   * the native adopter $THEIA_ROOT/bin/theia-migrate is missing.
+# Lab rigs / bare dev boxes that run NO UCM opt out explicitly with
+#   THEIA_OTA_ALLOW_NO_UCM=1
+# (in the Mender client's environment): the last two cases then degrade to the
+# old "the symlink switch IS the install" success. An explicit reject always fails.
 set -eu
+
+ALLOW_NO_UCM="${THEIA_OTA_ALLOW_NO_UCM:-0}"
 
 THEIA_ROOT="${THEIA_ROOT:-/opt/theia}"
 VER="$(readlink "$THEIA_ROOT/current" 2>/dev/null | sed 's#releases/##')"
@@ -25,14 +36,34 @@ VER="$(readlink "$THEIA_ROOT/current" 2>/dev/null | sed 's#releases/##')"
 
 adopt="$THEIA_ROOT/bin/theia-migrate"
 if [ ! -x "$adopt" ]; then
-    # Runtime too old to carry the native adopter, or a bare dev box: the symlink
-    # switch IS the install; the supervisor picks up `current` on restart.
-    echo "ucm-request: no $adopt; symlink-only install of $VER (ok)"
-    exit 0
+    # Runtime too old to carry the native adopter, or a bare dev box.
+    if [ "$ALLOW_NO_UCM" = "1" ]; then
+        # Opted out: the symlink switch IS the install; the supervisor picks up
+        # `current` on restart.
+        echo "ucm-request: no $adopt; symlink-only install of $VER (ok — THEIA_OTA_ALLOW_NO_UCM=1)"
+        exit 0
+    fi
+    echo "ucm-request: FAILED — no $adopt, cannot hand $VER to UCM (set THEIA_OTA_ALLOW_NO_UCM=1 on a rig that runs no UCM)" >&2
+    exit 1
 fi
 
 echo "ucm-request: signalling UcmDaemon.RequestUpdate to ADOPT $VER (sw/full)"
-# `theia-migrate adopt` exits 0 if UCM accepts OR isn't reachable here (the
-# symlink switch IS the install then), and non-zero ONLY on an explicit UCM
-# REJECT → Mender's ArtifactRollback restores `previous`.
-THEIA_ROOT="$THEIA_ROOT" "$adopt" adopt "$VER" full
+# THEIA_MIGRATE_ADOPT_STRICT=1 asks `theia-migrate adopt` to tell "UCM accepted"
+# (exit 0) apart from "UCM unreachable / not wired" (exit 3); an explicit UCM
+# REJECT is exit 1 either way. (An older theia-migrate ignores the variable and
+# still exits 0 when UCM is unreachable — upgrade the runtime to get the gate.)
+rc=0
+THEIA_ROOT="$THEIA_ROOT" THEIA_MIGRATE_ADOPT_STRICT=1 "$adopt" adopt "$VER" full || rc=$?
+case "$rc" in
+  0) exit 0 ;;
+  3)
+    if [ "$ALLOW_NO_UCM" = "1" ]; then
+        echo "ucm-request: UCM unreachable; symlink-only install of $VER (ok — THEIA_OTA_ALLOW_NO_UCM=1)"
+        exit 0
+    fi
+    echo "ucm-request: FAILED — UCM unreachable, $VER was not adopted (set THEIA_OTA_ALLOW_NO_UCM=1 on a rig that runs no UCM)" >&2
+    exit 1 ;;
+  *)
+    echo "ucm-request: FAILED — UCM did not accept $VER (theia-migrate adopt exit $rc)" >&2
+    exit "$rc" ;;
+esac

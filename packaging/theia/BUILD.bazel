@@ -234,6 +234,10 @@ pkg_deb(
     # theia-runtime. See //rules/config:distro_ubuntu24.
     depends = select({
         "@pero_theia//rules/config:is_arm64": "theia-runtime",
+        # BeagleBone AI-64 (Debian 13 trixie): per links libprotobuf, fw + idsm libnftables, com/crypto libssl
+        # dynamically from the board (the names are trixie's): apt resolves them when colony installs the deb.
+        "@pero_theia//rules/config:target_ai64":
+            "theia-runtime, libprotobuf32t64, libnftables1, libssl3t64",
         # noble (24.04) fleet build — same soname-versioned names as ubuntu24;
         # keyed on theia_target=noble (the `theia dist --arch noble` define) so a
         # native noble build gets the RIGHT Depends, not the jammy default.
